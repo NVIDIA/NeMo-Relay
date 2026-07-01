@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenInferenceError &#123;\n    MissingTokioRuntime,\n    UnsupportedTransport &#123;\n        transport: &amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    &#125;,\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenInferenceError &#123;\n    MissingTokioRuntime,\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
 
 Errors produced while configuring or operating the OpenInference subscriber.
 
@@ -20,18 +20,6 @@ Errors produced while configuring or operating the OpenInference subscriber.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MissingTokioRuntime"}} /></pre>
 
 The tonic gRPC exporter requires an active Tokio runtime.
-
-### `UnsupportedTransport`
-
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "UnsupportedTransport"}} /></pre>
-
-The requested transport is not available on this target.
-
-#### Fields
-
-### `transport: &'static str`
-
-Human-readable transport label used in the error message.
 
 ### `InvalidGrpcHeader`
 
