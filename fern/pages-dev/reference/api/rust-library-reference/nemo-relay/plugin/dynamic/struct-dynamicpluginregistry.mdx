@@ -101,6 +101,12 @@ Replaces the current runtime status without mutating desired state.
 
 Records the most recent dynamic-plugin failure summary.
 
+#### `update_environment`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_environment(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    environment_ref: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    environment: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Replaces the resolved worker environment and its validation state.
+
 #### `update_policy_status`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn update_policy_status(\n    &amp;mut self,\n    plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    policy_satisfied: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>,\n    startup_class: <a href=\"enum-dynamicpluginstartupclass\">DynamicPluginStartupClass</a>,\n    attestation_mode: <a href=\"enum-dynamicpluginattestationmode\">DynamicPluginAttestationMode</a>,\n    last_error: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginfailure\">DynamicPluginFailure</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
