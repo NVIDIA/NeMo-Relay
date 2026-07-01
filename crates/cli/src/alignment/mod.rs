@@ -609,8 +609,9 @@ pub(crate) fn gateway_management_policy(
 /// Decide whether this agent kind should emit a long-lived session agent scope.
 ///
 /// Claude Code and Codex can outlive a user-visible run, so the CLI represents
-/// their work with bounded turn scopes instead of exporting a long-lived agent
-/// scope that needs synthetic termination.
+/// their work with bounded Custom turn scopes instead of exporting a long-lived
+/// agent scope that needs synthetic termination. Every turn uses Custom scope
+/// semantics, while Agent scopes remain reserved for agent and subagent lineage.
 pub(crate) fn should_emit_session_agent_scope(agent_kind: AgentKind) -> bool {
     !matches!(agent_kind, AgentKind::ClaudeCode | AgentKind::Codex)
 }

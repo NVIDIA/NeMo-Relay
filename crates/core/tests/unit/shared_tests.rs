@@ -230,3 +230,129 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     deregister_llm_request_intercept("shared-codec").unwrap();
     reset_global();
 }
+
+#[test]
+fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    let parent = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("parent-name")
+            .scope_type(ScopeType::Agent)
+            .metadata(json!({"session_id": "parent-session"}))
+            .build(),
+    )
+    .unwrap();
+    let turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("codex-turn")
+            .scope_type(ScopeType::Custom)
+            .metadata(json!({
+                "nemo_relay_scope_role": "turn",
+                "session_id": "parent-session"
+            }))
+            .parent(&parent)
+            .build(),
+    )
+    .unwrap();
+    let child = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("child-name")
+            .scope_type(ScopeType::Agent)
+            .metadata(json!({"codex_subagent_session_id": "child-session"}))
+            .parent(&turn)
+            .build(),
+    )
+    .unwrap();
+
+    let (request, _, _) = run_request_intercepts_with_codec(
+        "openai.responses",
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        request.headers.get(DYNAMO_SESSION_ID_HEADER_KEY),
+        Some(&json!("child-session"))
+    );
+    assert_eq!(
+        request.headers.get(DYNAMO_PARENT_SESSION_ID_HEADER_KEY),
+        Some(&json!("parent-session"))
+    );
+
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&child.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let (request, _, _) = run_request_intercepts_with_codec(
+        "openai.responses",
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        request.headers.get(DYNAMO_SESSION_ID_HEADER_KEY),
+        Some(&json!("parent-session"))
+    );
+    assert!(
+        !request
+            .headers
+            .contains_key(DYNAMO_PARENT_SESSION_ID_HEADER_KEY)
+    );
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&turn.uuid)
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&parent.uuid)
+            .build(),
+    )
+    .unwrap();
+
+    let custom_turn = push_scope(
+        crate::api::scope::PushScopeParams::builder()
+            .name("custom-turn-only")
+            .scope_type(ScopeType::Custom)
+            .metadata(json!({
+                "nemo_relay_scope_role": "turn",
+                "session_id": "custom-session"
+            }))
+            .build(),
+    )
+    .unwrap();
+    let (request, _, _) = run_request_intercepts_with_codec(
+        "openai.responses",
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+        None,
+    )
+    .unwrap();
+    assert!(!request.headers.contains_key(DYNAMO_SESSION_ID_HEADER_KEY));
+    assert!(
+        !request
+            .headers
+            .contains_key(DYNAMO_PARENT_SESSION_ID_HEADER_KEY)
+    );
+    pop_scope(
+        crate::api::scope::PopScopeParams::builder()
+            .handle_uuid(&custom_turn.uuid)
+            .build(),
+    )
+    .unwrap();
+    reset_global();
+}

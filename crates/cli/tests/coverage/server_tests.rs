@@ -651,19 +651,19 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
-    let agent_starts = events
+    let turn_starts = events
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .filter(|event| {
             event["kind"] == "scope"
                 && event["scope_category"] == "start"
-                && event["category"] == "agent"
+                && event["metadata"]["nemo_relay_scope_role"] == "turn"
         })
         .filter_map(|event| event["name"].as_str().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
-    assert!(agent_starts.contains(&"codex-turn".to_string()));
-    assert!(agent_starts.contains(&"claude-code-turn".to_string()));
-    assert!(!agent_starts.contains(&"claude-code".to_string()));
+    assert!(turn_starts.contains(&"codex-turn".to_string()));
+    assert!(turn_starts.contains(&"claude-code-turn".to_string()));
+    assert!(!turn_starts.contains(&"claude-code".to_string()));
 }
 
 #[tokio::test]
@@ -1518,8 +1518,8 @@ async fn serve_listener_records_codex_stop_atof_contract() {
             && event["name"] == "codex"
     }));
 
-    let turn_start = find_scope_event(&events, "codex-turn", "agent", "start");
-    let turn_end = find_scope_event(&events, "codex-turn", "agent", "end");
+    let turn_start = find_scope_event(&events, "codex-turn", "custom", "start");
+    let turn_end = find_scope_event(&events, "codex-turn", "custom", "end");
     assert_eq!(turn_start["uuid"], turn_end["uuid"]);
     assert_eq!(
         turn_start["data"],

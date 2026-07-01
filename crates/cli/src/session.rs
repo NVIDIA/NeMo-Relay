@@ -1181,7 +1181,7 @@ impl Session {
         let scope = push_scope(
             PushScopeParams::builder()
                 .name(turn_name.as_str())
-                .scope_type(ScopeType::Agent)
+                .scope_type(ScopeType::Custom)
                 .parent_opt(self.agent_scope.as_ref())
                 .metadata(metadata)
                 .input(input)
