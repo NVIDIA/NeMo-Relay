@@ -13,7 +13,7 @@ pub use callbacks::{
     EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
     LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeFn, ToolInterceptFn, ToolSanitizeFn,
 };
 pub use global::global_context;
 pub use scope_stack::{

@@ -36,7 +36,7 @@ use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolExecutionOutcomeFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
@@ -48,6 +48,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
+use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -1214,7 +1215,7 @@ unsafe extern "C" fn native_plugin_context_register_tool_execution_intercept(
         Ok(name) => name,
         Err(status) => return status,
     };
-    match ctx.register_tool_execution_intercept(
+    match ctx.register_tool_execution_outcome_intercept(
         &name,
         priority,
         wrap_tool_execution_fn(instance, cb, user_data, free_fn),
@@ -1512,7 +1513,7 @@ fn wrap_tool_execution_fn(
     cb: NemoRelayNativeToolExecutionCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
-) -> ToolExecutionFn {
+) -> ToolExecutionOutcomeFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, args, next| {
         let name = name.to_owned();
@@ -1524,7 +1525,7 @@ fn wrap_tool_execution_fn(
             let args_string = native_string_from_json(&args)
                 .ok_or_else(|| FlowError::Internal("failed to allocate native args".into()))?;
             let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;
-            let mut out = ptr::null_mut();
+            let mut out_outcome = ptr::null_mut();
             let status = unsafe {
                 cb(
                     user_data.ptr,
@@ -1532,7 +1533,7 @@ fn wrap_tool_execution_fn(
                     args_string,
                     native_tool_next,
                     next_ctx,
-                    &mut out,
+                    &mut out_outcome,
                 )
             };
             unsafe {
@@ -1541,15 +1542,21 @@ fn wrap_tool_execution_fn(
                 native_string_free(args_string);
             }
             if status != NemoRelayStatus::Ok {
-                if !out.is_null() {
-                    unsafe { native_string_free(out) };
+                if !out_outcome.is_null() {
+                    unsafe { native_string_free(out_outcome) };
                 }
                 return Err(flow_error_from_status(
                     status,
                     "native tool execution failed",
                 ));
             }
-            take_json_from_native_string(out, "native tool execution returned null")
+            let outcome_json = take_json_from_native_string(
+                out_outcome,
+                "native tool execution returned null outcome",
+            )?;
+            serde_json::from_value::<ToolExecutionInterceptOutcome>(outcome_json).map_err(|err| {
+                FlowError::Internal(format!("invalid native tool execution outcome JSON: {err}"))
+            })
         })
     })
 }

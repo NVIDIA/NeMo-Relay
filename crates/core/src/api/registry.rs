@@ -4,10 +4,11 @@
 //! Middleware registry helpers for global and scope-local guardrails,
 //! intercepts, and subscribers.
 
+use crate::api::runtime::callbacks::ToolExecutionCallback;
 use crate::api::runtime::{
     LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionOutcomeFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
@@ -506,15 +507,49 @@ global_intercept_registry_api!(
     tool_request_intercepts,
     ToolInterceptFn
 );
-global_execution_registry_api!(
-    /// Register a global tool execution intercept.
-    /// Execution intercepts can wrap or replace the tool callback.
-    register_tool_execution_intercept,
-    /// Deregister a global tool execution intercept.
-    deregister_tool_execution_intercept,
-    tool_execution_intercepts,
-    ToolExecutionFn
-);
+/// Register a global tool execution intercept.
+/// Execution intercepts can wrap or replace the tool callback.
+pub fn register_tool_execution_intercept(
+    name: &str,
+    priority: i32,
+    callable: ToolExecutionFn,
+) -> Result<()> {
+    register_tool_execution_callback(name, priority, ToolExecutionCallback::Raw(callable))
+}
+
+pub(crate) fn register_tool_execution_outcome_intercept(
+    name: &str,
+    priority: i32,
+    callable: ToolExecutionOutcomeFn,
+) -> Result<()> {
+    register_tool_execution_callback(name, priority, ToolExecutionCallback::Outcome(callable))
+}
+
+fn register_tool_execution_callback(
+    name: &str,
+    priority: i32,
+    callable: ToolExecutionCallback,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let mut state = context
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    state
+        .tool_execution_intercepts
+        .register(ExecutionIntercept::new(name, priority, callable))
+        .map_err(FlowError::AlreadyExists)
+}
+
+/// Deregister a global tool execution intercept.
+pub fn deregister_tool_execution_intercept(name: &str) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let mut state = context
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    Ok(state.tool_execution_intercepts.deregister(name))
+}
 
 global_guardrail_registry_api!(
     /// Register a global LLM sanitize-request guardrail.
@@ -613,16 +648,44 @@ scope_intercept_registry_api!(
     tool_request_intercepts,
     ToolInterceptFn
 );
-scope_execution_registry_api!(
-    /// Register a scope-local tool execution intercept.
-    /// Execution intercepts can wrap or replace the tool callback inside the
-    /// owning scope.
-    scope_register_tool_execution_intercept,
-    /// Deregister a scope-local tool execution intercept.
-    scope_deregister_tool_execution_intercept,
-    tool_execution_intercepts,
-    ToolExecutionFn
-);
+/// Register a scope-local tool execution intercept.
+/// Execution intercepts can wrap or replace the tool callback inside the
+/// owning scope.
+pub fn scope_register_tool_execution_intercept(
+    scope_uuid: &uuid::Uuid,
+    name: &str,
+    priority: i32,
+    callable: ToolExecutionFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
+    let registries = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
+    registries
+        .tool_execution_intercepts
+        .register(ExecutionIntercept::new(
+            name,
+            priority,
+            ToolExecutionCallback::Raw(callable),
+        ))
+        .map_err(FlowError::AlreadyExists)
+}
+
+/// Deregister a scope-local tool execution intercept.
+pub fn scope_deregister_tool_execution_intercept(
+    scope_uuid: &uuid::Uuid,
+    name: &str,
+) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
+    let registries = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
+    Ok(registries.tool_execution_intercepts.deregister(name))
+}
 
 scope_guardrail_registry_api!(
     /// Register a scope-local LLM sanitize-request guardrail.

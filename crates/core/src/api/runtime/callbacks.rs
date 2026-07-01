@@ -16,6 +16,7 @@ use tokio_stream::Stream;
 
 use crate::api::event::Event;
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::Result;
 use crate::json::Json;
@@ -105,6 +106,37 @@ pub type ToolExecutionNextFn =
 /// chain fails.
 pub type ToolExecutionFn = Arc<
     dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Wrap or replace tool execution while scheduling lifecycle marks.
+///
+/// This callback receives the same raw-result continuation as
+/// [`ToolExecutionFn`]. The runtime retains marks returned by downstream
+/// outcome callbacks and prepends them to the marks returned here.
+pub type ToolExecutionOutcomeFn = Arc<
+    dyn Fn(
+            &str,
+            Json,
+            ToolExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Mixed representation stored by tool execution registries.
+#[derive(Clone)]
+pub(crate) enum ToolExecutionCallback {
+    /// Existing raw JSON execution callback.
+    Raw(ToolExecutionFn),
+    /// Outcome callback capable of scheduling tool lifecycle marks.
+    Outcome(ToolExecutionOutcomeFn),
+}
+
+/// Internal continuation carrying both a tool result and accumulated marks.
+pub(crate) type ToolExecutionOutcomeNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
         + Send
         + Sync,
 >;
