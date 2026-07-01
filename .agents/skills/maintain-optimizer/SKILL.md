@@ -42,7 +42,7 @@ See `docs/plugins/adaptive/configuration.md` and
   `python/nemo_relay/plugin.py`
 - Go adaptive helpers under `go/nemo_relay/adaptive` plus shared plugin
   helpers in `go/nemo_relay`
-- Node/WebAssembly adaptive helpers and plugin wrappers
+- Node.js adaptive helpers and plugin wrappers
 - Docs and examples that show canonical config shapes
 
 ## Checklist

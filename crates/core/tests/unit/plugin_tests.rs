@@ -53,7 +53,6 @@ fn expect_registration_failed(result: Result<()>, message_fragment: &str) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn set_conflicting_runtime_owner_for_tests() {
     unsafe {
         std::env::set_var(
@@ -66,9 +65,6 @@ fn set_conflicting_runtime_owner_for_tests() {
         )
     };
 }
-
-#[cfg(target_arch = "wasm32")]
-fn set_conflicting_runtime_owner_for_tests() {}
 
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {

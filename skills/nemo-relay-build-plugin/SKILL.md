@@ -107,7 +107,7 @@ endpoints rather than embedding sensitive values.
 - Python: `nemo_relay.plugin`
 - Node.js: `nemo-relay-node/plugin`
 - Rust: `nemo_relay::plugin`
-- Go, WebAssembly, and raw FFI are source-first or advanced surfaces.
+- Go and raw FFI are source-first or advanced surfaces.
 
 Use the same canonical `snake_case` config keys across bindings and files. Node
 helper functions can be `camelCase`, but plugin config objects remain

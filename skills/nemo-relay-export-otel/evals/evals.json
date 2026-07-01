@@ -21,7 +21,7 @@
     "ground_truth": "The agent identified this as an OpenTelemetry export task and provided guidance on configuring gRPC transport for Jaeger, including endpoint configuration, auth header setup, the requirement for a native Tokio runtime, and deterministic flush-before-exit procedures.",
     "expected_behavior": [
       "The agent referenced the nemo-relay-export-otel skill content for gRPC transport requirements",
-      "The agent warned that gRPC requires a native Tokio runtime and is not available on WebAssembly targets",
+      "The agent warned that gRPC requires an active Tokio runtime",
       "The agent explained how to configure auth headers and endpoint for Jaeger",
       "The agent described the flush and shutdown sequence for graceful exit",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"

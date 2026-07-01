@@ -57,7 +57,6 @@ SKIP_EXTENSIONS = frozenset(
         ".so",
         ".dylib",
         ".dll",
-        ".wasm",
         ".pyc",
         ".pyo",
         ".png",

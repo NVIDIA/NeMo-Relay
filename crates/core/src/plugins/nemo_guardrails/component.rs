@@ -19,17 +19,17 @@ use crate::plugin::{
 
 #[path = "local.rs"]
 mod local;
-#[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
+#[cfg(feature = "guardrails-remote")]
 #[path = "remote.rs"]
 mod remote;
 use local::register_local_backend;
-#[cfg(all(feature = "guardrails-remote", not(target_arch = "wasm32")))]
+#[cfg(feature = "guardrails-remote")]
 use remote::register_remote_backend;
 
 /// The plugin kind reserved for the planned first-party component.
 pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemo_guardrails";
 
-#[cfg(any(target_arch = "wasm32", not(feature = "guardrails-remote")))]
+#[cfg(not(feature = "guardrails-remote"))]
 fn register_remote_backend(
     _config: NeMoGuardrailsConfig,
     _ctx: &mut PluginRegistrationContext,

@@ -25,7 +25,6 @@ or branding text updates that must preserve functional identifiers.
 - Python package name and top-level module
 - Go module path and package paths
 - Node package names
-- WebAssembly crate or generated package names
 - C header names and symbol prefixes
 - Docs, examples, CI, and integration packages
 

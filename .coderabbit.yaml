@@ -31,7 +31,7 @@ reviews:
     type(optional-scope)[!]: concise imperative summary
 
     Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert.
-    Prefer scopes from this repository when clear: core, adaptive, python, ffi, node, wasm, go, docs, ci, deps
+    Prefer scopes from this repository when clear: core, adaptive, python, ffi, node, go, docs, ci, deps
     Use lowercase type and scope. If the change is a breaking change, add a ! suffix before the colon.
     Keep it under 72 characters and do not use a trailing period.
   auto_review:
@@ -47,12 +47,9 @@ reviews:
     - "!**/.venv/**"
     - "!**/node_modules/**"
     - "!crates/node/coverage/**"
-    - "!crates/wasm/coverage/**"
     - "!**/.pytest_cache/**"
     - "!**/.ruff_cache/**"
     - "!**/.scannerwork/**"
-    - "!crates/wasm/pkg/**"
-    - "!crates/wasm/pkg-test/**"
     - "!**/junit.xml"
     - "!**/*.profraw"
     - "!**/*.profdata"
@@ -64,7 +61,7 @@ reviews:
         Review the Rust runtime for async correctness, scope isolation, middleware ordering, and event lifecycle regressions.
         Pay close attention to task-local/thread-local scope propagation, callback lifetimes, stream finalization, and root_uuid isolation.
         Public API changes should preserve existing behavior unless tests and docs show the intended migration path.
-    - path: "crates/{python,ffi,node,wasm}/**/*"
+    - path: "crates/{python,ffi,node}/**/*"
       instructions: |
         Treat binding changes as public API changes. Check for parity with the other language bindings, FFI ownership/lifetime safety,
         callback error propagation, stable type conversion, and consistent async/stream semantics.

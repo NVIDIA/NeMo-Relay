@@ -286,8 +286,8 @@ are never gaps because they always carry a value, so they always take
 precedence. Only the open-ended parts of your code config (which components you
 include and the keys within each component's `config`) merge with the files.
 
-Without a filesystem, such as a WebAssembly (wasm) build, no files are
-read, so the base is empty and only your `initialize` config applies.
+Without filesystem access, no files are read, so the base is empty and only
+your `initialize` config applies.
 
 ## Explicit Defaults And Overrides
 

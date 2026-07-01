@@ -25,9 +25,8 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
   OpenInference semantic conventions.
 - Configure `transport`, `endpoint`, `service_name`, optional namespace and
   version, instrumentation scope, headers, resource attributes, and timeout.
-- Start with `http_binary` transport and an OTLP/HTTP traces endpoint. Native
-  targets can use `grpc` only when a Tokio runtime is active; WebAssembly rejects
-  `grpc`.
+- Start with `http_binary` transport and an OTLP/HTTP traces endpoint. Use
+  `grpc` only when a Tokio runtime is active.
 - Scope, tool, and LLM start inputs become `input.value`.
 - Scope, tool, and LLM end outputs become `output.value`.
 - LLM usage metadata maps token counters when provider responses include usage.

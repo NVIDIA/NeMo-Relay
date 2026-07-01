@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -252,9 +251,8 @@ flowchart LR
 ## Support Status
 
 > [!NOTE]
-> The main supported paths today are Rust, Python, and Node.js. Go,
-> WebAssembly, and raw C FFI are available for source-first users, but they are
-> still experimental.
+> The main supported paths today are Rust, Python, and Node.js. Go and raw C FFI
+> are available for source-first users, but they are still experimental.
 
 The following table shows which language bindings and CLI features are currently supported:
 
@@ -265,7 +263,6 @@ The following table shows which language bindings and CLI features are currently
 | Rust | Fully supported | Documented with Quick Start and Guides. |
 | NeMo Relay CLI | Supported | Local observability and hook-backed security are supported; optimization is partial and host-dependent. |
 | Go | Experimental | Source-first under `go/nemo_relay`. |
-| WebAssembly | Experimental | Source-first under `crates/wasm`. |
 | FFI | Experimental | Source-first under `crates/ffi`. |
 
 ### Agent Harness Support
