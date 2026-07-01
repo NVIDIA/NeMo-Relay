@@ -41,16 +41,9 @@ When a managed LLM call has a request codec:
 
 1. NeMo Relay calls `decode` before LLM request intercepts run.
 2. Request intercepts receive both the raw request and the annotated request.
-3. Intercepts edit provider-body fields through the annotated request and may
-   edit transport headers through the raw request. Raw `request.content` is
-   read-only while the codec is active.
+3. Intercepts may edit the raw request, the annotated request, or both.
 4. NeMo Relay calls `encode` to merge the annotated request back into the original raw request.
 5. Execution intercepts and the provider callback receive the encoded provider request.
-
-If a codec-aware intercept changes raw `request.content` or omits the returned
-annotation, Relay rejects the outcome before creating the LLM lifecycle. When
-no request codec is active, the raw request remains fully writable and is the
-provider-visible source of truth.
 
 When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
 
@@ -94,7 +87,7 @@ from nemo_relay.codecs import OpenAIChatCodec
 
 def add_system_message(_name, request, annotated):
     if annotated is None:
-        return nemo_relay.LLMRequestInterceptOutcome(request)
+        return request, annotated
 
     # Attributes of the annotated request can be re-assigned, but cannot be modified in-place.
     # For example `annotated.messages.append(...)` would not work, but re-assigning
@@ -103,7 +96,7 @@ def add_system_message(_name, request, annotated):
         {"role": "system", "content": "Answer with concise technical detail."},
         *annotated.messages,
     ]
-    return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+    return request, annotated
 
 nemo_relay.intercepts.register_llm_request(
     "framework.add_system_message",

@@ -260,8 +260,8 @@ tool_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
 nemo_relay.tools.conditional_execution("search", tool_args)
 
 llm_request = LLMRequest({}, {"messages": [{"role": "user", "content": "hello"}]})
-outcome = nemo_relay.llm.request_intercepts("demo-provider", llm_request)
-nemo_relay.llm.conditional_execution(outcome.request)
+llm_request = nemo_relay.llm.request_intercepts("demo-provider", llm_request)
+nemo_relay.llm.conditional_execution(llm_request)
 ```
 </Tab>
 
@@ -279,8 +279,8 @@ const toolArgs = await toolRequestIntercepts('search', { query: 'weather' });
 await toolConditionalExecution('search', toolArgs);
 
 const request = new LlmRequest({}, { messages: [{ role: 'user', content: 'hello' }] });
-const outcome = await llmRequestIntercepts('demo-provider', request);
-await llmConditionalExecution(outcome.request);
+const rewritten = await llmRequestIntercepts('demo-provider', request);
+await llmConditionalExecution(rewritten);
 ```
 </Tab>
 
@@ -297,8 +297,8 @@ let request = LlmRequest {
     headers: Default::default(),
     content: json!({"messages": [{"role": "user", "content": "hello"}]}),
 };
-let outcome = llm_request_intercepts("demo-provider", request)?;
-llm_conditional_execution(&outcome.request)?;
+let rewritten = llm_request_intercepts("demo-provider", request)?;
+llm_conditional_execution(&rewritten)?;
 ```
 </Tab>
 
