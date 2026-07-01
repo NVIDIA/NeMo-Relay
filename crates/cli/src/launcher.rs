@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_relay::observability::plugin_component::{
+    AtifStorageConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
+};
 use nemo_relay::plugin::PluginConfig;
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -678,14 +680,23 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
         destinations.push(format!("ATOF {}", path.display()));
     }
     if let Some(section) = config.atif.as_ref().filter(|section| section.enabled) {
-        let directory = section
-            .output_directory
-            .clone()
-            .unwrap_or_else(current_output_directory);
-        destinations.push(format!(
-            "ATIF {}",
-            directory.join(&section.filename_template).display()
-        ));
+        if section.storage.is_empty() {
+            let directory = section
+                .output_directory
+                .clone()
+                .unwrap_or_else(current_output_directory);
+            destinations.push(format!(
+                "ATIF {}",
+                directory.join(&section.filename_template).display()
+            ));
+        } else {
+            // Non-empty `storage` skips the local file write and uploads to each remote backend
+            // instead, so report the actual upload destinations rather than a local path that is
+            // never written.
+            for backend in &section.storage {
+                destinations.push(format!("ATIF {}", atif_storage_destination(backend)));
+            }
+        }
     }
     if let Some(section) = config
         .opentelemetry
@@ -714,6 +725,23 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
         ));
     }
     destinations
+}
+
+// Renders a single ATIF remote storage backend as a human-readable destination for the status
+// banner. S3 keys are summarized as `s3://<bucket>/<key_prefix>`; the per-trajectory object suffix
+// is omitted because it is only known once a session starts.
+fn atif_storage_destination(storage: &AtifStorageConfig) -> String {
+    match storage {
+        AtifStorageConfig::Http(http) => http.endpoint.clone(),
+        AtifStorageConfig::S3(s3) => {
+            let prefix = s3.key_prefix.as_deref().unwrap_or("").trim_matches('/');
+            if prefix.is_empty() {
+                format!("s3://{}", s3.bucket)
+            } else {
+                format!("s3://{}/{}", s3.bucket, prefix)
+            }
+        }
+    }
 }
 
 fn current_output_directory() -> PathBuf {
