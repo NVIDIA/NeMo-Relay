@@ -244,7 +244,7 @@ Create a new LLM handle.
 
 ##### Parameters
 
-- `name`: Logical provider or model family name.
+- `name`: Logical provider or model family name. Gateway-managed LLM calls use provider route names such as `anthropic.messages`, which become the emitted event name.
 - `parent_uuid`: Optional parent scope UUID.
 - `attributes`: LLM attribute bitflags.
 - `data`: Optional application payload stored on the handle.

@@ -17,7 +17,7 @@ Builder parameters for [`NemoRelayContextState::create_llm_handle`](/reference/a
 
 ### `name: &'a str`
 
-Logical provider or model family name.
+Logical provider or model family name. Gateway-managed provider calls should pass the provider route name, for example `anthropic.messages`.
 
 ### `parent_uuid: Option<Uuid>`
 

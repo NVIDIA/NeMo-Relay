@@ -27,6 +27,8 @@ Timestamp captured when the LLM handle was created.
 
 Provider or logical call name recorded on lifecycle events.
 
+Gateway-managed provider calls use provider route names such as `anthropic.messages`; event normalization may reuse those route names as codec hints when raw request shapes overlap across providers.
+
 ### `data: Option<Json>`
 
 Optional application payload stored on the handle.
