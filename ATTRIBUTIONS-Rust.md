@@ -27617,7 +27617,7 @@ THE SOFTWARE.
 
 ```
 
-## quinn - 0.11.9
+## quinn - 0.11.11
 **Repository URL**: https://github.com/quinn-rs/quinn
 **License Type(s)**: MIT OR Apache-2.0
 ### License: https://spdx.org/licenses/
@@ -27837,7 +27837,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-## quinn-proto - 0.11.14
+## quinn-proto - 0.11.15
 **Repository URL**: https://github.com/quinn-rs/quinn
 **License Type(s)**: MIT OR Apache-2.0
 ### License: https://spdx.org/licenses/
