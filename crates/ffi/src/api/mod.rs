@@ -243,15 +243,20 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
 /// Allocate canonical JSON for a C LLM request-intercept callback result.
 ///
 /// `annotated_json` may be null. `pending_marks_json` may be null, in which
-/// case an empty list is serialized. The caller owns the returned string and
-/// must release it with [`nemo_relay_string_free`].
+/// case an empty list is serialized. When used by a
+/// `NemoRelayLlmRequestInterceptCb`, assign the successful output to the
+/// callback's `out_outcome_json`; ownership transfers to Relay when the
+/// callback returns, so the callback must not free or reuse it. Outside a
+/// callback, the caller owns the returned string and must release it with
+/// `nemo_relay_string_free`.
 ///
 /// # Safety
 ///
-/// `request` must point to a live [`FfiLLMRequest`], optional JSON inputs must
+/// `request` must point to a live `FfiLLMRequest`, optional JSON inputs must
 /// be valid null-terminated strings when non-null, and `out_outcome_json` must
-/// be writable. The caller must free a successful output with
-/// [`nemo_relay_string_free`].
+/// be writable. A successful output must either be transferred through a
+/// callback's `out_outcome_json` or freed by its caller with
+/// `nemo_relay_string_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
     request: *const FfiLLMRequest,
@@ -260,11 +265,15 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
     out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
-    if request.is_null() || out_outcome_json.is_null() {
-        set_last_error("request and out_outcome_json must be non-null");
+    if out_outcome_json.is_null() {
+        set_last_error("out_outcome_json must be non-null");
         return NemoRelayStatus::NullPointer;
     }
     unsafe { *out_outcome_json = std::ptr::null_mut() };
+    if request.is_null() {
+        set_last_error("request must be non-null");
+        return NemoRelayStatus::NullPointer;
+    }
     let annotated_request = if annotated_json.is_null() {
         None
     } else {

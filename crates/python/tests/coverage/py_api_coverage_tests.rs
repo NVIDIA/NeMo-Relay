@@ -193,8 +193,12 @@ def llm_conditional(request):
 def llm_request_intercept(name, request, annotated):
     headers = dict(request.headers)
     headers["x-intercepted"] = "1"
-    content = dict(request.content)
-    content["messages"] = [{"role": "user", "content": "hello from intercept"}]
+    if annotated is None:
+        content = dict(request.content)
+        content["messages"] = [{"role": "user", "content": "hello from intercept"}]
+    else:
+        content = request.content
+        annotated.messages = [{"role": "user", "content": "hello from intercept"}]
     return LLMRequestInterceptOutcome(LLMRequest(headers, content), annotated)
 
 async def llm_exec(request):

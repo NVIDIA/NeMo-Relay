@@ -310,6 +310,27 @@ class TestCodecPipeline:
         finally:
             intercepts.deregister_llm_request("test-codec-raw-content")
 
+    async def test_codec_rejects_missing_annotation_before_provider(self):
+        """Codec-aware intercepts must return the decoded annotation."""
+        provider_called = False
+
+        def missing_annotation_intercept(name, request, annotated):
+            assert annotated is not None
+            return LLMRequestInterceptOutcome(request, None)
+
+        def provider(request):
+            nonlocal provider_called
+            provider_called = True
+            return {"unexpected": True}
+
+        intercepts.register_llm_request("test-codec-missing-annotation", 1, False, missing_annotation_intercept)
+        try:
+            with pytest.raises(RuntimeError, match="omitted annotated_request"):
+                await llm.execute("pipeline-llm", make_request(), provider, codec=SimpleCodec())
+            assert not provider_called
+        finally:
+            intercepts.deregister_llm_request("test-codec-missing-annotation")
+
     async def test_codec_parameter(self):
         """codec parameter passes the specified codec instance directly."""
         alternate = AlternateCodec()

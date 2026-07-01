@@ -2694,7 +2694,10 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         LlmCallExecuteParams::builder()
             .name("pending-managed-llm")
             .request(LlmRequest {
-                headers: serde_json::Map::new(),
+                headers: serde_json::Map::from_iter([(
+                    "x-pending-mark-test".into(),
+                    json!("preserved"),
+                )]),
                 content: json!({"prompt": "hello"}),
             })
             .func(Arc::new(move |request| {
@@ -2707,9 +2710,13 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
     .unwrap();
 
     let provider_request = provider_request.lock().unwrap().clone().unwrap();
-    let provider_json = serde_json::to_value(provider_request).unwrap();
-    assert!(provider_json.get("pending_marks").is_none());
-    assert!(provider_json.get("annotated_request").is_none());
+    assert_eq!(
+        provider_request.headers.get("x-pending-mark-test"),
+        Some(&json!("preserved"))
+    );
+    assert_eq!(provider_request.content["prompt"], "hello");
+    assert!(provider_request.content.get("pending_marks").is_none());
+    assert!(provider_request.content.get("annotated_request").is_none());
 
     let captured = captured_events_snapshot(&events);
     let start = captured

@@ -182,6 +182,13 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         llm_start.input().unwrap()["content"]["worker_plugin_llm_sanitize_request"],
         true
     );
+    let pending_mark = find_event(&captured_events, "fixture.worker.llm_request.mark", None);
+    assert_eq!(pending_mark.parent_uuid(), Some(llm_start.uuid()));
+    assert_eq!(
+        pending_mark.data().unwrap()["source"],
+        "worker_request_intercept"
+    );
+    assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
     let llm_end = find_event(
         &captured_events,
         "worker-fixture-llm-execute",

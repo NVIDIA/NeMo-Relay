@@ -44,6 +44,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
         NemoRelayStatus::InvalidJson
     );
     assert!(outcome_json.is_null());
+    outcome_json = std::ptr::dangling_mut();
     assert_eq!(
         unsafe {
             api::nemo_relay_llm_request_intercept_outcome_json_new(
@@ -55,6 +56,7 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
         },
         NemoRelayStatus::NullPointer
     );
+    assert!(outcome_json.is_null());
 
     unsafe { nemo_relay_llm_request_free(request) };
 }

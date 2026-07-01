@@ -208,7 +208,7 @@ class AllSurfacesPlugin(WorkerPlugin):
             del name
             return LlmRequestInterceptOutcome(
                 request=_tag_llm_request(request, "llm_request"),
-                annotated_request=_tag(annotated or {}, "annotated"),
+                annotated_request=_tag(annotated, "annotated") if annotated is not None else None,
                 pending_marks=[PendingMarkSpec("worker.pending", data={"source": "python"})],
             )
 
@@ -957,6 +957,19 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
             "metadata": None,
         }
     ]
+
+    request_only = await service.Invoke(
+        _invoke_request(
+            "llm_request",
+            pb.LLM_REQUEST_INTERCEPT,
+            llm=_llm_payload(request={"content": {"prompt": "hello"}}),
+        ),
+        AbortContext(),
+    )
+    request_only_outcome = _envelope_value(request_only.llm_request.outcome)
+    assert request_only_outcome["request"]["content"]["llm_request"]
+    assert request_only_outcome["annotated_request"] is None
+    assert request_only_outcome["pending_marks"] == outcome["pending_marks"]
 
     llm_execution = await _invoke_json_async(
         service,

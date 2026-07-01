@@ -19,12 +19,13 @@ use nemo_relay::api::runtime::{
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
+use nemo_relay::api::event::Event;
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+pub(crate) use nemo_relay::bindings::js::{JsPendingMarkSpec, js_pending_marks};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -33,52 +34,6 @@ use nemo_relay::error::{FlowError, Result};
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::JsEvent;
-
-/// JavaScript-facing pending mark DTO.
-///
-/// The public Node API uses camelCase while the canonical Relay wire contract
-/// keeps snake_case field names.
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct JsPendingMarkSpec {
-    name: String,
-    #[serde(default)]
-    category: Option<EventCategory>,
-    #[serde(default)]
-    category_profile: Option<CategoryProfile>,
-    #[serde(default)]
-    data: Option<Json>,
-    #[serde(default)]
-    metadata: Option<Json>,
-}
-
-impl From<JsPendingMarkSpec> for PendingMarkSpec {
-    fn from(mark: JsPendingMarkSpec) -> Self {
-        Self {
-            name: mark.name,
-            category: mark.category,
-            category_profile: mark.category_profile,
-            data: mark.data,
-            metadata: mark.metadata,
-        }
-    }
-}
-
-impl From<PendingMarkSpec> for JsPendingMarkSpec {
-    fn from(mark: PendingMarkSpec) -> Self {
-        Self {
-            name: mark.name,
-            category: mark.category,
-            category_profile: mark.category_profile,
-            data: mark.data,
-            metadata: mark.metadata,
-        }
-    }
-}
-
-pub(crate) fn js_pending_marks(marks: Vec<PendingMarkSpec>) -> Vec<JsPendingMarkSpec> {
-    marks.into_iter().map(Into::into).collect()
-}
 
 fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
     rx.recv().unwrap_or_else(|e| {

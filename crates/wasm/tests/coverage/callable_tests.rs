@@ -4,6 +4,7 @@
 //! Coverage tests for callable in the NeMo Relay WebAssembly crate.
 
 use super::*;
+use nemo_relay::api::event::PendingMarkSpec;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use serde_json::json;
 use tokio_stream::StreamExt;

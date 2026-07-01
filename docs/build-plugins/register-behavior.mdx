@@ -102,6 +102,7 @@ plugin.register('header-plugin', headerPlugin);
 
 <Tab title="Rust" language="rust">
 ```rust
+use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::plugin::{
     register_plugin, ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext,
     Result as PluginResult,
@@ -169,7 +170,7 @@ impl Plugin for HeaderPlugin {
                     request
                         .headers
                         .insert(header_name.clone(), header_value.clone().into());
-                    Ok((request, annotated))
+                    Ok(LlmRequestInterceptOutcome::new(request, annotated))
                 }),
             )?;
             Ok(())

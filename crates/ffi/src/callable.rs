@@ -172,8 +172,13 @@ pub type NemoRelayCodecEncodeFn = Option<
 /// signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
 /// optionally the annotated request as a JSON C string (null if no Codec
 /// resolved). Writes one owned canonical outcome JSON string to
-/// `out_outcome_json`. With a Codec, the outcome must preserve request content
-/// and return the annotation; only request headers and annotation fields are
+/// `out_outcome_json`. Any non-null string written there must be allocated by
+/// `nemo_relay_llm_request_intercept_outcome_json_new` or by an allocation
+/// compatible with `nemo_relay_string_free`. Ownership transfers to Relay
+/// when the callback returns; the callback must not free or reuse the string
+/// afterward. Relay frees it exactly once, even when the callback returns an
+/// error status. With a Codec, the outcome must preserve request content and
+/// return the annotation; only request headers and annotation fields are
 /// writable. Returns `NemoRelayStatus`.
 pub type NemoRelayLlmRequestInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,

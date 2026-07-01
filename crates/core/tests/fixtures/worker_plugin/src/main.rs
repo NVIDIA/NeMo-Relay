@@ -5,7 +5,9 @@ use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolNext, WorkerPlugin,
     WorkerSdkError, serve_plugin,
 };
-use nemo_relay_worker::{ConfigDiagnostic, DiagnosticLevel, Json, LlmRequest};
+use nemo_relay_worker::{
+    ConfigDiagnostic, DiagnosticLevel, Json, LlmRequest, PendingMarkSpec,
+};
 use serde_json::json;
 
 struct FixtureWorkerPlugin;
@@ -197,6 +199,13 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                 Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
                     request,
                     annotated,
+                )
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("fixture.worker.llm_request.mark")
+                        .data(json!({ "source": "worker_request_intercept" }))
+                        .metadata(json!({ "fixture": true }))
+                        .build(),
                 ))
             },
         );
