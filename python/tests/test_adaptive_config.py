@@ -15,6 +15,7 @@ from nemo_relay.adaptive import (
     BackendSpec,
     ComponentSpec,
     ConfigPolicy,
+    ConvergenceConfig,
     StateConfig,
     TelemetryConfig,
     ToolParallelismConfig,
@@ -142,6 +143,11 @@ class TestDynamicConfigContract:
                 "semi_stable_threshold": 0.5,
                 "min_observations_for_full_confidence": 20,
             },
+        }
+        assert AcgConfig(convergence=ConvergenceConfig(enabled=True)).to_dict()["convergence"] == {
+            "enabled": True,
+            "epsilon": 0.001,
+            "stability_window": 3,
         }
 
     def test_acg_config_allows_threshold_overrides(self):

@@ -89,7 +89,9 @@ fn sample_stability(agent_id: &str) -> StabilityAnalysisResult {
             observation_count: 3,
         }],
         stable_prefix_length: 1,
+        stable_prefix_fingerprint: None,
         total_observations: 3,
+        converged: false,
     }
 }
 
@@ -249,6 +251,7 @@ async fn in_memory_backend_round_trips_observations_and_stability() {
     );
     assert_eq!(loaded_stability.stable_prefix_length, 1);
     assert_eq!(loaded_stability.total_observations, 3);
+    assert!(!loaded_stability.converged);
 }
 
 #[tokio::test(flavor = "current_thread")]

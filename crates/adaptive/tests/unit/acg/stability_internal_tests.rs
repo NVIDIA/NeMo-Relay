@@ -78,3 +78,60 @@ fn stability_internal_effective_score_handles_zero_present_count() {
 
     assert_eq!(effective_stability_score(&observations, 3), 0.0);
 }
+
+#[test]
+fn stability_internal_prefix_fingerprint_ties_choose_lexicographically_smallest_hash() {
+    let mut counts = std::collections::HashMap::new();
+    counts.insert("sha256:bbbb".to_string(), 2);
+    counts.insert("sha256:aaaa".to_string(), 2);
+    counts.insert("sha256:cccc".to_string(), 1);
+
+    assert_eq!(
+        select_dominant_prefix_fingerprint(counts).as_deref(),
+        Some("sha256:aaaa")
+    );
+}
+
+#[test]
+fn stability_internal_equal_sequence_indexes_sort_by_span_id() {
+    let mut indexed_scores = vec![
+        (
+            1,
+            BlockStabilityScore {
+                span_id: SpanId("span-b".to_string()),
+                classification: StabilityClass::Stable,
+                score: 1.0,
+                confidence: 1.0,
+                observation_count: 3,
+            },
+        ),
+        (
+            1,
+            BlockStabilityScore {
+                span_id: SpanId("span-a".to_string()),
+                classification: StabilityClass::Stable,
+                score: 1.0,
+                confidence: 1.0,
+                observation_count: 3,
+            },
+        ),
+        (
+            0,
+            BlockStabilityScore {
+                span_id: SpanId("span-0".to_string()),
+                classification: StabilityClass::Stable,
+                score: 1.0,
+                confidence: 1.0,
+                observation_count: 3,
+            },
+        ),
+    ];
+
+    sort_indexed_scores(&mut indexed_scores);
+
+    let ordered_span_ids = indexed_scores
+        .iter()
+        .map(|(_, score)| score.span_id.0.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ordered_span_ids, vec!["span-0", "span-a", "span-b"]);
+}

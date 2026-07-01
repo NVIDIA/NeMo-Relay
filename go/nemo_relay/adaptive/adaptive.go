@@ -46,6 +46,15 @@ type AdaptiveHintsConfig = nemo_relay.AdaptiveHintsConfig
 // ToolParallelismConfig configures built-in adaptive tool scheduling.
 type ToolParallelismConfig = nemo_relay.ToolParallelismConfig
 
+// GovernorConfig configures topology-aware hint load shedding.
+type GovernorConfig = nemo_relay.GovernorConfig
+
+// DriftConfig configures topology-aware stale-plan invalidation.
+type DriftConfig = nemo_relay.DriftConfig
+
+// ConvergenceConfig configures topological convergence detection.
+type ConvergenceConfig = nemo_relay.ConvergenceConfig
+
 // AcgStabilityThresholds configures ACG prompt-stability classification.
 type AcgStabilityThresholds = nemo_relay.AcgStabilityThresholds
 
@@ -91,6 +100,21 @@ func NewRedisBackend(url, keyPrefix string) BackendSpec {
 // NewTelemetryConfig returns default adaptive telemetry settings.
 func NewTelemetryConfig() TelemetryConfig {
 	return nemo_relay.NewTelemetryConfig()
+}
+
+// NewGovernorConfig returns default topology-aware hint load-shedding settings.
+func NewGovernorConfig() GovernorConfig {
+	return nemo_relay.NewGovernorConfig()
+}
+
+// NewDriftConfig returns default topology-aware stale-plan detection settings.
+func NewDriftConfig() DriftConfig {
+	return nemo_relay.NewDriftConfig()
+}
+
+// NewConvergenceConfig returns default topological convergence detection settings.
+func NewConvergenceConfig() ConvergenceConfig {
+	return nemo_relay.NewConvergenceConfig()
 }
 
 // NewAdaptiveHintsConfig returns default adaptive hints injection settings.

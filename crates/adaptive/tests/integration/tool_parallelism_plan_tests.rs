@@ -9,24 +9,19 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
-use nemo_relay_adaptive::{
-    InMemoryBackend, StorageBackend, StorageBackendDyn, ToolParallelismLearner,
-};
 use nemo_relay_adaptive::learner::traits::Learner;
+use nemo_relay_adaptive::tool_parallelism_learner::ToolParallelismLearner;
 use nemo_relay_adaptive::types::cache::HotCache;
 use nemo_relay_adaptive::types::metadata::{MetadataEnvelope, ParallelHint};
 use nemo_relay_adaptive::types::plan::{ExecutionPlan, ParallelGroup};
 use nemo_relay_adaptive::types::records::{CallKind, CallRecord, RunRecord};
+use nemo_relay_adaptive::{InMemoryBackend, StorageBackend, StorageBackendDyn};
 
 fn make_hot_cache() -> Arc<RwLock<HotCache>> {
     Arc::new(RwLock::new(HotCache {
         plan: None,
         trie: None,
         agent_hints_default: None,
-        acg_profiles: std::collections::HashMap::new(),
-        acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: None,
-        acg_observation_count: 0,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
         acg_stability: None,
@@ -51,10 +46,6 @@ fn make_tool_call(
         total_tokens: None,
         model_name: None,
         tool_call_count: None,
-    annotated_request: None,
-    annotated_response: None,
-        annotated_request: None,
-        annotated_response: None,
         annotated_request: None,
         annotated_response: None,
     }

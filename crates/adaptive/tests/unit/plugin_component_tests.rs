@@ -12,6 +12,7 @@ use nemo_relay::api::runtime::global_context;
 use nemo_relay::plugin::{DiagnosticLevel, UnsupportedBehavior, clear_plugin_configuration};
 use nemo_relay::plugin::{Plugin, PluginRegistrationContext, rollback_registrations};
 use serde_json::json;
+
 fn reset_global() {
     let _ = clear_plugin_configuration();
     let _ = deregister_adaptive_component();
@@ -336,6 +337,37 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
             && diag.component.as_deref() == Some("adaptive_hints")
             && diag.field.as_deref() == Some("extra")
     }));
+}
+
+#[test]
+fn validate_adaptive_plugin_config_accepts_topology_sections() {
+    let config = json!({
+        "version": 1,
+        "adaptive_hints": {
+            "governor": {"enabled": true, "epsilon": 2.0}
+        },
+        "tool_parallelism": {
+            "mode": "observe_only",
+            "drift": {"enabled": true, "threshold": 0.5}
+        },
+        "acg": {
+            "provider": "anthropic",
+            "convergence": {"enabled": true, "epsilon": 0.01, "stability_window": 3}
+        },
+        "convergence": {"enabled": true, "epsilon": 0.01, "stability_window": 3},
+        "policy": {
+            "unknown_field": "error",
+            "unsupported_value": "error"
+        }
+    });
+
+    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diag| diag.code != "adaptive.unknown_field"),
+        "topology config fields should not be reported as unknown: {diagnostics:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

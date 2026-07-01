@@ -34,6 +34,8 @@ use nemo_relay::api::runtime::{
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
+use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
 use nemo_relay::plugin::{clear_plugin_configuration, rollback_registrations};
@@ -86,6 +88,12 @@ fn layered_acg_request() -> LlmRequest {
 }
 
 fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
+    let annotated_request = AnthropicMessagesCodec
+        .decode(&layered_acg_request())
+        .expect("layered request should decode");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&annotated_request)
+        .expect("layered request should build PromptIR");
+
     StabilityAnalysisResult {
         scores: vec![
             BlockStabilityScore {
@@ -111,7 +119,9 @@ fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResu
             },
         ],
         stable_prefix_length: 3,
+        stable_prefix_fingerprint: crate::acg::stability::prompt_prefix_fingerprint(&prompt_ir, 3),
         total_observations: observation_count,
+        converged: false,
     }
 }
 
@@ -283,6 +293,8 @@ fn build_learners_filters_unknown_entries() {
     let learners = build_learners(
         "agent-a",
         &["latency_sensitivity".to_string(), "unknown".to_string()],
+        None,
+        None,
         None,
     );
     assert_eq!(learners.len(), 1);
@@ -459,6 +471,8 @@ async fn telemetry_feature_registers_subscriber_and_starts_drain_task() {
         "agent-telemetry".into(),
         Uuid::now_v7(),
         None,
+        None,
+        None,
     );
     let name = feature.subscriber_name.clone();
 
@@ -490,6 +504,8 @@ async fn telemetry_feature_requires_backend() {
         TelemetryComponentConfig::default(),
         "agent-telemetry".into(),
         Uuid::now_v7(),
+        None,
+        None,
         None,
     );
     let mut ctx = RegistrationContext::new(&mut runtime);
@@ -777,7 +793,9 @@ async fn adaptive_runtime_helper_methods_cover_report_wait_for_idle_and_feature_
         build_learners(
             "agent-a",
             &["tool_parallelism".to_string(), "acg".to_string()],
+            config.tool_parallelism.as_ref(),
             config.acg.as_ref(),
+            config.convergence.as_ref(),
         )
         .len(),
         2

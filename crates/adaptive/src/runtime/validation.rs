@@ -62,6 +62,29 @@ pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
             ),
         );
     }
+    if let Some(tool_parallelism) = &config.tool_parallelism
+        && let Some(drift) = &tool_parallelism.drift
+    {
+        validate_positive_finite(
+            &mut report,
+            &config.policy,
+            "tool_parallelism.drift",
+            "threshold",
+            drift.threshold,
+        );
+    }
+
+    if let Some(adaptive_hints) = &config.adaptive_hints
+        && let Some(governor) = &adaptive_hints.governor
+    {
+        validate_positive_finite(
+            &mut report,
+            &config.policy,
+            "adaptive_hints.governor",
+            "epsilon",
+            governor.epsilon,
+        );
+    }
 
     if let Some(acg) = &config.acg
         && acg.provider != "anthropic"
@@ -80,8 +103,58 @@ pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
             ),
         );
     }
+    if let Some(acg) = &config.acg
+        && let Some(convergence) = &acg.convergence
+    {
+        validate_convergence(&mut report, &config.policy, "acg.convergence", convergence);
+    }
+    if let Some(convergence) = &config.convergence {
+        validate_convergence(&mut report, &config.policy, "convergence", convergence);
+    }
 
     report
+}
+
+fn validate_convergence(
+    report: &mut ConfigReport,
+    policy: &ConfigPolicy,
+    component: &str,
+    convergence: &crate::config::ConvergenceConfig,
+) {
+    validate_positive_finite(report, policy, component, "epsilon", convergence.epsilon);
+    if convergence.stability_window < 3 {
+        push_policy_diag(
+            &mut report.diagnostics,
+            policy.unsupported_value,
+            "adaptive.unsupported_value",
+            Some(component.to_string()),
+            Some("stability_window".to_string()),
+            format!(
+                "{component} stability_window must be at least 3, got {}",
+                convergence.stability_window
+            ),
+        );
+    }
+}
+
+fn validate_positive_finite(
+    report: &mut ConfigReport,
+    policy: &ConfigPolicy,
+    component: &str,
+    field: &str,
+    value: f64,
+) {
+    if value.is_finite() && value > 0.0 {
+        return;
+    }
+    push_policy_diag(
+        &mut report.diagnostics,
+        policy.unsupported_value,
+        "adaptive.unsupported_value",
+        Some(component.to_string()),
+        Some(field.to_string()),
+        format!("{component} {field} must be a positive finite number, got {value}"),
+    );
 }
 
 fn validate_backend(report: &mut ConfigReport, policy: &ConfigPolicy, backend: &BackendSpec) {

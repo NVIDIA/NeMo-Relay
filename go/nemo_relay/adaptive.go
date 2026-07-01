@@ -17,6 +17,7 @@ type AdaptiveConfig struct {
 	AdaptiveHints   *AdaptiveHintsConfig   `json:"adaptive_hints,omitempty"`
 	ToolParallelism *ToolParallelismConfig `json:"tool_parallelism,omitempty"`
 	Acg             *AcgConfig             `json:"acg,omitempty"`
+	Convergence     *ConvergenceConfig     `json:"convergence,omitempty"`
 	Policy          *ConfigPolicy          `json:"policy,omitempty"`
 }
 
@@ -39,16 +40,37 @@ type TelemetryConfig struct {
 
 // AdaptiveHintsConfig configures built-in LLM request hint injection.
 type AdaptiveHintsConfig struct {
-	Priority       int32  `json:"priority,omitempty"`
-	BreakChain     bool   `json:"break_chain,omitempty"`
-	InjectHeader   bool   `json:"inject_header,omitempty"`
-	InjectBodyPath string `json:"inject_body_path,omitempty"`
+	Priority       int32           `json:"priority,omitempty"`
+	BreakChain     bool            `json:"break_chain,omitempty"`
+	InjectHeader   bool            `json:"inject_header,omitempty"`
+	InjectBodyPath string          `json:"inject_body_path,omitempty"`
+	Governor       *GovernorConfig `json:"governor,omitempty"`
 }
 
 // ToolParallelismConfig configures built-in adaptive tool scheduling.
 type ToolParallelismConfig struct {
-	Priority int32  `json:"priority,omitempty"`
-	Mode     string `json:"mode,omitempty"`
+	Priority int32        `json:"priority,omitempty"`
+	Mode     string       `json:"mode,omitempty"`
+	Drift    *DriftConfig `json:"drift,omitempty"`
+}
+
+// GovernorConfig configures topology-aware hint load shedding.
+type GovernorConfig struct {
+	Enabled bool    `json:"enabled,omitempty"`
+	Epsilon float64 `json:"epsilon,omitempty"`
+}
+
+// DriftConfig configures topology-aware stale-plan invalidation.
+type DriftConfig struct {
+	Enabled   bool    `json:"enabled,omitempty"`
+	Threshold float64 `json:"threshold,omitempty"`
+}
+
+// ConvergenceConfig configures topological convergence detection.
+type ConvergenceConfig struct {
+	Enabled         bool    `json:"enabled,omitempty"`
+	Epsilon         float64 `json:"epsilon,omitempty"`
+	StabilityWindow uint32  `json:"stability_window,omitempty"`
 }
 
 // AcgStabilityThresholds configures prompt stability classification thresholds.
@@ -64,6 +86,7 @@ type AcgConfig struct {
 	ObservationWindow   uint32                  `json:"observation_window,omitempty"`
 	Priority            int32                   `json:"priority,omitempty"`
 	StabilityThresholds *AcgStabilityThresholds `json:"stability_thresholds,omitempty"`
+	Convergence         *ConvergenceConfig      `json:"convergence,omitempty"`
 }
 
 // AdaptiveComponentSpec wraps one adaptive config as a top-level plugin component.
@@ -99,6 +122,21 @@ func NewRedisAdaptiveBackend(url, keyPrefix string) AdaptiveBackendSpec {
 // NewTelemetryConfig returns default built-in adaptive telemetry settings.
 func NewTelemetryConfig() TelemetryConfig {
 	return TelemetryConfig{}
+}
+
+// NewGovernorConfig returns default topology-aware hint load-shedding settings.
+func NewGovernorConfig() GovernorConfig {
+	return GovernorConfig{Epsilon: 1.0}
+}
+
+// NewDriftConfig returns default topology-aware stale-plan detection settings.
+func NewDriftConfig() DriftConfig {
+	return DriftConfig{Threshold: 0.75}
+}
+
+// NewConvergenceConfig returns default topological convergence detection settings.
+func NewConvergenceConfig() ConvergenceConfig {
+	return ConvergenceConfig{Epsilon: 0.001, StabilityWindow: 3}
 }
 
 // NewAdaptiveHintsConfig returns default adaptive hints injection settings.

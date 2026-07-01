@@ -182,6 +182,7 @@ fn validate_adaptive_plugin_config(plugin_config: &Map<String, Json>) -> Vec<Con
             "adaptive_hints",
             "tool_parallelism",
             "acg",
+            "convergence",
             "policy",
         ],
     );
@@ -252,8 +253,21 @@ fn validate_adaptive_plugin_config(plugin_config: &Map<String, Json>) -> Vec<Con
                 "break_chain",
                 "inject_header",
                 "inject_body_path",
+                "governor",
             ],
         );
+        if let Some(governor_json) = adaptive_hints_json
+            .get("governor")
+            .and_then(Json::as_object)
+        {
+            validate_unknown_fields(
+                &mut diagnostics,
+                &config.policy,
+                Some("adaptive_hints.governor".to_string()),
+                governor_json,
+                &["enabled", "epsilon"],
+            );
+        }
     }
 
     if let Some(tool_parallelism_json) = plugin_config
@@ -265,8 +279,17 @@ fn validate_adaptive_plugin_config(plugin_config: &Map<String, Json>) -> Vec<Con
             &config.policy,
             Some("tool_parallelism".to_string()),
             tool_parallelism_json,
-            &["priority", "mode"],
+            &["priority", "mode", "drift"],
         );
+        if let Some(drift_json) = tool_parallelism_json.get("drift").and_then(Json::as_object) {
+            validate_unknown_fields(
+                &mut diagnostics,
+                &config.policy,
+                Some("tool_parallelism.drift".to_string()),
+                drift_json,
+                &["enabled", "threshold"],
+            );
+        }
     }
 
     if let Some(acg_json) = plugin_config.get("acg").and_then(Json::as_object) {
@@ -280,7 +303,27 @@ fn validate_adaptive_plugin_config(plugin_config: &Map<String, Json>) -> Vec<Con
                 "observation_window",
                 "priority",
                 "stability_thresholds",
+                "convergence",
             ],
+        );
+        if let Some(convergence_json) = acg_json.get("convergence").and_then(Json::as_object) {
+            validate_unknown_fields(
+                &mut diagnostics,
+                &config.policy,
+                Some("acg.convergence".to_string()),
+                convergence_json,
+                &["enabled", "epsilon", "stability_window"],
+            );
+        }
+    }
+
+    if let Some(convergence_json) = plugin_config.get("convergence").and_then(Json::as_object) {
+        validate_unknown_fields(
+            &mut diagnostics,
+            &config.policy,
+            Some("convergence".to_string()),
+            convergence_json,
+            &["enabled", "epsilon", "stability_window"],
         );
     }
 
