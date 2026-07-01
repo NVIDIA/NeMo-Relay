@@ -1,7 +1,7 @@
 ---
 title: "Function register_llm_request_intercept"
 sidebar-title: "register_llm_request_intercept"
-description: "Register a global LLM request intercept. Request intercepts can rewrite or annotate the outgoing LLM request."
+description: "Register a global LLM request intercept. Request intercepts can rewrite or annotate the outgoing LLM request and schedule lifecycle marks for the resulting LLM scope."
 position: 14
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    callable: <a href=\"../runtime/callbacks/type-llmrequestinterceptfn\">LlmRequestInterceptFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
-Register a global LLM request intercept. Request intercepts can rewrite or annotate the outgoing LLM request.
+Register a global LLM request intercept. Request intercepts can rewrite or annotate the outgoing LLM request and schedule lifecycle marks for the resulting LLM scope.
 
 ## Parameters
 

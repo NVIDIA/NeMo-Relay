@@ -1,7 +1,7 @@
 ---
 title: "Function wrap_llm_request_intercept_fn"
 sidebar-title: "wrap_llm_request_intercept_fn"
-description: "Wrap a C LLM request intercept callback (annotated-aware) into a Rust `LlmRequestInterceptFn` closure. The callback receives the intercept name, the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes the transformed request and annotated JSON to output pointers."
+description: "Wrap a C LLM request intercept callback (annotated-aware) into a Rust `LlmRequestInterceptFn` closure. The callback receives the intercept name, the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes one owned canonical outcome JSON string."
 position: 9
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,4 +11,4 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn wrap_llm_request_intercept_fn(\n    cb: <a href=\"type-nemorelayllmrequestinterceptcb\">NemoRelayLlmRequestInterceptCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n) -&gt; <a href=\"../../nemo-relay/api/runtime/callbacks/type-llmrequestinterceptfn\">LlmRequestInterceptFn</a>"}} /></pre>
 
-Wrap a C LLM request intercept callback (annotated-aware) into a Rust `LlmRequestInterceptFn` closure. The callback receives the intercept name, the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes the transformed request and annotated JSON to output pointers.
+Wrap a C LLM request intercept callback (annotated-aware) into a Rust `LlmRequestInterceptFn` closure. The callback receives the intercept name, the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes one owned canonical outcome JSON string.

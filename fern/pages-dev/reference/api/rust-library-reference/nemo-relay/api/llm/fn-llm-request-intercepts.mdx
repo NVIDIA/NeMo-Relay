@@ -2,14 +2,14 @@
 title: "Function llm_request_intercepts"
 sidebar-title: "llm_request_intercepts"
 description: "Run only the LLM request-intercept chain."
-position: 14
+position: 15
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm_request_intercepts(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm_request_intercepts(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    request: <a href=\"struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt;"}} /></pre>
 
 Run only the LLM request-intercept chain.
 
@@ -30,4 +30,6 @@ Returns any error raised by the request-intercept chain.
 
 ## Notes
 
-Conditional guardrails, codecs, and execution intercepts are not run by this helper.
+Conditional guardrails, codecs, and execution intercepts are not run by this helper. Run the LLM request-intercept chain and return its complete outcome.
+
+This helper does not emit the returned marks because it does not own an LLM lifecycle. Callers must attach them to the lifecycle they own.
