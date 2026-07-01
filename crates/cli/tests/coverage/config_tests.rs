@@ -249,9 +249,6 @@ anthropic_base_url = "http://anthropic"
 max_hook_payload_bytes = 12345
 max_passthrough_body_bytes = 67890
 
-[plugins]
-config = { components = [] }
-
 [agents.claude]
 command = "claude"
 
@@ -269,7 +266,7 @@ command = "hermes --yolo chat"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -283,10 +280,7 @@ command = "hermes --yolo chat"
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 12345);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 67890);
     assert_eq!(resolved.gateway.metadata, None);
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "components": [] }))
-    );
+    assert_eq!(resolved.gateway.plugin_config, None);
     assert_eq!(
         resolved.agents.codex.command.as_deref(),
         Some("codex --approval-mode never")
@@ -325,7 +319,7 @@ fn legacy_observability_config_sections_fail_clearly() {
             openai_base_url: None,
             anthropic_base_url: None,
             session_metadata: None,
-            plugin_config: None,
+            plugin_config_path: None,
             dry_run: false,
             print: false,
             command: vec![],
@@ -378,7 +372,7 @@ mode = "overwrite"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -414,7 +408,7 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
     let temp = tempfile::tempdir().unwrap();
     let explicit = temp.path().join("custom-config.toml");
     assert_eq!(
-        plugin_config_paths(Some(&explicit)),
+        plugin_config_paths(Some(&explicit), None),
         vec![temp.path().join("plugins.toml")]
     );
 
@@ -1148,7 +1142,7 @@ kind = "observability"
 }
 
 #[test]
-fn plugins_toml_conflicts_with_config_toml_plugins_config() {
+fn config_toml_plugin_configuration_is_rejected() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(
@@ -1159,7 +1153,6 @@ config = { version = 1, components = [] }
 "#,
     )
     .unwrap();
-    std::fs::write(temp.path().join("plugins.toml"), "version = 1\n").unwrap();
     let args = ServerArgs {
         config: Some(config_path),
         ..ServerArgs::default()
@@ -1167,71 +1160,38 @@ config = { version = 1, components = [] }
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
 
-    assert!(error.contains("plugin config is defined in both"));
-    assert!(error.contains("config.toml"));
+    assert!(error.contains("plugin configuration"));
+    assert!(error.contains("no longer supported"));
     assert!(error.contains("plugins.toml"));
 }
 
 #[test]
-fn plugins_toml_with_only_dynamic_plugins_preserves_config_toml_plugin_config() {
-    let temp = tempfile::tempdir().unwrap();
-    let plugin_dir = temp.path().join("plugins/acme");
-    std::fs::create_dir_all(&plugin_dir).unwrap();
-    write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let config_path = temp.path().join("config.toml");
-    std::fs::write(
-        &config_path,
-        r#"
-[plugins]
-config = { version = 1, components = [] }
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        temp.path().join("plugins.toml"),
-        r#"
-[[plugins.dynamic]]
-manifest = "plugins/acme/relay-plugin.toml"
-"#,
-    )
-    .unwrap();
-    let args = ServerArgs {
-        config: Some(config_path),
-        ..ServerArgs::default()
-    };
-
-    let resolved = resolve_server_config(&args).unwrap();
-
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "version": 1, "components": [] }))
-    );
-    assert_eq!(resolved.dynamic_plugins.len(), 1);
-    assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.worker");
-}
-
-#[test]
-fn cli_plugin_config_conflicts_with_file_plugin_config() {
+fn plugin_config_path_overrides_sibling_plugin_file() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
+    let sibling_path = temp.path().join("plugins.toml");
+    let override_path = temp.path().join("override.toml");
     std::fs::write(&config_path, "").unwrap();
-    std::fs::write(temp.path().join("plugins.toml"), "version = 1\n").unwrap();
+    std::fs::write(&sibling_path, "version = 1\n").unwrap();
+    std::fs::write(&override_path, "version = 2\n").unwrap();
     let command = RunCommand {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
-        dry_run: false,
+        plugin_config_path: Some(override_path),
+        dry_run: true,
         print: false,
         command: vec!["codex".into()],
     };
 
-    let error = resolve_run_config(&command, None).unwrap_err().to_string();
+    let resolved = resolve_run_config(&command, None).unwrap();
 
-    assert!(error.contains("--plugin-config"));
-    assert!(error.contains("file configuration"));
+    assert_eq!(
+        resolved.gateway.plugin_config,
+        Some(json!({ "version": 2 }))
+    );
 }
 
 #[test]
@@ -1252,7 +1212,7 @@ openai_base_url = "http://file-openai"
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: None,
         session_metadata: Some(r#"{"team":"cli"}"#.into()),
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -1287,7 +1247,7 @@ openai_base_url = "http://file-openai"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -1299,34 +1259,6 @@ openai_base_url = "http://file-openai"
 }
 
 #[test]
-fn run_plugin_config_overrides_inherited_top_level_plugin_config() {
-    let temp = tempfile::tempdir().unwrap();
-    let server = ServerArgs {
-        config: Some(isolated_config_path(&temp)),
-        plugin_config: Some(r#"{"components":["top-level"]}"#.into()),
-        ..ServerArgs::default()
-    };
-    let command = RunCommand {
-        agent: Some(CodingAgent::Codex),
-        config: None,
-        openai_base_url: None,
-        anthropic_base_url: None,
-        session_metadata: None,
-        plugin_config: Some(r#"{"components":["run"]}"#.into()),
-        dry_run: false,
-        print: false,
-        command: vec!["codex".into()],
-    };
-
-    let resolved = resolve_run_config(&command, Some(&server)).unwrap();
-
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "components": ["run"] }))
-    );
-}
-
-#[test]
 fn server_resolution_applies_all_server_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let args = ServerArgs {
@@ -1334,7 +1266,7 @@ fn server_resolution_applies_all_server_overrides() {
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
-        plugin_config: Some(r#"{"version":1,"components":[]}"#.into()),
+        plugin_config_path: None,
         max_hook_payload_bytes: Some(222),
         max_passthrough_body_bytes: Some(333),
     };
@@ -1346,10 +1278,7 @@ fn server_resolution_applies_all_server_overrides() {
     assert_eq!(resolved.gateway.anthropic_base_url, "http://cli-anthropic");
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 222);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 333);
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "version": 1, "components": [] }))
-    );
+    assert_eq!(resolved.gateway.plugin_config, None);
     assert!(args.requested_daemon_mode());
 }
 
@@ -1712,7 +1641,7 @@ fn run_resolution_applies_all_run_overrides() {
         openai_base_url: Some("http://run-openai".into()),
         anthropic_base_url: Some("http://run-anthropic".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),
-        plugin_config: Some(r#"{"components":["x"]}"#.into()),
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -1723,10 +1652,6 @@ fn run_resolution_applies_all_run_overrides() {
     assert_eq!(resolved.gateway.openai_base_url, "http://run-openai");
     assert_eq!(resolved.gateway.anthropic_base_url, "http://run-anthropic");
     assert_eq!(resolved.gateway.metadata, Some(json!({ "team": "run" })));
-    assert_eq!(
-        resolved.gateway.plugin_config,
-        Some(json!({ "components": ["x"] }))
-    );
 }
 
 #[test]
@@ -1757,7 +1682,7 @@ allowed = false
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["codex".into()],
@@ -1815,7 +1740,7 @@ fn recursive_toml_merge_replaces_scalars_and_preserves_tables() {
 openai_base_url = "http://old"
 anthropic_base_url = "http://anthropic"
 
-[plugins.config]
+[runtime.policy]
 version = 1
 policy = { unknown_component = "warn", unknown_field = "warn" }
 "#
@@ -1826,7 +1751,7 @@ policy = { unknown_component = "warn", unknown_field = "warn" }
 [upstream]
 openai_base_url = "http://new"
 
-[plugins.config.policy]
+[runtime.policy.policy]
 unknown_component = "error"
 "#
     .parse::<toml::Table>()
@@ -1844,11 +1769,11 @@ unknown_component = "error"
         Some("http://anthropic")
     );
     assert_eq!(
-        left["plugins"]["config"]["policy"]["unknown_component"].as_str(),
+        left["runtime"]["policy"]["policy"]["unknown_component"].as_str(),
         Some("error")
     );
     assert_eq!(
-        left["plugins"]["config"]["policy"]["unknown_field"].as_str(),
+        left["runtime"]["policy"]["policy"]["unknown_field"].as_str(),
         Some("warn")
     );
 }
