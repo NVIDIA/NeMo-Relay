@@ -1128,9 +1128,9 @@ func assertScopeLocalLLMWrappersDeregister(t *testing.T, scopeUUID string, reque
 		&requestInterceptCalls,
 		func() error {
 			return ScopeRegisterLlmRequestIntercept(scopeUUID, "llm_scope_req_int", 1, false,
-				func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+				func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 					requestInterceptCalls++
-					return headers, content, annotated, nil
+					return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 				},
 			)
 		},

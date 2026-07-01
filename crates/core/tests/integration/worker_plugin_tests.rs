@@ -182,6 +182,13 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         llm_start.input().unwrap()["content"]["worker_plugin_llm_sanitize_request"],
         true
     );
+    let pending_mark = find_event(&captured_events, "fixture.worker.llm_request.mark", None);
+    assert_eq!(pending_mark.parent_uuid(), Some(llm_start.uuid()));
+    assert_eq!(
+        pending_mark.data().unwrap()["source"],
+        "worker_request_intercept"
+    );
+    assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
     let llm_end = find_event(
         &captured_events,
         "worker-fixture-llm-execute",
@@ -226,6 +233,62 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         stream_value["request"]["worker_plugin_llm_stream_execution_request"],
         true
     );
+
+    loaded.clear();
+}
+
+#[tokio::test]
+async fn host_cancellation_reaches_rust_worker_invocation() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let dropped_tx = Arc::new(Mutex::new(Some(dropped_tx)));
+
+    let execution = tokio::spawn(tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("worker-fixture-cancelled-tool")
+            .args(json!({ "input": "cancel" }))
+            .func(Arc::new(move |_| {
+                let started = started_tx
+                    .lock()
+                    .expect("started lock")
+                    .take()
+                    .expect("callback should run once");
+                let dropped = dropped_tx
+                    .lock()
+                    .expect("dropped lock")
+                    .take()
+                    .expect("callback should run once");
+                Box::pin(async move {
+                    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+                    impl Drop for DropSignal {
+                        fn drop(&mut self) {
+                            if let Some(sender) = self.0.take() {
+                                let _ = sender.send(());
+                            }
+                        }
+                    }
+
+                    let _drop_signal = DropSignal(Some(dropped));
+                    let _ = started.send(());
+                    std::future::pending::<FlowResult<Json>>().await
+                })
+            }))
+            .build(),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(2), started_rx)
+        .await
+        .expect("worker should call the host continuation before cancellation")
+        .expect("worker should call the host continuation");
+
+    execution.abort();
+    let _ = execution.await;
+    tokio::time::timeout(std::time::Duration::from_secs(2), dropped_rx)
+        .await
+        .expect("worker cancellation should drop the host continuation")
+        .expect("host continuation drop signal should be delivered");
 
     loaded.clear();
 }

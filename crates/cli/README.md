@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -27,8 +26,8 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Why Use It?
 
-- 🧭 **Observe existing coding agents**: Run Claude Code, Codex, Cursor, or
-  Hermes Agent through a local NeMo Relay gateway without changing the agent
+- 🧭 **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
+  Agent through a local NeMo Relay gateway without changing the agent
   itself.
 - 🛠️ **Configure hooks interactively**: Use the setup wizard to write project or
   user config and install the hook files needed by supported agents.
@@ -43,8 +42,8 @@ with the installed `nemo-relay` command rather than link against the crate.
   Cargo package.
 - ✅ **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
   then runs doctor once config is present.
-- ✅ **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`,
-  `nemo-relay cursor`, and `nemo-relay hermes` start observed agent runs.
+- ✅ **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
+  `nemo-relay hermes` start observed agent runs.
 - ✅ **Config-driven launch**: `nemo-relay run` resolves config, environment, and
   CLI overrides for deterministic non-interactive use.
 - ✅ **Hook forwarding server**: A local gateway accepts agent hook events and

@@ -17,7 +17,7 @@ The main entry points are:
 - ``nemo_relay.adaptive`` for adaptive component configuration helpers
 - ``nemo_relay.observability`` for observability component configuration helpers
 - ``nemo_relay.pii_redaction`` for PII redaction component configuration helpers
-- ``nemo_relay.pricing`` for pricing component configuration helpers
+- ``nemo_relay.model_pricing`` for model pricing component configuration helpers
 
 Top-level exports also include:
 
@@ -43,11 +43,13 @@ Example::
         name: str,
         request: nemo_relay.LLMRequest,
         annotated: nemo_relay.AnnotatedLLMRequest | None
-    ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+    ) -> nemo_relay.LLMRequestInterceptOutcome:
         # The request object is immutable, however we can return a new instance with updated headers.
         headers = request.headers.copy()
         headers["Authorization"] = "Bearer test-token"
-        return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+        return nemo_relay.LLMRequestInterceptOutcome(
+            nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+        )
 
     async def tool_impl(args):
         return {"echo": args["query"]}
@@ -96,11 +98,13 @@ from nemo_relay._native import (
     LLMAttributes,
     LLMHandle,
     LLMRequest,
+    LLMRequestInterceptOutcome,
     MarkEvent,
     OpenInferenceConfig,
     OpenInferenceSubscriber,
     OpenTelemetryConfig,
     OpenTelemetrySubscriber,
+    PendingMarkSpec,
     ScopeAttributes,
     ScopeEvent,
     ScopeHandle,
@@ -162,12 +166,11 @@ ToolExecutionIntercept: TypeAlias = Callable[
     [str, Json, Callable[[Json], Awaitable[Json]]],
     Json | Awaitable[Json],
 ]
-#: Request intercept callback that rewrites raw and annotated LLM requests
-#: together. The return tuple supplies the request and optional annotated view
-#: passed to later request intercepts and execution.
+#: Request intercept callback that returns the canonical request, annotation,
+#: and pending-mark outcome passed to later intercepts and managed execution.
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
-    tuple[LLMRequest, AnnotatedLLMRequest | None],
+    LLMRequestInterceptOutcome,
 ]
 #: Execution intercept callback that wraps non-streaming LLM execution. The
 #: callback receives the logical LLM name, request, and next callable. It may
@@ -191,10 +194,10 @@ from nemo_relay import (  # noqa: E402
     guardrails,
     intercepts,
     llm,
+    model_pricing,
     observability,
     pii_redaction,
     plugin,
-    pricing,
     scope,
     scope_local,
     subscribers,
@@ -438,7 +441,7 @@ __all__ = [
     "adaptive",
     "observability",
     "pii_redaction",
-    "pricing",
+    "model_pricing",
     # Scope stack isolation
     "ScopeStack",
     "create_scope_stack",
@@ -457,6 +460,8 @@ __all__ = [
     "ToolHandle",
     "LLMHandle",
     "LLMRequest",
+    "LLMRequestInterceptOutcome",
+    "PendingMarkSpec",
     "Event",
     "AnnotatedLLMRequest",
     "AnnotatedLLMResponse",

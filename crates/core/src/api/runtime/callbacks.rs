@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio_stream::Stream;
 
 use crate::api::event::Event;
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::Result;
 use crate::json::Json;
@@ -163,17 +163,17 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// - Third argument: Optional normalized request annotation to carry forward.
 ///
 /// # Returns
-/// A [`Result`] containing the transformed request and optional annotation.
+/// A [`Result`] containing the canonical request-intercept outcome.
+/// Without a request codec, the returned request is authoritative. With a
+/// request codec, its headers remain writable while its content must remain
+/// unchanged; provider-body edits must be returned through the required
+/// annotation.
 ///
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
 pub type LlmRequestInterceptFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;

@@ -16,8 +16,10 @@ use std::ptr;
 use std::sync::Mutex;
 
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::{Event, ScopeCategory};
-pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
+pub use nemo_relay_types::api::event::{
+    CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+};
+pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 pub use nemo_relay_types::api::tool::ToolAttributes;
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
@@ -251,8 +253,7 @@ pub type NemoRelayNativeLlmRequestInterceptCb = unsafe extern "C" fn(
     name: *const NemoRelayNativeString,
     request_json: *const NemoRelayNativeString,
     annotated_json: *const NemoRelayNativeString,
-    out_request_json: *mut *mut NemoRelayNativeString,
-    out_annotated_json: *mut *mut NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
 /// Native LLM execution intercept callback.
@@ -1467,11 +1468,7 @@ impl<'a> PluginContext<'a> {
         callback: F,
     ) -> Result<()>
     where
-        F: Fn(
-                &str,
-                LlmRequest,
-                Option<AnnotatedLlmRequest>,
-            ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
             + Send
             + Sync
             + 'static,
@@ -2121,25 +2118,19 @@ unsafe extern "C" fn typed_llm_request_intercept_trampoline<F>(
     name: *const NemoRelayNativeString,
     request_json: *const NemoRelayNativeString,
     annotated_json: *const NemoRelayNativeString,
-    out_request_json: *mut *mut NemoRelayNativeString,
-    out_annotated_json: *mut *mut NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
-    F: Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+    F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync
         + 'static,
 {
-    if user_data.is_null() || out_request_json.is_null() || out_annotated_json.is_null() {
+    if user_data.is_null() || out_outcome_json.is_null() {
         return NemoRelayStatus::NullPointer;
     }
     unsafe {
-        *out_request_json = ptr::null_mut();
-        *out_annotated_json = ptr::null_mut();
+        *out_outcome_json = ptr::null_mut();
     }
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -2148,35 +2139,15 @@ where
         let annotated: Option<AnnotatedLlmRequest> =
             read_optional_json_value(&state.host, annotated_json, "annotated LLM request")?;
         match (state.callback)(&name, request, annotated) {
-            Ok((request, annotated)) => {
-                let Some(request) = HostString::from_json(&state.host, &request) else {
-                    set_last_error(&state.host, "failed to allocate LLM request output");
+            Ok(outcome) => {
+                let Some(outcome) = HostString::from_json(&state.host, &outcome) else {
+                    set_last_error(&state.host, "failed to allocate LLM request outcome");
                     return Ok(NemoRelayStatus::Internal);
                 };
-                let annotated = match annotated.as_ref() {
-                    Some(annotated) => {
-                        let Some(annotated) = HostString::from_json(&state.host, annotated) else {
-                            set_last_error(
-                                &state.host,
-                                "failed to allocate annotated LLM request output",
-                            );
-                            return Ok(NemoRelayStatus::Internal);
-                        };
-                        Some(annotated)
-                    }
-                    None => None,
-                };
                 unsafe {
-                    *out_request_json = request.ptr;
-                    *out_annotated_json = annotated
-                        .as_ref()
-                        .map(|annotated| annotated.ptr)
-                        .unwrap_or(ptr::null_mut());
+                    *out_outcome_json = outcome.ptr;
                 }
-                std::mem::forget(request);
-                if let Some(annotated) = annotated {
-                    std::mem::forget(annotated);
-                }
+                std::mem::forget(outcome);
                 Ok(NemoRelayStatus::Ok)
             }
             Err(message) => Ok(callback_error(&state.host, message)),
@@ -2646,7 +2617,7 @@ pub unsafe fn export_plugin<P: NativePlugin>(
     }
     unsafe { *out = NemoRelayNativePluginV1::default() };
     let host_ref = unsafe { &*host };
-    export_plugin_checked(host_ref, out, plugin)
+    export_plugin_checked(host_ref, out, || plugin)
 }
 
 /// Initializes a native plugin descriptor from a constructor callback.
@@ -2670,21 +2641,18 @@ where
     }
     unsafe { *out = NemoRelayNativePluginV1::default() };
     let host_ref = unsafe { &*host };
-    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
-        return NemoRelayStatus::InvalidArg;
-    }
-    if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {
-        return NemoRelayStatus::InvalidArg;
-    }
-
-    export_plugin_checked(host_ref, out, constructor())
+    export_plugin_checked(host_ref, out, constructor)
 }
 
-fn export_plugin_checked<P: NativePlugin>(
+fn export_plugin_checked<P, F>(
     host_ref: &NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
-    plugin: P,
-) -> NemoRelayStatus {
+    constructor: F,
+) -> NemoRelayStatus
+where
+    P: NativePlugin,
+    F: FnOnce() -> P,
+{
     if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
         return NemoRelayStatus::InvalidArg;
     }
@@ -2692,6 +2660,7 @@ fn export_plugin_checked<P: NativePlugin>(
         return NemoRelayStatus::InvalidArg;
     }
 
+    let plugin = constructor();
     let kind = plugin.plugin_kind().to_owned();
     let allows_multiple_components = plugin.allows_multiple_components();
     let Some(kind_handle) = HostString::new(host_ref, &kind) else {

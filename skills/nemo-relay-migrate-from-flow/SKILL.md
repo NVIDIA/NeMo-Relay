@@ -1,6 +1,6 @@
 ---
 name: nemo-relay-migrate-from-flow
-description: Migrate applications, examples, integrations, documentation, package manifests, and repository code from NeMo Flow naming and packages to NeMo Relay across Python, Rust, Node.js, Go, WebAssembly, C FFI, CLI, config, and observability surfaces; use when a user asks to rename nemo_flow/nemo-flow/NeMo Flow APIs, automate a migration, update imports or dependencies, or validate a Flow-to-Relay conversion
+description: Migrate applications, examples, integrations, documentation, package manifests, and repository code from NeMo Flow naming and packages to NeMo Relay across Python, Rust, Node.js, Go, C FFI, CLI, config, and observability surfaces; use when a user asks to rename nemo_flow/nemo-flow/NeMo Flow APIs, automate a migration, update imports or dependencies, or validate a Flow-to-Relay conversion
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -14,7 +14,7 @@ plus language-specific validation, not a behavior rewrite.
 ## Default Workflow
 
 1. Inspect the working tree and identify touched surfaces: Rust, Python,
-   Node.js, Go, WebAssembly, C FFI, CLI/config, docs, or integration patches.
+   Node.js, Go, C FFI, CLI/config, docs, or integrations.
 2. Run the bundled helper in dry-run mode before editing:
    `python skills/nemo-relay-migrate-from-flow/scripts/migrate_from_nemo_flow.py <path> --rename-paths`
 3. Review the reported text edits and path renames. If the scope is correct,
@@ -31,9 +31,8 @@ plus language-specific validation, not a behavior rewrite.
   `python/nemo_flow` -> `python/nemo_relay`
 - Rust: `nemo-flow` -> `nemo-relay`, `nemo-flow-adaptive` ->
   `nemo-relay-adaptive`, `nemo_flow::` -> `nemo_relay::`
-- Node.js and WebAssembly: `nemo-flow-node` -> `nemo-relay-node`,
-  `nemo-flow-wasm` -> `nemo-relay-wasm`, and related entry points such as
-  `/typed`, `/plugin`, `/adaptive`, and `/observability`
+- Node.js: `nemo-flow-node` -> `nemo-relay-node`, including related entry
+  points such as `/typed`, `/plugin`, `/adaptive`, and `/observability`
 - Go: `github.com/NVIDIA/NeMo-Flow/go/nemo_flow` ->
   `github.com/NVIDIA/NeMo-Relay/go/nemo_relay`, package aliases
   `nemo_flow` -> `nemo_relay`, and source directories `go/nemo_flow` ->
@@ -57,15 +56,14 @@ or intentional compatibility names.
   references, and `use nemo_relay::...` imports. Let Cargo regenerate
   `Cargo.lock` when dependencies changed.
 - **Node.js**: update `package.json`, workspace names, package-lock entries,
-  native addon artifact names, and imports from `nemo-relay-node` or
-  `nemo-relay-wasm`. Run the package manager to refresh locks.
+  native addon artifact names, and imports from `nemo-relay-node`. Run the
+  package manager to refresh locks.
 - **Go**: update `go.mod`, import paths, package declarations, aliases, and any
   local directory layout under `go/nemo_relay`.
 - **C FFI**: update header includes, exported symbol names, status and callback
   type names, macro constants, loader paths, and downstream bindings.
 - **Docs and examples**: update badges, package install commands, repository
-  links, hosted docs URLs, CLI commands, config paths, and integration patch
-  names.
+  links, hosted docs URLs, CLI commands, config paths, and integration names.
 
 ## Automation Helper
 
@@ -96,8 +94,7 @@ otherwise regenerate them with Cargo, uv/pip, npm, or Go tooling.
 - For Rust changes, run `cargo test` or the repository's Rust test recipe.
 - For Python changes, run the relevant import check and tests in the target
   environment.
-- For Node.js or WebAssembly changes, run package install, type checks, and
-  package tests.
+- For Node.js changes, run package install, type checks, and package tests.
 - For Go changes, run `go test ./...` from the updated module.
 - For docs-only migrations, build or link-check docs if the site navigation,
   install commands, or API references changed.

@@ -5,10 +5,10 @@ use std::ffi::c_void;
 use std::ptr;
 
 use nemo_relay_plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmJsonStream, LlmRequest,
-    NemoRelayNativeHostApiV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeString, NemoRelayStatus, NativePlugin, PluginContext, PluginRuntime,
-    ScopeCategory, ScopeType,
+    CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json, LlmJsonStream,
+    LlmRequest, LlmRequestInterceptOutcome, NemoRelayNativeHostApiV1,
+    NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayStatus,
+    NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
 };
 use serde_json::{Map, json};
 
@@ -119,9 +119,21 @@ impl NativePlugin for FixtureNativePlugin {
             0,
             false,
             |_name, request, annotated| {
-                Ok((
+                Ok(LlmRequestInterceptOutcome::new(
                     mark_llm_request(request, "native_plugin_llm_request_intercept"),
                     annotated,
+                )
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("fixture.native.llm_request.mark")
+                        .category(EventCategory::custom())
+                        .category_profile(CategoryProfile {
+                            subtype: Some("fixture.native.pending".into()),
+                            ..CategoryProfile::default()
+                        })
+                        .data(json!({ "source": "native_request_intercept" }))
+                        .metadata(json!({ "fixture": true }))
+                        .build(),
                 ))
             },
         )?;

@@ -17,13 +17,12 @@ body:
         - Python binding
         - Node.js binding
         - Go binding
-        - WebAssembly binding
         - C FFI
         - Adaptive runtime
         - Middleware or guardrails
         - Plugins
         - Observability or exporters
-        - Third-party integration patches
+        - Framework integrations
         - Build, packaging, or CI
         - Documentation or examples
         - Not sure

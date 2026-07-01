@@ -39,7 +39,10 @@ impl EventNormalizationExt for Event {
             return Some(Cow::Borrowed(annotated.as_ref()));
         }
         let request: LlmRequest = serde_json::from_value(self.input()?.clone()).ok()?;
-        resolve::normalize_request(&request).map(Cow::Owned)
+        // Managed LLM events use the provider route as the event name (for
+        // example, "anthropic.messages"), which doubles as the codec hint for
+        // shape-identical request bodies.
+        resolve::normalize_request_with_hint(&request, Some(self.name())).map(Cow::Owned)
     }
 
     fn normalized_llm_response(&self) -> Option<Cow<'_, AnnotatedLlmResponse>> {

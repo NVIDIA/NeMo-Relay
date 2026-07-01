@@ -365,7 +365,7 @@ async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
         },
     )
     .unwrap();
-    assert!(request.headers.is_empty());
+    assert!(request.request.headers.is_empty());
 
     let mut registrations = ctx.into_registrations();
     assert_eq!(registrations.len(), 1);

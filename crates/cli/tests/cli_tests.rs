@@ -987,25 +987,25 @@ fn cli_plugins_edit_requires_tty() {
 }
 
 #[test]
-fn cli_pricing_validate_accepts_valid_catalog() {
+fn cli_model_pricing_validate_accepts_valid_catalog() {
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     std::fs::write(&catalog, pricing_catalog_json("test-model")).unwrap();
 
     let output = Command::new(gateway_bin())
-        .args(["pricing", "validate"])
+        .args(["model-pricing", "validate"])
         .arg(&catalog)
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Valid pricing catalog"));
+    assert!(stdout.contains("Valid model pricing catalog"));
     assert!(stdout.contains("1 entry"));
 }
 
 #[test]
-fn cli_pricing_validate_rejects_invalid_catalog() {
+fn cli_model_pricing_validate_rejects_invalid_catalog() {
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     std::fs::write(
@@ -1024,26 +1024,26 @@ fn cli_pricing_validate_rejects_invalid_catalog() {
     .unwrap();
 
     let output = Command::new(gateway_bin())
-        .args(["pricing", "validate"])
+        .args(["model-pricing", "validate"])
         .arg(&catalog)
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("invalid pricing catalog"));
+    assert!(stderr.contains("invalid model pricing catalog"));
     assert!(stderr.contains("rates or rate_schedule"));
 }
 
 #[test]
-fn cli_pricing_init_creates_project_pricing_component() {
+fn cli_model_pricing_init_creates_project_pricing_component() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&project)
-        .args(["pricing", "init", "--project"])
+        .args(["model-pricing", "init", "--project"])
         .output()
         .unwrap();
 
@@ -1055,7 +1055,7 @@ fn cli_pricing_init_creates_project_pricing_component() {
 }
 
 #[test]
-fn cli_pricing_add_source_validates_and_updates_user_plugin_config() {
+fn cli_model_pricing_add_source_validates_and_updates_user_plugin_config() {
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     std::fs::write(&catalog, pricing_catalog_json("custom-model")).unwrap();
@@ -1068,7 +1068,7 @@ fn cli_pricing_add_source_validates_and_updates_user_plugin_config() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["pricing", "add-source"])
+        .args(["model-pricing", "add-source"])
         .arg("pricing.json")
         .output()
         .unwrap();
@@ -1087,7 +1087,7 @@ fn cli_pricing_add_source_validates_and_updates_user_plugin_config() {
 }
 
 #[test]
-fn cli_pricing_resolve_reports_source_match_and_estimate() {
+fn cli_model_pricing_resolve_reports_source_match_and_estimate() {
     let temp = tempfile::tempdir().unwrap();
     let catalog = temp.path().join("pricing.json");
     let xdg = temp.path().join("xdg/nemo-relay");
@@ -1117,7 +1117,7 @@ path = {}
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .args([
-            "pricing",
+            "model-pricing",
             "resolve",
             "custom-model",
             "--provider",
@@ -1137,7 +1137,7 @@ path = {}
         String::from_utf8_lossy(&output.stdout)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Resolved pricing"));
+    assert!(stdout.contains("Resolved model pricing"));
     assert!(stdout.contains(&format!("source = file:{}", catalog.display())));
     assert!(stdout.contains("provider = test"));
     assert!(stdout.contains("model = custom-model"));
@@ -1146,7 +1146,7 @@ path = {}
 }
 
 #[test]
-fn cli_pricing_resolve_reports_missing_sources_distinctly() {
+fn cli_model_pricing_resolve_reports_missing_sources_distinctly() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     std::fs::create_dir_all(&cwd).unwrap();
@@ -1155,15 +1155,15 @@ fn cli_pricing_resolve_reports_missing_sources_distinctly() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["pricing", "resolve", "custom-model"])
+        .args(["model-pricing", "resolve", "custom-model"])
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("no pricing sources configured"),
-        "expected missing pricing source error, got:\n{stderr}"
+        stderr.contains("no model pricing sources configured"),
+        "expected missing model pricing source error, got:\n{stderr}"
     );
 }
 
@@ -1172,10 +1172,63 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    for agent in ["claude", "codex", "cursor", "hermes"] {
+    for agent in ["claude", "codex", "hermes"] {
         assert!(
             stdout.contains(&format!("  {agent}")),
             "expected `--help` to list `{agent}` subcommand, got:\n{stdout}"
+        );
+    }
+    assert!(!stdout.contains("  cursor"));
+}
+
+#[test]
+fn cli_rejects_removed_cursor_entry_points() {
+    let output = Command::new(gateway_bin()).arg("cursor").output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand 'cursor'"));
+
+    let output = Command::new(gateway_bin())
+        .args(["hook-forward", "cursor"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid value 'cursor'"));
+}
+
+#[test]
+fn cli_help_lists_model_pricing_command_only() {
+    let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("  model-pricing"),
+        "expected `--help` to list `model-pricing` subcommand, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("  pricing")),
+        "expected `--help` not to list the old `pricing` subcommand, got:\n{stdout}"
+    );
+
+    let old_command = Command::new(gateway_bin()).arg("pricing").output().unwrap();
+    assert!(!old_command.status.success());
+    assert!(String::from_utf8_lossy(&old_command.stderr).contains("unrecognized subcommand"));
+
+    let model_pricing_help = Command::new(gateway_bin())
+        .args(["model-pricing", "--help"])
+        .output()
+        .unwrap();
+    let model_pricing_stdout = String::from_utf8_lossy(&model_pricing_help.stdout);
+    for description in [
+        "Validate a model pricing catalog JSON file",
+        "Initialize model pricing in",
+        "Add a model pricing catalog file source",
+        "Resolve which model pricing entry matches a model",
+    ] {
+        assert!(
+            model_pricing_stdout.contains(description),
+            "expected `model-pricing --help` to include `{description}`, got:\n{model_pricing_stdout}"
         );
     }
 }
@@ -1626,7 +1679,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
-            "cursor",
+            "hermes",
             "--gateway-url",
             &server_url,
             "--fail-closed",
@@ -1641,7 +1694,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let request = received.recv().unwrap();
 
     assert!(!output.status.success());
-    assert!(request.contains("POST /hooks/cursor HTTP/1.1"));
+    assert!(request.contains("POST /hooks/hermes HTTP/1.1"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP 503"));
 }
 

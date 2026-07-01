@@ -1,6 +1,6 @@
 ---
 name: update-project-version
-description: Update the NeMo Relay project version across Cargo, Node, generated WebAssembly package metadata, and lockfiles without leaving release surfaces out of sync
+description: Update the NeMo Relay project version across Cargo, Node, and lockfiles without leaving release surfaces out of sync
 author: NVIDIA Corporation and Affiliates
 license: Apache-2.0
 ---
@@ -31,11 +31,6 @@ pre-release or build-metadata variants used during packaging.
   `packages["crates/node"].version` and
   `packages["integrations/openclaw"].version`. The workspace-root lockfile may
   not have a top-level `version` field.
-- `crates/wasm/package.json` is a local dev manifest. Do not treat it as the
-  publishable package manifest unless it gains an explicit `version` field.
-- The publishable WebAssembly npm package version is derived from
-  `crates/wasm/Cargo.toml` through `wasm-pack` output plus
-  `crates/wasm/scripts/prepare_pkg.mjs`.
 
 ## Workflow
 
@@ -69,8 +64,8 @@ pre-release or build-metadata variants used during packaging.
      package entries, and the OpenClaw `nemo-relay-node` dependency entries in
      both files.
    `set_node_package_version` remains a compatibility alias.
-   `set_npm_package_version` remains the reusable npm JSON helper for Node and
-   WebAssembly packaging recipes.
+   `set_npm_package_version` remains the reusable npm JSON helper for Node
+   packaging recipes.
 4. Refresh generated surfaces:
    - Run `cargo check --workspace` to refresh `Cargo.lock` if workspace package
      entries changed.
@@ -80,10 +75,6 @@ pre-release or build-metadata variants used during packaging.
    - If `package-lock.json` changed, regenerate
      `ATTRIBUTIONS-Node.md` with
      `./scripts/generate_attributions.sh node`.
-   - If the change needs WebAssembly publish validation, rebuild the generated package
-     with `just build-wasm` or
-     `NEMO_RELAY_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-relay-wasm`. Inspect
-     `crates/wasm/pkg/package.json`, not `crates/wasm/package.json`.
 5. Audit remaining references to the old version with targeted search. Separate
    true version pins from examples, generated attribution files, and unrelated
    third-party versions.
@@ -97,12 +88,10 @@ pre-release or build-metadata variants used during packaging.
   `./scripts/generate_attributions.sh rust`
 - If Node packaging changed materially: run `npm install --ignore-scripts` from
   the repository root or stronger Node validation through `just test-node`
-- If validating the WebAssembly publish surface: inspect the regenerated
-  `crates/wasm/pkg/package.json`
 
 ## Release Notes
 
-- `just package-node`, `just package-python`, and `just package-wasm` may set
+- `just package-node` and `just package-python` may set
   temporary non-release versions for packaging. Do not commit those temporary
   suffixes as the canonical project version unless the release process requires
   that exact string.
@@ -110,10 +99,9 @@ pre-release or build-metadata variants used during packaging.
 ## Avoid
 
 - Updating only `Cargo.toml` or only Node package metadata
-- Assuming `crates/wasm/package.json` is the published npm manifest
 - Forgetting `Cargo.lock`, `ATTRIBUTIONS-Rust.md`, or `ATTRIBUTIONS-Node.md`
   after changing versioned inputs that feed them
-- Doing blind repository-wide search/replace across docs, patches, and
+- Doing blind repository-wide search/replace across docs and
   generated attribution files
 
 ## References
@@ -124,8 +112,5 @@ pre-release or build-metadata variants used during packaging.
 - `package-lock.json`
 - `crates/node/package.json`
 - `integrations/openclaw/package.json`
-- `crates/wasm/Cargo.toml`
-- `crates/wasm/package.json`
-- `crates/wasm/scripts/prepare_pkg.mjs`
 - `justfile`
 - `scripts/licensing/attributions_lockfile_md.py`

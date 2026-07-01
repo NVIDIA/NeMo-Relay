@@ -335,29 +335,31 @@ async fn callback_helpers_cover_worker_response_edges() {
             },
             "llm_intercept_invalid_request" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    request: Some(JsonEnvelope {
-                        schema: LLM_REQUEST_SCHEMA.into(),
-                        json: b"null".to_vec(),
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@1".into(),
+                        json: br#"{"request":null}"#.to_vec(),
                     }),
-                    annotated_request: None,
-                    has_annotated_request: false,
                 })),
             },
             "llm_intercept_missing_annotated" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    request: Some(valid_llm_request_envelope()),
-                    annotated_request: None,
-                    has_annotated_request: true,
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LegacyLlmRequestInterceptResult@1".into(),
+                        json: br#"{}"#.to_vec(),
+                    }),
                 })),
             },
             "llm_intercept_invalid_annotated" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    request: Some(valid_llm_request_envelope()),
-                    annotated_request: Some(JsonEnvelope {
-                        schema: ANNOTATED_LLM_REQUEST_SCHEMA.into(),
-                        json: b"null".to_vec(),
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@1".into(),
+                        json: serde_json::to_vec(&json!({
+                            "request": valid_llm_request(),
+                            "annotated_request": 3,
+                            "pending_marks": [],
+                        }))
+                        .unwrap(),
                     }),
-                    has_annotated_request: true,
                 })),
             },
             "llm_intercept_error" => InvokeResponse {
@@ -405,7 +407,11 @@ async fn callback_helpers_cover_worker_response_edges() {
             None,
         )
         .expect_err("invalid LLM intercept request should fail");
-    assert!(error.to_string().contains("invalid LLM request"));
+    assert!(
+        error
+            .to_string()
+            .contains("invalid LLM request intercept outcome")
+    );
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -414,11 +420,11 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
-        .expect_err("missing annotated request should fail when flagged present");
+        .expect_err("legacy outcome schema should fail");
     assert!(
         error
             .to_string()
-            .contains("llm request intercept annotated request is missing")
+            .contains("unsupported LLM request intercept outcome schema")
     );
 
     let error = callback
@@ -429,7 +435,11 @@ async fn callback_helpers_cover_worker_response_edges() {
             None,
         )
         .expect_err("invalid annotated request should fail");
-    assert!(error.to_string().contains("invalid annotated LLM request"));
+    assert!(
+        error
+            .to_string()
+            .contains("invalid LLM request intercept outcome")
+    );
 
     let error = callback
         .invoke_llm_request_intercept("llm_intercept_error", "model", valid_llm_request(), None)
@@ -512,7 +522,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
     )
     .await;
 
-    let stream = callback
+    let mut stream = callback
         .invoke_llm_stream_execution(
             "stream_receiver_drop",
             "model",
@@ -523,14 +533,373 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
         )
         .await
         .expect("host stream should be returned");
-    drop(stream);
     yield_tx
         .send(())
         .expect("worker stream yield signal should be delivered");
+    tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .expect("worker stream should yield before timing out")
+        .expect("worker stream ended before yielding a chunk")
+        .expect("worker stream chunk should be valid");
+    drop(stream);
     tokio::time::timeout(std::time::Duration::from_secs(1), stream_dropped_rx)
         .await
         .expect("worker stream should be dropped after host receiver is dropped")
         .expect("worker stream drop signal should be delivered");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn callback_timeout_sends_explicit_worker_cancellation() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = started_tx.clone();
+            move |_| {
+                let started_tx = started_tx.clone();
+                Box::pin(async move {
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let request = callback.base_request(
+        "timeout",
+        RegistrationSurface::ToolRequestIntercept,
+        None,
+        Some(invoke_request_payload_tool("tool", json!({}))),
+    );
+    let invocation_id = request.invocation_id.clone();
+
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move {
+        callback_task
+            .invoke_async_with_timeout(request, std::time::Duration::from_millis(10))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+        .await
+        .expect("worker invocation should start before timeout assertion")
+        .expect("worker invocation should start");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+        .await
+        .expect("timed out invocation should complete")
+        .expect("timed out invocation task should join");
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should send cancellation after timeout")
+        .expect("cancellation channel should remain open");
+
+    assert!(
+        result
+            .expect_err("worker invocation should time out")
+            .to_string()
+            .contains("worker invocation timed out")
+    );
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("timed out"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        {
+            let started_tx = started_tx.clone();
+            move |_| {
+                let started_tx = started_tx.clone();
+                Box::pin(async move {
+                    if let Some(started) = started_tx.lock().expect("started lock").take() {
+                        let _ = started.send(());
+                    }
+                    std::future::pending::<InvokeResponse>().await
+                })
+            }
+        },
+        |_| Box::pin(tokio_stream::empty()),
+    )
+    .await;
+    let continuation_id = callback
+        .host_state
+        .insert_continuation(Continuation::Tool(Arc::new(|value| {
+            Box::pin(async move { Ok(value) })
+        })))
+        .expect("continuation should insert");
+    let request = callback.base_request(
+        "cancel",
+        RegistrationSurface::ToolExecutionIntercept,
+        Some(continuation_id),
+        Some(invoke_request_payload_tool("tool", json!({}))),
+    );
+    let scope_stack_id = request
+        .scope
+        .as_ref()
+        .expect("worker invocation should have a scope stack")
+        .scope_stack_id
+        .clone();
+    let invocation_stack = callback
+        .host_state
+        .stack(&scope_stack_id)
+        .expect("invocation scope stack lookup should succeed")
+        .expect("invocation scope stack should exist");
+    let baseline_depth = invocation_stack
+        .read()
+        .expect("invocation scope stack lock")
+        .scopes()
+        .len();
+    let host_runtime = WorkerHostRuntimeService {
+        state: callback.host_state.clone(),
+    };
+    for name in ["cancelled-outer", "cancelled-inner"] {
+        let pushed = host_runtime
+            .push_scope(Request::new(PushScopeRequest {
+                activation_id: ACTIVATION_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                scope: Some(ScopeContext {
+                    scope_stack_id: scope_stack_id.clone(),
+                    parent_scope_id: String::new(),
+                }),
+                name: name.into(),
+                scope_type: ProtoScopeType::Custom as i32,
+                data: None,
+                metadata: None,
+                input: None,
+            }))
+            .await
+            .expect("worker scope should push")
+            .into_inner();
+        assert!(pushed.error.is_none());
+    }
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth + 2
+    );
+    let overlapping_scope_stack_id = callback
+        .host_state
+        .insert_invocation_scope_stack(invocation_stack.clone());
+    let invocation_id = request.invocation_id.clone();
+    let callback_task = callback.clone();
+    let task = tokio::spawn(async move { callback_task.invoke_async(request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+        .await
+        .expect("worker invocation should start before caller abort")
+        .expect("worker invocation should start");
+
+    task.abort();
+    let _ = task.await;
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should send cancellation when caller drops")
+        .expect("cancellation channel should remain open");
+
+    assert_eq!(cancellation.invocation_id, invocation_id);
+    assert!(cancellation.reason.contains("caller cancelled"));
+    assert!(
+        callback
+            .host_state
+            .continuations
+            .lock()
+            .expect("continuation lock")
+            .is_empty()
+    );
+    assert!(
+        callback
+            .host_state
+            .scope_handles
+            .lock()
+            .expect("scope handle lock")
+            .is_empty()
+    );
+    assert_eq!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope lock")
+            .len(),
+        1
+    );
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth + 2
+    );
+    callback
+        .host_state
+        .cleanup_invocation_scope_stack(&overlapping_scope_stack_id);
+    assert!(
+        callback
+            .host_state
+            .scope_stacks
+            .lock()
+            .expect("scope lock")
+            .is_empty()
+    );
+    assert!(
+        callback
+            .host_state
+            .pending_scope_cleanups
+            .lock()
+            .expect("pending cleanup lock")
+            .is_empty()
+    );
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth
+    );
+    callback
+        .host_state
+        .cleanup_invocation_scope_stack(&scope_stack_id);
+    callback
+        .host_state
+        .cleanup_invocation_scope_stack(&overlapping_scope_stack_id);
+    assert_eq!(
+        invocation_stack
+            .read()
+            .expect("invocation scope stack lock")
+            .scopes()
+            .len(),
+        baseline_depth
+    );
+}
+
+#[test]
+fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
+    let state = Arc::new(WorkerHostRuntimeState::new(
+        ACTIVATION_ID.into(),
+        AUTH_TOKEN.into(),
+    ));
+    let stack = crate::api::runtime::create_scope_stack();
+    let baseline_depth = stack.read().expect("scope stack lock").scopes().len();
+    let scope_stack_id = state.insert_invocation_scope_stack(stack.clone());
+    with_scope_stack(stack.clone(), || {
+        push_scope(
+            PushScopeParams::builder()
+                .name("cleanup-lock-test")
+                .scope_type(ScopeType::Custom)
+                .build(),
+        )
+    })
+    .expect("worker scope should push");
+
+    let stack_guard = stack.write().expect("scope stack lock");
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let cleanup_state = state.clone();
+    let cleanup = std::thread::spawn(move || {
+        cleanup_state.cleanup_invocation_scope_stack(&scope_stack_id);
+        let _ = done_tx.send(());
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        let cleanup_registered = state
+            .scope_stack_cleanups
+            .lock()
+            .expect("scope cleanup lock")
+            .iter()
+            .any(|handle| Arc::ptr_eq(handle, &stack));
+        if cleanup_registered {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "scope cleanup should register before unwinding"
+        );
+        std::thread::yield_now();
+    }
+
+    assert!(state.scope_stacks.try_lock().is_ok());
+    assert!(state.pending_scope_cleanups.try_lock().is_ok());
+    drop(stack_guard);
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("scope cleanup thread should finish before timing out");
+    cleanup.join().expect("scope cleanup thread should finish");
+
+    assert!(
+        state
+            .scope_stack_cleanups
+            .lock()
+            .expect("scope cleanup lock")
+            .is_empty()
+    );
+    assert_eq!(
+        stack.read().expect("scope stack lock").scopes().len(),
+        baseline_depth
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dropping_host_stream_sends_explicit_worker_cancellation() {
+    let (yield_tx, yield_rx) = oneshot::channel();
+    let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
+    let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
+        |_| {
+            Box::pin(async {
+                InvokeResponse {
+                    result: Some(InvokeResult::Empty(EmptyResult {})),
+                }
+            })
+        },
+        {
+            let yield_rx = yield_rx.clone();
+            move |_| {
+                let yield_rx = yield_rx
+                    .lock()
+                    .expect("yield lock")
+                    .take()
+                    .expect("stream should be created once");
+                Box::pin(SignalChunkThenPendingStream {
+                    yield_rx,
+                    dropped: None,
+                    yielded: false,
+                })
+            }
+        },
+    )
+    .await;
+    let mut stream = callback
+        .invoke_llm_stream_execution(
+            "cancel_stream",
+            "model",
+            valid_llm_request(),
+            Arc::new(|_request| {
+                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
+            }),
+        )
+        .await
+        .expect("host stream should be returned");
+    yield_tx
+        .send(())
+        .expect("worker stream yield signal should be delivered");
+    tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .expect("worker stream should yield before abandonment")
+        .expect("worker stream should yield before abandonment")
+        .expect("worker stream chunk should be valid");
+    drop(stream);
+
+    let cancellation = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx.recv())
+        .await
+        .expect("host should cancel abandoned stream")
+        .expect("cancellation channel should remain open");
+    assert!(cancellation.reason.contains("stopped consuming"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -968,10 +1337,6 @@ fn valid_llm_request() -> LlmRequest {
     }
 }
 
-fn valid_llm_request_envelope() -> JsonEnvelope {
-    json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).expect("llm request envelope")
-}
-
 async fn fake_callback_service(
     invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
 ) -> (WorkerPluginCallback, oneshot::Sender<()>) {
@@ -985,6 +1350,20 @@ async fn fake_callback_service_with_stream(
 ) -> (WorkerPluginCallback, oneshot::Sender<()>) {
     let (client, shutdown_tx) = fake_worker_client_with_stream(invoke, invoke_stream).await;
     callback_for_client(client, shutdown_tx)
+}
+
+async fn fake_callback_service_with_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (
+    WorkerPluginCallback,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+) {
+    let (client, shutdown_tx, cancel_rx) =
+        fake_worker_client_with_handlers(invoke, invoke_stream).await;
+    let (callback, shutdown_tx) = callback_for_client(client, shutdown_tx);
+    (callback, shutdown_tx, cancel_rx)
 }
 
 fn callback_for_client(
@@ -1056,6 +1435,26 @@ async fn fake_worker_client_with_stream(
     invoke: impl Fn(InvokeRequest) -> InvokeResponse + Send + Sync + 'static,
     invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
 ) -> (PluginWorkerClient<Channel>, oneshot::Sender<()>) {
+    let invoke = Arc::new(invoke);
+    let (client, shutdown_tx, _cancel_rx) = fake_worker_client_with_handlers(
+        move |request| {
+            let invoke = invoke.clone();
+            Box::pin(async move { invoke(request) })
+        },
+        invoke_stream,
+    )
+    .await;
+    (client, shutdown_tx)
+}
+
+async fn fake_worker_client_with_handlers(
+    invoke: impl Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync + 'static,
+    invoke_stream: impl Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync + 'static,
+) -> (
+    PluginWorkerClient<Channel>,
+    oneshot::Sender<()>,
+    mpsc::UnboundedReceiver<CancelInvocationRequest>,
+) {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .expect("fake worker listener should bind");
@@ -1063,11 +1462,13 @@ async fn fake_worker_client_with_stream(
         .local_addr()
         .expect("fake worker listener address should be available");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let (cancel_tx, cancel_rx) = mpsc::unbounded_channel();
     tokio::spawn(
         Server::builder()
             .add_service(PluginWorkerServer::new(FakePluginWorker {
                 invoke: Arc::new(invoke),
                 invoke_stream: Arc::new(invoke_stream),
+                cancel_tx,
             }))
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                 let _ = shutdown_rx.await;
@@ -1076,7 +1477,7 @@ async fn fake_worker_client_with_stream(
     let client = PluginWorkerClient::connect(format!("http://{addr}"))
         .await
         .expect("fake worker client should connect");
-    (client, shutdown_tx)
+    (client, shutdown_tx, cancel_rx)
 }
 
 fn registration(surface: RegistrationSurface, local_name: &str) -> Registration {
@@ -1093,10 +1494,12 @@ fn poison_mutex(f: impl FnOnce() + std::panic::UnwindSafe) {
 }
 
 struct FakePluginWorker {
-    invoke: Arc<dyn Fn(InvokeRequest) -> InvokeResponse + Send + Sync>,
+    invoke: Arc<dyn Fn(InvokeRequest) -> FakeInvokeFuture + Send + Sync>,
     invoke_stream: Arc<dyn Fn(InvokeRequest) -> FakeInvokeStream + Send + Sync>,
+    cancel_tx: mpsc::UnboundedSender<CancelInvocationRequest>,
 }
 
+type FakeInvokeFuture = Pin<Box<dyn Future<Output = InvokeResponse> + Send>>;
 type FakeInvokeStream =
     Pin<Box<dyn tokio_stream::Stream<Item = std::result::Result<StreamChunk, Status>> + Send>>;
 
@@ -1198,7 +1601,9 @@ impl PluginWorker for FakePluginWorker {
         &self,
         request: Request<InvokeRequest>,
     ) -> std::result::Result<tonic::Response<InvokeResponse>, tonic::Status> {
-        Ok(tonic::Response::new((self.invoke)(request.into_inner())))
+        Ok(tonic::Response::new(
+            (self.invoke)(request.into_inner()).await,
+        ))
     }
 
     type InvokeStreamStream =
@@ -1215,11 +1620,12 @@ impl PluginWorker for FakePluginWorker {
 
     async fn cancel_invocation(
         &self,
-        _request: Request<CancelInvocationRequest>,
+        request: Request<CancelInvocationRequest>,
     ) -> std::result::Result<tonic::Response<WorkerAck>, tonic::Status> {
+        let _ = self.cancel_tx.send(request.into_inner());
         Ok(tonic::Response::new(WorkerAck {
-            accepted: false,
-            message: "not implemented".into(),
+            accepted: true,
+            message: "cancelled".into(),
         }))
     }
 

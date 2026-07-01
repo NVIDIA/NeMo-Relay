@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::json;
 
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
@@ -53,7 +53,6 @@ fn expect_registration_failed(result: Result<()>, message_fragment: &str) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn set_conflicting_runtime_owner_for_tests() {
     unsafe {
         std::env::set_var(
@@ -66,9 +65,6 @@ fn set_conflicting_runtime_owner_for_tests() {
         )
     };
 }
-
-#[cfg(target_arch = "wasm32")]
-fn set_conflicting_runtime_owner_for_tests() {}
 
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {
@@ -97,7 +93,7 @@ impl Plugin for TestPlugin {
                 false,
                 Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!(true));
-                    Ok((request, annotated))
+                    Ok(LlmRequestInterceptOutcome::new(request, annotated))
                 }),
             )
         })
@@ -475,7 +471,7 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
         },
     )
     .unwrap();
-    assert_eq!(request.headers.get("x-plugin"), Some(&json!(true)));
+    assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
@@ -488,7 +484,7 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
         },
     )
     .unwrap();
-    assert_eq!(request.headers.get("x-plugin"), None);
+    assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
 
@@ -519,7 +515,7 @@ fn test_initialize_plugins_registers_and_clears_components() {
         },
     )
     .unwrap();
-    assert_eq!(request.headers.get("x-plugin"), Some(&json!(true)));
+    assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     clear_plugin_configuration().unwrap();
     let request = llm_request_intercepts(
@@ -530,7 +526,7 @@ fn test_initialize_plugins_registers_and_clears_components() {
         },
     )
     .unwrap();
-    assert_eq!(request.headers.get("x-plugin"), None);
+    assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
 
@@ -763,7 +759,9 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         "llm-request",
         1,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
     )
     .unwrap();
     ctx.register_llm_execution_intercept(
@@ -1063,7 +1061,9 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         "llm-request",
         1,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
     )
     .unwrap();
     expect_registration_failed(
@@ -1071,7 +1071,9 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
             "llm-request",
             1,
             false,
-            Arc::new(|_name, request, annotated| Ok((request, annotated))),
+            Arc::new(|_name, request, annotated| {
+                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            }),
         ),
         "llm request intercept:",
     );
@@ -1250,7 +1252,9 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         "llm-request",
         1,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(

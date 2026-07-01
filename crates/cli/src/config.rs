@@ -58,18 +58,6 @@ pub(crate) enum Command {
                       nemo-relay --openai-base-url https://inference-api.nvidia.com codex"
     )]
     Codex(EasyPathCommand),
-    /// Run Cursor with observability (setup on first use)
-    #[command(
-        long_about = "Run Cursor's `cursor-agent` CLI under an ephemeral NeMo Relay gateway. The \
-                      launcher temporarily patches `.cursor/hooks.json` in the project root \
-                      during the run and restores it on exit. Disable that via \
-                      `[agents.cursor] patch_restore_hooks = false` in config.toml if you \
-                      maintain `.cursor/hooks.json` yourself.",
-        after_help = "Examples:\n  \
-                      nemo-relay cursor\n  \
-                      nemo-relay cursor -- agent --resume <session-id>"
-    )]
-    Cursor(EasyPathCommand),
     /// Run Hermes with observability (setup on first use)
     #[command(
         long_about = "Run NVIDIA's Hermes agent under a NeMo Relay gateway. Hermes reads hooks \
@@ -90,7 +78,7 @@ pub(crate) enum Command {
     /// Uninstall coding-agent plugins installed by `nemo-relay install`.
     Uninstall(UninstallCommand),
     /// Validate and configure model pricing catalogs.
-    Pricing(PricingCommand),
+    ModelPricing(PricingCommand),
     /// Diagnose env, agents, config, observability (optionally scoped to one agent)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
@@ -247,27 +235,27 @@ impl PluginsSubcommand {
     }
 }
 
-/// Args for `nemo-relay pricing`.
+/// Args for `nemo-relay model-pricing`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingCommand {
     #[command(subcommand)]
     pub(crate) command: PricingSubcommand,
 }
 
-/// Pricing catalog and resolver subcommands.
+/// Model pricing catalog and resolver subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PricingSubcommand {
-    /// Validate a pricing catalog JSON file.
+    /// Validate a model pricing catalog JSON file.
     Validate(PricingValidateCommand),
-    /// Initialize the pricing plugin component in `plugins.toml`.
+    /// Initialize model pricing in `plugins.toml`.
     Init(PricingInitCommand),
-    /// Add a pricing catalog file source to `plugins.toml`.
+    /// Add a model pricing catalog file source to `plugins.toml`.
     AddSource(PricingAddSourceCommand),
-    /// Resolve which pricing entry matches a model and optional usage.
+    /// Resolve which model pricing entry matches a model and optional usage.
     Resolve(PricingResolveCommand),
 }
 
-/// Common target-scope flags for pricing config mutations.
+/// Common target-scope flags for model pricing config mutations.
 #[derive(Debug, Clone, Default, Args)]
 #[command(group(
     ArgGroup::new("pricing_scope")
@@ -286,33 +274,33 @@ pub(crate) struct PricingScopeArgs {
     pub(crate) global: bool,
 }
 
-/// Args for `nemo-relay pricing validate`.
+/// Args for `nemo-relay model-pricing validate`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingValidateCommand {
-    /// Path to a Relay pricing catalog JSON file.
+    /// Path to a Relay model pricing catalog JSON file.
     pub(crate) path: PathBuf,
 }
 
-/// Args for `nemo-relay pricing init`.
+/// Args for `nemo-relay model-pricing init`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingInitCommand {
     #[command(flatten)]
     pub(crate) scope: PricingScopeArgs,
 }
 
-/// Args for `nemo-relay pricing add-source`.
+/// Args for `nemo-relay model-pricing add-source`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingAddSourceCommand {
     #[command(flatten)]
     pub(crate) scope: PricingScopeArgs,
-    /// Path to a Relay pricing catalog JSON file.
+    /// Path to a Relay model pricing catalog JSON file.
     pub(crate) path: PathBuf,
     /// Append as a lower-priority source instead of prepending as the highest-priority override.
     #[arg(long)]
     pub(crate) append: bool,
 }
 
-/// Args for `nemo-relay pricing resolve`.
+/// Args for `nemo-relay model-pricing resolve`.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct PricingResolveCommand {
     /// Model ID or routed model name to look up.
@@ -538,7 +526,6 @@ pub(crate) enum CodingAgent {
     #[value(name = "claude", alias = "claude-code")]
     ClaudeCode,
     Codex,
-    Cursor,
     Hermes,
 }
 
@@ -626,7 +613,6 @@ impl ResolvedDynamicPluginConfig {
 pub(crate) struct AgentConfigs {
     pub(crate) claude: AgentCommandConfig,
     pub(crate) codex: AgentCommandConfig,
-    pub(crate) cursor: CursorAgentConfig,
     pub(crate) hermes: AgentCommandConfig,
 }
 
@@ -636,24 +622,6 @@ pub(crate) struct AgentCommandConfig {
     /// Recorded by `nemo-relay config` when it installs hermes shell hooks. Other agents leave
     /// this empty; the launcher reads it only to print a "hooks live here" pointer for hermes.
     pub(crate) hooks_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CursorAgentConfig {
-    pub(crate) command: Option<String>,
-    pub(crate) patch_restore_hooks: bool,
-}
-
-impl Default for CursorAgentConfig {
-    // Keeps Cursor run-mode patching enabled unless a config file opts out. Cursor's CLI discovers
-    // hooks from project files, so the launcher needs permission to temporarily patch and restore
-    // `.cursor/hooks.json` by default.
-    fn default() -> Self {
-        Self {
-            command: None,
-            patch_restore_hooks: true,
-        }
-    }
 }
 
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
@@ -687,12 +655,11 @@ struct FilePluginsConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentsConfig {
-    // Keys match the agent's CLI invocation name (`claude`, `codex`, `cursor`, `hermes`) — the
+    // Keys match the agent's CLI invocation name (`claude`, `codex`, `hermes`) — the
     // word the user types at the shell — not the product name ("Claude Code") or the internal
     // `CodingAgent` enum kebab spelling. Same convention as the bare-agent shortcut in Phase 2.
     claude: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
-    cursor: Option<FileCursorAgentConfig>,
     hermes: Option<FileAgentCommandConfig>,
 }
 
@@ -700,12 +667,6 @@ struct FileAgentsConfig {
 struct FileAgentCommandConfig {
     command: Option<String>,
     hooks_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FileCursorAgentConfig {
-    command: Option<String>,
-    patch_restore_hooks: Option<bool>,
 }
 
 impl Default for GatewayConfig {
@@ -988,8 +949,7 @@ pub(crate) fn user_config_dir() -> Option<PathBuf> {
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
-// are ignored, preserving defaults and prior merge layers; Cursor's patch-restore flag is only
-// changed when explicitly present.
+// are ignored, preserving defaults and prior merge layers.
 fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Result<(), CliError> {
     let config: FileConfig = value.try_into().map_err(|error| {
         CliError::Config(format!("invalid gateway configuration shape: {error}"))
@@ -1266,9 +1226,7 @@ fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<()
     Ok(())
 }
 
-// Applies configured agent commands and Cursor's temporary-hook behavior. Cursor's
-// `patch_restore_hooks` flag is intentionally tri-state in file config so omitted values preserve
-// the safe default while explicit `false` disables temporary hook mutation.
+// Applies configured agent commands from the merged file configuration.
 fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileAgentsConfig>) {
     let Some(file_agents) = file_agents else {
         return;
@@ -1278,12 +1236,6 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
     }
     if let Some(value) = file_agents.codex {
         agents.codex.command = value.command;
-    }
-    if let Some(value) = file_agents.cursor {
-        agents.cursor.command = value.command;
-        if let Some(patch_restore_hooks) = value.patch_restore_hooks {
-            agents.cursor.patch_restore_hooks = patch_restore_hooks;
-        }
     }
     if let Some(value) = file_agents.hermes {
         agents.hermes.command = value.command;
@@ -1411,7 +1363,6 @@ impl CodingAgent {
         match self {
             Self::ClaudeCode => "/hooks/claude-code",
             Self::Codex => "/hooks/codex",
-            Self::Cursor => "/hooks/cursor",
             Self::Hermes => "/hooks/hermes",
         }
     }
@@ -1423,7 +1374,6 @@ impl CodingAgent {
         match self {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
-            Self::Cursor => "cursor",
             Self::Hermes => "hermes",
         }
     }
@@ -1438,7 +1388,6 @@ impl CodingAgent {
         match name {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
-            "cursor" | "cursor-agent" => Some(Self::Cursor),
             "hermes" | "hermes-agent" => Some(Self::Hermes),
             _ => None,
         }

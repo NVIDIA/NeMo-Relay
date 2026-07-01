@@ -53,7 +53,7 @@ An **adaptive state backend** stores observations and learned state for adaptive
 
 **Binding**
 
-A **binding** is a language-specific public API surface for the NeMo Relay runtime, such as Python, Node.js, Go, WebAssembly, Rust, or C FFI.
+A **binding** is a language-specific public API surface for the NeMo Relay runtime, such as Python, Node.js, Go, Rust, or C FFI.
 
 **Break Chain**
 
@@ -106,7 +106,7 @@ An **exporter** is a subscriber-oriented component that translates NeMo Relay ev
 **Experimental Binding**
 
 An **experimental binding** exposes runtime behavior for source-first users but
-is not the primary documentation path. Go, WebAssembly, and the raw C FFI
+is not the primary documentation path. Go and the raw C FFI
 surface are experimental unless a page says otherwise.
 
 **FFI**
@@ -293,10 +293,6 @@ A **stream execution intercept** is the streaming LLM variant of an execution in
 **Subscriber**
 
 A **subscriber** is a consumer of emitted events. Subscribers receive the runtime event stream and can use it for in-process analytics, forwarding, or export. Examples include: - Custom event consumers - ATIF export - OpenTelemetry export - OpenInference export
-
-**Third-Party Integration Patch**
-
-A **third-party integration patch** is a repository patch maintained for an upstream framework under ``patches/`` and applied to the matching submodule under ``third_party/``.
 
 **Tool Call**
 

@@ -3,17 +3,19 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
+use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
-    LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmStreamExecutionNextFn,
+    EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
+    LlmStreamExecutionNextFn,
 };
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
@@ -28,7 +30,7 @@ use crate::error::{FlowError, Result};
 use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 
-pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
+pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 
 /// Runtime-owned handle identifying an active or completed LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -41,6 +43,10 @@ pub struct LlmHandle {
     #[builder(default = Utc::now())]
     pub started_at: DateTime<Utc>,
     /// Provider or logical call name recorded on lifecycle events.
+    ///
+    /// Gateway-managed provider calls use provider route names such as
+    /// `anthropic.messages`; event normalization may reuse those route names as
+    /// codec hints when raw request shapes overlap across providers.
     #[builder(setter(into))]
     pub name: String,
     /// Optional application payload stored on the handle.
@@ -64,7 +70,8 @@ pub struct LlmHandle {
 #[derive(Debug, Clone, TypedBuilder)]
 #[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
 pub struct CreateLlmHandleParams<'a> {
-    /// Logical provider or model family name.
+    /// Logical provider or model family name. Gateway-managed provider calls
+    /// should pass the provider route name, for example `anthropic.messages`.
     pub name: &'a str,
     /// Optional parent scope UUID.
     #[builder(default)]
@@ -260,20 +267,39 @@ fn emit_llm_start(
     request_codec: Option<&dyn LlmCodec>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
-    let (entries, subscribers) = {
+    let subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    emit_llm_start_with_subscribers(
+        handle,
+        request,
+        annotated_request,
+        request_codec,
+        &subscribers,
+    )
+}
+
+fn emit_llm_start_with_subscribers(
+    handle: &LlmHandle,
+    request: &LlmRequest,
+    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    request_codec: Option<&dyn LlmCodec>,
+    subscribers: &[EventSubscriberFn],
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let entries = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_sanitize_request_guardrails
         });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_sanitize_request_entries(&scope_locals);
-        (entries, subscribers)
+        state.llm_sanitize_request_entries(&scope_locals)
     };
     let sanitized_request =
         NemoRelayContextState::llm_sanitize_request_snapshot_chain(request.clone(), &entries);
@@ -294,7 +320,34 @@ fn emit_llm_start(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.build_llm_start_event(handle, Some(input), annotated_request)
     };
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, subscribers);
+    Ok(())
+}
+
+fn emit_pending_request_marks(
+    handle: &LlmHandle,
+    marks: Vec<PendingMarkSpec>,
+    subscribers: &[EventSubscriberFn],
+) -> Result<()> {
+    if marks.is_empty() {
+        return Ok(());
+    }
+    ensure_runtime_owner()?;
+    let timestamp = handle.started_at + TimeDelta::microseconds(1);
+    for mark in marks {
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name(mark.name)
+                .parent_uuid(handle.uuid)
+                .timestamp(timestamp)
+                .data_opt(mark.data)
+                .metadata_opt(mark.metadata)
+                .build(),
+            mark.category,
+            mark.category_profile,
+        ));
+        NemoRelayContextState::emit_event(&event, subscribers);
+    }
     Ok(())
 }
 
@@ -387,12 +440,14 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
             response_codec_errors_fatal: true,
             attach_estimated_cost: false,
         },
+        None,
     )
 }
 
 fn llm_call_end_with_behavior(
     params: LlmCallEndParams<'_>,
     behavior: LlmCallEndBehavior,
+    lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     let LlmCallEndParams {
         handle,
@@ -411,7 +466,10 @@ fn llm_call_end_with_behavior(
             &registries.llm_sanitize_response_guardrails
         });
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        let subscribers = match lifecycle_subscribers {
+            Some(subscribers) => subscribers.to_vec(),
+            None => snapshot_event_subscribers(scope_subscribers)?,
+        };
         let context = global_context();
         let state = context
             .read()
@@ -471,13 +529,20 @@ fn llm_call_end_with_behavior(
     }
 }
 
-fn emit_llm_end_without_output(handle: &LlmHandle, metadata: Option<Json>) -> Result<()> {
+fn emit_llm_end_without_output(
+    handle: &LlmHandle,
+    metadata: Option<Json>,
+    lifecycle_subscribers: Option<&[EventSubscriberFn]>,
+) -> Result<()> {
     ensure_runtime_owner()?;
     let (event, subscribers) = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        let subscribers = match lifecycle_subscribers {
+            Some(subscribers) => subscribers.to_vec(),
+            None => snapshot_event_subscribers(scope_subscribers)?,
+        };
         let context = global_context();
         let state = context
             .read()
@@ -587,7 +652,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
-    let (intercepted_request, annotated_request) =
+    let (intercepted_request, annotated_request, pending_marks) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
     let handle = create_llm_handle(
@@ -600,12 +665,19 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .model_name_opt(model_name)
             .build(),
     )?;
-    emit_llm_start(
+    let lifecycle_subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    emit_llm_start_with_subscribers(
         &handle,
         &intercepted_request,
         annotated_request.clone(),
         request_codec.as_deref(),
+        &lifecycle_subscribers,
     )?;
+    emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -633,13 +705,15 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                     response_codec_errors_fatal: false,
                     attach_estimated_cost: true,
                 },
+                Some(&lifecycle_subscribers),
             )?;
             Ok(response)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_llm_end_without_output(&handle, end_metadata);
+            let _ =
+                emit_llm_end_without_output(&handle, end_metadata, Some(&lifecycle_subscribers));
             Err(error)
         }
     }
@@ -743,7 +817,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
-    let (intercepted_request, annotated_request) =
+    let (intercepted_request, annotated_request, pending_marks) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
     let handle = create_llm_handle(
@@ -756,12 +830,19 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             .model_name_opt(model_name)
             .build(),
     )?;
-    emit_llm_start(
+    let lifecycle_subscribers = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+    };
+    emit_llm_start_with_subscribers(
         &handle,
         &intercepted_request,
         annotated_request,
         request_codec.as_deref(),
+        &lifecycle_subscribers,
     )?;
+    emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -778,21 +859,22 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 
     match execution(intercepted_request).await {
         Ok(raw_stream) => {
-            let wrapper = LlmStreamWrapper::new(
+            let wrapper = LlmStreamWrapper::new_managed(
                 raw_stream,
                 handle,
                 collector,
                 finalizer,
-                data,
                 metadata,
                 response_codec,
+                lifecycle_subscribers,
             );
             Ok(Box::pin(wrapper) as LlmJsonStream)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_llm_end_without_output(&handle, end_metadata);
+            let _ =
+                emit_llm_end_without_output(&handle, end_metadata, Some(&lifecycle_subscribers));
             Err(error)
         }
     }
@@ -817,7 +899,14 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
 /// # Notes
 /// Conditional guardrails, codecs, and execution intercepts are not run by
 /// this helper.
-pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequest> {
+/// Run the LLM request-intercept chain and return its complete outcome.
+///
+/// This helper does not emit the returned marks because it does not own an LLM
+/// lifecycle. Callers must attach them to the lifecycle they own.
+pub fn llm_request_intercepts(
+    name: &str,
+    request: LlmRequest,
+) -> Result<LlmRequestInterceptOutcome> {
     ensure_runtime_owner()?;
     let entries = {
         let scope_stack = current_scope_stack();
@@ -830,10 +919,9 @@ pub fn llm_request_intercepts(name: &str, request: LlmRequest) -> Result<LlmRequ
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_request_intercept_entries(&scope_locals)
     };
-    let (request, _) = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
-        name, request, None, &entries,
-    )?;
-    Ok(request)
+    NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+        name, request, None, &entries, false,
+    )
 }
 
 /// Run only the LLM conditional-execution guardrail chain.

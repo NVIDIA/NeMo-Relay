@@ -22,7 +22,7 @@ security middleware, and optimization features.
 | LangChain | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
 | LangGraph | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
 | Deep Agents | ✅ Yes | ✅ Yes | ✅ Yes | Wrapped tool and LLM calling. |
-| OpenClaw | ✅ Yes | ⚠️ Partial | ❌ No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
+| OpenClaw | ✅ Yes | ⚠️ Partial | ❌ No | Hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
 
 ## Guides
 
@@ -40,5 +40,5 @@ instructions.
   Agents extra and capturing Deep Agents-specific marks, skills, subagents, and
   human-in-the-loop lifecycle events.
 
-If you are building a new framework integration or patching framework internals,
+If you are building a new public-API framework integration,
 use [Integrate into Frameworks](/integrate-into-frameworks/about) instead.

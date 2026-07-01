@@ -86,126 +86,6 @@ const nodeEntries = [
     ],
   },
 ];
-const wasmEntries = [
-  {
-    file: 'crates/wasm/wrappers/esm/plugin.js',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'ComponentSpec', params: ['kind', 'config', 'options'] },
-      { name: 'validate', params: ['config'] },
-      { name: 'initialize', params: ['config'] },
-      { name: 'clear', params: [] },
-      { name: 'report', params: [] },
-      { name: 'listKinds', params: [] },
-      { name: 'register', params: ['pluginKind', 'plugin'] },
-      { name: 'deregister', params: ['pluginKind'] },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/esm/adaptive.js',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'inMemoryBackend', params: [] },
-      { name: 'redisBackend', params: ['url', 'keyPrefix'] },
-      { name: 'telemetryConfig', params: ['config'] },
-      { name: 'adaptiveHintsConfig', params: ['config'] },
-      { name: 'toolParallelismConfig', params: ['config'] },
-      { name: 'acgConfig', params: ['config'] },
-      { name: 'ComponentSpec', params: ['config', 'options'] },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/esm/typed.js',
-    functions: [
-      { name: 'encodeWithCodec', params: ['codec', 'payload'] },
-      { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
-      { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseCodec', 'options'] },
-      {
-        name: 'typedLlmStreamExecute',
-        params: ['name', 'request', 'func', 'collector', 'finalizer', 'chunkCodec', 'responseCodec', 'options'],
-      },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/nodejs/plugin.js',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'ComponentSpec', params: ['kind', 'config', 'options'] },
-      { name: 'validate', params: ['config'] },
-      { name: 'initialize', params: ['config'] },
-      { name: 'clear', params: [] },
-      { name: 'report', params: [] },
-      { name: 'listKinds', params: [] },
-      { name: 'register', params: ['pluginKind', 'plugin'] },
-      { name: 'deregister', params: ['pluginKind'] },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/nodejs/adaptive.js',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'inMemoryBackend', params: [] },
-      { name: 'redisBackend', params: ['url', 'keyPrefix'] },
-      { name: 'telemetryConfig', params: ['config'] },
-      { name: 'adaptiveHintsConfig', params: ['config'] },
-      { name: 'toolParallelismConfig', params: ['config'] },
-      { name: 'acgConfig', params: ['config'] },
-      { name: 'ComponentSpec', params: ['config', 'options'] },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/nodejs/typed.js',
-    functions: [
-      { name: 'encodeWithCodec', params: ['codec', 'payload'] },
-      { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
-      { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseCodec', 'options'] },
-      {
-        name: 'typedLlmStreamExecute',
-        params: ['name', 'request', 'func', 'collector', 'finalizer', 'chunkCodec', 'responseCodec', 'options'],
-      },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/esm/plugin.d.ts',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'ComponentSpec', params: ['kind', 'config', 'options'] },
-      { name: 'validate', params: ['config'] },
-      { name: 'initialize', params: ['config'] },
-      { name: 'clear', params: [] },
-      { name: 'report', params: [] },
-      { name: 'listKinds', params: [] },
-      { name: 'register', params: ['pluginKind', 'plugin'] },
-      { name: 'deregister', params: ['pluginKind'] },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/esm/adaptive.d.ts',
-    functions: [
-      { name: 'defaultConfig', params: [] },
-      { name: 'inMemoryBackend', params: [] },
-      { name: 'redisBackend', params: ['url', 'keyPrefix'] },
-      { name: 'telemetryConfig', params: ['config'] },
-      { name: 'adaptiveHintsConfig', params: ['config'] },
-      { name: 'toolParallelismConfig', params: ['config'] },
-      { name: 'acgConfig', params: ['config'] },
-      { name: 'ComponentSpec', params: ['config', 'options'] },
-    ],
-  },
-  {
-    file: 'crates/wasm/wrappers/esm/typed.d.ts',
-    functions: [
-      { name: '__testEncodeWithCodec', params: ['codec', 'payload'] },
-      { name: 'typedToolExecute', params: ['name', 'args', 'func', 'argsCodec', 'resultCodec', 'options'] },
-      { name: 'typedLlmExecute', params: ['name', 'request', 'func', 'responseCodec', 'options'] },
-      {
-        name: 'typedLlmStreamExecute',
-        params: ['name', 'request', 'func', 'collector', 'finalizer', 'chunkCodec', 'responseCodec', 'options'],
-      },
-    ],
-  },
-];
-
 function escapeRegExp(value) {
   return value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
@@ -307,16 +187,8 @@ export function checkPublicDocstrings(entries) {
 }
 
 export function getDocstringEntries(target) {
-  if (target === 'node') {
+  if (target === 'node' || target === 'all') {
     return nodeEntries;
-  }
-
-  if (target === 'wasm') {
-    return wasmEntries;
-  }
-
-  if (target === 'all') {
-    return [...nodeEntries, ...wasmEntries];
   }
 
   throw new Error(`unknown docstring target: ${target}`);

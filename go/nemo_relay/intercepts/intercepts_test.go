@@ -87,12 +87,12 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 	t.Helper()
 
 	if err := intercepts.RegisterLlmRequest("intercepts_llm_req", 1, false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+		func(name string, request nemo_relay.LLMRequestDTO, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 			var payload map[string]interface{}
-			_ = json.Unmarshal(content, &payload)
+			_ = json.Unmarshal(request.Content, &payload)
 			payload["intercepted"] = true
-			out, _ := json.Marshal(payload)
-			return headers, out, annotated, nil
+			request.Content, _ = json.Marshal(payload)
+			return nemo_relay.LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmRequest failed: %v", err)
@@ -109,7 +109,7 @@ func runGlobalLLMInterceptShorthandChecks(t *testing.T) {
 	var llmReq struct {
 		Content map[string]interface{} `json:"content"`
 	}
-	if err := json.Unmarshal(transformedRequest, &llmReq); err != nil {
+	if err := json.Unmarshal(transformedRequest.Request.Content, &llmReq.Content); err != nil {
 		t.Fatalf("unmarshal llm request: %v", err)
 	}
 	if llmReq.Content["intercepted"] != true {
@@ -198,8 +198,8 @@ func runScopeLocalLLMInterceptShorthandChecks(t *testing.T, scopeUUID string) {
 	t.Helper()
 
 	if err := intercepts.ScopeRegisterLlmRequest(scopeUUID, "intercepts_scope_llm_req", 1, false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-			return headers, content, annotated, nil
+		func(name string, request nemo_relay.LLMRequestDTO, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
+			return nemo_relay.LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	); err != nil {
 		t.Fatalf("ScopeRegisterLlmRequest failed: %v", err)

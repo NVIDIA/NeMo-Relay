@@ -30,7 +30,14 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
     let code = CString::new(code).unwrap();
     let file_name = CString::new("coverage_tests.py").unwrap();
     let module_name = CString::new("coverage_tests").unwrap();
-    PyModule::from_code(py, &code, &file_name, &module_name).unwrap()
+    let module = PyModule::from_code(py, &code, &file_name, &module_name).unwrap();
+    module
+        .setattr(
+            "Outcome",
+            py.get_type::<crate::py_types::PyLLMRequestInterceptOutcome>(),
+        )
+        .unwrap();
+    module
 }
 
 fn make_request() -> LlmRequest {
@@ -390,7 +397,7 @@ def llm_conditional(request):
     return None
 
 def llm_request_intercept(name, request, annotated):
-    return (request, annotated)
+    return Outcome(request, annotated)
 
 async def llm_execution_intercept(name, request, next):
     return await next(request)

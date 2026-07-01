@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 pub use nemo_relay_types::codec::response::*;
 
-pub use super::pricing::{
+pub use super::model_pricing::{
     CacheReadAccounting, ModelPricing, PricingCatalog, PricingCatalogError, PricingConfig,
     PricingResolver, PricingSource, PricingSourceConfig, PricingUnit, PromptCachePricing,
     TokenPricingRates, active_pricing_resolver, attach_estimated_cost,

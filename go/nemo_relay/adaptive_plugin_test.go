@@ -104,12 +104,13 @@ func registerLifecycleInterceptors(ctx *PluginContext, pluginKind string) error 
 		"llm_request",
 		7,
 		false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-			out, err := decorateJSONPayload(headers, "x-go-plugin", pluginKind)
+		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+			out, err := decorateJSONPayload(request.Headers, "x-go-plugin", pluginKind)
 			if err != nil {
-				return nil, nil, nil, err
+				return LLMRequestInterceptOutcome{}, err
 			}
-			return out, content, annotated, nil
+			request.Headers = out
+			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	); err != nil {
 		return err
@@ -441,8 +442,8 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			return closed.RegisterLlmConditionalExecutionGuardrail("llm_conditional", 1, func(headers, content json.RawMessage) *string { return nil })
 		}},
 		{"llm request", func() error {
-			return closed.RegisterLlmRequestIntercept("llm_request", 1, false, func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-				return headers, content, annotated, nil
+			return closed.RegisterLlmRequestIntercept("llm_request", 1, false, func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+				return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 			})
 		}},
 		{"tool request", func() error {

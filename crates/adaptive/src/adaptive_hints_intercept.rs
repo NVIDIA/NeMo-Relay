@@ -86,22 +86,24 @@ fn manual_agent_hints(manual: u32, effective_agent_id: &str, scope_depth: usize)
     }
 }
 
-fn inject_agent_hints(request: &mut LlmRequest, hints: &AgentHints) {
+fn inject_agent_hints(
+    request: &mut LlmRequest,
+    annotated: &mut Option<AnnotatedLlmRequest>,
+    hints: &AgentHints,
+) {
     let Ok(serialized_hints) = serde_json::to_value(hints) else {
         return;
     };
 
-    if let Some(body) = request.content.as_object_mut() {
-        if !body.contains_key("nvext") {
-            body.insert(
-                "nvext".to_string(),
-                serde_json::Value::Object(serde_json::Map::new()),
-            );
-        }
-        if let Some(nvext) = body
-            .get_mut("nvext")
-            .and_then(|value| value.as_object_mut())
-        {
+    let body = annotated
+        .as_mut()
+        .map(|annotated| &mut annotated.extra)
+        .or_else(|| request.content.as_object_mut());
+    if let Some(body) = body {
+        let nvext = body
+            .entry("nvext".to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let Some(nvext) = nvext.as_object_mut() {
             nvext.insert("agent_hints".to_string(), serialized_hints.clone());
         }
     }
@@ -172,7 +174,9 @@ impl AdaptiveHintsIntercept {
     pub fn into_request_fn(self) -> LlmRequestInterceptFn {
         let this = Arc::new(self);
         Arc::new(
-            move |_name: &str, mut request: LlmRequest, annotated: Option<AnnotatedLlmRequest>| {
+            move |_name: &str,
+                  mut request: LlmRequest,
+                  mut annotated: Option<AnnotatedLlmRequest>| {
                 let scope_path = extract_scope_path();
                 let manual_ls = read_manual_latency_sensitivity();
                 let scope_depth = scope_path.len();
@@ -189,10 +193,12 @@ impl AdaptiveHintsIntercept {
                 );
 
                 if let Some(hints) = final_hints {
-                    inject_agent_hints(&mut request, &hints);
+                    inject_agent_hints(&mut request, &mut annotated, &hints);
                 }
 
-                Ok((request, annotated))
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
             },
         )
     }

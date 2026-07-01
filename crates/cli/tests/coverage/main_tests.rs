@@ -212,7 +212,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
         .to_string();
     assert!(error.contains("plugin install supports codex"));
 
-    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "cursor"]).unwrap();
+    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "hermes"]).unwrap();
     let error = run_command(cli.command.unwrap(), &cli.server)
         .await
         .unwrap_err()
@@ -299,7 +299,7 @@ fn pricing_validate_dispatch_covers_success_read_and_parse_errors() {
     })
     .unwrap_err()
     .to_string();
-    assert!(missing.contains("could not read pricing catalog"));
+    assert!(missing.contains("could not read model pricing catalog"));
 
     let invalid = dir.path().join("invalid.json");
     std::fs::write(&invalid, "{\"version\":2,\"entries\":[]}").unwrap();
@@ -308,5 +308,5 @@ fn pricing_validate_dispatch_covers_success_read_and_parse_errors() {
     })
     .unwrap_err()
     .to_string();
-    assert!(invalid_error.contains("invalid pricing catalog"));
+    assert!(invalid_error.contains("invalid model pricing catalog"));
 }

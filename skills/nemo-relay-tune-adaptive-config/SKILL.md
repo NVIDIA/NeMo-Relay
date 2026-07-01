@@ -34,7 +34,7 @@ request-specific middleware, or production trace debugging.
   `ComponentSpec(...)`, then activates through `nemo-relay-node/plugin`.
 - Rust uses `nemo_relay_adaptive::{AdaptiveConfig, ComponentSpec, ...}` and
   `nemo_relay::plugin::{validate_plugin_config, initialize_plugins}`.
-- Go, WebAssembly, and raw FFI are source-first or advanced surfaces.
+- Go and raw FFI are source-first or advanced surfaces.
 - Plugins install runtime behavior such as subscribers, guardrails, intercepts,
   and related helpers. Adaptive is a built-in plugin component, not a separate
   runtime model.

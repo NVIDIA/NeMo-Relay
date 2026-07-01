@@ -42,7 +42,7 @@ _ToolExecutionIntercept: TypeAlias = Callable[
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
-    tuple["LLMRequest", "AnnotatedLLMRequest | None"],
+    "LLMRequestInterceptOutcome",
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
     [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
@@ -381,6 +381,42 @@ class LLMRequest:
     def content(self) -> _JsonObject:
         """Return the request content body as a JSON object."""
         ...
+
+class PendingMarkSpec:
+    """A runtime-owned mark specification returned by request middleware."""
+    def __init__(
+        self,
+        name: str,
+        category: Optional[str] = ...,
+        category_profile: Optional[_Json] = ...,
+        data: Optional[_Json] = ...,
+        metadata: Optional[_Json] = ...,
+    ) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def category(self) -> Optional[str]: ...
+    @property
+    def category_profile(self) -> Optional[_Json]: ...
+    @property
+    def data(self) -> Optional[_Json]: ...
+    @property
+    def metadata(self) -> Optional[_Json]: ...
+
+class LLMRequestInterceptOutcome:
+    """Canonical result returned by an LLM request intercept."""
+    def __init__(
+        self,
+        request: LLMRequest,
+        annotated_request: Optional[AnnotatedLLMRequest] = ...,
+        pending_marks: list[PendingMarkSpec] = ...,
+    ) -> None: ...
+    @property
+    def request(self) -> LLMRequest: ...
+    @property
+    def annotated_request(self) -> Optional[AnnotatedLLMRequest]: ...
+    @property
+    def pending_marks(self) -> list[PendingMarkSpec]: ...
 
 class AnnotatedLLMRequest:
     """Structured view of an LLM request produced by a codec.
@@ -1509,7 +1545,7 @@ def tool_conditional_execution(name: str, args: _Json) -> None:
     """
     ...
 
-def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequest:
+def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequestInterceptOutcome:
     """Run the registered LLM request-intercept chain.
 
     Args:

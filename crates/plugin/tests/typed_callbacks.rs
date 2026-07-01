@@ -14,16 +14,16 @@ use std::sync::{
 
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmJsonStream, LlmNext,
-    LlmRequest, LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
-    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PluginContext, PluginRuntime, ScopeType,
-    ToolNext,
+    LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSubscriberCb,
+    NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb,
+    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
+    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
+    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
+    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -2580,14 +2580,13 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
 
     let mut ctx = test_context(&host);
     ctx.register_llm_request_intercept("llm-request-intercept", 0, false, |_name, request, ann| {
-        Ok((request, ann))
+        Ok(LlmRequestInterceptOutcome::new(request, ann))
     })
     .unwrap();
     let registration = take_llm_request_intercept_registration();
     let name = host_string(&host, "llm");
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let mut out_request = ptr::null_mut();
-    let mut out_annotated = ptr::null_mut();
+    let mut out_outcome = ptr::null_mut();
     assert_eq!(
         unsafe {
             (registration.cb)(
@@ -2595,8 +2594,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
                 name,
                 request,
                 ptr::null(),
-                &mut out_request,
-                &mut out_annotated,
+                &mut out_outcome,
             )
         },
         NemoRelayStatus::NullPointer
@@ -2608,20 +2606,6 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
                 name,
                 request,
                 ptr::null(),
-                ptr::null_mut(),
-                &mut out_annotated,
-            )
-        },
-        NemoRelayStatus::NullPointer
-    );
-    assert_eq!(
-        unsafe {
-            (registration.cb)(
-                registration.user_data as *mut c_void,
-                name,
-                request,
-                ptr::null(),
-                &mut out_request,
                 ptr::null_mut(),
             )
         },
@@ -2889,14 +2873,13 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
 
     let mut ctx = test_context(&host);
     ctx.register_llm_request_intercept("llm-request", 0, false, |_name, request, ann| {
-        Ok((request, ann))
+        Ok(LlmRequestInterceptOutcome::new(request, ann))
     })
     .unwrap();
     let registration = take_llm_request_intercept_registration();
     let name = host_string(&host, "llm");
     let bad_request = host_string(&host, "{not json");
-    let mut out_request = ptr::null_mut();
-    let mut out_annotated = ptr::null_mut();
+    let mut out_outcome = ptr::null_mut();
     assert_eq!(
         unsafe {
             (registration.cb)(
@@ -2904,8 +2887,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
                 name,
                 bad_request,
                 ptr::null(),
-                &mut out_request,
-                &mut out_annotated,
+                &mut out_outcome,
             )
         },
         NemoRelayStatus::InvalidJson
@@ -2919,8 +2901,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
                 name,
                 request,
                 bad_annotation,
-                &mut out_request,
-                &mut out_annotated,
+                &mut out_outcome,
             )
         },
         NemoRelayStatus::InvalidJson
@@ -3091,8 +3072,7 @@ fn typed_callbacks_map_additional_callback_errors() {
     let registration = take_llm_request_intercept_registration();
     let name = host_string(&host, "llm");
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let mut out_request = ptr::null_mut();
-    let mut out_annotated = ptr::null_mut();
+    let mut out_outcome = ptr::null_mut();
     assert_eq!(
         unsafe {
             (registration.cb)(
@@ -3100,8 +3080,7 @@ fn typed_callbacks_map_additional_callback_errors() {
                 name,
                 request,
                 ptr::null(),
-                &mut out_request,
-                &mut out_annotated,
+                &mut out_outcome,
             )
         },
         NemoRelayStatus::Internal
@@ -4231,7 +4210,10 @@ fn typed_llm_request_intercept_does_not_publish_partial_outputs() {
     let host = test_host();
     let mut ctx = test_context(&host);
     ctx.register_llm_request_intercept("llm", 0, false, |_name, request, _annotated| {
-        Ok((request, Some(test_annotated_llm_request())))
+        Ok(LlmRequestInterceptOutcome::new(
+            request,
+            Some(test_annotated_llm_request()),
+        ))
     })
     .unwrap();
 
@@ -4241,11 +4223,9 @@ fn typed_llm_request_intercept_does_not_publish_partial_outputs() {
     assert!(!registration.break_chain);
     let name = host_string(&host, "llm");
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let stale_request = host_string(&host, r#"{"stale":"request"}"#);
-    let stale_annotated = host_string(&host, r#"{"stale":"annotated"}"#);
-    let mut out_request = stale_request;
-    let mut out_annotated = stale_annotated;
-    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(1);
+    let stale_outcome = host_string(&host, r#"{"stale":"outcome"}"#);
+    let mut out_outcome = stale_outcome;
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
     let live_before = live_host_strings();
     let status = unsafe {
         (registration.cb)(
@@ -4253,18 +4233,15 @@ fn typed_llm_request_intercept_does_not_publish_partial_outputs() {
             name,
             request,
             ptr::null(),
-            &mut out_request,
-            &mut out_annotated,
+            &mut out_outcome,
         )
     };
     *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = None;
     assert_eq!(status, NemoRelayStatus::Internal);
-    assert!(out_request.is_null());
-    assert!(out_annotated.is_null());
+    assert!(out_outcome.is_null());
     assert_eq!(live_host_strings(), live_before);
     unsafe {
-        (host.string_free)(stale_request);
-        (host.string_free)(stale_annotated);
+        (host.string_free)(stale_outcome);
         (host.string_free)(name);
         (host.string_free)(request);
         registration.free();
@@ -4272,15 +4249,14 @@ fn typed_llm_request_intercept_does_not_publish_partial_outputs() {
 
     let mut ctx = test_context(&host);
     ctx.register_llm_request_intercept("llm", 0, false, |_name, request, _annotated| {
-        Ok((request, None))
+        Ok(LlmRequestInterceptOutcome::new(request, None))
     })
     .unwrap();
 
     let registration = take_llm_request_intercept_registration();
     let name = host_string(&host, "llm");
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let mut out_request = ptr::null_mut();
-    let mut out_annotated = ptr::null_mut();
+    let mut out_outcome = ptr::null_mut();
     *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
     let status = unsafe {
         (registration.cb)(
@@ -4288,14 +4264,12 @@ fn typed_llm_request_intercept_does_not_publish_partial_outputs() {
             name,
             request,
             ptr::null(),
-            &mut out_request,
-            &mut out_annotated,
+            &mut out_outcome,
         )
     };
     *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = None;
     assert_eq!(status, NemoRelayStatus::Internal);
-    assert!(out_request.is_null());
-    assert!(out_annotated.is_null());
+    assert!(out_outcome.is_null());
     unsafe {
         (host.string_free)(name);
         (host.string_free)(request);
@@ -4313,7 +4287,10 @@ fn typed_llm_request_intercept_round_trips_request_and_annotations() {
         assert!(annotated.is_some());
         request.headers.insert("x-mutated".into(), json!(true));
         request.content["rewritten"] = json!(true);
-        Ok((request, Some(test_annotated_llm_request())))
+        Ok(LlmRequestInterceptOutcome::new(
+            request,
+            Some(test_annotated_llm_request()),
+        ))
     })
     .unwrap();
 
@@ -4327,24 +4304,22 @@ fn typed_llm_request_intercept_round_trips_request_and_annotations() {
         &host,
         serde_json::to_value(test_annotated_llm_request()).unwrap(),
     );
-    let mut out_request = ptr::null_mut();
-    let mut out_annotated = ptr::null_mut();
+    let mut out_outcome = ptr::null_mut();
     let status = unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             name,
             request,
             annotated,
-            &mut out_request,
-            &mut out_annotated,
+            &mut out_outcome,
         )
     };
     assert_eq!(status, NemoRelayStatus::Ok);
-    let out_request = read_json_and_free(&host, out_request);
-    assert_eq!(out_request["headers"]["x-mutated"], json!(true));
-    assert_eq!(out_request["content"]["rewritten"], json!(true));
-    let out_annotated = read_json_and_free(&host, out_annotated);
-    assert_eq!(out_annotated["messages"], json!([]));
+    let outcome = read_json_and_free(&host, out_outcome);
+    assert_eq!(outcome["request"]["headers"]["x-mutated"], json!(true));
+    assert_eq!(outcome["request"]["content"]["rewritten"], json!(true));
+    assert_eq!(outcome["annotated_request"]["messages"], json!([]));
+    assert_eq!(outcome["pending_marks"], json!([]));
 
     unsafe {
         (host.string_free)(name);
@@ -4355,35 +4330,87 @@ fn typed_llm_request_intercept_round_trips_request_and_annotations() {
 
     let mut ctx = test_context(&host);
     ctx.register_llm_request_intercept("llm", 0, false, |_name, request, _annotated| {
-        Ok((request, None))
+        Ok(LlmRequestInterceptOutcome::new(request, None))
     })
     .unwrap();
     let registration = take_llm_request_intercept_registration();
     let name = host_string(&host, "llm");
     let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
-    let mut out_request = ptr::null_mut();
-    let mut out_annotated = host_string(&host, r#"{"stale":true}"#);
-    let stale_annotated = out_annotated;
+    let mut out_outcome = host_string(&host, r#"{"stale":true}"#);
+    let stale_outcome = out_outcome;
     let status = unsafe {
         (registration.cb)(
             registration.user_data as *mut c_void,
             name,
             request,
             ptr::null(),
-            &mut out_request,
-            &mut out_annotated,
+            &mut out_outcome,
         )
     };
     assert_eq!(status, NemoRelayStatus::Ok);
-    assert!(out_annotated.is_null());
-    assert_eq!(
-        read_json_and_free(&host, out_request)["content"]["input"],
-        json!(true)
-    );
+    let outcome = read_json_and_free(&host, out_outcome);
+    assert!(outcome["annotated_request"].is_null());
+    assert_eq!(outcome["request"]["content"]["input"], json!(true));
+    assert_eq!(outcome["pending_marks"], json!([]));
     unsafe {
-        (host.string_free)(stale_annotated);
+        (host.string_free)(stale_outcome);
         (host.string_free)(name);
         (host.string_free)(request);
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_llm_request_intercept_serializes_canonical_outcome() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_llm_request_intercept("llm", 23, false, |_name, mut request, annotated| {
+        request.content["rewritten"] = json!(true);
+        Ok(
+            LlmRequestInterceptOutcome::new(request, annotated).with_pending_mark(
+                PendingMarkSpec::builder()
+                    .name("plugin.request.rewritten")
+                    .data(json!({ "saved_tokens": 7 }))
+                    .build(),
+            ),
+        )
+    })
+    .unwrap();
+
+    let registration = take_llm_request_intercept_registration();
+    assert_eq!(registration.priority, 23);
+    assert!(!registration.break_chain);
+    let name = host_string(&host, "llm");
+    let request = json_host_string(&host, serde_json::to_value(test_llm_request()).unwrap());
+    let annotated = json_host_string(
+        &host,
+        serde_json::to_value(test_annotated_llm_request()).unwrap(),
+    );
+    let mut out_outcome = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            name,
+            request,
+            annotated,
+            &mut out_outcome,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    let outcome = read_json_and_free(&host, out_outcome);
+    assert_eq!(outcome["request"]["content"]["rewritten"], true);
+    assert_eq!(outcome["annotated_request"]["messages"], json!([]));
+    assert_eq!(
+        outcome["pending_marks"][0]["name"],
+        "plugin.request.rewritten"
+    );
+    assert_eq!(outcome["pending_marks"][0]["data"]["saved_tokens"], 7);
+
+    unsafe {
+        (host.string_free)(name);
+        (host.string_free)(request);
+        (host.string_free)(annotated);
         registration.free();
     }
 }

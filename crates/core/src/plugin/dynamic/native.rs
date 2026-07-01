@@ -32,7 +32,7 @@ use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 
 use crate::api::event::Event;
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
@@ -48,7 +48,6 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
-use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -1712,16 +1711,14 @@ fn wrap_llm_request_intercept_fn(
             }
             None => ptr::null_mut(),
         };
-        let mut out_request = ptr::null_mut();
-        let mut out_annotated = ptr::null_mut();
+        let mut out_outcome = ptr::null_mut();
         let status = unsafe {
             cb(
                 user_data.ptr,
                 name_string,
                 request_string,
                 annotated_string,
-                &mut out_request,
-                &mut out_annotated,
+                &mut out_outcome,
             )
         };
         unsafe {
@@ -1731,39 +1728,23 @@ fn wrap_llm_request_intercept_fn(
         }
         if status != NemoRelayStatus::Ok {
             unsafe {
-                native_string_free(out_request);
-                native_string_free(out_annotated);
+                native_string_free(out_outcome);
             }
             return Err(flow_error_from_status(
                 status,
                 "native LLM request intercept failed",
             ));
         }
-        let request_json = json_from_native_string(
-            out_request,
-            "native LLM request intercept returned null request",
+        let outcome_json = json_from_native_string(
+            out_outcome,
+            "native LLM request intercept returned null outcome",
         );
-        let annotated_json = if out_annotated.is_null() {
-            Ok(None)
-        } else {
-            json_from_native_string(out_annotated, "invalid annotated request").map(Some)
-        };
         unsafe {
-            native_string_free(out_request);
-            native_string_free(out_annotated);
+            native_string_free(out_outcome);
         }
-        let request_json = request_json?;
-        let annotated_json = annotated_json?;
-        let request: LlmRequest = serde_json::from_value(request_json)
-            .map_err(|err| FlowError::Internal(format!("invalid LLM request JSON: {err}")))?;
-        let annotated = annotated_json
-            .map(|annotated_json| {
-                serde_json::from_value::<AnnotatedLlmRequest>(annotated_json).map_err(|err| {
-                    FlowError::Internal(format!("invalid annotated request JSON: {err}"))
-                })
-            })
-            .transpose()?;
-        Ok((request, annotated))
+        serde_json::from_value::<LlmRequestInterceptOutcome>(outcome_json?).map_err(|err| {
+            FlowError::Internal(format!("invalid LLM request intercept outcome JSON: {err}"))
+        })
     })
 }
 

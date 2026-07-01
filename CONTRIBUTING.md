@@ -21,8 +21,7 @@ the published package for your language:
 - **Python package** -- `uv add nemo-relay` or `pip install nemo-relay`
 - **Node.js package** -- `npm install nemo-relay-node`
 
-Go, WebAssembly, and the raw FFI surface are currently experimental and remain
-source-first.
+Go and the raw FFI surface are currently experimental and remain source-first.
 
 ### Source Development
 
@@ -33,10 +32,9 @@ Install these tools before you start:
 - **just** -- `cargo install just --locked`
 - **Go** >= 1.21
 - **Node.js** (LTS)
-- **wasm-pack** -- `cargo install wasm-pack`
 - **cargo-deny** -- `cargo install cargo-deny`
 
-When you work in Go, WebAssembly, or the raw FFI surface, build and validate those
+When you work in Go or the raw FFI surface, build and validate those
 bindings from source in the same branch.
 
 Clone the repository and build the workspace:
@@ -60,8 +58,6 @@ cd go/nemo_relay
 CGO_LDFLAGS="-L../../target/release" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+${LD_LIBRARY_PATH}:}../../target/release" go test -v ./...
 cd ../..
 
-# WebAssembly binding
-wasm-pack test --node crates/wasm
 ```
 
 Verify everything works by running the test suites (see [Testing Requirements](#testing-requirements) below).
@@ -78,7 +74,7 @@ Use the following prefixes for branch names:
 | `test/` | Test additions or modifications |
 | `refactor/` | Code restructuring without behavior changes |
 
-Examples: `feat/scope-context-managers`, `fix/node-wasm-silent-failures`, `docs/api-reference-update`.
+Examples: `feat/scope-context-managers`, `fix/node-silent-failures`, `docs/api-reference-update`.
 
 ## Release Tagging
 
@@ -166,7 +162,6 @@ just ci=true test-rust
 just test-python
 just test-go
 just test-node
-just test-wasm
 ```
 
 Those target recipes are the primary entrypoints for targeted reruns as well:
@@ -184,8 +179,6 @@ just test-go
 # Node.js (requires native addon built)
 just test-node
 
-# WebAssembly (unit tests)
-just test-wasm
 ```
 
 When adding new functionality, include tests in the appropriate test files for each affected language binding. Tests are organized by topic: types, scope, tools, LLM, deregister, context isolation, and scope-local.
@@ -200,7 +193,7 @@ Before opening a PR, check the following:
 1. `README.md` still reflects the current workspace members and top-level docs.
 2. The relevant reference docs are updated for any public API change.
 3. The relevant crate or package README is updated when that surface changed.
-4. Embedded documentation snippets, patch docs, and binding-support notes are updated if examples or supported bindings changed.
+4. Embedded documentation snippets, integration docs, and binding-support notes are updated if examples or supported bindings changed.
 5. For docs site changes, run `just docs` (or `./scripts/build-docs.sh html` as a compatibility wrapper) — it regenerates ignored Fern API reference pages before validation.
 
 For documentation-heavy changes, prefer small targeted commits so the history
@@ -223,7 +216,7 @@ Complete these checks before opening or updating a pull request.
 
 1. Ensure all pre-commit hooks pass.
 2. Run the relevant test suites and confirm they pass.
-3. Verify your changes compile cleanly with the relevant `./scripts/build*.sh` entrypoint.
+3. Verify your changes compile cleanly with the relevant target-specific build recipe, such as `just build-rust` or `just build-python`.
 4. Update the relevant documentation entry points and references.
 5. Rebase your branch on the latest `main` to avoid merge conflicts.
 
@@ -280,7 +273,7 @@ Valid types:
 Examples:
 
 ```
-feat: add scope context managers for automatic cleanup in Go, Node.js, and WebAssembly
+feat: add scope context managers for automatic cleanup in Go and Node.js
 fix: propagate JS callback errors instead of silent null fallback
 docs: update API reference for typed wrapper methods
 test: add context isolation tests for concurrent scope stacks
@@ -330,4 +323,4 @@ Before making significant changes, read through the documentation in
 - [Middleware](docs/about-nemo-relay/concepts/middleware.mdx) -- execution ordering and middleware behavior
 - [API Reference](docs/reference/api/index.mdx) -- public surfaces across Rust, Python, and Node.js
 
-The codebase follows a layered architecture: **Core (Rust)** provides the runtime, with bindings through **FFI (C, used by Go through CGo)**, **PyO3 (Python)**, **NAPI (Node.js)**, and **wasm-bindgen (WebAssembly)**. Each binding mirrors the full API surface.
+The codebase follows a layered architecture: **Core (Rust)** provides the runtime, with bindings through **FFI (C, used by Go through CGo)**, **PyO3 (Python)**, and **NAPI (Node.js)**. Each binding mirrors the full API surface.

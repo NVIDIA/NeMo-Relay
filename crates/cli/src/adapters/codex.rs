@@ -4,7 +4,7 @@
 use axum::http::HeaderMap;
 use serde_json::{Value, json};
 
-use crate::adapters::{AdapterOutcome, ClassificationRules, classify};
+use crate::adapters::{AdapterOutcome, CODEX_PAYLOAD_EXTRACTOR, ClassificationRules, classify};
 use crate::model::AgentKind;
 
 /// Normalizes Codex hook payloads while leaving Codex hook control flow untouched.
@@ -16,6 +16,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let events = classify(
         &payload,
         headers,
+        &CODEX_PAYLOAD_EXTRACTOR,
         &ClassificationRules {
             kind: AgentKind::Codex,
             agent_start: &["sessionStart", "session_start", "agentStarted"],

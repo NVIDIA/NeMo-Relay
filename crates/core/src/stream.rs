@@ -35,7 +35,7 @@ use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::LlmHandle;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
-use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
+use crate::api::runtime::{EventSubscriberFn, ScopeStackHandle, current_scope_stack};
 use crate::api::shared::metadata_with_otel_status;
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::LlmResponseCodec;
@@ -63,6 +63,7 @@ pub struct LlmStreamWrapper {
     finalizer: Option<Box<dyn FnOnce() -> Json + Send>>,
     response_codec: Option<Arc<dyn LlmResponseCodec>>,
     metadata: Option<Json>,
+    subscribers: Vec<EventSubscriberFn>,
     chunk_index: u64,
     ended: bool,
 }
@@ -98,6 +99,36 @@ impl LlmStreamWrapper {
         metadata: Option<Json>,
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
     ) -> Self {
+        let subscribers = {
+            let scope_stack = current_scope_stack();
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+            let context = global_context();
+            context
+                .read()
+                .map(|state| state.collect_event_subscribers(&scope_subscribers))
+                .unwrap_or_default()
+        };
+        Self::new_managed(
+            inner,
+            handle,
+            collector,
+            finalizer,
+            metadata,
+            response_codec,
+            subscribers,
+        )
+    }
+
+    pub(crate) fn new_managed(
+        inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
+        handle: LlmHandle,
+        collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
+        finalizer: Box<dyn FnOnce() -> Json + Send>,
+        metadata: Option<Json>,
+        response_codec: Option<Arc<dyn LlmResponseCodec>>,
+        subscribers: Vec<EventSubscriberFn>,
+    ) -> Self {
         Self {
             inner,
             handle,
@@ -106,6 +137,7 @@ impl LlmStreamWrapper {
             finalizer: Some(finalizer),
             response_codec,
             metadata,
+            subscribers,
             chunk_index: 0,
             ended: false,
         }
@@ -155,19 +187,17 @@ impl LlmStreamWrapper {
             let ss_guard = self.scope_stack.read().expect("scope stack lock poisoned");
             let sl =
                 ss_guard.collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
-            let sl_subs = ss_guard.collect_scope_local_subscribers();
             let ctx = global_context();
             let state = ctx.read();
             match state {
                 Ok(state) => {
-                    let subscribers = state.collect_event_subscribers(&sl_subs);
                     let entries = state.llm_sanitize_response_entries(&sl);
-                    Some((entries, subscribers))
+                    Some(entries)
                 }
                 Err(_) => None,
             }
         };
-        let Some((entries, subscribers)) = snapshot else {
+        let Some(entries) = snapshot else {
             return;
         };
         let sanitized =
@@ -197,7 +227,7 @@ impl LlmStreamWrapper {
             }
         };
         if let Some(event) = event_snapshot {
-            NemoRelayContextState::emit_event(&event, &subscribers);
+            NemoRelayContextState::emit_event(&event, &self.subscribers);
         }
     }
 
@@ -205,15 +235,10 @@ impl LlmStreamWrapper {
     fn emit_chunk_mark(&self, chunk_index: u64, raw_chunk: &Json) {
         let data = llm_chunk_mark_data(chunk_index, raw_chunk);
         let event_snapshot = {
-            let Ok(ss_guard) = self.scope_stack.read() else {
-                return;
-            };
-            let sl_subs = ss_guard.collect_scope_local_subscribers();
             let ctx = global_context();
             let state = ctx.read();
             match state {
                 Ok(state) => {
-                    let subscribers = state.collect_event_subscribers(&sl_subs);
                     let event = state.create_event(MarkEvent::new(
                         BaseEvent::builder()
                             .name("llm.chunk")
@@ -223,13 +248,13 @@ impl LlmStreamWrapper {
                         None,
                         None,
                     ));
-                    Some((event, subscribers))
+                    Some(event)
                 }
                 Err(_) => None,
             }
         };
-        if let Some((event, subscribers)) = event_snapshot {
-            NemoRelayContextState::emit_event(&event, &subscribers);
+        if let Some(event) = event_snapshot {
+            NemoRelayContextState::emit_event(&event, &self.subscribers);
         }
     }
 }

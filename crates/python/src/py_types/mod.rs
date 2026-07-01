@@ -132,6 +132,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyToolHandle>()?;
     m.add_class::<PyLLMHandle>()?;
     m.add_class::<PyLLMRequest>()?;
+    m.add_class::<PyPendingMarkSpec>()?;
+    m.add_class::<PyLLMRequestInterceptOutcome>()?;
     m.add_class::<PyAnnotatedLLMRequest>()?;
     m.add_class::<PyAnnotatedLLMResponse>()?;
     m.add_class::<PyScopeEvent>()?;

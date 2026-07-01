@@ -14,11 +14,13 @@ Example::
         name: str,
         request: nemo_relay.LLMRequest,
         annotated: nemo_relay.AnnotatedLLMRequest | None
-    ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+    ) -> nemo_relay.LLMRequestInterceptOutcome:
         # The request object is immutable, however we can return a new instance with updated headers.
         headers = request.headers.copy()
         headers["X-Trace"] = "demo"
-        return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+        return nemo_relay.LLMRequestInterceptOutcome(
+            nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+        )
 
     nemo_relay.intercepts.register_llm_request("trace-header", 10, False, add_header)
 """
@@ -167,9 +169,9 @@ def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmReq
         priority: Execution order for the intercept. Lower values run first.
         break_chain: Whether to stop applying lower-priority request intercepts
             after this intercept runs.
-        fn: Callable invoked as ``fn(name, request, annotated)`` that returns a
-            tuple of ``(request, annotated)`` for the next intercept or the
-            provider callback.
+        fn: Callable invoked as ``fn(name, request, annotated)`` that returns an
+            ``nemo_relay.LLMRequestInterceptOutcome`` for the next intercept or
+            the provider callback.
 
     Returns:
         None: This function returns after the intercept is registered.
@@ -186,10 +188,12 @@ def register_llm_request(name: str, priority: int, break_chain: bool, fn: LlmReq
         def add_header(
             name: str, request: nemo_relay.LLMRequest,
             annotated: nemo_relay.AnnotatedLLMRequest | None
-        ) -> tuple[nemo_relay.LLMRequest, nemo_relay.AnnotatedLLMRequest | None]:
+        ) -> nemo_relay.LLMRequestInterceptOutcome:
             headers = request.headers.copy()
             headers["X-Trace"] = "req-123"
-            return nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+            return nemo_relay.LLMRequestInterceptOutcome(
+                nemo_relay.LLMRequest(headers=headers, content=request.content), annotated
+            )
 
         nemo_relay.intercepts.register_llm_request(
             "trace-header",

@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(not(target_arch = "wasm32"))]
-
 //! Integration coverage for SDK-built native dynamic plugins.
 
 use std::path::{Path, PathBuf};
@@ -342,6 +340,24 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         llm_start.input().unwrap()["content"]["native_plugin_llm_request_intercept"],
         true
     );
+    let pending_mark = find_event(&managed_llm_events, "fixture.native.llm_request.mark", None);
+    assert_eq!(pending_mark.parent_uuid(), Some(llm_start.uuid()));
+    assert_eq!(
+        pending_mark.category().map(|category| category.as_str()),
+        Some("custom")
+    );
+    assert_eq!(
+        pending_mark
+            .category_profile()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("fixture.native.pending")
+    );
+    assert_eq!(
+        pending_mark.data().unwrap()["source"],
+        "native_request_intercept"
+    );
+    assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
+    assert!(pending_mark.timestamp() > llm_start.timestamp());
     let llm_end = find_event(
         &managed_llm_events,
         "native-fixture-llm-execute",
@@ -400,6 +416,13 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert_eq!(*collected_stream_chunks.lock().unwrap(), stream_chunks);
     flush_subscribers().expect("stream native fixture events should flush");
     let stream_events = events.lock().unwrap().clone();
+    let stream_start = find_event(
+        &stream_events,
+        "native-fixture-llm-stream",
+        Some(ScopeCategory::Start),
+    );
+    let stream_pending_mark = find_event(&stream_events, "fixture.native.llm_request.mark", None);
+    assert_eq!(stream_pending_mark.parent_uuid(), Some(stream_start.uuid()));
     let stream_end = find_event(
         &stream_events,
         "native-fixture-llm-stream",

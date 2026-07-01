@@ -31,7 +31,7 @@ use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
@@ -171,15 +171,21 @@ pub type NemoRelayCodecEncodeFn = Option<
 /// C callback type for LLM request intercepts with unified annotated-aware
 /// signature. Receives the intercept name, the opaque `FfiLLMRequest`, and
 /// optionally the annotated request as a JSON C string (null if no Codec
-/// resolved). Writes transformed outputs to `out_request` and
-/// `out_annotated_json`. Returns `NemoRelayStatus`.
+/// resolved). Writes one owned canonical outcome JSON string to
+/// `out_outcome_json`. Any non-null string written there must be allocated by
+/// `nemo_relay_llm_request_intercept_outcome_json_new` or by an allocation
+/// compatible with `nemo_relay_string_free`. Ownership transfers to Relay
+/// when the callback returns; the callback must not free or reuse the string
+/// afterward. Relay frees it exactly once, even when the callback returns an
+/// error status. With a Codec, the outcome must preserve request content and
+/// return the annotation; only request headers and annotation fields are
+/// writable. Returns `NemoRelayStatus`.
 pub type NemoRelayLlmRequestInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     name: *const c_char,
     request: *const FfiLLMRequest,
     annotated_json: *const c_char,
-    out_request: *mut *mut FfiLLMRequest,
-    out_annotated_json: *mut *mut c_char,
+    out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus;
 
 /// Callback for collecting intercepted stream chunks. Invoked with each chunk
@@ -559,8 +565,8 @@ pub fn wrap_json_fn(
 
 /// Wrap a C LLM request intercept callback (annotated-aware) into a Rust
 /// `LlmRequestInterceptFn` closure. The callback receives the intercept name,
-/// the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes
-/// the transformed request and annotated JSON to output pointers.
+/// the opaque `FfiLLMRequest`, and the annotated JSON (or null). It writes one
+/// owned canonical outcome JSON string.
 pub fn wrap_llm_request_intercept_fn(
     cb: NemoRelayLlmRequestInterceptCb,
     user_data: *mut libc::c_void,
@@ -587,9 +593,7 @@ pub fn wrap_llm_request_intercept_fn(
                 std::ptr::null()
             };
 
-            // Initialize output pointers
-            let mut out_request: *mut FfiLLMRequest = std::ptr::null_mut();
-            let mut out_annotated: *mut c_char = std::ptr::null_mut();
+            let mut out_outcome: *mut c_char = std::ptr::null_mut();
 
             let status = unsafe {
                 cb(
@@ -597,8 +601,7 @@ pub fn wrap_llm_request_intercept_fn(
                     c_name.as_ptr(),
                     ffi_req,
                     annotated_ptr,
-                    &mut out_request,
-                    &mut out_annotated,
+                    &mut out_outcome,
                 )
             };
 
@@ -606,32 +609,29 @@ pub fn wrap_llm_request_intercept_fn(
             unsafe { drop(Box::from_raw(ffi_req)) };
 
             if status != NemoRelayStatus::Ok {
+                unsafe { nemo_relay_string_free_internal(out_outcome) };
                 let message = last_error_message()
                     .unwrap_or_else(|| "request intercept callback failed".to_string());
                 return Err(FlowError::Internal(message));
             }
 
-            // Read output request
-            let new_request = if out_request.is_null() {
+            if out_outcome.is_null() {
                 return Err(FlowError::Internal(
-                    "request intercept returned null out_request".to_string(),
+                    "request intercept returned null out_outcome_json".to_string(),
                 ));
-            } else {
-                let boxed = unsafe { Box::from_raw(out_request) };
-                boxed.0
-            };
-
-            // Read output annotated
-            let new_annotated = if out_annotated.is_null() {
-                None
-            } else {
-                let s = unsafe { CStr::from_ptr(out_annotated) }.to_string_lossy();
-                let parsed: Option<AnnotatedLLMRequest> = serde_json::from_str(&s).ok();
-                unsafe { nemo_relay_string_free_internal(out_annotated) };
-                parsed
-            };
-
-            Ok((new_request, new_annotated))
+            }
+            let outcome = unsafe { CStr::from_ptr(out_outcome) }
+                .to_str()
+                .map_err(|error| FlowError::Internal(format!("invalid outcome UTF-8: {error}")))
+                .and_then(|json| {
+                    serde_json::from_str::<LlmRequestInterceptOutcome>(json).map_err(|error| {
+                        FlowError::Internal(format!(
+                            "invalid LLM request intercept outcome JSON: {error}"
+                        ))
+                    })
+                });
+            unsafe { nemo_relay_string_free_internal(out_outcome) };
+            outcome
         },
     )
 }

@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -26,7 +25,7 @@ shared runtime for scopes, policy, plugins, and lifecycle events.
 
 | Goal | Start With... |
 |---|---|
-| Observe Codex, Claude Code, Cursor, or Hermes locally via CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
+| Observe Codex, Claude Code, or Hermes locally via CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
@@ -253,9 +252,8 @@ flowchart LR
 ## Support Status
 
 > [!NOTE]
-> The main supported paths today are Rust, Python, and Node.js. Go,
-> WebAssembly, and raw C FFI are available for source-first users, but they are
-> still experimental.
+> The main supported paths today are Rust, Python, and Node.js. Go and raw C FFI
+> are available for source-first users, but they are still experimental.
 
 The following table shows which language bindings and CLI features are currently supported:
 
@@ -266,7 +264,6 @@ The following table shows which language bindings and CLI features are currently
 | Rust | Fully supported | Documented with Quick Start and Guides. |
 | NeMo Relay CLI | Supported | Local observability and hook-backed security are supported; optimization is partial and host-dependent. |
 | Go | Experimental | Source-first under `go/nemo_relay`. |
-| WebAssembly | Experimental | Source-first under `crates/wasm`. |
 | FFI | Experimental | Source-first under `crates/ffi`. |
 
 ### Agent Harness Support
@@ -283,7 +280,6 @@ coverage.
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
 | Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
 | Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
-| Cursor | Partial | Limited | No | Missing hooks under `cursor-agent` and manual gateway routing limit full feature coverage. |
 
 ### Public API Integrations
 
@@ -295,7 +291,7 @@ or plugin hooks that preserve enough lifecycle fidelity.
 | LangChain | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | LangGraph | Yes | Yes | Yes | Wrapped tool and LLM calling. |
 | Deep Agents | Yes | Yes | Yes | Wrapped tool and LLM calling. |
-| OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Managed execution rewrites require the patch-based integration. |
+| OpenClaw | Yes | Partial | No | Hook-backed telemetry with pre-tool guardrails. Public hooks do not expose managed execution rewrites. |
 
 The Python `nemo-relay` package ships extras for LangChain, LangGraph, and Deep
 Agents:
@@ -306,19 +302,6 @@ uv add "nemo-relay[langchain,langgraph,deepagents]"
 
 Refer to [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) for setup
 guides and current caveats.
-
-### Patch-Based Integrations
-
-Patch-based integrations are experimental samples maintained against pinned
-upstream checkouts. Use [third_party/README.md](third_party/README.md) for the
-clone, checkout, and patch-application workflow.
-
-| Integration | Observability | Security | Optimization | Notes |
-|:---|:---:|:---:|:---:|:---|
-| [LangChain](third_party/README-langchain.md), [LangGraph](third_party/README-langgraph.md), [LangChain NVIDIA](third_party/README-langchain-nvidia.md) | Yes | Yes | Yes | Directly patches behavior into code. |
-| [opencode](third_party/README-opencode.md) | Yes | Yes | Yes | Directly patches behavior into code. |
-| [OpenClaw](third_party/README-openclaw.md) | Yes | Yes | Yes | Adds middleware support to OpenClaw and a built-in plugin. |
-| [Hermes Agent](third_party/README-hermes-agent.md) | Yes | Yes | Yes | Directly patches behavior into code. |
 
 ## Documentation
 

@@ -1380,7 +1380,7 @@ pub fn with_scope(
     let scope_stack = current_scope_stack_handle();
     let scope_uuid = scope_handle.inner.uuid;
     // Hand the callback a real `ScopeHandle` instance, matching the Rust,
-    // Python, and WebAssembly bindings, so it can be passed back into `event`,
+    // Python bindings, so it can be passed back into `event`,
     // `toolCallExecute`, and `llmCallExecute`. The instance is materialized on
     // the JS thread because a `napi_wrap`'d handle cannot cross the
     // threadsafe-function boundary as plain JSON.
@@ -2259,6 +2259,9 @@ pub fn register_llm_request_intercept(
     name: String,
     priority: i32,
     break_chain: bool,
+    #[napi(
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }"
+    )]
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     core_registry_api::register_llm_request_intercept(
@@ -2729,6 +2732,9 @@ pub fn scope_register_llm_request_intercept(
     name: String,
     priority: i32,
     break_chain: bool,
+    #[napi(
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }"
+    )]
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
@@ -2942,7 +2948,9 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// Run the registered LLM request intercept chain on the given request.
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
-#[napi(ts_return_type = "Promise<unknown>")]
+#[napi(
+    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+)]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
@@ -2952,7 +2960,13 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
             TASK_SCOPE_STACK
                 .scope(scope_stack, async move {
                     core_llm_api::llm_request_intercepts(&name, llm_request)
-                        .map(|r| serde_json::to_value(&r).unwrap_or(Json::Null))
+                        .map(|r| {
+                            serde_json::json!({
+                                "request": r.request,
+                                "annotated": r.annotated_request,
+                                "pendingMarks": callable::js_pending_marks(r.pending_marks),
+                            })
+                        })
                         .map_err(to_napi_err)
                 })
                 .await

@@ -7,7 +7,6 @@
   },
   "workspaces": [
     "crates/node",
-    "crates/wasm",
     "integrations/openclaw"
   ],
   "devDependencies": {

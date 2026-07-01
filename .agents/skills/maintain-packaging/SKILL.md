@@ -25,7 +25,6 @@ consumed outside the source tree.
 - Go module path in `go/nemo_relay/go.mod`
 - Node workspace metadata in root `package.json` and `package-lock.json`
 - Node package metadata in `crates/node/package.json`
-- WebAssembly package naming and generated package expectations
 - FFI header and library naming
 - CI workflows, install commands, and example commands
 - `justfile` build, test, clean, version, and package recipes for plugin crates

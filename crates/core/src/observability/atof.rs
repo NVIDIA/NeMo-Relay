@@ -16,11 +16,11 @@ use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::time::Duration;
 
 use chrono::Utc;
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 use futures_util::{SinkExt, stream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 use crate::api::event::Event;
@@ -465,23 +465,20 @@ fn stored_failure_result(path: &Path, state: &AtofExporterState) -> Result<()> {
     Ok(())
 }
 
-#[cfg_attr(
-    any(not(feature = "atof-streaming"), target_arch = "wasm32"),
-    allow(dead_code)
-)]
+#[cfg_attr(not(feature = "atof-streaming"), allow(dead_code))]
 enum EndpointMessage {
     Event(String),
     Flush(std_mpsc::Sender<()>),
     Close(std_mpsc::Sender<()>),
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 enum NdjsonBodyMessage {
     Event(Vec<u8>),
     Flush(std_mpsc::Sender<()>),
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 impl NdjsonBodyMessage {
     fn acknowledge_if_flush(self) {
         if let Self::Flush(done) = self {
@@ -519,7 +516,7 @@ impl AtofEndpointWorker {
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndpointWorker>> {
     let mut workers = Vec::with_capacity(configs.len());
     for (index, config) in configs.iter().enumerate() {
@@ -536,7 +533,7 @@ fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndp
     Ok(workers)
 }
 
-#[cfg(any(not(feature = "atof-streaming"), target_arch = "wasm32"))]
+#[cfg(not(feature = "atof-streaming"))]
 fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndpointWorker>> {
     if configs.is_empty() {
         return Ok(Vec::new());
@@ -546,7 +543,7 @@ fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndp
     Err(AtofExporterError::InvalidEndpoint(message))
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<AtofEndpointWorker> {
     validate_endpoint_config(&config)?;
     let timeout = Duration::from_millis(config.timeout_millis);
@@ -561,7 +558,7 @@ fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<Ato
     })
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn validate_endpoint_config(config: &AtofEndpointConfig) -> Result<()> {
     if config.url.trim().is_empty() {
         return Err(AtofExporterError::InvalidEndpoint(
@@ -592,7 +589,7 @@ fn validate_endpoint_config(config: &AtofEndpointConfig) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn build_header_map(headers: &HashMap<String, String>) -> Result<reqwest::header::HeaderMap> {
     let mut out = reqwest::header::HeaderMap::new();
     for (key, value) in headers {
@@ -605,7 +602,7 @@ fn build_header_map(headers: &HashMap<String, String>) -> Result<reqwest::header
     Ok(out)
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn run_endpoint_worker(
     index: usize,
     config: AtofEndpointConfig,
@@ -631,12 +628,12 @@ fn run_endpoint_worker(
     });
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn run_http_post_endpoint(
     index: usize,
     config: AtofEndpointConfig,
@@ -690,7 +687,7 @@ async fn run_http_post_endpoint(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn run_websocket_endpoint(
     index: usize,
     config: AtofEndpointConfig,
@@ -726,11 +723,11 @@ async fn run_websocket_endpoint(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 type AtofWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn drain_websocket_pending(
     index: usize,
     config: &AtofEndpointConfig,
@@ -752,7 +749,7 @@ async fn drain_websocket_pending(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn drain_websocket_pending_inner(
     index: usize,
     config: &AtofEndpointConfig,
@@ -795,7 +792,7 @@ async fn drain_websocket_pending_inner(
     true
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn connect_websocket(
     config: &AtofEndpointConfig,
 ) -> std::result::Result<AtofWebSocket, String> {
@@ -822,7 +819,7 @@ async fn connect_websocket(
     .map_err(|error| error.to_string())
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn run_ndjson_endpoint(
     index: usize,
     config: AtofEndpointConfig,
@@ -864,7 +861,7 @@ async fn run_ndjson_endpoint(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn build_ndjson_client(
     config: &AtofEndpointConfig,
 ) -> std::result::Result<reqwest::Client, String> {
@@ -877,7 +874,7 @@ fn build_ndjson_client(
         .map_err(|error| format!("client build failed: {error}"))
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn ndjson_body_channel() -> (
     tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
     reqwest::Body,
@@ -898,7 +895,7 @@ fn ndjson_body_channel() -> (
     (body_tx, reqwest::Body::wrap_stream(body_stream))
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn send_ndjson_event(
     index: usize,
     body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
@@ -911,7 +908,7 @@ fn send_ndjson_event(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn send_ndjson_flush(
     index: usize,
     body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
@@ -923,7 +920,7 @@ fn send_ndjson_flush(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn finish_ndjson_upload(
     index: usize,
     request: tokio::task::JoinHandle<reqwest::Result<reqwest::Response>>,
@@ -944,7 +941,7 @@ async fn finish_ndjson_upload(
     let _ = done.send(());
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn drain_closed(mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>) {
     while let Some(message) = rx.recv().await {
         match message {
@@ -960,7 +957,7 @@ async fn drain_closed(mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessa
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String) -> String {
     match config.field_name_policy {
         AtofEndpointFieldNamePolicy::Preserve => raw_json,
@@ -968,7 +965,7 @@ fn endpoint_event_json(config: &AtofEndpointConfig, raw_json: String) -> String 
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn replace_dotted_field_names(raw_json: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<Json>(raw_json) else {
         return raw_json.to_string();
@@ -977,7 +974,7 @@ fn replace_dotted_field_names(raw_json: &str) -> String {
     serde_json::to_string(&value).unwrap_or_else(|_| raw_json.to_string())
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn replace_dotted_value_keys(value: &mut Json) {
     match value {
         Json::Object(object) => replace_dotted_object_keys(object),
@@ -990,7 +987,7 @@ fn replace_dotted_value_keys(value: &mut Json) {
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Json>) {
     let mut old = std::mem::take(object)
         .into_iter()
@@ -1008,7 +1005,7 @@ fn replace_dotted_object_keys(object: &mut serde_json::Map<String, Json>) {
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn collision_free_key(object: &serde_json::Map<String, Json>, key: String) -> String {
     if !object.contains_key(&key) {
         return key;
@@ -1022,7 +1019,7 @@ fn collision_free_key(object: &serde_json::Map<String, Json>, key: String) -> St
     unreachable!("unbounded suffix search must find a key")
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 async fn log_http_error(index: usize, label: &str, response: reqwest::Response) {
     let status = response.status();
     match response.text().await {
@@ -1037,7 +1034,7 @@ async fn log_http_error(index: usize, label: &str, response: reqwest::Response) 
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn truncate_log_body(body: &str) -> String {
     const LIMIT: usize = 1024;
     let trimmed = body.trim();

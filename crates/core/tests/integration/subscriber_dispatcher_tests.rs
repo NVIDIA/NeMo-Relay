@@ -3,8 +3,6 @@
 
 //! Integration tests for native subscriber dispatch behavior.
 
-#![cfg(not(target_arch = "wasm32"))]
-
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 

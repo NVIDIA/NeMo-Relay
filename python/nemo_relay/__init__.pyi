@@ -30,10 +30,10 @@ from nemo_relay import codecs as codecs
 from nemo_relay import guardrails as guardrails
 from nemo_relay import intercepts as intercepts
 from nemo_relay import llm as llm
+from nemo_relay import model_pricing as model_pricing
 from nemo_relay import observability as observability
 from nemo_relay import pii_redaction as pii_redaction
 from nemo_relay import plugin as plugin
-from nemo_relay import pricing as pricing
 from nemo_relay import scope as scope
 from nemo_relay import scope_local as scope_local
 from nemo_relay import subscribers as subscribers
@@ -70,6 +70,9 @@ from nemo_relay._native import (
     LLMRequest as LLMRequest,
 )
 from nemo_relay._native import (
+    LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
+)
+from nemo_relay._native import (
     MarkEvent as MarkEvent,
 )
 from nemo_relay._native import (
@@ -83,6 +86,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
+)
+from nemo_relay._native import (
+    PendingMarkSpec as PendingMarkSpec,
 )
 from nemo_relay._native import (
     ScopeAttributes as ScopeAttributes,
@@ -209,7 +215,7 @@ Exceptional flow:
 """
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
-    tuple[LLMRequest, AnnotatedLLMRequest | None],
+    LLMRequestInterceptOutcome,
 ]
 """Request intercept callback that rewrites raw and annotated LLM requests.
 
@@ -217,7 +223,7 @@ Arguments:
     The logical LLM name, raw request, and optional annotated request view.
 
 Return:
-    The request and optional annotated view passed to later middleware.
+    The complete canonical outcome passed to later middleware.
 """
 LlmExecutionIntercept: TypeAlias = Callable[
     [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],

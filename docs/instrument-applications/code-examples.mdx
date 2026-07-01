@@ -26,7 +26,7 @@ The following table shows which API to use based on your integration need:
 
 Use manual lifecycle calls only when the surrounding code owns the real tool invocation and only exposes reliable start and finish hooks.
 If you are replaying events or bridging a framework clock, pass an explicit timestamp to the manual start, end, or mark helpers.
-Python accepts timezone-aware `datetime` values, Node.js and WebAssembly accept Unix microseconds since epoch, Rust accepts `DateTime<Utc>`, and Go accepts `time.Time`.
+Python accepts timezone-aware `datetime` values, Node.js accepts Unix microseconds since epoch, Rust accepts `DateTime<Utc>`, and Go accepts `time.Time`.
 
 <Tabs>
 <Tab title="Python" language="python">

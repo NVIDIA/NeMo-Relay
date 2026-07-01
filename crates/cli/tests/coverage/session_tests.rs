@@ -3424,7 +3424,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
             vec![
                 NormalizedEvent::SubagentEnded(SubagentEvent {
                     session_id: "out-of-order".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "subagentStop".into(),
                     subagent_id: "missing".into(),
                     payload: json!({ "reason": "missing-start" }),
@@ -3432,7 +3432,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
                 }),
                 NormalizedEvent::ToolEnded(ToolEvent {
                     session_id: "out-of-order".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "postToolUse".into(),
                     tool_call_id: "tool-without-start".into(),
                     tool_name: "Shell".into(),
@@ -3445,7 +3445,7 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
                 }),
                 NormalizedEvent::AgentEnded(SessionEvent {
                     session_id: "out-of-order".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "sessionEnd".into(),
                     payload: json!({}),
                     metadata: json!({}),
@@ -4269,14 +4269,14 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
             vec![
                 NormalizedEvent::AgentStarted(SessionEvent {
                     session_id: "multi-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "sessionStart".into(),
                     payload: json!({}),
                     metadata: json!({}),
                 }),
                 NormalizedEvent::SubagentStarted(SubagentEvent {
                     session_id: "multi-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "subagentStart".into(),
                     subagent_id: "worker-1".into(),
                     payload: json!({}),
@@ -4284,7 +4284,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
                 }),
                 NormalizedEvent::SubagentStarted(SubagentEvent {
                     session_id: "multi-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "subagentStart".into(),
                     subagent_id: "worker-2".into(),
                     payload: json!({}),
@@ -4292,7 +4292,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
                 }),
                 NormalizedEvent::LlmHint(LlmHintEvent {
                     session_id: "multi-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "afterAgentThought".into(),
                     subagent_id: Some("worker-1".into()),
                     agent_id: None,
@@ -4306,7 +4306,7 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
                 }),
                 NormalizedEvent::LlmHint(LlmHintEvent {
                     session_id: "multi-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "afterAgentThought".into(),
                     subagent_id: Some("worker-2".into()),
                     agent_id: None,
@@ -4385,14 +4385,14 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
             vec![
                 NormalizedEvent::AgentStarted(SessionEvent {
                     session_id: "ambiguous-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "sessionStart".into(),
                     payload: json!({}),
                     metadata: json!({}),
                 }),
                 NormalizedEvent::LlmHint(LlmHintEvent {
                     session_id: "ambiguous-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "afterAgentThought".into(),
                     subagent_id: None,
                     agent_id: None,
@@ -4406,7 +4406,7 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
                 }),
                 NormalizedEvent::LlmHint(LlmHintEvent {
                     session_id: "ambiguous-session".into(),
-                    agent_kind: AgentKind::Cursor,
+                    agent_kind: AgentKind::ClaudeCode,
                     event_name: "afterAgentResponse".into(),
                     subagent_id: None,
                     agent_id: None,

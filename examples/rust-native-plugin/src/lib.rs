@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use nemo_relay_plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmJsonStream, LlmRequest, NativePlugin,
-    PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+    CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json, LlmJsonStream,
+    LlmRequest, LlmRequestInterceptOutcome, NativePlugin, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeCategory, ScopeType,
 };
 use serde_json::{Map, json};
 
@@ -235,9 +236,20 @@ impl NativePlugin for ExampleNativePlugin {
         ctx.register_llm_request_intercept("example_llm_request", 20, false, {
             let tag = config.tag.clone();
             move |_name, request, annotated| {
-                Ok((
+                Ok(LlmRequestInterceptOutcome::new(
                     tag_llm_request(request, "native_llm_request_intercept", &tag),
                     annotated,
+                )
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("example.native.llm_request_intercept")
+                        .category(EventCategory::custom())
+                        .category_profile(CategoryProfile {
+                            subtype: Some("example.native.request_rewrite".into()),
+                            ..CategoryProfile::default()
+                        })
+                        .data(json!({ "tag": &tag }))
+                        .build(),
                 ))
             }
         })?;

@@ -12,9 +12,9 @@ use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 use crate::api::tool::ToolAttributes;
 use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
-use crate::codec::pricing::pricing_test_mutex;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,

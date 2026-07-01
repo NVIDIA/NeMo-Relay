@@ -374,10 +374,15 @@ unsafe extern "C" fn llm_request_intercept_cb(
     _name: *const c_char,
     request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    out_request: *mut *mut FfiLLMRequest,
-    _out_annotated_json: *mut *mut c_char,
+    out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
-    unsafe { *out_request = llm_request_cb(ptr::null_mut(), request) };
+    let transformed = unsafe { Box::from_raw(llm_request_cb(ptr::null_mut(), request)) };
+    let outcome = json!({
+        "request": transformed.0,
+        "annotated_request": null,
+        "pending_marks": [],
+    });
+    unsafe { *out_outcome_json = CString::new(outcome.to_string()).unwrap().into_raw() };
     NemoRelayStatus::Ok
 }
 
@@ -386,8 +391,7 @@ unsafe extern "C" fn llm_request_intercept_fail_cb(
     _name: *const c_char,
     _request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    _out_request: *mut *mut FfiLLMRequest,
-    _out_annotated_json: *mut *mut c_char,
+    _out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     crate::error::set_last_error("llm request intercept callback failed");
     NemoRelayStatus::Internal

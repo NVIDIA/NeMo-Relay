@@ -548,7 +548,8 @@ global_guardrail_registry_api!(
 );
 global_intercept_registry_api!(
     /// Register a global LLM request intercept.
-    /// Request intercepts can rewrite or annotate the outgoing LLM request.
+    /// Request intercepts can rewrite or annotate the outgoing LLM request and
+    /// schedule lifecycle marks for the resulting LLM scope.
     register_llm_request_intercept,
     /// Deregister a global LLM request intercept.
     deregister_llm_request_intercept,
@@ -655,7 +656,7 @@ scope_guardrail_registry_api!(
 scope_intercept_registry_api!(
     /// Register a scope-local LLM request intercept.
     /// Request intercepts can rewrite or annotate LLM requests inside the
-    /// owning scope.
+    /// owning scope and schedule lifecycle marks for the resulting LLM scope.
     scope_register_llm_request_intercept,
     /// Deregister a scope-local LLM request intercept.
     scope_deregister_llm_request_intercept,

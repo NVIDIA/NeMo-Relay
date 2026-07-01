@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(all(not(target_arch = "wasm32"), feature = "guardrails-remote"))]
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -1128,13 +1126,3 @@ fn configured_tool_selector(
 #[cfg(test)]
 #[path = "../../../tests/unit/plugins/nemo_guardrails/remote_coverage_tests.rs"]
 mod coverage_tests;
-
-#[cfg(any(target_arch = "wasm32", not(feature = "guardrails-remote")))]
-pub(super) fn register_remote_backend(
-    _config: NeMoGuardrailsConfig,
-    _ctx: &mut PluginRegistrationContext,
-) -> PluginResult<()> {
-    Err(PluginError::RegistrationFailed(
-        "built-in NeMo Guardrails remote backend is unavailable in this build".to_string(),
-    ))
-}

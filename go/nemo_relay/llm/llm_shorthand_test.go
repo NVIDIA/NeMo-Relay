@@ -45,12 +45,12 @@ func assertLLMRequestInterceptShorthand(t *testing.T) {
 	t.Helper()
 
 	if err := nemo_relay.RegisterLlmRequestIntercept("llm_req_int", 1, false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+		func(name string, request nemo_relay.LLMRequestDTO, annotated json.RawMessage) (nemo_relay.LLMRequestInterceptOutcome, error) {
 			var payload map[string]interface{}
-			_ = json.Unmarshal(content, &payload)
+			_ = json.Unmarshal(request.Content, &payload)
 			payload["intercepted"] = true
-			out, _ := json.Marshal(payload)
-			return headers, out, annotated, nil
+			request.Content, _ = json.Marshal(payload)
+			return nemo_relay.LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	); err != nil {
 		t.Fatalf("RegisterLlmRequestIntercept failed: %v", err)
@@ -67,7 +67,7 @@ func assertLLMRequestInterceptShorthand(t *testing.T) {
 	var intercepted struct {
 		Content map[string]interface{} `json:"content"`
 	}
-	if err := json.Unmarshal(request, &intercepted); err != nil {
+	if err := json.Unmarshal(request.Request.Content, &intercepted.Content); err != nil {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 	if intercepted.Content["intercepted"] != true {

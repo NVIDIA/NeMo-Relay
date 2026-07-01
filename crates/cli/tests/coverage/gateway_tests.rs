@@ -103,6 +103,22 @@ fn selects_provider_routes() {
 }
 
 #[test]
+fn provider_route_names_round_trip_through_alignment_routes() {
+    for route in [
+        ProviderRoute::OpenAiResponses,
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiModels,
+        ProviderRoute::AnthropicMessages,
+        ProviderRoute::AnthropicCountTokens,
+    ] {
+        assert_eq!(
+            GatewayRouteKind::from_provider_name(route.name()),
+            Some(route.alignment_route())
+        );
+    }
+}
+
+#[test]
 fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
