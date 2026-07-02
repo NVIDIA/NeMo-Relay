@@ -26,27 +26,27 @@ runtime semantics as the Rust and Node.js surfaces.
 
 ## Why Use It?
 
-- 🧭 **Own execution context in Python**: Group agent, tool, and LLM work into
+- **Own execution context in Python**: Group agent, tool, and LLM work into
   one scope tree from Python application code.
-- 🛡️ **Package policy around callbacks**: Use guardrails and intercepts to block
+- **Package policy around callbacks**: Use guardrails and intercepts to block
   work, sanitize observability payloads, rewrite requests, or wrap execution.
-- 📡 **Emit one lifecycle stream**: Send runtime events to in-process
+- **Emit one lifecycle stream**: Send runtime events to in-process
   subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
   OpenInference workflows.
-- 🧩 **Integrate without a framework migration**: Wrap framework or provider
+- **Integrate without a framework migration**: Wrap framework or provider
   callbacks while preserving the application’s orchestration model.
 
 ## What You Get
 
-- ✅ **Scope, tool, and LLM helpers**: Managed boundaries that emit lifecycle
+- **Scope, tool, and LLM helpers**: Managed boundaries that emit lifecycle
   events and run middleware in a consistent order.
-- ✅ **Middleware APIs**: Guardrails and intercepts for tool and LLM requests,
+- **Middleware APIs**: Guardrails and intercepts for tool and LLM requests,
   responses, and execution.
-- ✅ **Subscribers and exporters**: Event consumers for observability and
+- **Subscribers and exporters**: Event consumers for observability and
   diagnostics.
-- ✅ **Plugin and typed helpers**: Public modules for plugins, codecs, typed
+- **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.
-- ✅ **Shared Rust runtime semantics**: Python behavior aligned with the Rust
+- **Shared Rust runtime semantics**: Python behavior aligned with the Rust
   and Node.js surfaces.
 
 ## Installation

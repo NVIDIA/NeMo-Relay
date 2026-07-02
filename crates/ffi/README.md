@@ -25,27 +25,27 @@ binding consumes it through CGo.
 
 ## Why Use It?
 
-- 🔌 **Expose NeMo Relay to native consumers**: Call the shared Rust runtime from
+- **Expose NeMo Relay to native consumers**: Call the shared Rust runtime from
   C-compatible hosts and downstream language bindings.
-- 🧱 **Build on one ABI**: Keep native integrations aligned with the same scope,
+- **Build on one ABI**: Keep native integrations aligned with the same scope,
   middleware, lifecycle event, and observability contract.
-- 📦 **Consume a generated C header**: Use the committed `nemo_relay.h` surface
+- **Consume a generated C header**: Use the committed `nemo_relay.h` surface
   produced by the crate build.
-- 🚧 **Work source-first**: Use this experimental surface when Rust, Python, and
+- **Work source-first**: Use this experimental surface when Rust, Python, and
   Node.js packages are not the right integration layer.
 
 ## What You Get
 
-- ✅ **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
+- **Exported `nemo_relay_*` symbols**: APIs for scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, observability exporters, and scope stack
   isolation.
-- ✅ **Generated header**: A committed `nemo_relay.h` file for C-compatible
+- **Generated header**: A committed `nemo_relay.h` file for C-compatible
   consumers.
-- ✅ **Native library outputs**: Shared and static libraries for platform
+- **Native library outputs**: Shared and static libraries for platform
   linking.
-- ✅ **JSON payload contract**: Cross-language request, response, metadata, and
+- **JSON payload contract**: Cross-language request, response, metadata, and
   event data carried as JSON.
-- ✅ **Go binding foundation**: The repository-maintained Go binding consumes
+- **Go binding foundation**: The repository-maintained Go binding consumes
   this ABI through CGo.
 
 ## Installation

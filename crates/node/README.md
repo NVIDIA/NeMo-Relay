@@ -25,26 +25,26 @@ should install it from npm rather than depend on the Rust crate directly.
 
 ## Why Use It?
 
-- 🧭 **Own execution context in Node.js**: Group agent, tool, and LLM work into
+- **Own execution context in Node.js**: Group agent, tool, and LLM work into
   one scope tree from JavaScript or TypeScript.
-- 🛡️ **Put policy around callbacks**: Register guardrails and intercepts for
+- **Put policy around callbacks**: Register guardrails and intercepts for
   request rewriting, blocking, sanitization, and execution wrapping.
-- 📡 **Emit one lifecycle stream**: Send runtime events to in-process
+- **Emit one lifecycle stream**: Send runtime events to in-process
   subscribers, Agent Trajectory Interchange Format (ATIF), OpenTelemetry, or
   OpenInference workflows.
-- 🧩 **Use package entry points by need**: Import the main runtime surface plus
+- **Use package entry points by need**: Import the main runtime surface plus
   typed, plugin, adaptive, and observability helpers from npm.
 
 ## What You Get
 
-- ✅ **npm package for Node.js**: A Node.js 24 or newer package backed by a
+- **npm package for Node.js**: A Node.js 24 or newer package backed by a
   napi-rs native extension.
-- ✅ **Managed tool and LLM execution**: Helpers that emit lifecycle events and
+- **Managed tool and LLM execution**: Helpers that emit lifecycle events and
   run middleware in a consistent order.
-- ✅ **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries.
-- ✅ **Observability exporters**: Subscriber and exporter support for common
+- **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries.
+- **Observability exporters**: Subscriber and exporter support for common
   runtime telemetry flows.
-- ✅ **Additional entry points**: `nemo-relay-node/typed`,
+- **Additional entry points**: `nemo-relay-node/typed`,
   `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
   `nemo-relay-node/observability`.
 
