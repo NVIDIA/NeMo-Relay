@@ -2130,6 +2130,9 @@ pub fn register_tool_execution_intercept(
     env: Env,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+    )]
     callable: JsFunction,
 ) -> Result<()> {
     let key = PromiseAwareKey::GlobalToolExecution(name.clone());
@@ -2560,6 +2563,9 @@ pub fn scope_register_tool_execution_intercept(
     scope_uuid: String,
     name: String,
     priority: i32,
+    #[napi(
+        ts_arg_type = "(args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+    )]
     callable: JsFunction,
 ) -> Result<()> {
     let key = PromiseAwareKey::ScopeToolExecution {

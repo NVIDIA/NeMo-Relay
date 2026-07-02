@@ -93,14 +93,13 @@ sha256 = {digest}
 {signature_line}
 
 [load]
-runtime = "python"
-entrypoint = {entrypoint}
+runtime = "command"
+entrypoint = "plugin.py"
 "#,
             capabilities = capabilities,
             signature_line = signature_line,
             digest = toml_basic_string(&digest),
             plugin_id = toml_basic_string(plugin_id),
-            entrypoint = toml_basic_string(&format!("{plugin_id}.plugin:register")),
         ),
     )
     .unwrap();
@@ -1483,6 +1482,32 @@ command = "hermes --yolo chat"
     assert!(stdout.contains("agent = hermes"));
     assert!(stdout.contains("openai_base_url = http://file-openai"));
     assert!(stdout.contains("argv = hermes --yolo chat"));
+}
+
+#[test]
+fn cli_run_dry_run_rejects_missing_explicit_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-config.toml");
+
+    let output = Command::new(gateway_bin())
+        .args([
+            "run",
+            "--config",
+            missing.to_str().unwrap(),
+            "--agent",
+            "codex",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("does not exist"), "{stderr}");
+    assert!(
+        stderr.contains(missing.to_string_lossy().as_ref()),
+        "{stderr}"
+    );
 }
 
 #[test]

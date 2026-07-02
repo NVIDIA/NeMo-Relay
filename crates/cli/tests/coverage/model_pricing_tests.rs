@@ -114,3 +114,58 @@ fn pricing_component_rejects_malformed_component_config() {
         .to_string();
     assert!(error.contains("invalid model pricing config"));
 }
+
+#[test]
+fn pricing_document_update_preserves_dynamic_and_host_sections() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        r#"host_setting = "preserve-me"
+
+[[plugins.dynamic]]
+manifest = "./relay-plugin.toml"
+config = {}
+
+[plugins.policy]
+allow_unsigned = true
+
+[host.extra]
+value = 42
+"#,
+    )
+    .unwrap();
+
+    update_plugin_config_document(&path, |plugin_config| {
+        let index = ensure_pricing_component(plugin_config)?;
+        plugin_config.components[index].enabled = true;
+        Ok(())
+    })
+    .unwrap();
+
+    let root = std::fs::read_to_string(&path)
+        .unwrap()
+        .parse::<toml::Table>()
+        .unwrap();
+    assert_eq!(root["host_setting"].as_str(), Some("preserve-me"));
+    assert_eq!(root["host"]["extra"]["value"].as_integer(), Some(42));
+    assert_eq!(
+        root["plugins"]["policy"]["allow_unsigned"].as_bool(),
+        Some(true)
+    );
+    let dynamic = root["plugins"]["dynamic"].as_array().unwrap();
+    assert_eq!(dynamic[0]["manifest"].as_str(), Some("./relay-plugin.toml"));
+    assert!(dynamic[0]["config"].as_table().unwrap().is_empty());
+    let pricing = root["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["kind"].as_str() == Some(PRICING_PLUGIN_KIND))
+        .expect("pricing component should be present");
+    assert!(
+        pricing
+            .get("enabled")
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true)
+    );
+}

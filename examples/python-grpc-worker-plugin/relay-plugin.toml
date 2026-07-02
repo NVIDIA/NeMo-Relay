@@ -17,6 +17,13 @@ enabled = false
 [capabilities]
 items = ["plugin_worker"]
 
+[source]
+manifest_root = "."
+artifact = "nemo_relay_python_grpc_worker_example/worker.py"
+
+[integrity]
+sha256 = "sha256:966849be254cc6299a17a4bb65500363e9a48f98cc1e0091192e42b23821486f"
+
 [load]
 runtime = "python"
 entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"

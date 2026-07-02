@@ -109,6 +109,9 @@ from nemo_relay._native import (
     ToolAttributes as ToolAttributes,
 )
 from nemo_relay._native import (
+    ToolExecutionInterceptOutcome as ToolExecutionInterceptOutcome,
+)
+from nemo_relay._native import (
     ToolHandle as ToolHandle,
 )
 
@@ -199,7 +202,7 @@ Return:
 """
 ToolExecutionIntercept: TypeAlias = Callable[
     [str, Json, Callable[[Json], Awaitable[Json]]],
-    Json | Awaitable[Json],
+    ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
 """Execution intercept callback that wraps tool execution.
 
@@ -207,7 +210,7 @@ Arguments:
     The tool name, current JSON arguments, and next callable.
 
 Return:
-    A JSON-compatible result, either directly or as an awaitable.
+    A canonical tool execution outcome, either directly or as an awaitable.
 
 Exceptional flow:
     The callback may short-circuit by not invoking ``next``. Exceptions

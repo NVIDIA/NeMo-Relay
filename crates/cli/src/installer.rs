@@ -111,7 +111,6 @@ async fn send_hook_forward_request(
     url: String,
     input: String,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
-    crate::tls::install_rustls_crypto_provider();
     Ok(reqwest::Client::builder()
         .timeout(HOOK_FORWARD_TIMEOUT)
         .build()?

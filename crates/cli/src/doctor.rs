@@ -906,7 +906,6 @@ async fn probe_atof_http_upload(
     index: usize,
     transport: &str,
 ) -> Check {
-    crate::tls::install_rustls_crypto_provider();
     let client = match reqwest::Client::builder().timeout(timeout_duration).build() {
         Ok(client) => client,
         Err(err) => {
@@ -1094,7 +1093,6 @@ fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
 }
 
 async fn probe_http_named(name: &'static str, url: &str) -> Check {
-    crate::tls::install_rustls_crypto_provider();
     let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {

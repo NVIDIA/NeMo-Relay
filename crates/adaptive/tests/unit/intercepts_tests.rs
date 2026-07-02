@@ -102,7 +102,7 @@ async fn test_tool_intercept_calls_next() {
 
     let result = intercept("test", json!({"input": 1}), next).await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), json!({"result": "ok"}));
+    assert_eq!(result.unwrap(), json!({"result": "ok"}).into());
 }
 
 #[tokio::test]
@@ -125,7 +125,7 @@ async fn test_tool_intercept_with_populated_cache() {
     // Should not panic and should return next's result
     let result = intercept("test", json!({"tool_input": "data"}), next).await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), json!({"from_next": true}));
+    assert_eq!(result.unwrap(), json!({"from_next": true}).into());
 }
 
 #[tokio::test]
@@ -147,7 +147,7 @@ async fn test_tool_intercept_passes_args_to_next() {
     let input = json!({"tool_arg": "value", "count": 42});
     let result = intercept("test", input.clone(), next).await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), input);
+    assert_eq!(result.unwrap(), input.into());
 }
 
 #[test]
@@ -325,8 +325,8 @@ async fn test_schedule_mode_intercept_waits_for_primer_before_running_follower()
     tokio::task::yield_now().await;
     let follower = tokio::spawn(intercept("search", json!({"call": 2}), next.clone()));
 
-    assert_eq!(primer.await.unwrap().unwrap(), json!({"call": 1}));
-    assert_eq!(follower.await.unwrap().unwrap(), json!({"call": 2}));
+    assert_eq!(primer.await.unwrap().unwrap(), json!({"call": 1}).into());
+    assert_eq!(follower.await.unwrap().unwrap(), json!({"call": 2}).into());
     assert_eq!(next_order.load(Ordering::SeqCst), 2);
 
     reset_scope_stack();

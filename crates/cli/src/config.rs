@@ -197,7 +197,7 @@ pub(crate) struct PluginJsonContext<'a> {
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
-    /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
+    /// Interactively create or edit built-in and dynamic plugin configuration.
     Edit(PluginsEditCommand),
     /// Register a manifest-backed dynamic plugin in `plugins.toml`.
     Add(PluginsAddCommand),
@@ -793,31 +793,31 @@ fn load_shared_config(
 ) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths(explicit) {
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path)?;
-            let parsed = raw
-                .parse::<toml::Table>()
-                .map(toml::Value::Table)
-                .map_err(|error| {
-                    CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
-                })?;
-            let legacy_observability = legacy_observability_sections(&parsed);
-            if !legacy_observability.is_empty() {
-                return Err(CliError::Config(format!(
-                    "legacy observability config in {} is no longer supported: {}; configure \
-                     observability in plugins.toml with `nemo-relay plugins edit`",
-                    path.display(),
-                    legacy_observability.join(", ")
-                )));
-            }
-            if parsed.get("plugins").is_some() {
-                return Err(CliError::Config(format!(
-                    "plugin configuration in {} is no longer supported; move it to plugins.toml",
-                    path.display()
-                )));
-            }
-            merge_toml(&mut merged, parsed);
+        let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
+            continue;
+        };
+        let parsed = raw
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .map_err(|error| {
+                CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
+            })?;
+        let legacy_observability = legacy_observability_sections(&parsed);
+        if !legacy_observability.is_empty() {
+            return Err(CliError::Config(format!(
+                "legacy observability config in {} is no longer supported: {}; configure \
+                 observability in plugins.toml with `nemo-relay plugins edit`",
+                path.display(),
+                legacy_observability.join(", ")
+            )));
         }
+        if parsed.get("plugins").is_some() {
+            return Err(CliError::Config(format!(
+                "plugin configuration in {} is no longer supported; move it to plugins.toml",
+                path.display()
+            )));
+        }
+        merge_toml(&mut merged, parsed);
     }
     let plugin_toml = load_plugin_toml_config(explicit, plugin_config_path)?;
     let mut resolved = ResolvedConfig {
@@ -828,6 +828,30 @@ fn load_shared_config(
     apply_plugin_toml_config(&mut resolved, plugin_toml);
     apply_env_config(&mut resolved.gateway)?;
     Ok(resolved)
+}
+
+fn read_config_file(
+    path: &Path,
+    required: bool,
+    description: &str,
+) -> Result<Option<String>, CliError> {
+    match path.try_exists() {
+        Ok(false) if !required => Ok(None),
+        Ok(false) => Err(CliError::Config(format!(
+            "explicit {description} file {} does not exist",
+            path.display()
+        ))),
+        Err(error) => Err(CliError::Config(format!(
+            "failed to inspect {description} file {}: {error}",
+            path.display()
+        ))),
+        Ok(true) => std::fs::read_to_string(path).map(Some).map_err(|error| {
+            CliError::Config(format!(
+                "failed to read {description} file {}: {error}",
+                path.display()
+            ))
+        }),
+    }
 }
 
 /// Returns true if any of the implicit config file locations exists on disk. Used by the
@@ -1013,10 +1037,9 @@ where
     let mut runtime_documents = Vec::new();
 
     for path in &paths {
-        if !path.exists() {
+        let Some(raw) = read_config_file(path, false, "plugin configuration")? else {
             continue;
-        }
-        let raw = std::fs::read_to_string(path)?;
+        };
         let mut parsed = raw
             .parse::<toml::Table>()
             .map(toml::Value::Table)

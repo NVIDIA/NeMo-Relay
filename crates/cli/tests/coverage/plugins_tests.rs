@@ -15,6 +15,65 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
+use serde_json::Map;
+use std::path::PathBuf;
+
+fn write_editor_dynamic_manifest(
+    dir: &Path,
+    plugin_id: &str,
+    name: Option<&str>,
+    schema: Option<&Value>,
+) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let name = name
+        .map(|name| format!("name = {name:?}\n"))
+        .unwrap_or_default();
+    let schema_capability = if schema.is_some() {
+        ", \"config_schema\""
+    } else {
+        ""
+    };
+    let schema_section = if schema.is_some() {
+        "\n[config_schema]\npath = \"config.schema.json\"\n"
+    } else {
+        ""
+    };
+    let manifest = dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest,
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = "{plugin_id}"
+{name}kind = "worker"
+
+[compat]
+relay = "0.5"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"{schema_capability}]
+{schema_section}
+[load]
+runtime = "python"
+entrypoint = "fixture.plugin:register"
+"#
+        ),
+    )
+    .unwrap();
+    if let Some(schema) = schema {
+        std::fs::write(
+            dir.join("config.schema.json"),
+            serde_json::to_vec_pretty(schema).unwrap(),
+        )
+        .unwrap();
+    }
+    manifest
+}
 
 fn adaptive_component_config(agent_id: &str) -> serde_json::Map<String, Value> {
     json!({
@@ -316,11 +375,13 @@ fn typed_editor_model_contains_pii_redaction_options() {
 #[test]
 fn plugin_menu_uses_setup_theme_markers() {
     let theme = ColorfulTheme::default();
-    let lines = render_menu(
+    let lines = render_menu_for_size(
         &theme,
         "plugins.toml",
         &[MenuItem::new("First"), MenuItem::new("Second")],
         0,
+        24,
+        80,
     );
     let rendered = lines.join("\n");
 
@@ -337,31 +398,57 @@ fn plugin_menu_builds_ordered_component_actions() {
     let config = PluginConfig::default();
     let components = editable_components(&config).unwrap();
 
-    let (items, actions) = plugin_menu_items(&components, &temp.path().join("plugins.toml"));
+    let dynamic = vec![(
+        "Example Dynamic".to_owned(),
+        "dynamic; config absent; schema fields".to_owned(),
+    )];
+    let (items, actions) =
+        plugin_menu_items(&components, &dynamic, &temp.path().join("plugins.toml"));
     let plain_labels = items
         .iter()
         .map(|item| console::strip_ansi_codes(&item.label).into_owned())
         .collect::<Vec<_>>();
 
     assert_eq!(items.len(), actions.len());
-    assert_eq!(plain_labels[0], "Toggle Observability component [on]");
-    assert_eq!(plain_labels[1], "  Edit Observability ATOF");
+    assert!(plain_labels[0].starts_with("Observability [on] —"));
     assert!(
         plain_labels
             .iter()
-            .any(|label| { label.contains("Toggle NeMo Guardrails component [off]") })
+            .any(|label| { label.starts_with("NeMo Guardrails [off] —") })
     );
-    assert!(matches!(actions[0], MenuAction::ToggleComponent(0)));
+    assert_eq!(
+        plain_labels[components.len()],
+        "Example Dynamic — dynamic; config absent; schema fields"
+    );
+    assert_eq!(plain_labels.len(), components.len() + dynamic.len() + 3);
+    assert!(matches!(actions[0], MenuAction::EditComponent(0)));
     assert!(matches!(
-        actions[1],
-        MenuAction::EditField {
-            component_index: 0,
-            field_index: 0
-        }
+        actions[components.len()],
+        MenuAction::EditDynamic(0)
     ));
     assert!(matches!(actions[actions.len() - 3], MenuAction::Preview));
     assert!(matches!(actions[actions.len() - 2], MenuAction::Save));
     assert!(matches!(actions[actions.len() - 1], MenuAction::Cancel));
+}
+
+#[test]
+fn component_menu_contains_toggle_fields_and_back() {
+    let config = PluginConfig::default();
+    let components = editable_components(&config).unwrap();
+    let component = &components[0];
+
+    let (items, actions) = component_menu_items(component);
+    let labels = items
+        .iter()
+        .map(|item| console::strip_ansi_codes(&item.label).into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(labels[0], "Toggle component [on]");
+    assert_eq!(labels[1], "  Edit ATOF");
+    assert_eq!(labels.last().unwrap(), "Back [q]");
+    assert!(matches!(actions[0], ComponentMenuAction::Toggle));
+    assert!(matches!(actions[1], ComponentMenuAction::EditField(0)));
+    assert!(matches!(actions.last(), Some(ComponentMenuAction::Back)));
 }
 
 #[test]
@@ -374,10 +461,10 @@ fn component_enablement_shortcuts_clear_and_reset_differ() {
         .find(|component| component.label() == "Observability")
         .unwrap();
     observability.set_enabled(false);
-    apply_component_enablement_shortcut(observability, MenuShortcut::Reset);
+    reset_component_menu_item(observability, Some(ComponentMenuAction::Toggle)).unwrap();
     assert!(observability.enabled());
 
-    apply_component_enablement_shortcut(observability, MenuShortcut::Clear);
+    clear_component_menu_item(observability, Some(ComponentMenuAction::Toggle)).unwrap();
     assert!(!observability.enabled());
 
     let adaptive = components
@@ -385,8 +472,137 @@ fn component_enablement_shortcuts_clear_and_reset_differ() {
         .find(|component| component.label() == "Adaptive")
         .unwrap();
     adaptive.set_enabled(true);
-    apply_component_enablement_shortcut(adaptive, MenuShortcut::Reset);
+    reset_component_menu_item(adaptive, Some(ComponentMenuAction::Toggle)).unwrap();
     assert!(!adaptive.enabled());
+}
+
+#[test]
+fn component_field_clear_only_removes_optional_fields() {
+    let config = PluginConfig::default();
+    let mut components = editable_components(&config).unwrap();
+
+    let observability = components
+        .iter_mut()
+        .find(|component| component.label() == "Observability")
+        .unwrap();
+    let atof_index = observability
+        .fields()
+        .iter()
+        .position(|field| field.name == "atof")
+        .unwrap();
+    let atof = observability.fields()[atof_index];
+    assert!(atof.optional);
+    let EditableComponent::Observability(state) = observability else {
+        unreachable!();
+    };
+    state.config.atof = Some(Default::default());
+    assert!(observability.field_configured(atof));
+    clear_component_menu_item(
+        observability,
+        Some(ComponentMenuAction::EditField(atof_index)),
+    )
+    .unwrap();
+    assert!(!observability.field_configured(atof));
+
+    let pii_redaction = components
+        .iter_mut()
+        .find(|component| component.label() == "PII Redaction")
+        .unwrap();
+    let input_index = pii_redaction
+        .fields()
+        .iter()
+        .position(|field| field.name == "input")
+        .unwrap();
+    let input = pii_redaction.fields()[input_index];
+    assert!(!input.optional);
+    let EditableComponent::PiiRedaction(state) = pii_redaction else {
+        unreachable!();
+    };
+    state.config.input = false;
+    assert!(pii_redaction.field_configured(input));
+    clear_component_menu_item(
+        pii_redaction,
+        Some(ComponentMenuAction::EditField(input_index)),
+    )
+    .unwrap();
+    assert!(pii_redaction.field_configured(input));
+    let EditableComponent::PiiRedaction(state) = &*pii_redaction else {
+        unreachable!();
+    };
+    assert!(!state.config.input);
+    reset_component_menu_item(
+        pii_redaction,
+        Some(ComponentMenuAction::EditField(input_index)),
+    )
+    .unwrap();
+    assert!(!pii_redaction.field_configured(input));
+}
+
+#[test]
+fn menu_viewport_keeps_selection_visible_and_pages() {
+    let first = menu_viewport(20, 0, 8);
+    assert_eq!((first.start, first.end, first.page_size), (0, 4, 4));
+    assert!(first.indicators);
+
+    let middle = menu_viewport(20, 10, 8);
+    assert!(middle.start <= 10 && middle.end > 10);
+    assert_eq!(middle.end - middle.start, middle.page_size);
+
+    let last = menu_viewport(20, 19, 8);
+    assert_eq!(last.end, 20);
+    assert!(last.start <= 19);
+}
+
+#[test]
+fn menu_selection_navigation_wraps_pages_and_jumps() {
+    assert_eq!(menu_selection_after_key(&Key::ArrowUp, 0, 10, 4), Some(9));
+    assert_eq!(menu_selection_after_key(&Key::Char('k'), 4, 10, 4), Some(3));
+    assert_eq!(menu_selection_after_key(&Key::ArrowDown, 9, 10, 4), Some(0));
+    assert_eq!(menu_selection_after_key(&Key::Char('j'), 4, 10, 4), Some(5));
+    assert_eq!(menu_selection_after_key(&Key::PageUp, 5, 10, 4), Some(1));
+    assert_eq!(menu_selection_after_key(&Key::PageUp, 2, 10, 4), Some(0));
+    assert_eq!(menu_selection_after_key(&Key::PageDown, 5, 10, 4), Some(9));
+    assert_eq!(menu_selection_after_key(&Key::Home, 5, 10, 4), Some(0));
+    assert_eq!(menu_selection_after_key(&Key::End, 5, 10, 4), Some(9));
+    assert_eq!(menu_selection_after_key(&Key::Enter, 5, 10, 4), None);
+    assert_eq!(menu_selection_after_key(&Key::PageDown, 0, 0, 4), None);
+}
+
+#[test]
+fn menu_renderer_respects_terminal_height_and_width() {
+    let theme = ColorfulTheme::default();
+    let items = (0..20)
+        .map(|index| MenuItem::new(format!("A very long menu item number {index}")))
+        .collect::<Vec<_>>();
+    let lines = render_menu_for_size(&theme, "plugins.toml", &items, 10, 8, 24);
+
+    assert!(lines.len() <= 8);
+    assert!(
+        lines
+            .iter()
+            .all(|line| console::measure_text_width(line) <= 24)
+    );
+    assert!(lines.iter().any(|line| line.contains("↑")));
+    assert!(lines.iter().any(|line| line.contains("↓")));
+}
+
+#[test]
+fn menu_renderer_bounds_tiny_terminals_and_sanitizes_physical_rows() {
+    let theme = ColorfulTheme::default();
+    let items = [
+        MenuItem::new("safe\nsecond row\r\u{1b}[31mred"),
+        MenuItem::new("next"),
+    ];
+
+    for rows in [0, 1, 2] {
+        let lines = render_menu_for_size(&theme, "unsafe\nprompt\u{1b}[2J", &items, 0, rows, 80);
+        assert!(lines.len() <= rows.max(1), "rows={rows}: {lines:?}");
+        assert!(lines.iter().all(|line| {
+            !line
+                .chars()
+                .any(|character| matches!(character, '\n' | '\r' | '\u{1b}'))
+        }));
+    }
 }
 
 #[test]
@@ -1239,6 +1455,361 @@ fn read_plugin_config_handles_missing_and_invalid_files() {
 }
 
 #[test]
+fn plugin_config_document_preserves_host_sections_and_dynamic_config_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        r#"version = 1
+host_setting = "preserve-me"
+
+[[components]]
+kind = "observability"
+enabled = true
+extension_field = "preserve-component-extension"
+config = {}
+
+[plugins.policy]
+allow_unsigned = true
+
+[[plugins.dynamic]]
+manifest = "./first/relay-plugin.toml"
+
+[[plugins.dynamic]]
+manifest = "./second/relay-plugin.toml"
+config = {}
+
+[host.extra]
+value = "preserve-host-section"
+"#,
+    )
+    .unwrap();
+
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    assert_eq!(document.path(), path);
+    assert_eq!(document.config().components.len(), 1);
+    let entries = document.dynamic_entries().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].index, 0);
+    assert_eq!(entries[0].manifest, "./first/relay-plugin.toml");
+    assert_eq!(
+        entries[0].manifest_path,
+        temp.path().join("first/relay-plugin.toml")
+    );
+    assert_eq!(entries[0].config, None);
+    assert_eq!(entries[1].config, Some(Map::new()));
+
+    document.config_mut().components[0].enabled = false;
+    document
+        .set_dynamic_config(0, Map::from_iter([("token".to_owned(), json!("secret"))]))
+        .unwrap();
+    document.remove_dynamic_config(1).unwrap();
+
+    let mut redacted = document.clone();
+    redacted
+        .set_dynamic_config(
+            0,
+            Map::from_iter([("token".to_owned(), json!("<redacted>"))]),
+        )
+        .unwrap();
+    assert!(redacted.render().unwrap().contains("<redacted>"));
+    assert!(!document.render().unwrap().contains("<redacted>"));
+
+    document.write().unwrap();
+    let rendered = std::fs::read_to_string(&path).unwrap();
+    let root = rendered.parse::<toml::Table>().unwrap();
+    assert_eq!(root["host_setting"].as_str(), Some("preserve-me"));
+    assert_eq!(
+        root["host"]["extra"]["value"].as_str(),
+        Some("preserve-host-section")
+    );
+    let component = &root["components"].as_array().unwrap()[0];
+    assert_eq!(component["enabled"].as_bool(), Some(false));
+    assert_eq!(
+        component["extension_field"].as_str(),
+        Some("preserve-component-extension")
+    );
+    assert_eq!(
+        root["plugins"]["policy"]["allow_unsigned"].as_bool(),
+        Some(true)
+    );
+    let dynamic = root["plugins"]["dynamic"].as_array().unwrap();
+    assert_eq!(
+        dynamic[0]["manifest"].as_str(),
+        Some("./first/relay-plugin.toml")
+    );
+    assert_eq!(dynamic[0]["config"]["token"].as_str(), Some("secret"));
+    assert!(dynamic[1].get("config").is_none());
+}
+
+#[test]
+fn dynamic_config_array_resize_preserves_toml_native_values() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        r#"[[plugins.dynamic]]
+manifest = "./plugin/relay-plugin.toml"
+config = { records = [{ observed_at = 1979-05-27T07:32:00Z, label = "existing" }] }
+"#,
+    )
+    .unwrap();
+
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    let original = document.dynamic_entries().unwrap()[0]
+        .config
+        .clone()
+        .unwrap();
+    let mut grown = original.clone();
+    grown
+        .get_mut("records")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"label": "new"}));
+    document
+        .patch_dynamic_config(0, Some(&original), Some(grown.clone()))
+        .unwrap();
+
+    let grown_root = document.render().unwrap().parse::<toml::Table>().unwrap();
+    let grown_records =
+        grown_root["plugins"]["dynamic"].as_array().unwrap()[0]["config"]["records"]
+            .as_array()
+            .unwrap();
+    assert_eq!(grown_records.len(), 2);
+    assert!(grown_records[0]["observed_at"].is_datetime());
+
+    let mut shrunk = grown.clone();
+    shrunk
+        .get_mut("records")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .truncate(1);
+    document
+        .patch_dynamic_config(0, Some(&grown), Some(shrunk))
+        .unwrap();
+
+    let shrunk_root = document.render().unwrap().parse::<toml::Table>().unwrap();
+    let shrunk_records =
+        shrunk_root["plugins"]["dynamic"].as_array().unwrap()[0]["config"]["records"]
+            .as_array()
+            .unwrap();
+    assert_eq!(shrunk_records.len(), 1);
+    assert!(shrunk_records[0]["observed_at"].is_datetime());
+}
+
+#[test]
+fn dynamic_editor_loads_document_local_plugins_and_redacts_schema_secrets() {
+    let temp = tempfile::tempdir().unwrap();
+    write_editor_dynamic_manifest(
+        &temp.path().join("plugins/structured"),
+        "acme.structured",
+        Some("Structured Plugin"),
+        Some(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+                "token": {"type": "string", "writeOnly": true},
+                "retries": {"type": "integer", "default": 3},
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "password": {"type": "string", "writeOnly": true}
+                        }
+                    }
+                }
+            }
+        })),
+    );
+    write_editor_dynamic_manifest(&temp.path().join("plugins/raw"), "acme.raw", None, None);
+    write_editor_dynamic_manifest(
+        &temp.path().join("plugins/absent"),
+        "acme.absent",
+        None,
+        Some(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {"optional": {"type": "string"}}
+        })),
+    );
+    write_editor_dynamic_manifest(&temp.path().join("plugins/empty"), "acme.empty", None, None);
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        r#"[[plugins.dynamic]]
+manifest = "./plugins/structured/relay-plugin.toml"
+config = { token = "super-secret", retries = 5, records = [{ password = "nested-secret" }], observed_at = 1979-05-27T07:32:00Z, unknown = { nested = "keep" } }
+
+[[plugins.dynamic]]
+manifest = "./plugins/raw/relay-plugin.toml"
+config = { local_time = 1979-05-27T07:32:00Z }
+
+[[plugins.dynamic]]
+manifest = "./plugins/absent/relay-plugin.toml"
+
+[[plugins.dynamic]]
+manifest = "./plugins/empty/relay-plugin.toml"
+config = {}
+"#,
+    )
+    .unwrap();
+
+    let document = PluginConfigDocument::read(&path).unwrap();
+    let mut states = load_dynamic_plugin_states(&document).unwrap();
+    assert_eq!(states.len(), 4);
+    assert_eq!(states[0].label(), "Structured Plugin (acme.structured)");
+    assert_eq!(states[1].label(), "acme.raw");
+    assert!(states[0].menu_summary().contains("schema fields"));
+    assert!(states[1].menu_summary().contains("configured"));
+    assert!(states[2].menu_summary().contains("config absent"));
+    assert!(states[3].menu_summary().contains("explicit empty config"));
+    assert!(states[0].top_level_field_uses_hidden_json("records"));
+    assert_eq!(
+        states[0]
+            .restore_raw_field_for_test(&["records".to_owned()])
+            .unwrap(),
+        json!([{ "password": "nested-secret" }])
+    );
+    let labels = states[0].top_level_field_labels();
+    assert!(labels.iter().any(|label| label.contains("<redacted>")));
+    assert!(labels.iter().all(|label| !label.contains("super-secret")));
+
+    states[2].clear_top_level_field("optional");
+    states[2].reset_top_level_field("optional").unwrap();
+    assert_eq!(states[2].config(), None);
+
+    let mut preview = document.clone();
+    for state in &states {
+        state.apply_to_document(&mut preview, true).unwrap();
+    }
+    let rendered = preview.render().unwrap();
+    assert!(rendered.contains("<redacted>"));
+    assert!(!rendered.contains("super-secret"));
+    assert!(!rendered.contains("nested-secret"));
+    let preview_root = rendered.parse::<toml::Table>().unwrap();
+    assert!(
+        preview_root["plugins"]["dynamic"].as_array().unwrap()[0]["config"]["observed_at"]
+            .is_datetime()
+    );
+    assert!(
+        preview_root["plugins"]["dynamic"].as_array().unwrap()[1]["config"]["local_time"]
+            .is_datetime()
+    );
+    assert!(
+        preview_root["plugins"]["dynamic"].as_array().unwrap()[2]
+            .get("config")
+            .is_none()
+    );
+
+    states[0].reset_top_level_field("retries").unwrap();
+    assert_eq!(states[0].config().unwrap().get("retries"), Some(&json!(3)));
+    assert_eq!(
+        states[0].config().unwrap().get("unknown"),
+        Some(&json!({"nested": "keep"}))
+    );
+    let mut touched = document.clone();
+    states[0].apply_to_document(&mut touched, false).unwrap();
+    assert_eq!(
+        touched.dynamic_entries().unwrap()[0]
+            .config
+            .as_ref()
+            .unwrap()
+            .get("unknown"),
+        Some(&json!({"nested": "keep"}))
+    );
+    let touched_root = touched.render().unwrap().parse::<toml::Table>().unwrap();
+    assert!(
+        touched_root["plugins"]["dynamic"].as_array().unwrap()[0]["config"]["observed_at"]
+            .is_datetime()
+    );
+    states[0].clear_top_level_field("token");
+    states[0].clear_top_level_field("retries");
+    states[0].clear_top_level_field("unknown");
+    states[0].clear_top_level_field("observed_at");
+    states[0].clear_top_level_field("records");
+    assert_eq!(states[0].config(), Some(&Map::new()));
+
+    states[0].reset();
+    let mut persisted = document.clone();
+    for state in &states {
+        state.apply_to_document(&mut persisted, false).unwrap();
+    }
+    let entries = persisted.dynamic_entries().unwrap();
+    assert_eq!(entries[0].config, None);
+    assert_eq!(entries[2].config, None);
+    assert_eq!(entries[3].config, Some(Map::new()));
+    let persisted_root = persisted.render().unwrap().parse::<toml::Table>().unwrap();
+    assert!(
+        persisted_root["plugins"]["dynamic"].as_array().unwrap()[1]["config"]["local_time"]
+            .is_datetime()
+    );
+}
+
+#[test]
+fn dynamic_editor_rejects_unreadable_declared_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    write_editor_dynamic_manifest(
+        &plugin_dir,
+        "acme.missing-schema",
+        None,
+        Some(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object"
+        })),
+    );
+    std::fs::remove_file(plugin_dir.join("config.schema.json")).unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(
+        &path,
+        "[[plugins.dynamic]]\nmanifest = \"./plugin/relay-plugin.toml\"\n",
+    )
+    .unwrap();
+
+    let document = PluginConfigDocument::read(&path).unwrap();
+    let error = load_dynamic_plugin_states(&document)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("acme.missing-schema"), "{error}");
+    assert!(error.contains("failed to read schema"), "{error}");
+}
+
+#[test]
+fn plugin_config_document_reports_invalid_dynamic_entries_and_indexes() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(&path, "[plugins]\ndynamic = \"not-an-array\"\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    assert!(
+        document
+            .dynamic_entries()
+            .unwrap_err()
+            .to_string()
+            .contains("plugins.dynamic must be an array")
+    );
+    assert!(
+        document
+            .remove_dynamic_config(0)
+            .unwrap_err()
+            .to_string()
+            .contains("plugins.dynamic must be an array")
+    );
+
+    std::fs::write(&path, "[[plugins.dynamic]]\nmanifest = \"plugin.toml\"\n").unwrap();
+    let mut document = PluginConfigDocument::read(&path).unwrap();
+    assert!(
+        document
+            .set_dynamic_config(1, Map::new())
+            .unwrap_err()
+            .to_string()
+            .contains("index 1 is out of range")
+    );
+}
+
+#[test]
 fn write_plugin_config_prunes_defaults_and_round_trips() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("plugins.toml");
@@ -1681,6 +2252,7 @@ fn parse_float_value_rejects_non_finite_numbers() {
 
 #[test]
 fn target_path_resolves_project_and_global_without_user_env() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let cwd = std::env::current_dir().unwrap();
 
     assert_eq!(

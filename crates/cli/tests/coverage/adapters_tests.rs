@@ -1072,3 +1072,479 @@ fn stop_responses_preserve_vendor_shapes() {
     assert!(matches!(codex.events[0], NormalizedEvent::LlmHint(_)));
     assert_eq!(codex.response, json!({}));
 }
+
+#[test]
+fn claude_partial_tool_payload_mixes_native_and_fallback_identifiers() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::ToolStarted(event) => {
+            assert_eq!(event.session_id, "claude-session");
+            assert!(event.tool_call_id.starts_with("tool-"));
+            assert_eq!(event.tool_name, "Bash");
+            assert_eq!(event.arguments, json!(null));
+            assert_eq!(event.result, json!(null));
+            assert_eq!(event.status, None);
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn codex_partial_tool_end_keeps_missing_fields_null() {
+    let outcome = codex::adapt(
+        json!({
+            "conversationId": "conversation-1",
+            "event": "toolEnded",
+            "tool_call_id": "call-1"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::ToolEnded(event) => {
+            assert_eq!(event.session_id, "conversation-1");
+            assert_eq!(event.tool_call_id, "call-1");
+            assert_eq!(event.tool_name, "unknown_tool");
+            assert_eq!(event.arguments, json!(null));
+            assert_eq!(event.result, json!(null));
+            assert_eq!(event.status, None);
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn hermes_partial_post_tool_payload_synthesizes_call_id_only() {
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-session",
+            "tool_name": "terminal"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::ToolEnded(event) => {
+            assert_eq!(event.session_id, "hermes-session");
+            assert!(event.tool_call_id.starts_with("tool-"));
+            assert_eq!(event.tool_name, "terminal");
+            assert_eq!(event.arguments, json!(null));
+            assert_eq!(event.result, json!(null));
+            assert_eq!(event.status, None);
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_hermes_post_tool_call_result_and_status_shapes() {
+    let outcome = hermes::adapt(
+        json!({
+            "hook_event_name": "post_tool_call",
+            "session_id": "hermes-session",
+            "tool_call_id": "tool-1",
+            "tool_name": "terminal",
+            "tool_response": { "stdout": "/repo" },
+            "decision": "allow"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::ToolEnded(event) => {
+            assert_eq!(event.tool_call_id, "tool-1");
+            assert_eq!(event.result, json!({ "stdout": "/repo" }));
+            assert_eq!(event.status.as_deref(), Some("allow"));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+/// Walks a payload-path precedence chain: each step asserts the expected
+/// winner, then removes the winning key (from the payload root, or from its
+/// `extra` object when the first tuple field is true) so the next candidate
+/// takes over. Once every listed key is removed, the extraction must yield
+/// nothing.
+fn assert_string_fallback_chain(
+    payload: &mut serde_json::Value,
+    chain: &[(bool, &str, &str)],
+    extract: impl Fn(&serde_json::Value) -> Option<String>,
+) {
+    for (remove_from_extra, key, expected) in chain {
+        assert_eq!(
+            extract(payload).as_deref(),
+            Some(*expected),
+            "winner before removing `{key}`"
+        );
+        let object = if *remove_from_extra {
+            payload["extra"].as_object_mut().unwrap()
+        } else {
+            payload.as_object_mut().unwrap()
+        };
+        object.remove(*key);
+    }
+    assert_eq!(extract(payload), None, "chain should be exhausted");
+}
+
+#[test]
+fn hermes_tool_result_path_precedence_walks_fallback_chain() {
+    let headers = HeaderMap::new();
+    let mut payload = json!({
+        "tool_output": "from-tool-output",
+        "tool_response": "from-tool-response",
+        "output": "from-output",
+        "result": "from-result",
+        "extra": {
+            "tool_output": "from-extra-tool-output",
+            "result": "from-extra-result"
+        }
+    });
+
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "tool_output", "from-tool-output"),
+            (false, "tool_response", "from-tool-response"),
+            (false, "output", "from-output"),
+            (false, "result", "from-result"),
+            (true, "tool_output", "from-extra-tool-output"),
+            (true, "result", "from-extra-result"),
+        ],
+        |payload| {
+            HERMES_PAYLOAD_EXTRACTOR
+                .tool_call(payload, &headers, "post_tool_call")
+                .result
+                .map(|result| result.as_str().expect("string tool result").to_string())
+        },
+    );
+}
+
+#[test]
+fn hermes_tool_status_prefers_explicit_fields_over_derived_status() {
+    let headers = HeaderMap::new();
+    let mut payload = json!({
+        "status": "success",
+        "decision": "block",
+        "permission": "deny"
+    });
+
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "status", "success"),
+            (false, "decision", "block"),
+            (false, "permission", "deny"),
+        ],
+        |payload| {
+            HERMES_PAYLOAD_EXTRACTOR
+                .tool_call(payload, &headers, "post_tool_call")
+                .status
+        },
+    );
+
+    // Explicit status fields win over event-name-derived status; without them the conservative
+    // failure spellings still map to `error`.
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .tool_call(
+                &json!({ "status": "success" }),
+                &headers,
+                "post_tool_call_failed"
+            )
+            .status
+            .as_deref(),
+        Some("success")
+    );
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .tool_call(&json!({}), &headers, "post_tool_call_failed")
+            .status
+            .as_deref(),
+        Some("error")
+    );
+}
+
+#[test]
+fn claude_extractor_reads_llm_hint_fields() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "hook_event_name": "Stop",
+        "session_id": "claude-session",
+        "subagent_id": "worker-1",
+        "agent_id": "agent-1",
+        "agent_type": "general-purpose",
+        "conversation_id": "conversation-1",
+        "generation_id": "generation-1",
+        "extra": { "request_id": "request-1" },
+        "model": "claude-sonnet-4"
+    });
+
+    assert_eq!(
+        CLAUDE_CODE_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        ExtractedLlmHint {
+            subagent_id: Some("worker-1".into()),
+            agent_id: Some("agent-1".into()),
+            agent_type: Some("general-purpose".into()),
+            conversation_id: Some("conversation-1".into()),
+            generation_id: Some("generation-1".into()),
+            request_id: Some("request-1".into()),
+            model: Some("claude-sonnet-4".into()),
+        }
+    );
+}
+
+#[test]
+fn claude_stop_with_partial_hint_fields_keeps_missing_fields_none() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "Stop",
+            "model": "claude-sonnet-4"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::LlmHint(event) => {
+            assert_eq!(event.session_id, "claude-session");
+            assert_eq!(event.model.as_deref(), Some("claude-sonnet-4"));
+            assert_eq!(event.subagent_id, None);
+            assert_eq!(event.agent_id, None);
+            assert_eq!(event.agent_type, None);
+            assert_eq!(event.conversation_id, None);
+            assert_eq!(event.generation_id, None);
+            assert_eq!(event.request_id, None);
+            assert_eq!(event.metadata["model"], json!("claude-sonnet-4"));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+    assert!(matches!(outcome.events[1], NormalizedEvent::TurnEnded(_)));
+}
+
+#[test]
+fn llm_hint_model_and_request_id_precedence_chains() {
+    let headers = HeaderMap::new();
+
+    // Hint extraction is shared across harnesses; Claude Code stands in for all of them.
+    let mut payload = json!({
+        "model": "flat-model",
+        "model_name": "snake-model",
+        "modelName": "camel-model"
+    });
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "model", "flat-model"),
+            (false, "model_name", "snake-model"),
+            (false, "modelName", "camel-model"),
+        ],
+        |payload| {
+            CLAUDE_CODE_PAYLOAD_EXTRACTOR
+                .llm_hint(payload, &headers)
+                .model
+        },
+    );
+
+    let mut payload = json!({
+        "request_id": "flat-snake",
+        "requestId": "flat-camel",
+        "request": { "id": "nested" },
+        "extra": { "request_id": "extra" }
+    });
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "request_id", "flat-snake"),
+            (false, "requestId", "flat-camel"),
+            (false, "request", "nested"),
+            (false, "extra", "extra"),
+        ],
+        |payload| {
+            CLAUDE_CODE_PAYLOAD_EXTRACTOR
+                .llm_hint(payload, &headers)
+                .request_id
+        },
+    );
+}
+
+#[test]
+fn session_id_path_precedence_walks_fallback_chain() {
+    let headers = HeaderMap::new();
+    // The canonical session-id chain is shared by every harness; Claude Code stands in for all.
+    let mut payload = json!({
+        "session_id": "flat-snake",
+        "sessionId": "flat-camel",
+        "session": { "id": "nested" },
+        "conversation_id": "conversation-snake",
+        "conversationId": "conversation-camel",
+        "parent_session_id": "parent",
+        "task_id": "task",
+        "extra": { "session_id": "extra-session", "task_id": "extra-task" }
+    });
+
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "session_id", "flat-snake"),
+            (false, "sessionId", "flat-camel"),
+            (false, "session", "nested"),
+            (false, "conversation_id", "conversation-snake"),
+            (false, "conversationId", "conversation-camel"),
+            (false, "parent_session_id", "parent"),
+            (false, "task_id", "task"),
+            (true, "session_id", "extra-session"),
+            (true, "task_id", "extra-task"),
+        ],
+        |payload| CLAUDE_CODE_PAYLOAD_EXTRACTOR.session_id(payload, &headers),
+    );
+}
+
+#[test]
+fn event_name_path_precedence_walks_fallback_chain() {
+    let mut payload = json!({
+        "hook_event_name": "hook-name",
+        "eventName": "camel-name",
+        "type": "type-name",
+        "name": "name-name",
+        "extra": {
+            "hook_event_name": "extra-hook-name",
+            "name": "extra-name"
+        }
+    });
+
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "hook_event_name", "hook-name"),
+            (false, "eventName", "camel-name"),
+            (false, "type", "type-name"),
+            (false, "name", "name-name"),
+            (true, "hook_event_name", "extra-hook-name"),
+            (true, "name", "extra-name"),
+        ],
+        |payload| CLAUDE_CODE_PAYLOAD_EXTRACTOR.event_name(payload),
+    );
+}
+
+#[test]
+fn subagent_id_path_precedence_falls_back_to_nested_shapes_then_header() {
+    let headers = HeaderMap::new();
+    let mut payload = json!({
+        "subagent_id": "flat-subagent",
+        "child_subagent_id": "flat-child",
+        "agent_id": "flat-agent",
+        "subagent": { "id": "nested-subagent" },
+        "agent": { "id": "nested-agent" },
+        "extra": { "agent_id": "extra-agent" }
+    });
+
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "subagent_id", "flat-subagent"),
+            (false, "child_subagent_id", "flat-child"),
+            (false, "agent_id", "flat-agent"),
+            (false, "subagent", "nested-subagent"),
+            (false, "agent", "nested-agent"),
+            (true, "agent_id", "extra-agent"),
+        ],
+        |payload| CLAUDE_CODE_PAYLOAD_EXTRACTOR.subagent_id(payload, &headers),
+    );
+
+    // With every payload path exhausted, the explicit subagent header is the last fallback.
+    let mut header_map = HeaderMap::new();
+    header_map.insert("x-nemo-relay-subagent-id", "header-worker".parse().unwrap());
+    assert_eq!(
+        CLAUDE_CODE_PAYLOAD_EXTRACTOR
+            .subagent_id(&payload, &header_map)
+            .as_deref(),
+        Some("header-worker")
+    );
+}
+
+#[test]
+fn codex_subagent_id_prefers_flat_ids_over_thread_spawn_nickname() {
+    let headers = HeaderMap::new();
+    let mut payload = json!({
+        "subagent_id": "flat-subagent",
+        "source": {
+            "subagent": { "thread_spawn": { "agent_nickname": "codex-nickname" } }
+        },
+        "subagent": { "id": "nested-subagent" }
+    });
+
+    assert_string_fallback_chain(
+        &mut payload,
+        &[
+            (false, "subagent_id", "flat-subagent"),
+            (false, "source", "codex-nickname"),
+            (false, "subagent", "nested-subagent"),
+        ],
+        |payload| CODEX_PAYLOAD_EXTRACTOR.subagent_id(payload, &headers),
+    );
+}
+
+#[test]
+fn null_intermediate_objects_do_not_mask_string_fallback_paths() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "subagent": null,
+        "agent": { "id": "nested-agent" }
+    });
+
+    // A null intermediate stops the `subagent.id` lookup without error, so the later
+    // `agent.id` candidate still supplies the identifier.
+    assert_eq!(
+        CLAUDE_CODE_PAYLOAD_EXTRACTOR
+            .subagent_id(&payload, &headers)
+            .as_deref(),
+        Some("nested-agent")
+    );
+}
+
+#[test]
+fn json_path_lookups_handle_empty_strings_arrays_and_deep_nesting() {
+    let payload = json!({
+        "empty": "",
+        "list": [{ "id": "inside-array" }],
+        "deep": { "level_two": { "level_three": { "value": "deep-value" } } }
+    });
+
+    // Empty strings exist as values but are filtered from string lookups.
+    assert_eq!(value_at(&payload, &["empty"]), Some(json!("")));
+    assert_eq!(string_at(&payload, &["empty"]), None);
+
+    // Arrays are not traversed by object-key paths.
+    assert_eq!(value_at(&payload, &["list", "id"]), None);
+
+    assert_eq!(
+        string_at(&payload, &["deep", "level_two", "level_three", "value"]).as_deref(),
+        Some("deep-value")
+    );
+    assert_eq!(
+        first_string_at(
+            &payload,
+            &[
+                &["missing"][..],
+                &["empty"][..],
+                &["list", "id"][..],
+                &["deep", "level_two", "level_three", "value"][..],
+            ],
+        )
+        .as_deref(),
+        Some("deep-value")
+    );
+    assert_eq!(
+        first_value_at(&payload, &[&["missing"][..], &["also", "missing"][..]]),
+        None
+    );
+}

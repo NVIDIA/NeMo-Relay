@@ -10,6 +10,7 @@ use nemo_relay_types::api::event::{
     llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};
@@ -170,4 +171,54 @@ fn llm_request_intercept_outcome_converts_from_request_inputs() {
         optional_annotation,
         LlmRequestInterceptOutcome::new(request, Some(annotated_request))
     );
+}
+
+#[test]
+fn tool_execution_intercept_outcome_round_trips_pending_marks() {
+    let outcome = ToolExecutionInterceptOutcome::new(json!({"stdout": "compacted"}))
+        .with_pending_mark(
+            PendingMarkSpec::builder()
+                .name("tool.output.compacted")
+                .category(EventCategory::custom())
+                .category_profile(
+                    CategoryProfile::builder()
+                        .subtype("optimizer.saved_tokens")
+                        .build(),
+                )
+                .data(json!({"saved_tokens": 12}))
+                .metadata(json!({"source": "test"}))
+                .build(),
+        );
+
+    let encoded = serde_json::to_value(&outcome).expect("outcome should serialize");
+    assert_eq!(encoded["result"]["stdout"], "compacted");
+    assert_eq!(encoded["pending_marks"][0]["name"], "tool.output.compacted");
+    assert_eq!(encoded["pending_marks"][0]["category"], "custom");
+
+    let decoded: ToolExecutionInterceptOutcome =
+        serde_json::from_value(encoded).expect("outcome should deserialize");
+    assert_eq!(decoded, outcome);
+
+    let defaults: ToolExecutionInterceptOutcome = serde_json::from_value(json!({
+        "result": "plain",
+        "future_field": true
+    }))
+    .expect("omitted pending marks and unknown fields should be accepted");
+    assert!(defaults.pending_marks.is_empty());
+    assert_eq!(defaults.result, json!("plain"));
+
+    assert!(
+        serde_json::from_value::<ToolExecutionInterceptOutcome>(json!({
+            "pending_marks": []
+        }))
+        .is_err(),
+        "result is required"
+    );
+}
+
+#[test]
+fn tool_execution_intercept_outcome_converts_from_json() {
+    let result = json!({"value": 42});
+    let outcome: ToolExecutionInterceptOutcome = result.clone().into();
+    assert_eq!(outcome, ToolExecutionInterceptOutcome::new(result));
 }

@@ -16,6 +16,7 @@ use tokio_stream::Stream;
 
 use crate::api::event::Event;
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::Result;
 use crate::json::Json;
@@ -81,7 +82,9 @@ pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>
 ///   chain.
 ///
 /// # Returns
-/// A future resolving to the tool result JSON.
+/// A future resolving to the downstream tool result JSON. Pending marks from
+/// downstream intercepts are retained by the runtime and are not exposed
+/// through this continuation.
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
@@ -98,13 +101,25 @@ pub type ToolExecutionNextFn =
 /// - Third argument: Continuation for the remaining execution chain.
 ///
 /// # Returns
-/// A future resolving to the tool result JSON.
+/// A future resolving to the canonical tool execution outcome, containing the
+/// tool result and any pending lifecycle marks produced by this intercept.
 ///
 /// # Errors
 /// The future resolves to an error when the intercept or remaining execution
 /// chain fails.
 pub type ToolExecutionFn = Arc<
-    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(
+            &str,
+            Json,
+            ToolExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Internal continuation carrying both a tool result and accumulated marks.
+pub(crate) type ToolExecutionOutcomeNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
         + Send
         + Sync,
 >;

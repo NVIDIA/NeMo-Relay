@@ -608,7 +608,6 @@ fn run_endpoint_worker(
     config: AtofEndpointConfig,
     rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
-    install_rustls_crypto_provider();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -626,11 +625,6 @@ fn run_endpoint_worker(
             AtofEndpointTransport::Ndjson => run_ndjson_endpoint(index, config, rx).await,
         }
     });
-}
-
-#[cfg(feature = "atof-streaming")]
-fn install_rustls_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 #[cfg(feature = "atof-streaming")]

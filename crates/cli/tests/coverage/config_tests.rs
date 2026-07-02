@@ -292,6 +292,82 @@ command = "hermes --yolo chat"
 }
 
 #[test]
+fn explicit_config_must_exist() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("missing-config.toml");
+    let command = RunCommand {
+        agent: None,
+        config: Some(path.clone()),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: true,
+        print: false,
+        command: vec![],
+    };
+
+    let error = resolve_run_config(&command, None).unwrap_err().to_string();
+
+    assert!(error.contains("does not exist"), "{error}");
+    assert!(error.contains(path.to_string_lossy().as_ref()), "{error}");
+}
+
+#[test]
+fn absent_optional_plugin_config_is_ignored() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("plugins.toml");
+
+    let loaded = load_plugin_toml_config_from_paths(vec![missing]).unwrap();
+
+    assert!(loaded.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_config_errors_include_the_source_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let command = RunCommand {
+        agent: None,
+        config: Some(config_path.clone()),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: true,
+        print: false,
+        command: vec![],
+    };
+    let config_error = resolve_run_config(&command, None).unwrap_err().to_string();
+    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(config_error.contains("failed to read configuration file"));
+    assert!(
+        config_error.contains(config_path.to_string_lossy().as_ref()),
+        "{config_error}"
+    );
+
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(&plugins_path, "version = 1\n").unwrap();
+    std::fs::set_permissions(&plugins_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let plugin_error = load_plugin_toml_config_from_paths(vec![plugins_path.clone()])
+        .unwrap_err()
+        .to_string();
+    std::fs::set_permissions(&plugins_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(plugin_error.contains("failed to read plugin configuration file"));
+    assert!(
+        plugin_error.contains(plugins_path.to_string_lossy().as_ref()),
+        "{plugin_error}"
+    );
+}
+
+#[test]
 fn legacy_observability_config_sections_fail_clearly() {
     let temp = tempfile::tempdir().unwrap();
     for (name, contents, expected) in [
@@ -1261,8 +1337,10 @@ openai_base_url = "http://file-openai"
 #[test]
 fn server_resolution_applies_all_server_overrides() {
     let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(&config_path, "").unwrap();
     let args = ServerArgs {
-        config: Some(isolated_config_path(&temp)),
+        config: Some(config_path),
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
@@ -1635,9 +1713,11 @@ fn gateway_body_limit_file_values_must_be_nonzero() {
 #[test]
 fn run_resolution_applies_all_run_overrides() {
     let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(&config_path, "").unwrap();
     let command = RunCommand {
         agent: Some(CodingAgent::Codex),
-        config: Some(isolated_config_path(&temp)),
+        config: Some(config_path),
         openai_base_url: Some("http://run-openai".into()),
         anthropic_base_url: Some("http://run-anthropic".into()),
         session_metadata: Some(r#"{"team":"run"}"#.into()),

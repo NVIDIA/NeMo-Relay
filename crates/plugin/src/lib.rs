@@ -21,7 +21,7 @@ pub use nemo_relay_types::api::event::{
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
-pub use nemo_relay_types::api::tool::ToolAttributes;
+pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -223,7 +223,7 @@ pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
     args_json: *const NemoRelayNativeString,
     next_fn: NemoRelayNativeToolNextFn,
     next_ctx: *mut c_void,
-    out_json: *mut *mut NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
 /// Native LLM request transform callback for request sanitizers.
@@ -1353,6 +1353,10 @@ impl<'a> PluginContext<'a> {
     }
 
     /// Registers a typed tool execution intercept.
+    ///
+    /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
+    /// [`ToolNext::call`] continues the chain and returns only the raw
+    /// downstream result JSON; Relay retains downstream pending marks.
     pub fn register_tool_execution_intercept<F>(
         &mut self,
         name: &str,
@@ -1360,7 +1364,10 @@ impl<'a> PluginContext<'a> {
         callback: F,
     ) -> Result<()>
     where
-        F: for<'next> Fn(&str, Json, ToolNext<'next>) -> Result<Json> + Send + Sync + 'static,
+        F: for<'next> Fn(&str, Json, ToolNext<'next>) -> Result<ToolExecutionInterceptOutcome>
+            + Send
+            + Sync
+            + 'static,
     {
         let user_data = typed_callback_user_data(self.host, callback);
         let status = unsafe {
@@ -1996,15 +2003,18 @@ unsafe extern "C" fn typed_tool_execution_trampoline<F>(
     args_json: *const NemoRelayNativeString,
     next_fn: NemoRelayNativeToolNextFn,
     next_ctx: *mut c_void,
-    out_json: *mut *mut NemoRelayNativeString,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus
 where
-    F: for<'next> Fn(&str, Json, ToolNext<'next>) -> Result<Json> + Send + Sync + 'static,
+    F: for<'next> Fn(&str, Json, ToolNext<'next>) -> Result<ToolExecutionInterceptOutcome>
+        + Send
+        + Sync
+        + 'static,
 {
-    if user_data.is_null() || out_json.is_null() {
+    if user_data.is_null() || out_outcome_json.is_null() {
         return NemoRelayStatus::NullPointer;
     }
-    unsafe { *out_json = ptr::null_mut() };
+    unsafe { *out_outcome_json = ptr::null_mut() };
     let state = unsafe { &*(user_data as *const TypedCallback<F>) };
     let result = catch_unwind(AssertUnwindSafe(|| {
         let name = read_required_host_string(&state.host, name, "tool name")?;
@@ -2015,7 +2025,15 @@ where
             next_ctx,
         };
         match (state.callback)(&name, args, next) {
-            Ok(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
+            Ok(outcome) => {
+                let Some(outcome) = HostString::from_json(&state.host, &outcome) else {
+                    set_last_error(&state.host, "failed to allocate tool execution outcome");
+                    return Ok(NemoRelayStatus::Internal);
+                };
+                unsafe { *out_outcome_json = outcome.ptr };
+                std::mem::forget(outcome);
+                Ok(NemoRelayStatus::Ok)
+            }
             Err(message) => Ok(callback_error(&state.host, message)),
         }
     }));

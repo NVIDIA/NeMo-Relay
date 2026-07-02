@@ -1154,7 +1154,7 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         .unwrap();
         assert_eq!(
             serde_json::from_str::<Json>(&tool_intercept_json).unwrap(),
-            json!({"next": true})
+            json!({"result": {"next": true}, "pending_marks": []})
         );
 
         let request = cstring(r#"{"headers":{},"content":{"model":"ffi-model","messages":[]}}"#);

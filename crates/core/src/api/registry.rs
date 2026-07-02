@@ -508,7 +508,9 @@ global_intercept_registry_api!(
 );
 global_execution_registry_api!(
     /// Register a global tool execution intercept.
-    /// Execution intercepts can wrap or replace the tool callback.
+    /// Execution intercepts can wrap or replace the tool callback. Each
+    /// callback returns a canonical tool execution outcome, while its
+    /// continuation resolves to the raw downstream result JSON.
     register_tool_execution_intercept,
     /// Deregister a global tool execution intercept.
     deregister_tool_execution_intercept,
@@ -616,7 +618,8 @@ scope_intercept_registry_api!(
 scope_execution_registry_api!(
     /// Register a scope-local tool execution intercept.
     /// Execution intercepts can wrap or replace the tool callback inside the
-    /// owning scope.
+    /// owning scope. Each callback returns a canonical tool execution outcome,
+    /// while its continuation resolves to the raw downstream result JSON.
     scope_register_tool_execution_intercept,
     /// Deregister a scope-local tool execution intercept.
     scope_deregister_tool_execution_intercept,

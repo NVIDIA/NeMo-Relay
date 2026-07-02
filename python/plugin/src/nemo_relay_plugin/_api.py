@@ -16,7 +16,7 @@ Public data types:
     LlmRequest: A Relay LLM request represented as a JSON object.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
-    PendingMarkSpec: A mark Relay emits under the future managed LLM scope.
+    PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
@@ -91,6 +91,7 @@ EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@1"
 LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@1"
+TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionInterceptOutcome@1"
 PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
 _OBJECT_SCHEMAS = frozenset(
     {
@@ -98,6 +99,7 @@ _OBJECT_SCHEMAS = frozenset(
         LLM_REQUEST_SCHEMA,
         ANNOTATED_LLM_REQUEST_SCHEMA,
         LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+        TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     }
 )
 _UNREGISTERED = object()
@@ -183,7 +185,7 @@ class ConfigDiagnostic:
 
 @dataclass(slots=True)
 class PendingMarkSpec:
-    """Describe a mark Relay emits after starting a managed LLM call."""
+    """Describe a mark Relay emits under a managed lifecycle scope."""
 
     name: str
     category: str | None = None
@@ -220,6 +222,28 @@ class LlmRequestInterceptOutcome:
         return {
             "request": self.request,
             "annotated_request": self.annotated_request,
+            "pending_marks": marks,
+        }
+
+
+@dataclass(slots=True)
+class ToolExecutionInterceptOutcome:
+    """Canonical result returned by a Python worker tool execution intercept."""
+
+    result: Json
+    pending_marks: list[PendingMarkSpec] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this outcome to the canonical worker-envelope payload."""
+        marks = []
+        for mark in self.pending_marks:
+            if not isinstance(mark, PendingMarkSpec):
+                raise WorkerSdkError(
+                    "tool execution intercept outcome pending_marks must contain PendingMarkSpec values"
+                )
+            marks.append(mark.to_json())
+        return {
+            "result": self.result,
             "pending_marks": marks,
         }
 
@@ -372,7 +396,10 @@ SubscriberCallback: TypeAlias = Callable[[Event], None | Awaitable[None]]
 ToolSanitizeCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 ToolConditionalCallback: TypeAlias = Callable[[str, Json], str | None | Awaitable[str | None]]
 ToolRequestCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
-ToolExecutionCallback: TypeAlias = Callable[[str, Json, "ToolNext"], Json | Awaitable[Json]]
+ToolExecutionCallback: TypeAlias = Callable[
+    [str, Json, "ToolNext"],
+    ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
+]
 LlmSanitizeRequestCallback: TypeAlias = Callable[[LlmRequest], LlmRequest | Awaitable[LlmRequest]]
 LlmSanitizeResponseCallback: TypeAlias = Callable[[Json], Json | Awaitable[Json]]
 LlmConditionalCallback: TypeAlias = Callable[[LlmRequest], str | None | Awaitable[str | None]]
@@ -565,9 +592,9 @@ class PluginContext:
         Args:
             name: Component-local registration name.
             callback: Function receiving ``(tool_name, arguments, next_call)``
-                and returning the tool result as JSON, directly or through an
-                awaitable. It can call :meth:`ToolNext.call` zero, one, or
-                multiple times while the invocation is active.
+                and returning :class:`ToolExecutionInterceptOutcome`, directly
+                or through an awaitable. It can call :meth:`ToolNext.call`
+                zero, one, or multiple times while the invocation is active.
             priority: Execution order. Lower values run first.
         """
         self._push_registration(name, pb.TOOL_EXECUTION_INTERCEPT, priority, False)
@@ -1185,9 +1212,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
 
     worker_target = _grpc_target(worker_endpoint)
-    host_target = _grpc_target(host_endpoint)
     await _unlink_unix_socket(worker_endpoint)
-    host_channel = grpc.aio.insecure_channel(host_target)
+    host_channel = _open_host_channel(host_endpoint)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
@@ -1438,7 +1464,16 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                         ToolNext(self._runtime, request.continuation_id),
                     )
                 )
-                return _json_response(result)
+                if not isinstance(result, ToolExecutionInterceptOutcome):
+                    raise WorkerSdkError("tool execution intercept must return ToolExecutionInterceptOutcome")
+                return pb.InvokeResponse(
+                    tool_execution=pb.ToolExecutionInterceptResult(
+                        outcome=_json_envelope(
+                            TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+                            result.to_json(),
+                        ),
+                    )
+                )
             if request.surface == pb.LLM_SANITIZE_REQUEST_GUARDRAIL:
                 return _json_response(
                     await _maybe_await(
@@ -1795,6 +1830,16 @@ def _grpc_target(endpoint: str) -> str:
     return parsed.netloc
 
 
+def _open_host_channel(endpoint: str) -> Any:
+    target = _grpc_target(endpoint)
+    if endpoint.startswith("unix://"):
+        return grpc.aio.insecure_channel(
+            target,
+            options=(("grpc.default_authority", "localhost"),),
+        )
+    return grpc.aio.insecure_channel(target)
+
+
 def _announced_worker_endpoint(worker_endpoint: str, bound_port: int) -> str:
     target = _grpc_target(worker_endpoint)
     if target.startswith("unix:"):
@@ -1844,5 +1889,6 @@ async def _unlink_unix_socket(endpoint: str) -> None:
             raise WorkerSdkError(f"unable to determine whether worker socket path {path} is active") from exc
         else:
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(writer.wait_closed(), timeout=1)
             raise WorkerSdkError(f"worker socket path {path} is already active")
