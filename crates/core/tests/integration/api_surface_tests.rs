@@ -394,7 +394,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_execution_intercept(
         "tool-execution",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
@@ -570,7 +570,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-execution",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
     assert!(scope_deregister_tool_execution_intercept(&scope.uuid, "tool-execution").unwrap());
@@ -690,7 +690,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             &scope.uuid,
             "missing-tool-exec",
             1,
-            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
         )
         .unwrap_err(),
         "scope",

@@ -32,6 +32,7 @@ from nemo_relay_plugin import (  # noqa: E402
     PluginContext,
     PluginRuntime,
     ScopeType,
+    ToolExecutionInterceptOutcome,
     ToolNext,
     WorkerPlugin,
     WorkerSdkError,
@@ -44,6 +45,7 @@ from nemo_relay_plugin._api import (  # noqa: E402
     JSON_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
     _decode_required_envelope,
@@ -192,9 +194,12 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def tool_request(name: str, value: Json) -> Json:
             return _tag(value, f"request_{name}")
 
-        async def tool_execution(name: str, value: Json, next_call: ToolNext) -> Json:
+        async def tool_execution(name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
             result = await next_call.call(_tag(value, f"execute_{name}"))
-            return _tag(result, "tool_execution")
+            return ToolExecutionInterceptOutcome(
+                result=_tag(result, "tool_execution"),
+                pending_marks=[PendingMarkSpec("worker.tool.execution")],
+            )
 
         def llm_sanitize_request(request: Json) -> Json:
             return _tag_llm_request(request, "llm_sanitize_request")
@@ -905,9 +910,10 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
 
     tool_request = await _invoke_json_async(service, "tool_request", pb.TOOL_REQUEST_INTERCEPT)
     assert tool_request["tag"] == "request_lookup"
-    tool_execution = await _invoke_json_async(service, "tool_execution", pb.TOOL_EXECUTION_INTERCEPT)
-    assert tool_execution["tag"] == "tool_execution"
-    assert tool_execution["next_tool"]["tag"] == "execute_lookup"
+    tool_execution = await _invoke_tool_execution_async(service, "tool_execution")
+    assert tool_execution["result"]["tag"] == "tool_execution"
+    assert tool_execution["result"]["next_tool"]["tag"] == "execute_lookup"
+    assert tool_execution["pending_marks"][0]["name"] == "worker.tool.execution"
 
     llm_sanitize_request = await _invoke_json_async(
         service,
@@ -1064,6 +1070,30 @@ async def test_llm_request_intercept_rejects_non_object_typed_results(invalid_pa
 
     assert response.WhichOneof("result") == "error"
     assert "must be a JSON object" in response.error.message
+
+
+async def test_tool_execution_intercept_rejects_legacy_raw_result():
+    class LegacyResultPlugin(WorkerPlugin):
+        plugin_id = "tests.legacy_tool_execution_result"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def legacy_result(name: str, value: Json, next_call: ToolNext) -> Any:
+                del name, value, next_call
+                return {"legacy_result": True}
+
+            ctx.register_tool_execution_intercept("legacy", legacy_result)
+
+    service = _service(LegacyResultPlugin(), RecordingHostStub())
+    await _register(service)
+    response = await service.Invoke(
+        _tool_request("legacy", pb.TOOL_EXECUTION_INTERCEPT, {}),
+        AbortContext(),
+    )
+
+    assert response.WhichOneof("result") == "error"
+    assert "must return ToolExecutionInterceptOutcome" in response.error.message
 
 
 @pytest.mark.parametrize(
@@ -1551,7 +1581,7 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def tool_execution(tool_name: str, value: Json, next_call: ToolNext) -> Json:
+            async def tool_execution(tool_name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
                 del tool_name, value, next_call
                 started.set()
                 try:
@@ -1560,6 +1590,7 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
                     cancelled.set()
                     await release.wait()
                     raise
+                raise AssertionError("unreachable")
 
             ctx.register_tool_execution_intercept("cancel", tool_execution)
 
@@ -2249,6 +2280,19 @@ async def _invoke_json_async(
     response = await service.Invoke(request, AbortContext())
     assert response.WhichOneof("result") == "json", response
     return _envelope_value(response.json.value)
+
+
+async def _invoke_tool_execution_async(
+    service: _WorkerService,
+    registration_name: str,
+) -> Json:
+    response = await service.Invoke(
+        _tool_request(registration_name, pb.TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
+        AbortContext(),
+    )
+    assert response.WhichOneof("result") == "tool_execution", response
+    assert response.tool_execution.outcome.schema == TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA
+    return _envelope_value(response.tool_execution.outcome)
 
 
 def _envelope_value(envelope: Any) -> Json:

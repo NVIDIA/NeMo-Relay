@@ -38,7 +38,7 @@ _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
 _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
-    _Json | Awaitable[_Json],
+    "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
@@ -383,7 +383,7 @@ class LLMRequest:
         ...
 
 class PendingMarkSpec:
-    """A runtime-owned mark specification returned by request middleware."""
+    """A runtime-owned mark specification returned by lifecycle middleware."""
     def __init__(
         self,
         name: str,
@@ -415,6 +415,23 @@ class LLMRequestInterceptOutcome:
     def request(self) -> LLMRequest: ...
     @property
     def annotated_request(self) -> Optional[AnnotatedLLMRequest]: ...
+    @property
+    def pending_marks(self) -> list[PendingMarkSpec]: ...
+
+class ToolExecutionInterceptOutcome:
+    """Canonical result returned by a tool execution intercept.
+
+    ``result`` is passed to the remaining middleware and application.
+    ``pending_marks`` are Relay-owned lifecycle metadata emitted after the
+    tool-end event and are not included in the application-visible result.
+    """
+    def __init__(
+        self,
+        result: _Json,
+        pending_marks: list[PendingMarkSpec] = ...,
+    ) -> None: ...
+    @property
+    def result(self) -> _Json: ...
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 
@@ -1745,7 +1762,10 @@ def register_tool_execution_intercept(name: str, priority: int, callable: _ToolE
     Args:
         name: Unique intercept name.
         priority: Execution order; lower values run first.
-        callable: Middleware callback that may call or short-circuit ``next``.
+        callable: Middleware callback returning
+            ``ToolExecutionInterceptOutcome``. It may call or short-circuit
+            ``next``; ``next`` resolves to the raw downstream result while
+            Relay retains downstream pending marks.
 
     Returns:
         ``None``.
@@ -1975,7 +1995,10 @@ def scope_register_tool_execution_intercept(
         scope_uuid: UUID of the owning scope.
         name: Unique intercept name within that scope.
         priority: Execution order; lower values run first.
-        callable: Middleware callback used while the owning scope is active.
+        callable: Middleware callback returning
+            ``ToolExecutionInterceptOutcome`` while the owning scope is active.
+            Its ``next`` continuation resolves to the raw downstream result
+            while Relay retains downstream pending marks.
 
     Returns:
         ``None``.

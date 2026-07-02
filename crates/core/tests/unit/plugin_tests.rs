@@ -752,7 +752,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
     ctx.register_llm_request_intercept(
@@ -1223,14 +1223,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_execution_intercept(
             "tool-exec",
             1,
-            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
         ),
         "tool execution intercept:",
     );
@@ -1313,7 +1313,7 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
 

@@ -17,11 +17,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
-use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent};
+use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
     Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext, PluginContext, PluginRuntime, Result,
-    ScopeType, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin,
-    serve_plugin_arc, serve_plugin_arc_with_config,
+    ScopeType, ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError,
+    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -505,7 +505,7 @@ async fn worker_service_invokes_every_registration_surface() {
         "phase",
         "tool_request",
     );
-    let tool_exec = invoke_json(
+    let tool_outcome = invoke_tool_execution(
         &mut client,
         tool_invoke(
             "tool-exec",
@@ -514,6 +514,9 @@ async fn worker_service_invokes_every_registration_surface() {
         ),
     )
     .await;
+    assert_eq!(tool_outcome.pending_marks.len(), 1);
+    assert_eq!(tool_outcome.pending_marks[0].name, "worker.tool.execution");
+    let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
     assert!(
@@ -1400,7 +1403,7 @@ impl WorkerPlugin for CancellationPlugin {
             async move {
                 let _cancelled = CancelledOnDrop(unary_cancelled);
                 unary_started.notify_one();
-                std::future::pending::<Result<Json>>().await
+                std::future::pending::<Result<ToolExecutionInterceptOutcome>>().await
             }
         });
 
@@ -1540,7 +1543,16 @@ impl WorkerPlugin for SurfacePlugin {
                 runtime.pop_scope(&handle, None, None).await?;
                 runtime.drop_scope_stack(&stack_id).await?;
                 let next_value = next.call(value).await?;
-                Ok(set_json_field(next_value, "phase", "tool_exec"))
+                Ok(ToolExecutionInterceptOutcome::new(set_json_field(
+                    next_value,
+                    "phase",
+                    "tool_exec",
+                ))
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("worker.tool.execution")
+                        .build(),
+                ))
             }
         });
         let scope_runtime = runtime.clone();
@@ -1572,7 +1584,7 @@ impl WorkerPlugin for SurfacePlugin {
                         .await?;
                     runtime.pop_scope(&handle, None, None).await?;
                 }
-                Ok(Json::Null)
+                Ok(Json::Null.into())
             }
         });
 
@@ -2250,6 +2262,32 @@ async fn invoke_json(client: &mut PluginWorkerClient<Channel>, request: InvokeRe
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::Json(result) => {
             decode_json_envelope(&result.value.expect("json value")).expect("decode JSON result")
+        }
+        nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
+            decode_json_envelope::<ToolExecutionInterceptOutcome>(
+                &result.outcome.expect("tool execution outcome"),
+            )
+            .expect("decode tool execution outcome")
+            .result
+        }
+        other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+async fn invoke_tool_execution(
+    client: &mut PluginWorkerClient<Channel>,
+    request: InvokeRequest,
+) -> ToolExecutionInterceptOutcome {
+    let response = client
+        .invoke(Request::new(request))
+        .await
+        .expect("invoke succeeds")
+        .into_inner();
+    match response.result.expect("invoke result") {
+        nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
+            let outcome = result.outcome.expect("tool execution outcome");
+            assert_eq!(outcome.schema, "nemo.relay.ToolExecutionInterceptOutcome@1");
+            decode_json_envelope(&outcome).expect("decode tool execution outcome")
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }

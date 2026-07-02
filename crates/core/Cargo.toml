@@ -23,7 +23,6 @@ default = [
 atof-streaming = [
     "dep:futures-util",
     "dep:reqwest",
-    "dep:rustls",
     "dep:tokio-tungstenite",
     "tokio/io-util",
     "tokio/net",
@@ -33,12 +32,10 @@ atof-streaming = [
 schema = ["dep:schemars", "nemo-relay-types/schema"]
 guardrails-remote = [
     "dep:reqwest",
-    "dep:rustls",
 ]
 object-store = [
     "dep:object_store",
     "dep:reqwest",
-    "dep:rustls",
     "tokio/net",
     "tokio/time",
 ]
@@ -47,7 +44,6 @@ otel = [
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
     "dep:reqwest",
-    "dep:rustls",
     "dep:tonic",
 ]
 openinference = [
@@ -56,7 +52,6 @@ openinference = [
     "dep:opentelemetry-otlp",
     "dep:opentelemetry_sdk",
     "dep:reqwest",
-    "dep:rustls",
     "dep:tonic",
 ]
 worker-grpc = [
@@ -98,8 +93,7 @@ libloading = "0.8"
 semver = "1"
 sha2 = "0.11"
 opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "grpc-tonic"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots-no-provider", "stream"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "rustls-tls-native-roots", "stream"], optional = true }
 tonic = { version = "0.14.1", default-features = false, optional = true }
 object_store = { version = "0.13", default-features = false, features = ["aws"], optional = true }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }

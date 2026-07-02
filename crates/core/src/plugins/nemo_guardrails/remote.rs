@@ -17,7 +17,6 @@ use crate::codec::traits::LlmCodec;
 use crate::error::FlowError;
 use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use rustls::crypto::ring;
 
 use super::{NeMoGuardrailsConfig, RequestDefaultsConfig, RequestRailsConfig};
 
@@ -62,8 +61,6 @@ impl RemoteBackendRuntime {
             })?;
             default_headers.insert(header_name, header_value);
         }
-
-        let _ = ring::default_provider().install_default();
 
         let client = reqwest::Client::builder()
             .default_headers(default_headers)
@@ -938,13 +935,14 @@ pub(super) fn register_remote_backend(
                 };
 
                 let tool_result = next(current_args.clone()).await?;
-                if !enable_tool_output {
-                    return Ok(tool_result);
-                }
-
-                runtime
-                    .check_tool_output(&tool_name, &current_args, &tool_result)
-                    .await
+                let tool_result = if enable_tool_output {
+                    runtime
+                        .check_tool_output(&tool_name, &current_args, &tool_result)
+                        .await?
+                } else {
+                    tool_result
+                };
+                Ok(tool_result.into())
             })
         });
         ctx.register_tool_execution_intercept(

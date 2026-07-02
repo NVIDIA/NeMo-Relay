@@ -244,7 +244,6 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 
 impl AppState {
     fn new(config: GatewayConfig) -> Self {
-        crate::tls::install_rustls_crypto_provider();
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
         let http = Client::builder()

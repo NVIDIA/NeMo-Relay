@@ -3,10 +3,11 @@
 
 use serde_json::json;
 
+use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
-use crate::api::runtime::ToolExecutionNextFn;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
+use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
@@ -15,12 +16,12 @@ use crate::api::shared::{
 };
 use crate::error::{FlowError, Result};
 use crate::json::Json;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-pub use nemo_relay_types::api::tool::ToolAttributes;
+pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
 
 /// Runtime-owned handle identifying an active or completed tool call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -204,6 +205,13 @@ pub struct ToolCallEndParams<'a> {
 /// Sanitize-request guardrails affect only the emitted start-event payload, not
 /// the caller-owned `args` value.
 pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
+    let (handle, _) = tool_call_with_subscriber_snapshot(params)?;
+    Ok(handle)
+}
+
+fn tool_call_with_subscriber_snapshot(
+    params: ToolCallParams<'_>,
+) -> Result<(ToolHandle, Vec<EventSubscriberFn>)> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
     let (entries, subscribers) = {
@@ -245,7 +253,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         (handle, event)
     };
     NemoRelayContextState::emit_event(&event, &subscribers);
-    Ok(handle)
+    Ok((handle, subscribers))
 }
 
 /// Finish a manual tool lifecycle span.
@@ -275,6 +283,14 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
 /// the caller-owned `result` value.
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
+    tool_call_end_with_pending_marks(params, Vec::new(), None)
+}
+
+fn tool_call_end_with_pending_marks(
+    params: ToolCallEndParams<'_>,
+    pending_marks: Vec<PendingMarkSpec>,
+    lifecycle_subscribers: Option<&[EventSubscriberFn]>,
+) -> Result<()> {
     ensure_runtime_owner()?;
     let (entries, subscribers) = {
         let scope_stack = current_scope_stack();
@@ -282,8 +298,11 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_response_guardrails
         });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        let subscribers = if lifecycle_subscribers.is_some() {
+            Vec::new()
+        } else {
+            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+        };
         let context = global_context();
         let state = context
             .read()
@@ -291,6 +310,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         let entries = state.tool_sanitize_response_entries(&scope_locals);
         (entries, subscribers)
     };
+    let subscribers = lifecycle_subscribers.unwrap_or(&subscribers);
     let sanitized_result = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
         &params.handle.name,
         params.result,
@@ -315,25 +335,46 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
                 .build(),
         )
     };
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    let marks = pending_marks
+        .into_iter()
+        .enumerate()
+        .map(|(index, mark)| {
+            let timestamp = *event.timestamp()
+                + TimeDelta::microseconds(i64::try_from(index).unwrap_or_default() + 1);
+            Event::Mark(MarkEvent::new(
+                BaseEvent::builder()
+                    .name(mark.name)
+                    .parent_uuid(params.handle.uuid)
+                    .timestamp(timestamp)
+                    .data_opt(mark.data)
+                    .metadata_opt(mark.metadata)
+                    .build(),
+                mark.category,
+                mark.category_profile,
+            ))
+        })
+        .collect::<Vec<_>>();
+    NemoRelayContextState::emit_event(&event, subscribers);
+    for mark in marks {
+        NemoRelayContextState::emit_event(&mark, subscribers);
+    }
     Ok(())
 }
 
-fn emit_tool_end_without_output(handle: &ToolHandle, metadata: Option<Json>) -> Result<()> {
+fn emit_tool_end_without_output(
+    handle: &ToolHandle,
+    metadata: Option<Json>,
+    lifecycle_subscribers: &[EventSubscriberFn],
+) -> Result<()> {
     ensure_runtime_owner()?;
-    let (event, subscribers) = {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+    let event = {
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let event = state.end_tool_handle(handle, handle.data.clone(), metadata);
-        (event, subscribers)
+        state.end_tool_handle(handle, handle.data.clone(), metadata)
     };
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    NemoRelayContextState::emit_event(&event, lifecycle_subscribers);
     Ok(())
 }
 
@@ -439,7 +480,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
         &intercept_entries,
     )?;
 
-    let handle = tool_call(
+    let (handle, lifecycle_subscribers) = tool_call_with_subscriber_snapshot(
         ToolCallParams::builder()
             .name(name.as_str())
             .args(intercepted_args.clone())
@@ -463,22 +504,28 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
     };
 
     match execution(intercepted_args).await {
-        Ok(result) => {
+        Ok(outcome) => {
+            let ToolExecutionInterceptOutcome {
+                result,
+                pending_marks,
+            } = outcome;
             let end_metadata = metadata_with_otel_status(metadata, "OK", None);
-            tool_call_end(
+            tool_call_end_with_pending_marks(
                 ToolCallEndParams::builder()
                     .handle(&handle)
                     .result(result.clone())
                     .data_opt(data)
                     .metadata_opt(end_metadata)
                     .build(),
+                pending_marks,
+                Some(&lifecycle_subscribers),
             )?;
             Ok(result)
         }
         Err(error) => {
             let end_metadata =
                 metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
-            let _ = emit_tool_end_without_output(&handle, end_metadata);
+            let _ = emit_tool_end_without_output(&handle, end_metadata, &lifecycle_subscribers);
             Err(error)
         }
     }

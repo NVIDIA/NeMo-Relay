@@ -89,8 +89,8 @@ func TestAlreadyExistsErrorOnDuplicateToolRequestIntercept(t *testing.T) {
 
 func TestAlreadyExistsErrorOnDuplicateToolExecutionIntercept(t *testing.T) {
 	name := "go_err_dup_exec_int"
-	fn := func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-		return next(args)
+	fn := func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		return toolExecutionOutcome(next(args))
 	}
 
 	err := RegisterToolExecutionIntercept(name, 1, fn)

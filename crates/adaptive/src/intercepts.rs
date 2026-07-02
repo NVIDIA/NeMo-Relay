@@ -128,7 +128,7 @@ pub(crate) fn create_tool_execution_intercept_with_mode(
         let name = name.to_string();
         Box::pin(async move {
             let Some(cohort_key) = resolve_warm_first_cohort_key(&name, &mode, &cache) else {
-                return next(args).await;
+                return next(args).await.map(Into::into);
             };
 
             match resolve_warm_first_role(&registry, cohort_key.clone()).await {
@@ -136,7 +136,7 @@ pub(crate) fn create_tool_execution_intercept_with_mode(
                     let result = next(args).await;
                     gate.release();
                     cleanup_cohort_gate(&registry, &cohort_key, &gate).await;
-                    result
+                    result.map(Into::into)
                 }
                 WarmFirstRole::Follower(gate) => {
                     let _ = tokio::time::timeout(
@@ -144,10 +144,19 @@ pub(crate) fn create_tool_execution_intercept_with_mode(
                         gate.wait_for_release(),
                     )
                     .await;
-                    next(args).await
+                    next(args).await.map(Into::into)
                 }
             }
-        }) as Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
+        })
+            as Pin<
+                Box<
+                    dyn Future<
+                            Output = FlowResult<
+                                nemo_relay::api::tool::ToolExecutionInterceptOutcome,
+                            >,
+                        > + Send,
+                >,
+            >
     })
 }
 

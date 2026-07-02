@@ -105,7 +105,6 @@ impl Drop for SubscriberCleanup {
 }
 
 fn test_http_client() -> reqwest::Client {
-    crate::tls::install_rustls_crypto_provider();
     reqwest::Client::new()
 }
 

@@ -280,7 +280,6 @@ impl OpenTelemetrySubscriber {
 fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
-            install_rustls_crypto_provider();
             let mut builder = SpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -343,10 +342,6 @@ fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvid
     } else {
         Ok(builder.with_simple_exporter(exporter).build())
     }
-}
-
-fn install_rustls_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {

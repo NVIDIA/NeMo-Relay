@@ -24,6 +24,12 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
         )
         .unwrap();
     module
+        .setattr(
+            "ToolOutcome",
+            py.get_type::<crate::py_types::PyToolExecutionInterceptOutcome>(),
+        )
+        .unwrap();
+    module
 }
 
 fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> T {
@@ -142,7 +148,7 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return await next(value)
+    return ToolOutcome(await next(value))
 "#,
         );
 
@@ -598,7 +604,7 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return await next(value)
+    return ToolOutcome(await next(value))
 "#,
         );
 
@@ -882,7 +888,7 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return await next(value)
+    return ToolOutcome(await next(value))
 "#,
         );
 

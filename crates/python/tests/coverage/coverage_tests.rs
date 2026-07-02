@@ -38,6 +38,12 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
         )
         .unwrap();
     module
+        .setattr(
+            "ToolOutcome",
+            py.get_type::<crate::py_types::PyToolExecutionInterceptOutcome>(),
+        )
+        .unwrap();
+    module
 }
 
 fn make_request() -> LlmRequest {
@@ -409,7 +415,7 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return await next(value)
+    return ToolOutcome(await next(value))
 
 class CoveragePlugin:
     def validate(self, plugin_config):
@@ -714,7 +720,7 @@ async def tool_exec(args):
 async def tool_intercept(name, args, next):
     result = await next({"x": args["x"] + 1})
     result["wrapped"] = True
-    return result
+    return ToolOutcome(result)
 
 async def llm_exec(request):
     return {"model": request.content["model"]}
@@ -725,6 +731,13 @@ async def llm_intercept(name, request, next):
     return result
 "#,
         );
+
+        module
+            .setattr(
+                "ToolOutcome",
+                py.get_type::<crate::py_types::PyToolExecutionInterceptOutcome>(),
+            )
+            .unwrap();
 
         let tool_exec_py: Py<PyAny> = module.getattr("tool_exec").unwrap().unbind();
         let tool_intercept_py: Py<PyAny> = module.getattr("tool_intercept").unwrap().unbind();
@@ -746,7 +759,7 @@ async def llm_intercept(name, request, next):
                     tool_intercept("tool", json!({"x": 2}), tool_next)
                         .await
                         .unwrap(),
-                    json!({"next": 3, "wrapped": true})
+                    json!({"next": 3, "wrapped": true}).into()
                 );
 
                 let llm_exec = wrap_py_llm_exec_fn(llm_exec_py);

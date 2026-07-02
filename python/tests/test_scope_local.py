@@ -20,6 +20,7 @@ from nemo_relay import (
     MarkEvent,
     ScopeEvent,
     ScopeType,
+    ToolExecutionInterceptOutcome,
     guardrails,
     llm,
     scope,
@@ -495,7 +496,7 @@ class TestScopeLocalExecutionIntercept:
                 handle,
                 "sl_exec_intercept",
                 1,
-                lambda name, args, next_fn: {"from": "intercept"},
+                lambda name, args, next_fn: ToolExecutionInterceptOutcome({"from": "intercept"}),
             )
             result = await tools.execute("exec_int_tool", {}, my_tool)
 
@@ -517,7 +518,7 @@ class TestScopeLocalExecutionIntercept:
         def intercept_fn(name, args, next_fn):
             # Cannot call next_fn here — it returns a Future.
             args["x"] = args["x"] + 1
-            return {"value": args["x"] * 2, "intercepted": True}
+            return ToolExecutionInterceptOutcome({"value": args["x"] * 2, "intercepted": True})
 
         with scope.scope("exec_next_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_execution(handle, "sl_exec_next", 1, intercept_fn)
@@ -593,7 +594,12 @@ class TestScopeLocalLlmWrappers:
             scope_local.register_tool_request(handle, "sl_tool_req_cov", 1, False, lambda name, args: args)
             assert scope_local.deregister_tool_request(handle, "sl_tool_req_cov") is True
 
-            scope_local.register_tool_execution(handle, "sl_tool_exec_cov", 1, lambda name, args, next_fn: args)
+            scope_local.register_tool_execution(
+                handle,
+                "sl_tool_exec_cov",
+                1,
+                lambda name, args, next_fn: ToolExecutionInterceptOutcome(args),
+            )
             assert scope_local.deregister_tool_execution(handle, "sl_tool_exec_cov") is True
 
             scope_local.register_llm_sanitize_request(handle, "sl_llm_req_cov", 1, lambda req: req)

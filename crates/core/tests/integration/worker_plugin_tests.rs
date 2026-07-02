@@ -144,6 +144,9 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         tool_end.output().unwrap()["worker_plugin_tool_sanitize_response"],
         true
     );
+    let tool_mark = find_event(&captured_events, "fixture.worker.tool_execution.mark", None);
+    assert_eq!(tool_mark.parent_uuid(), Some(tool_start.uuid()));
+    assert!(tool_mark.timestamp() > tool_end.timestamp());
 
     let llm_execute_response = llm_call_execute(
         LlmCallExecuteParams::builder()
