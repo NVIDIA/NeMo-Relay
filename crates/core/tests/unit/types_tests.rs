@@ -677,6 +677,37 @@ fn normalized_llm_request_decodes_wrapped_request_when_unannotated() {
 }
 
 #[test]
+fn normalized_llm_request_uses_event_name_provider_hint() {
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("anthropic.messages")
+            .data(json!({
+                "headers": {},
+                "content": {
+                    "model": "claude-3-5-sonnet",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stop_sequences": ["END"]
+                }
+            }))
+            .build(),
+        ScopeCategory::Start,
+        llm_attributes_to_strings(LlmAttributes::empty()),
+        EventCategory::llm(),
+        Some(CategoryProfile::default()),
+    ));
+    let normalized = event
+        .normalized_llm_request()
+        .expect("decodes wrapped anthropic request");
+    let stop = normalized
+        .params
+        .as_ref()
+        .and_then(|params| params.stop.as_ref())
+        .expect("anthropic stop_sequences are normalized");
+    assert_eq!(stop, &vec!["END".to_string()]);
+    assert!(!normalized.extra.contains_key("stop_sequences"));
+}
+
+#[test]
 fn normalized_llm_request_prefers_annotation() {
     let request = annotated_request("demo-model", "annotated");
     let event = llm_start_event(

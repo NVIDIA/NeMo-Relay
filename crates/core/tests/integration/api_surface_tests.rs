@@ -394,7 +394,7 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     register_tool_execution_intercept(
         "tool-execution",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
     assert!(deregister_tool_execution_intercept("tool-execution").unwrap());
@@ -423,7 +423,11 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
         "llm-request",
         1,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
+        }),
     )
     .unwrap();
     assert!(deregister_llm_request_intercept("llm-request").unwrap());
@@ -566,7 +570,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         &scope.uuid,
         "tool-execution",
         1,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
     assert!(scope_deregister_tool_execution_intercept(&scope.uuid, "tool-execution").unwrap());
@@ -612,7 +616,11 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         "llm-request",
         1,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
+        }),
     )
     .unwrap();
     assert!(scope_deregister_llm_request_intercept(&scope.uuid, "llm-request").unwrap());
@@ -682,7 +690,7 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
             &scope.uuid,
             "missing-tool-exec",
             1,
-            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+            Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
         )
         .unwrap_err(),
         "scope",
@@ -931,7 +939,9 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         false,
         Arc::new(|_name, mut request, annotated| {
             request.headers.insert("x-intercepted".into(), json!(true));
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -940,7 +950,10 @@ async fn test_llm_api_emits_sanitized_events_and_covers_error_paths() {
         make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]})),
     )
     .unwrap();
-    assert_eq!(intercepted.headers.get("x-intercepted"), Some(&json!(true)));
+    assert_eq!(
+        intercepted.request.headers.get("x-intercepted"),
+        Some(&json!(true))
+    );
     deregister_llm_request_intercept("llm-request").unwrap();
 
     register_llm_conditional_execution_guardrail(

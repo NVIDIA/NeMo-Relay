@@ -34,9 +34,10 @@ use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::Event;
-pub use nemo_relay_types::api::llm::LlmRequest;
+pub use nemo_relay_types::api::event::{Event, PendingMarkSpec};
+pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
+pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -47,8 +48,8 @@ use nemo_relay_worker_proto::v1::{
     HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
-    WorkerError,
+    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
+    ValidateResponse, WorkerAck, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
@@ -120,16 +121,14 @@ type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
-type ToolExecutionFn = Arc<dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<Json> + Send + Sync>;
+type ToolExecutionFn = Arc<
+    dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
+>;
 type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
 type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
 type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
 type LlmRequestFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;
@@ -275,6 +274,10 @@ impl PluginContext {
     }
 
     /// Registers a tool execution intercept.
+    ///
+    /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
+    /// [`ToolNext::call`] continues the chain and returns only the raw
+    /// downstream result JSON; Relay retains downstream pending marks.
     pub fn register_tool_execution_intercept<F, Fut>(
         &mut self,
         name: &str,
@@ -282,7 +285,7 @@ impl PluginContext {
         callback: F,
     ) where
         F: Fn(&str, Json, ToolNext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Json>> + Send + 'static,
+        Fut: Future<Output = Result<ToolExecutionInterceptOutcome>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -364,11 +367,7 @@ impl PluginContext {
         break_chain: bool,
         callback: F,
     ) where
-        F: Fn(
-                &str,
-                LlmRequest,
-                Option<AnnotatedLlmRequest>,
-            ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
             + Send
             + Sync
             + 'static,
@@ -1372,7 +1371,7 @@ impl WorkerService {
                 };
                 let future =
                     with_thread_scope(&scope, || handler(&payload.tool_name, payload.value, next));
-                Ok(json_response(future.await?))
+                Ok(tool_execution_response(future.await?)?)
             }
             RegistrationSurface::LlmSanitizeRequestGuardrail => {
                 let payload = llm_payload(request.payload)?;
@@ -1407,10 +1406,10 @@ impl WorkerService {
                     .map(|value| decode_json_envelope::<AnnotatedLlmRequest>(&value))
                     .transpose()?;
                 let handler = self.llm_request(&request.registration_name)?;
-                let (request, annotated) = with_thread_scope(&scope, || {
+                let outcome = with_thread_scope(&scope, || {
                     handler(&payload.model_name, request_value, annotated)
                 })?;
-                Ok(llm_request_response(request, annotated)?)
+                Ok(llm_request_response(outcome)?)
             }
             RegistrationSurface::LlmExecutionIntercept => {
                 let payload = llm_payload(request.payload)?;
@@ -1664,20 +1663,30 @@ fn guardrail_response(reason: Option<String>) -> InvokeResponse {
     }
 }
 
-fn llm_request_response(
-    request: LlmRequest,
-    annotated: Option<AnnotatedLlmRequest>,
-) -> Result<InvokeResponse> {
+fn llm_request_response(outcome: LlmRequestInterceptOutcome) -> Result<InvokeResponse> {
     Ok(InvokeResponse {
         result: Some(
             nemo_relay_worker_proto::v1::invoke_response::Result::LlmRequest(
                 LlmRequestInterceptResult {
-                    request: Some(json_envelope("nemo.relay.LlmRequest@1", &request)?),
-                    annotated_request: annotated
-                        .as_ref()
-                        .map(|value| json_envelope("nemo.relay.AnnotatedLlmRequest@1", value))
-                        .transpose()?,
-                    has_annotated_request: annotated.is_some(),
+                    outcome: Some(json_envelope(
+                        "nemo.relay.LlmRequestInterceptOutcome@1",
+                        &outcome,
+                    )?),
+                },
+            ),
+        ),
+    })
+}
+
+fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<InvokeResponse> {
+    Ok(InvokeResponse {
+        result: Some(
+            nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
+                ToolExecutionInterceptResult {
+                    outcome: Some(json_envelope(
+                        "nemo.relay.ToolExecutionInterceptOutcome@1",
+                        &outcome,
+                    )?),
                 },
             ),
         ),

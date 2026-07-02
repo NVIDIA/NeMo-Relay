@@ -44,7 +44,7 @@ Do not use this skill when the application is not instrumented yet. Start with
 - Adaptive Cache Governor providers are `passthrough`, `anthropic`, and
   `openai`; omit ACG until prompt-cache planning is needed.
 - Helper APIs exist in Rust `nemo_relay_adaptive`, Python `nemo_relay.adaptive`,
-  and Node.js `nemo-relay-node/adaptive`. Go, WebAssembly, and raw FFI are
+  and Node.js `nemo-relay-node/adaptive`. Go and raw FFI are
   source-first or advanced surfaces.
 
 ## Default Path

@@ -68,6 +68,18 @@ block_llms = false
 emit_isolated_scope = true
 ```
 
+The manifest declares the `config_schema` capability and references
+`config.schema.json`. After adding the plugin, use the editor for the same
+configuration target (`--user`, `--project`, or `--global`) to configure the
+fields without loading the native library:
+
+```bash
+nemo-relay plugins edit
+```
+
+The editor reads the schema file relative to `relay-plugin.toml`. It does not
+run the plugin during schema discovery.
+
 Start the gateway normally after the dynamic record is enabled:
 
 ```bash
@@ -84,9 +96,16 @@ The example registers the following runtime behavior:
 - Request and execution intercepts for tools that mutate JSON payloads and call
   continuations.
 - LLM sanitize request/response guardrails.
-- LLM request, execution, and stream execution intercepts.
+- An LLM request intercept that rewrites the request and schedules a mark. Relay
+  emits that mark after the LLM start event with the LLM scope as its parent.
+- LLM execution and stream execution intercepts.
 - Runtime mark and scope events.
 - A plugin-owned isolated scope stack for non-correlated visibility.
 
 Native plugins are not sandboxed. They run in the Relay process and must not
 unwind across ABI callbacks.
+
+Request intercepts do not own an LLM lifecycle because they run before Relay
+creates the LLM scope. `register_llm_request_intercept` returns one
+`LlmRequestInterceptOutcome`, whose `pending_marks` Relay emits in interceptor
+order after the LLM start event and before provider execution.

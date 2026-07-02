@@ -26,6 +26,7 @@ use nemo_relay_worker_proto::v1::{
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
+use sha2::{Digest, Sha256};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::StreamExt;
@@ -60,6 +61,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
     event as emit_scope_mark, pop_scope, push_scope,
 };
+use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
@@ -76,6 +78,7 @@ const ANNOTATED_LLM_REQUEST_SCHEMA: &str = "nemo.relay.AnnotatedLlmRequest@1";
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_RETRY: Duration = Duration::from_millis(25);
+const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";
 const PYTHON_WORKER_BOOTSTRAP: &str = r#"
 import asyncio
 import importlib
@@ -100,6 +103,10 @@ pub struct WorkerPluginLoadSpec {
     pub plugin_id: String,
     /// Path to the authored `relay-plugin.toml`.
     pub manifest_ref: String,
+    /// Relay-managed per-plugin runtime environment.
+    ///
+    /// This is required for Python workers and ignored by other worker runtimes.
+    pub environment_ref: Option<String>,
     /// Resolved dynamic plugin config passed to the worker.
     pub config: Map<String, Json>,
 }
@@ -306,6 +313,7 @@ fn load_one_worker_plugin(
     let mut child = ChildGuard::new(spawn_worker_process(WorkerProcessLaunch {
         runtime,
         manifest_path: &manifest_path,
+        environment_ref: spec.environment_ref.as_deref(),
         plugin_id: &spec.plugin_id,
         entrypoint,
         activation_id: &activation_id,
@@ -669,6 +677,7 @@ async fn connect_worker(
 struct WorkerProcessLaunch<'a> {
     runtime: WorkerRuntime,
     manifest_path: &'a Path,
+    environment_ref: Option<&'a str>,
     plugin_id: &'a str,
     entrypoint: &'a str,
     activation_id: &'a str,
@@ -685,8 +694,15 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
         .unwrap_or_else(|| Path::new("."));
     let (mut command, command_display) = match spec.runtime {
         WorkerRuntime::Python => {
-            let python = std::env::var("NEMO_RELAY_PYTHON").unwrap_or_else(|_| "python3".into());
+            let python = resolve_python_executable(spec.plugin_id, spec.environment_ref)?;
+            if !python.is_file() {
+                return Err(PluginError::RegistrationFailed(format!(
+                    "configured Python worker environment interpreter '{}' does not exist",
+                    python.display()
+                )));
+            }
             let mut command = Command::new(python);
+            clear_host_python_environment(&mut command);
             command
                 .arg("-c")
                 .arg(PYTHON_WORKER_BOOTSTRAP)
@@ -718,6 +734,56 @@ fn spawn_worker_process(spec: WorkerProcessLaunch<'_>) -> crate::plugin::Result<
             spec.runtime, command_display
         ))
     })
+}
+
+fn resolve_python_executable(
+    plugin_id: &str,
+    environment_ref: Option<&str>,
+) -> crate::plugin::Result<PathBuf> {
+    let environment_ref = environment_ref.ok_or_else(|| {
+        PluginError::InvalidConfig(
+            "Python worker activation requires a lifecycle-managed environment_ref; run `nemo-relay plugins add <path>`"
+                .into(),
+        )
+    })?;
+    let environment = Path::new(environment_ref);
+    let expected_name = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let is_managed_path = environment.is_absolute()
+        && environment
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new(&expected_name))
+        && environment
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == MANAGED_ENVIRONMENTS_DIR);
+    if !is_managed_path {
+        return Err(PluginError::InvalidConfig(format!(
+            "Python worker environment_ref '{}' is not the lifecycle-managed path for plugin '{plugin_id}'",
+            environment.display()
+        )));
+    }
+    if std::fs::symlink_metadata(environment)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err(PluginError::InvalidConfig(format!(
+            "Python worker environment_ref '{}' must not be a symbolic link",
+            environment.display()
+        )));
+    }
+    Ok(if cfg!(windows) {
+        environment.join("Scripts").join("python.exe")
+    } else {
+        environment.join("bin").join("python")
+    })
+}
+
+fn clear_host_python_environment(command: &mut Command) {
+    for key in ["PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"] {
+        command.env_remove(key);
+    }
 }
 
 impl WorkerPluginInstance {
@@ -1115,7 +1181,7 @@ impl WorkerPluginCallback {
         tool_name: &str,
         value: Json,
         next: ToolExecutionNextFn,
-    ) -> FlowResult<Json> {
+    ) -> FlowResult<ToolExecutionInterceptOutcome> {
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::Tool(next))?;
@@ -1125,7 +1191,28 @@ impl WorkerPluginCallback {
             Some(continuation_id),
             Some(invoke_request_payload_tool(tool_name, value)),
         );
-        json_from_invoke_response(self.invoke_async(request).await?)
+        let response = self.invoke_async(request).await?;
+        match response.result {
+            Some(invoke_response_result::Result::ToolExecution(result)) => {
+                let outcome =
+                    required_envelope(result.outcome, "tool execution intercept outcome")?;
+                if outcome.schema != "nemo.relay.ToolExecutionInterceptOutcome@1" {
+                    return Err(FlowError::Internal(format!(
+                        "worker returned unsupported tool execution intercept outcome schema: {}",
+                        outcome.schema
+                    )));
+                }
+                decode_json_envelope(&outcome).map_err(|err| {
+                    FlowError::Internal(format!(
+                        "worker returned invalid tool execution intercept outcome: {err}"
+                    ))
+                })
+            }
+            Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
+            _ => Err(FlowError::Internal(
+                "worker tool execution intercept returned unexpected result".into(),
+            )),
+        }
     }
 
     fn invoke_llm_request_json(
@@ -1195,7 +1282,7 @@ impl WorkerPluginCallback {
         model_name: &str,
         request: LlmRequest,
         annotated: Option<AnnotatedLlmRequest>,
-    ) -> FlowResult<(LlmRequest, Option<AnnotatedLlmRequest>)> {
+    ) -> FlowResult<crate::api::llm::LlmRequestInterceptOutcome> {
         let invoke = self.base_request(
             registration_name,
             RegistrationSurface::LlmRequestIntercept,
@@ -1210,26 +1297,18 @@ impl WorkerPluginCallback {
         let response = self.invoke_blocking(invoke)?;
         match response.result {
             Some(invoke_response_result::Result::LlmRequest(result)) => {
-                let request = required_envelope(result.request, "llm request intercept request")?;
-                let request = decode_json_envelope::<LlmRequest>(&request).map_err(|err| {
-                    FlowError::Internal(format!("worker returned invalid LLM request: {err}"))
-                })?;
-                let annotated = if result.has_annotated_request {
-                    let envelope = required_envelope(
-                        result.annotated_request,
-                        "llm request intercept annotated request",
-                    )?;
-                    Some(
-                        decode_json_envelope::<AnnotatedLlmRequest>(&envelope).map_err(|err| {
-                            FlowError::Internal(format!(
-                                "worker returned invalid annotated LLM request: {err}"
-                            ))
-                        })?,
-                    )
-                } else {
-                    None
-                };
-                Ok((request, annotated))
+                let outcome = required_envelope(result.outcome, "llm request intercept outcome")?;
+                if outcome.schema != "nemo.relay.LlmRequestInterceptOutcome@1" {
+                    return Err(FlowError::Internal(format!(
+                        "worker returned unsupported LLM request intercept outcome schema: {}",
+                        outcome.schema
+                    )));
+                }
+                decode_json_envelope(&outcome).map_err(|err| {
+                    FlowError::Internal(format!(
+                        "worker returned invalid LLM request intercept outcome: {err}"
+                    ))
+                })
             }
             Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
             _ => Err(FlowError::Internal(

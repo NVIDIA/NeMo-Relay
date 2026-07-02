@@ -6,10 +6,11 @@
 use std::sync::Arc;
 
 use nemo_relay_types::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, ScopeCategory, ScopeEvent,
+    BaseEvent, CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings,
 };
-use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};
@@ -77,4 +78,147 @@ fn event_round_trips_with_annotated_llm_profiles() {
             .and_then(|response| response.id.as_deref()),
         Some("resp_1")
     );
+}
+
+#[test]
+fn llm_request_intercept_outcome_round_trips_pending_marks() {
+    let outcome = LlmRequestInterceptOutcome::new(
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({ "prompt": "hello" }),
+        },
+        None,
+    )
+    .with_pending_mark(
+        PendingMarkSpec::builder()
+            .name("request.optimized")
+            .category(EventCategory::custom())
+            .category_profile(
+                CategoryProfile::builder()
+                    .subtype("optimizer.saved_tokens")
+                    .build(),
+            )
+            .data(json!({ "saved_tokens": 12 }))
+            .metadata(json!({ "source": "test" }))
+            .build(),
+    );
+
+    let encoded = serde_json::to_value(&outcome).expect("outcome should serialize");
+    assert_eq!(encoded["pending_marks"][0]["name"], "request.optimized");
+    assert_eq!(encoded["pending_marks"][0]["category"], "custom");
+    assert!(encoded["annotated_request"].is_null());
+
+    let mut encoded_without_pending_marks = encoded.clone();
+    encoded_without_pending_marks
+        .as_object_mut()
+        .unwrap()
+        .remove("pending_marks");
+    let decoded_without_pending_marks: LlmRequestInterceptOutcome =
+        serde_json::from_value(encoded_without_pending_marks)
+            .expect("outcome without pending marks should deserialize");
+    assert!(decoded_without_pending_marks.pending_marks.is_empty());
+
+    let decoded_defaults: LlmRequestInterceptOutcome = serde_json::from_value(json!({
+        "request": {"headers": {}, "content": {"prompt": "hello"}},
+        "future_field": true
+    }))
+    .expect("omitted optional fields and unknown fields should be accepted");
+    assert!(decoded_defaults.annotated_request.is_none());
+    assert!(decoded_defaults.pending_marks.is_empty());
+
+    assert!(
+        serde_json::from_value::<LlmRequestInterceptOutcome>(json!({
+            "annotated_request": null,
+            "pending_marks": []
+        }))
+        .is_err(),
+        "request is required"
+    );
+
+    let decoded: LlmRequestInterceptOutcome =
+        serde_json::from_value(encoded).expect("outcome should deserialize");
+    assert_eq!(decoded, outcome);
+}
+
+#[test]
+fn llm_request_intercept_outcome_converts_from_request_inputs() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({ "prompt": "hello" }),
+    };
+    let annotated_request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "messages": [],
+        "model": "model"
+    }))
+    .expect("annotated request should deserialize");
+
+    let request_only: LlmRequestInterceptOutcome = request.clone().into();
+    assert_eq!(
+        request_only,
+        LlmRequestInterceptOutcome::new(request.clone(), None)
+    );
+
+    let required_annotation: LlmRequestInterceptOutcome =
+        (request.clone(), annotated_request.clone()).into();
+    assert_eq!(
+        required_annotation,
+        LlmRequestInterceptOutcome::new(request.clone(), Some(annotated_request.clone()))
+    );
+
+    let optional_annotation: LlmRequestInterceptOutcome =
+        (request.clone(), Some(annotated_request.clone())).into();
+    assert_eq!(
+        optional_annotation,
+        LlmRequestInterceptOutcome::new(request, Some(annotated_request))
+    );
+}
+
+#[test]
+fn tool_execution_intercept_outcome_round_trips_pending_marks() {
+    let outcome = ToolExecutionInterceptOutcome::new(json!({"stdout": "compacted"}))
+        .with_pending_mark(
+            PendingMarkSpec::builder()
+                .name("tool.output.compacted")
+                .category(EventCategory::custom())
+                .category_profile(
+                    CategoryProfile::builder()
+                        .subtype("optimizer.saved_tokens")
+                        .build(),
+                )
+                .data(json!({"saved_tokens": 12}))
+                .metadata(json!({"source": "test"}))
+                .build(),
+        );
+
+    let encoded = serde_json::to_value(&outcome).expect("outcome should serialize");
+    assert_eq!(encoded["result"]["stdout"], "compacted");
+    assert_eq!(encoded["pending_marks"][0]["name"], "tool.output.compacted");
+    assert_eq!(encoded["pending_marks"][0]["category"], "custom");
+
+    let decoded: ToolExecutionInterceptOutcome =
+        serde_json::from_value(encoded).expect("outcome should deserialize");
+    assert_eq!(decoded, outcome);
+
+    let defaults: ToolExecutionInterceptOutcome = serde_json::from_value(json!({
+        "result": "plain",
+        "future_field": true
+    }))
+    .expect("omitted pending marks and unknown fields should be accepted");
+    assert!(defaults.pending_marks.is_empty());
+    assert_eq!(defaults.result, json!("plain"));
+
+    assert!(
+        serde_json::from_value::<ToolExecutionInterceptOutcome>(json!({
+            "pending_marks": []
+        }))
+        .is_err(),
+        "result is required"
+    );
+}
+
+#[test]
+fn tool_execution_intercept_outcome_converts_from_json() {
+    let result = json!({"value": 42});
+    let outcome: ToolExecutionInterceptOutcome = result.clone().into();
+    assert_eq!(outcome, ToolExecutionInterceptOutcome::new(result));
 }

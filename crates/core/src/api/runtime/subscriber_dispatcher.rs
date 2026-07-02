@@ -7,7 +7,6 @@ use crate::api::event::Event;
 use crate::api::runtime::EventSubscriberFn;
 use crate::error::Result;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod native {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -152,37 +151,12 @@ mod native {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use super::*;
-
-    pub(super) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) {
-        for subscriber in subscribers {
-            subscriber(event);
-        }
-    }
-
-    pub(super) fn flush_subscribers() -> Result<()> {
-        Ok(())
-    }
-}
-
 /// Queue an event for subscriber delivery.
 pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) {
-    #[cfg(not(target_arch = "wasm32"))]
     native::dispatch_event(event, subscribers);
-    #[cfg(target_arch = "wasm32")]
-    wasm::dispatch_event(event, subscribers);
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.
 pub fn flush_subscribers() -> Result<()> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        native::flush_subscribers()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        wasm::flush_subscribers()
-    }
+    native::flush_subscribers()
 }

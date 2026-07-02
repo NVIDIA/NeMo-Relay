@@ -325,7 +325,16 @@ unsafe extern "C" fn tool_exec_intercept_cb(
     next_fn: NemoRelayToolExecNextFn,
     next_ctx: *mut libc::c_void,
 ) -> *mut c_char {
-    unsafe { next_fn(args_json, next_ctx) }
+    let result_ptr = unsafe { next_fn(args_json, next_ctx) };
+    if result_ptr.is_null() {
+        return ptr::null_mut();
+    }
+    let result: Json =
+        serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
+    unsafe { nemo_relay_string_free(result_ptr) };
+    CString::new(json!({ "result": result, "pending_marks": [] }).to_string())
+        .unwrap()
+        .into_raw()
 }
 
 unsafe extern "C" fn llm_request_cb(
@@ -374,10 +383,15 @@ unsafe extern "C" fn llm_request_intercept_cb(
     _name: *const c_char,
     request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    out_request: *mut *mut FfiLLMRequest,
-    _out_annotated_json: *mut *mut c_char,
+    out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
-    unsafe { *out_request = llm_request_cb(ptr::null_mut(), request) };
+    let transformed = unsafe { Box::from_raw(llm_request_cb(ptr::null_mut(), request)) };
+    let outcome = json!({
+        "request": transformed.0,
+        "annotated_request": null,
+        "pending_marks": [],
+    });
+    unsafe { *out_outcome_json = CString::new(outcome.to_string()).unwrap().into_raw() };
     NemoRelayStatus::Ok
 }
 
@@ -386,8 +400,7 @@ unsafe extern "C" fn llm_request_intercept_fail_cb(
     _name: *const c_char,
     _request: *const FfiLLMRequest,
     _annotated_json: *const c_char,
-    _out_request: *mut *mut FfiLLMRequest,
-    _out_annotated_json: *mut *mut c_char,
+    _out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     crate::error::set_last_error("llm request intercept callback failed");
     NemoRelayStatus::Internal

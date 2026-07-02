@@ -103,22 +103,6 @@ python_integration_langchain:
   - 'rust-toolchain.toml'
   - 'uv.lock'
 
-wasm_package:
-  - 'Cargo.lock'
-  - 'Cargo.toml'
-  - 'crates/adaptive/Cargo.toml'
-  - 'crates/adaptive/src/**'
-  - 'crates/core/Cargo.toml'
-  - 'crates/core/src/**'
-  - 'crates/types/Cargo.toml'
-  - 'crates/types/src/**'
-  - 'crates/wasm/Cargo.toml'
-  - 'crates/wasm/scripts/**'
-  - 'crates/wasm/src/**'
-  - 'crates/wasm/wrappers/**'
-  - 'justfile'
-  - 'rust-toolchain.toml'
-
 dependencies:
   - 'Cargo.lock'
   - 'Cargo.toml'
@@ -195,11 +179,3 @@ python:
   - 'pyproject.toml'
   - 'python/**/!(*.md)'
   - 'uv.lock'
-
-wasm:
-  - 'crates/wasm/Cargo.toml'
-  - 'crates/wasm/package.json'
-  - 'crates/wasm/scripts/**'
-  - 'crates/wasm/src/**'
-  - 'crates/wasm/tests-js/**'
-  - 'scripts/test-support/**'

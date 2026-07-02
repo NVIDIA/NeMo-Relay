@@ -19,11 +19,13 @@ use nemo_relay::api::runtime::{
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_relay::api::event::Event;
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -32,6 +34,51 @@ use nemo_relay::error::{FlowError, Result};
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::JsEvent;
+
+/// JavaScript-facing pending mark DTO.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct JsPendingMarkSpec {
+    name: String,
+    #[serde(default)]
+    category: Option<EventCategory>,
+    #[serde(default)]
+    category_profile: Option<CategoryProfile>,
+    #[serde(default)]
+    data: Option<Json>,
+    #[serde(default)]
+    metadata: Option<Json>,
+}
+
+impl From<JsPendingMarkSpec> for PendingMarkSpec {
+    fn from(mark: JsPendingMarkSpec) -> Self {
+        Self {
+            name: mark.name,
+            category: mark.category,
+            category_profile: mark.category_profile,
+            data: mark.data,
+            metadata: mark.metadata,
+        }
+    }
+}
+
+impl From<PendingMarkSpec> for JsPendingMarkSpec {
+    fn from(mark: PendingMarkSpec) -> Self {
+        Self {
+            name: mark.name,
+            category: mark.category,
+            category_profile: mark.category_profile,
+            data: mark.data,
+            metadata: mark.metadata,
+        }
+    }
+}
+
+/// Convert canonical pending marks to JavaScript-facing DTOs.
+#[must_use]
+pub(crate) fn js_pending_marks(marks: Vec<PendingMarkSpec>) -> Vec<JsPendingMarkSpec> {
+    marks.into_iter().map(Into::into).collect()
+}
 
 fn recv_json_or_null(rx: std::sync::mpsc::Receiver<Json>, error_prefix: &str) -> Json {
     rx.recv().unwrap_or_else(|e| {
@@ -208,7 +255,9 @@ pub fn wrap_js_tool_exec_fn(
 ///
 /// The JS callback receives a single JSON object
 /// `{ name: string, request: LlmRequest, annotated: AnnotatedLlmRequest | null }`
-/// and must return `{ request: LlmRequest, annotated: AnnotatedLlmRequest | null }`.
+/// and must return `{ request, annotated?, pendingMarks? }`.
+/// When `annotated` is non-null, request content is read-only and provider-body
+/// edits must be made through the returned annotation; headers remain writable.
 pub fn wrap_js_llm_request_intercept_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> LlmRequestInterceptFn {
@@ -217,7 +266,7 @@ pub fn wrap_js_llm_request_intercept_fn(
         move |name: &str,
               request: LlmRequest,
               annotated: Option<AnnotatedLlmRequest>|
-              -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)> {
+              -> Result<LlmRequestInterceptOutcome> {
             let func = func.clone();
             let req_json = serde_json::to_value(&request).unwrap_or(Json::Null);
             let annotated_json = annotated
@@ -245,32 +294,23 @@ pub fn wrap_js_llm_request_intercept_fn(
             }
             let result = recv_json_result(rx, "JS LLM request intercept callback failed")?;
 
-            // Validate expected shape: { "request": {...}, "annotated": ... }
-            let obj = result.as_object().ok_or_else(|| {
-                FlowError::Internal(
-                    "JS LLM request intercept: expected object with 'request' and 'annotated' fields".to_string(),
-                )
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct JsOutcome {
+                request: LlmRequest,
+                #[serde(default)]
+                annotated: Option<AnnotatedLlmRequest>,
+                #[serde(default)]
+                pending_marks: Vec<JsPendingMarkSpec>,
+            }
+            let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
+                FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
             })?;
-
-            let new_request: LlmRequest = serde_json::from_value(
-                obj.get("request").cloned().unwrap_or(Json::Null),
-            )
-            .map_err(|e| {
-                FlowError::Internal(format!(
-                    "JS LLM request intercept: failed to deserialize request: {e}"
-                ))
-            })?;
-
-            let new_annotated: Option<AnnotatedLlmRequest> = match obj.get("annotated") {
-                Some(Json::Null) | None => None,
-                Some(val) => Some(serde_json::from_value(val.clone()).map_err(|e| {
-                    FlowError::Internal(format!(
-                        "JS LLM request intercept: failed to deserialize annotated: {e}"
-                    ))
-                })?),
-            };
-
-            Ok((new_request, new_annotated))
+            Ok(LlmRequestInterceptOutcome {
+                request: outcome.request,
+                annotated_request: outcome.annotated,
+                pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+            })
         },
     )
 }
@@ -586,21 +626,35 @@ pub fn wrap_js_response_codec(
     })
 }
 
-/// Wrap a JS function `(args, next) => result` for tool execution intercept.
+/// Wrap a JS function `(args, next) => { result, pendingMarks? }` for tool execution intercept.
 ///
 /// The JS callback receives the tool arguments and a real `next(args)` function
 /// that returns a Promise for the downstream result.
 pub fn wrap_js_tool_exec_intercept_fn(
     func: Arc<PromiseAwareFn>,
-) -> Arc<
-    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> nemo_relay::api::runtime::ToolExecutionFn {
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let func = func.clone();
         let next_json: JsonNextFn = Arc::new(move |next_args| next(next_args));
-        Box::pin(async move { func.call_with_json_next(args, next_json).await })
+        Box::pin(async move {
+            let result = func.call_with_json_next(args, next_json).await?;
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct JsOutcome {
+                result: Json,
+                #[serde(default)]
+                pending_marks: Vec<JsPendingMarkSpec>,
+            }
+            let outcome: JsOutcome = serde_json::from_value(result).map_err(|error| {
+                FlowError::Internal(format!(
+                    "invalid JS tool execution intercept outcome: {error}"
+                ))
+            })?;
+            Ok(ToolExecutionInterceptOutcome {
+                result: outcome.result,
+                pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+            })
+        })
     })
 }
 

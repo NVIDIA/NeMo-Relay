@@ -15,7 +15,8 @@ use std::sync::Arc;
 use tokio_stream::Stream;
 
 use crate::api::event::Event;
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::Result;
 use crate::json::Json;
@@ -81,7 +82,9 @@ pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>
 ///   chain.
 ///
 /// # Returns
-/// A future resolving to the tool result JSON.
+/// A future resolving to the downstream tool result JSON. Pending marks from
+/// downstream intercepts are retained by the runtime and are not exposed
+/// through this continuation.
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
@@ -98,13 +101,25 @@ pub type ToolExecutionNextFn =
 /// - Third argument: Continuation for the remaining execution chain.
 ///
 /// # Returns
-/// A future resolving to the tool result JSON.
+/// A future resolving to the canonical tool execution outcome, containing the
+/// tool result and any pending lifecycle marks produced by this intercept.
 ///
 /// # Errors
 /// The future resolves to an error when the intercept or remaining execution
 /// chain fails.
 pub type ToolExecutionFn = Arc<
-    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
+    dyn Fn(
+            &str,
+            Json,
+            ToolExecutionNextFn,
+        ) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Internal continuation carrying both a tool result and accumulated marks.
+pub(crate) type ToolExecutionOutcomeNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionInterceptOutcome>> + Send>>
         + Send
         + Sync,
 >;
@@ -163,17 +178,17 @@ pub type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + 
 /// - Third argument: Optional normalized request annotation to carry forward.
 ///
 /// # Returns
-/// A [`Result`] containing the transformed request and optional annotation.
+/// A [`Result`] containing the canonical request-intercept outcome.
+/// Without a request codec, the returned request is authoritative. With a
+/// request codec, its headers remain writable while its content must remain
+/// unchanged; provider-body edits must be returned through the required
+/// annotation.
 ///
 /// # Errors
 /// The callback can return any [`FlowError`](crate::error::FlowError) to abort
 /// the request-intercept chain.
 pub type LlmRequestInterceptFn = Arc<
-    dyn Fn(
-            &str,
-            LlmRequest,
-            Option<AnnotatedLlmRequest>,
-        ) -> Result<(LlmRequest, Option<AnnotatedLlmRequest>)>
+    dyn Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
         + Send
         + Sync,
 >;

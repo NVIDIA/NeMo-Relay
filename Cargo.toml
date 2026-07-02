@@ -14,8 +14,7 @@ members = [
     # Language Bindings
     "crates/python",
     "crates/ffi",
-    "crates/node",
-    "crates/wasm"
+    "crates/node"
 ]
 exclude = [".tmp", ".uv-cache"]
 resolver = "2"

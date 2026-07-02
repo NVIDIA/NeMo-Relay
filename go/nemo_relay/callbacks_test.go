@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+func toolExecutionOutcome(result json.RawMessage, err error) (ToolExecutionInterceptOutcome, error) {
+	return ToolExecutionInterceptOutcome{Result: result}, err
+}
+
 func TestRegisterAndUnregisterClosure(t *testing.T) {
 	fn := ToolExecutionFunc(func(args json.RawMessage) (json.RawMessage, error) {
 		return args, nil

@@ -12,16 +12,16 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::scope::{EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType};
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 use futures_util::StreamExt;
 use serde_json::{Map, json};
 use std::fs;
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 use std::io::{Read, Write};
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 use std::net::TcpListener;
 use std::sync::Arc;
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -231,7 +231,7 @@ fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn read_http_request(stream: &mut std::net::TcpStream) -> String {
     let mut data = Vec::new();
     let mut buf = [0_u8; 1];
@@ -286,7 +286,7 @@ fn read_http_request(stream: &mut std::net::TcpStream) -> String {
     String::new()
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -308,7 +308,7 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
     (url, captures)
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec<String> {
     for _ in 0..100 {
         let snapshot = captures.lock().unwrap().clone();
@@ -320,7 +320,7 @@ fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec
     captures.lock().unwrap().clone()
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn start_websocket_capture_server(
     listener: TcpListener,
     captures: Arc<Mutex<Vec<String>>>,
@@ -397,7 +397,7 @@ fn endpoint_and_exporter_config_builders_preserve_values() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_field_name_policy_replaces_dots_recursively() {
     let config =
         AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost)
@@ -421,7 +421,7 @@ fn endpoint_field_name_policy_replaces_dots_recursively() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json() {
     let preserve =
         AtofEndpointConfig::new("http://127.0.0.1:9/events", AtofEndpointTransport::HttpPost);
@@ -435,9 +435,8 @@ fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_http_helper_edges_are_safe() {
-    install_rustls_crypto_provider();
     assert_eq!(
         AtofEndpointFieldNamePolicy::parse("unknown"),
         None,
@@ -570,7 +569,7 @@ fn subscriber_writes_canonical_event_jsonl() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
     let dir = temp_dir("atof-streaming-http");
     let (url, captures) = start_http_capture_server(4);
@@ -616,7 +615,7 @@ fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn websocket_endpoint_receives_fifo_json_text_events() {
     let dir = temp_dir("atof-streaming-websocket");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -648,7 +647,7 @@ fn websocket_endpoint_receives_fifo_json_text_events() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn websocket_flush_drains_events_queued_before_reconnect() {
     let dir = temp_dir("atof-streaming-websocket-reconnect");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1307,7 +1306,7 @@ fn invalid_filename_errors_cleanly() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn invalid_endpoint_config_errors_cleanly() {
     let dir = temp_dir("atof-invalid-endpoint");
 
@@ -1333,7 +1332,7 @@ fn invalid_endpoint_config_errors_cleanly() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn invalid_endpoint_scheme_errors_cleanly() {
     let dir = temp_dir("atof-invalid-endpoint-scheme");
 
@@ -1381,7 +1380,7 @@ fn invalid_endpoint_scheme_errors_cleanly() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("x-test".to_string(), "ok".to_string());
@@ -1444,7 +1443,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
     let (body_tx, body) = ndjson_body_channel();
     drop(body);
@@ -1475,7 +1474,7 @@ fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -1522,7 +1521,7 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("bad header".to_string(), "ok".to_string());
@@ -1560,7 +1559,7 @@ fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("bad header".to_string(), "ok".to_string());
@@ -1582,7 +1581,7 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
 }
 
 #[test]
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn ndjson_upload_close_timeout_acknowledges_close() {
     let request = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let request: tokio::task::JoinHandle<reqwest::Result<reqwest::Response>> =

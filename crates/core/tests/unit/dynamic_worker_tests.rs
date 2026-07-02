@@ -28,6 +28,55 @@ const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
 
 #[test]
+fn python_environment_resolution_requires_lifecycle_managed_path() {
+    let plugin_id = "acme.python";
+    let digest = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let temp = tempfile::tempdir().unwrap();
+    let managed = temp.path().join(MANAGED_ENVIRONMENTS_DIR).join(digest);
+    let python = resolve_python_executable(plugin_id, managed.to_str()).unwrap();
+    assert!(python.starts_with(&managed));
+
+    let outside = std::env::temp_dir().join("unmanaged-python-environment");
+    let error = resolve_python_executable(plugin_id, outside.to_str())
+        .expect_err("an arbitrary environment path should be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("is not the lifecycle-managed path")
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let target = temp.path().join("symlink-target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        symlink(&target, &managed).unwrap();
+
+        let error = resolve_python_executable(plugin_id, managed.to_str())
+            .expect_err("a symlinked environment should be rejected");
+        assert!(error.to_string().contains("must not be a symbolic link"));
+    }
+}
+
+#[test]
+fn python_worker_launch_clears_host_python_environment() {
+    let mut command = Command::new("python");
+    clear_host_python_environment(&mut command);
+    let removed = command
+        .get_envs()
+        .filter_map(|(key, value)| value.is_none().then_some(key))
+        .collect::<Vec<_>>();
+    for key in ["PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"] {
+        assert!(removed.contains(&std::ffi::OsStr::new(key)));
+    }
+}
+
+#[test]
 fn response_helpers_cover_error_and_unexpected_shapes() {
     let worker_error = WorkerError {
         code: "worker.failed".into(),
@@ -335,29 +384,31 @@ async fn callback_helpers_cover_worker_response_edges() {
             },
             "llm_intercept_invalid_request" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    request: Some(JsonEnvelope {
-                        schema: LLM_REQUEST_SCHEMA.into(),
-                        json: b"null".to_vec(),
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@1".into(),
+                        json: br#"{"request":null}"#.to_vec(),
                     }),
-                    annotated_request: None,
-                    has_annotated_request: false,
                 })),
             },
             "llm_intercept_missing_annotated" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    request: Some(valid_llm_request_envelope()),
-                    annotated_request: None,
-                    has_annotated_request: true,
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LegacyLlmRequestInterceptResult@1".into(),
+                        json: br#"{}"#.to_vec(),
+                    }),
                 })),
             },
             "llm_intercept_invalid_annotated" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
-                    request: Some(valid_llm_request_envelope()),
-                    annotated_request: Some(JsonEnvelope {
-                        schema: ANNOTATED_LLM_REQUEST_SCHEMA.into(),
-                        json: b"null".to_vec(),
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@1".into(),
+                        json: serde_json::to_vec(&json!({
+                            "request": valid_llm_request(),
+                            "annotated_request": 3,
+                            "pending_marks": [],
+                        }))
+                        .unwrap(),
                     }),
-                    has_annotated_request: true,
                 })),
             },
             "llm_intercept_error" => InvokeResponse {
@@ -405,7 +456,11 @@ async fn callback_helpers_cover_worker_response_edges() {
             None,
         )
         .expect_err("invalid LLM intercept request should fail");
-    assert!(error.to_string().contains("invalid LLM request"));
+    assert!(
+        error
+            .to_string()
+            .contains("invalid LLM request intercept outcome")
+    );
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -414,11 +469,11 @@ async fn callback_helpers_cover_worker_response_edges() {
             valid_llm_request(),
             None,
         )
-        .expect_err("missing annotated request should fail when flagged present");
+        .expect_err("legacy outcome schema should fail");
     assert!(
         error
             .to_string()
-            .contains("llm request intercept annotated request is missing")
+            .contains("unsupported LLM request intercept outcome schema")
     );
 
     let error = callback
@@ -429,7 +484,11 @@ async fn callback_helpers_cover_worker_response_edges() {
             None,
         )
         .expect_err("invalid annotated request should fail");
-    assert!(error.to_string().contains("invalid annotated LLM request"));
+    assert!(
+        error
+            .to_string()
+            .contains("invalid LLM request intercept outcome")
+    );
 
     let error = callback
         .invoke_llm_request_intercept("llm_intercept_error", "model", valid_llm_request(), None)
@@ -804,18 +863,19 @@ fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
             .expect("scope cleanup lock")
             .iter()
             .any(|handle| Arc::ptr_eq(handle, &stack));
-        if cleanup_registered {
+        if cleanup_registered
+            && state.scope_stacks.try_lock().is_ok()
+            && state.pending_scope_cleanups.try_lock().is_ok()
+        {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "scope cleanup should register before unwinding"
+            "scope cleanup should release host state locks before unwinding"
         );
         std::thread::yield_now();
     }
 
-    assert!(state.scope_stacks.try_lock().is_ok());
-    assert!(state.pending_scope_cleanups.try_lock().is_ok());
     drop(stack_guard);
     done_rx
         .recv_timeout(std::time::Duration::from_secs(1))
@@ -1325,10 +1385,6 @@ fn valid_llm_request() -> LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({ "prompt": "unit" }),
     }
-}
-
-fn valid_llm_request_envelope() -> JsonEnvelope {
-    json_envelope(LLM_REQUEST_SCHEMA, &valid_llm_request()).expect("llm request envelope")
 }
 
 async fn fake_callback_service(

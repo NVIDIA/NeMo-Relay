@@ -13,7 +13,6 @@ use http_body_util::BodyExt;
 use reqwest::Client;
 
 fn test_http_client() -> Client {
-    crate::tls::install_rustls_crypto_provider();
     Client::new()
 }
 
@@ -100,6 +99,22 @@ fn selects_provider_routes() {
         GatewayRouteKind::AnthropicCountTokens
     );
     assert_eq!(ProviderRoute::from_path("/unsupported"), None);
+}
+
+#[test]
+fn provider_route_names_round_trip_through_alignment_routes() {
+    for route in [
+        ProviderRoute::OpenAiResponses,
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiModels,
+        ProviderRoute::AnthropicMessages,
+        ProviderRoute::AnthropicCountTokens,
+    ] {
+        assert_eq!(
+            GatewayRouteKind::from_provider_name(route.name()),
+            Some(route.alignment_route())
+        );
+    }
 }
 
 #[test]

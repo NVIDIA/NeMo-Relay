@@ -364,6 +364,29 @@ pub struct MarkEvent {
     pub category_profile: Option<CategoryProfile>,
 }
 
+/// Mark requested by middleware for materialization by a lifecycle owner.
+///
+/// The runtime assigns the parent UUID, event UUID, and timestamp when it
+/// materializes the mark at the appropriate lifecycle boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[builder(field_defaults(setter(into, strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
+pub struct PendingMarkSpec {
+    /// Human-readable mark name.
+    pub name: String,
+    /// Optional semantic category for the mark.
+    #[builder(default)]
+    pub category: Option<EventCategory>,
+    /// Optional category-specific typed fields.
+    #[builder(default)]
+    pub category_profile: Option<CategoryProfile>,
+    /// Optional application payload attached to the mark.
+    #[builder(default)]
+    pub data: Option<Json>,
+    /// Optional metadata attached to the mark.
+    #[builder(default)]
+    pub metadata: Option<Json>,
+}
+
 impl MarkEvent {
     /// Construct a mark event from a base envelope and optional category data.
     ///

@@ -27,8 +27,7 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
   version, instrumentation scope, headers, resource attributes, and timeout.
 - Start with `http_binary` transport and an OTLP traces endpoint such as a local
   collector on port `4318` unless deployment requirements differ.
-- `grpc` transport is available on native targets when a Tokio runtime is
-  active. WebAssembly supports `http_binary` and rejects `grpc`.
+- `grpc` transport is available when a Tokio runtime is active.
 - Use explicit config objects in application code; environment variables may be
   honored by the underlying exporter but should not be the only source of
   application behavior.
@@ -51,7 +50,7 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 - No spans visible
 - Wrong endpoint or auth headers
 - Events emitted outside active scopes
-- `grpc` selected without a native Tokio runtime or on a WebAssembly target
+- `grpc` selected without a Tokio runtime
 - Forgetting register/deregister or flush/shutdown steps
 
 ## Related Skills

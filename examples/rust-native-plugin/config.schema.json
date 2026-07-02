@@ -1,0 +1,39 @@
+{
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rust Native Policy Example",
+  "type": "object",
+  "additionalProperties": false,
+  "x-nemo-relay-order": [
+    "tag",
+    "block_tools",
+    "block_llms",
+    "emit_isolated_scope"
+  ],
+  "properties": {
+    "tag": {
+      "title": "Event tag",
+      "description": "Tag added to events emitted by the example plugin.",
+      "type": "string",
+      "default": "rust-native-example"
+    },
+    "block_tools": {
+      "title": "Block tool calls",
+      "description": "Reject tool calls through the example conditional guardrail.",
+      "type": "boolean",
+      "default": false
+    },
+    "block_llms": {
+      "title": "Block LLM calls",
+      "description": "Reject LLM calls through the example conditional guardrail.",
+      "type": "boolean",
+      "default": false
+    },
+    "emit_isolated_scope": {
+      "title": "Emit isolated scope",
+      "description": "Emit the example plugin's isolated scope and mark events.",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

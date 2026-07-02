@@ -971,6 +971,7 @@ impl Session {
                 }
                 let owner = self.resolve_llm_owner(&start);
                 self.record_llm_request_affinity(
+                    &start.provider,
                     &start.request,
                     owner.subagent_id.as_deref(),
                     owner.status,
@@ -1034,6 +1035,7 @@ impl Session {
                     self.resolve_llm_owner(&start)
                 };
                 self.record_llm_request_affinity(
+                    &start.provider,
                     &start.request,
                     owner.subagent_id.as_deref(),
                     owner.status,
@@ -1848,7 +1850,7 @@ impl Session {
     // pair unhinted Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses calls with
     // the subagent that first owned the same coding task.
     fn request_affinity_owner(&mut self, start: &LlmGatewayStart) -> Option<LlmOwnerResolution> {
-        let key = alignment::request_affinity_key(&start.request)?;
+        let key = alignment::request_affinity_key(&start.provider, &start.request)?;
         let subagent_id = self.llm_request_affinity.get(&key).cloned().flatten()?;
         let parent = match self.subagents.get(&subagent_id).cloned() {
             Some(parent) => parent,
@@ -2041,6 +2043,7 @@ impl Session {
     // is meant to correct when multiple coding-agent workers share a root session.
     fn record_llm_request_affinity(
         &mut self,
+        provider: &str,
         request: &LlmRequest,
         subagent_id: Option<&str>,
         status: &str,
@@ -2051,7 +2054,7 @@ impl Session {
         let Some(subagent_id) = subagent_id else {
             return;
         };
-        let Some(key) = alignment::request_affinity_key(request) else {
+        let Some(key) = alignment::request_affinity_key(provider, request) else {
             return;
         };
         match self.llm_request_affinity.get_mut(&key) {

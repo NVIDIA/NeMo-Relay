@@ -9,7 +9,7 @@ This file provides guidance to agents, including Claude Code and OpenAI Codex, w
 
 ## Project Overview
 
-NeMo Relay is a multi-language agent runtime framework for execution scopes, lifecycle events, middleware, plugins, and observability around tool and LLM calls. The core runtime is Rust. Primary supported bindings are Rust, Python, and Node.js. Go, WebAssembly, and the raw C FFI are experimental and source-first.
+NeMo Relay is a multi-language agent runtime framework for execution scopes, lifecycle events, middleware, plugins, and observability around tool and LLM calls. The core runtime is Rust. Primary supported bindings are Rust, Python, and Node.js. Go and the raw C FFI are experimental and source-first.
 
 The shared runtime model is:
 
@@ -31,7 +31,6 @@ crates/
   python/     # PyO3 native extension for the Python package
   ffi/        # Raw C ABI layer used by downstream bindings such as Go
   node/       # NAPI Node.js binding and JavaScript/TypeScript entry points
-  wasm/       # wasm-bindgen WebAssembly binding and JS wrappers
 python/
   nemo_relay/  # Python wrapper package: scopes, tools, LLM, middleware, typed helpers, plugins, adaptive helpers
   tests/      # Python tests
@@ -48,13 +47,12 @@ Install the tools needed for the surfaces you touch. For a full repository valid
 
 | Tool | Version / Notes | Required For |
 |---|---|---|
-| Rust | Docs minimum is 1.86 or newer; the repo pins the active toolchain in `rust-toolchain.toml` | Rust core, native bindings, FFI, WebAssembly |
+| Rust | Docs minimum is 1.86 or newer; the repo pins the active toolchain in `rust-toolchain.toml` | Rust core, native bindings, FFI |
 | Python | 3.11 or newer | Python package, PyO3 builds, docs tooling |
-| Node.js | 24 or newer, with npm | Node.js binding, WebAssembly JS tests, generated API docs |
+| Node.js | 24 or newer, with npm | Node.js binding, generated API docs |
 | Go | 1.21 or newer | Experimental Go binding |
 | `uv` | Current project workflow tool | Python environments, docs dependencies, pre-commit |
 | `just` | 1.40 or newer | Canonical build, test, docs, package task runner |
-| `wasm-pack` | 0.14.0 or newer | WebAssembly build and integration tests |
 | `cargo-deny` | Current stable | Rust dependency auditing |
 | `cargo-nextest` | 0.9.111 or newer | CI-style Rust test runs |
 | `cargo-llvm-cov` | 0.8.5 or newer | CI-style coverage reports |
@@ -66,7 +64,6 @@ cargo install just --locked
 cargo install cargo-deny --locked
 cargo install cargo-nextest --version 0.9.111 --locked
 cargo install cargo-llvm-cov --version 0.8.5 --locked
-cargo install wasm-pack --version 0.14.0 --locked
 
 uv sync
 uv run pre-commit install
@@ -78,7 +75,7 @@ npm install --ignore-scripts
 
 ## Build, Test, And Docs Commands
 
-Prefer the repository `just` recipes over raw tool commands. Use raw `cargo`, `pytest`, `go test`, `npm`, or `wasm-pack` commands only for focused debugging or targeted single-test reruns that do not have a `just` recipe.
+Prefer the repository `just` recipes over raw tool commands. Use raw `cargo`, `pytest`, `go test`, or `npm` commands only for focused debugging or targeted single-test reruns that do not have a `just` recipe.
 
 Discover the current task surface with:
 
@@ -93,7 +90,6 @@ just build-rust
 just build-python
 just build-node
 just build-go
-just build-wasm
 just build-all
 ```
 
@@ -105,7 +101,6 @@ just ci=true test-rust       # CI-style Rust test run; uses nextest and coverage
 just test-python
 just test-node
 just test-go
-just test-wasm
 just test-all
 ```
 
@@ -121,7 +116,6 @@ Package targets:
 ```bash
 just package-python
 just package-node
-just package-wasm
 ```
 
 Cleanup:
@@ -138,7 +132,6 @@ uv run pytest python/tests/test_scope.py
 uv run pytest -k "test_name"
 cd crates/node && node --test --test-name-pattern="pattern" tests/*.mjs
 cd go/nemo_relay && go test -v -run TestFoo ./...
-wasm-pack test --node crates/wasm
 ```
 
 ## Validation Expectations
@@ -151,7 +144,6 @@ Minimum guidance:
 - Python binding or wrapper changes: `just test-python`.
 - Node.js binding or wrapper changes: `just test-node`.
 - Go binding or raw FFI changes: `just test-go` and the relevant Rust/FFI checks.
-- WebAssembly binding changes: `just test-wasm`.
 - Documentation site changes: `just docs`. Run docs link validation with `just docs-linkcheck` when links change. The recipes regenerate the ignored Fern API reference pages before validation.
 - Cross-language API changes: run the touched binding tests and update docs, package READMEs, and generated surfaces where applicable.
 
@@ -167,7 +159,7 @@ repository.
 - Follow binding naming conventions: Rust and Python `snake_case`, C FFI exports prefixed `nemo_relay_`, Go `PascalCase` for public APIs, Node.js `camelCase`.
 - Preserve the shared runtime model across bindings. Do not add behavior to one primary binding without considering Rust, Python, and Node.js parity.
 - Prefer documented public APIs and stable wrapper commands. Do not rely on internal helpers in examples or user-facing docs.
-- Keep primary documentation focused on Rust, Python, and Node.js. Treat Go, WebAssembly, and raw FFI as experimental and source-first unless binding-support guidance changes.
+- Keep primary documentation focused on Rust, Python, and Node.js. Treat Go and raw FFI as experimental and source-first unless binding-support guidance changes.
 - Use `Json = serde_json::Value` in Rust-facing runtime APIs where the existing code expects JSON payloads.
 - Use `Result<T>` with `FlowError` in core runtime paths. Keep errors explicit and binding-appropriate at the wrapper layer.
 - Keep async behavior on the existing tokio-based model. Bindings should preserve callback and future lifetimes rather than blocking or hiding async work unexpectedly.
@@ -197,7 +189,6 @@ truth.
 - Python wrapper modules live under `python/nemo_relay/`; the native extension is built from `crates/python` with `maturin`.
 - Node.js public entry points include the main runtime package plus `nemo-relay-node/typed`, `nemo-relay-node/plugin`, and `nemo-relay-node/adaptive`.
 - Go uses the C FFI and requires the FFI library build before tests; `just test-go` handles the library path setup.
-- WebAssembly includes Rust wasm-bindgen tests plus JS wrapper/package tests; `just test-wasm` runs both paths.
 
 ## Integrations
 

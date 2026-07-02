@@ -571,7 +571,7 @@ describe('Tool intercepts', () => {
   });
 
   it('execution intercept register/deregister', () => {
-    registerToolExecutionIntercept('node_tool_exec_int', 10, async (args, next) => next(args));
+    registerToolExecutionIntercept('node_tool_exec_int', 10, async (args, next) => ({ result: await next(args) }));
     deregisterToolExecutionIntercept('node_tool_exec_int');
   });
 
@@ -627,30 +627,59 @@ describe('Tool intercepts', () => {
   });
 
   it('execution intercept composes with next', async () => {
+    const events = [];
+    registerSubscriber('node_tool_exec_mark_sub', (event) => events.push(event));
     registerToolExecutionIntercept('node_tool_exec_repl', 10, async (args, next) => {
       const result = await next({
         ...args,
         intercepted: true,
       });
       return {
-        ...result,
-        wrapped: true,
+        result: {
+          ...result,
+          wrapped: true,
+        },
+        pendingMarks: [{ name: 'node.tool.execution' }],
       };
     });
-    const result = await toolCallExecute(
-      'replaced_tool',
-      {},
-      (args) => ({
-        original: !args.intercepted,
-      }),
-      null,
-      null,
-      null,
-      null,
-    );
-    assert.equal(result.original, false);
-    assert.equal(result.wrapped, true);
-    deregisterToolExecutionIntercept('node_tool_exec_repl');
+    try {
+      const result = await toolCallExecute(
+        'replaced_tool',
+        {},
+        (args) => ({
+          original: !args.intercepted,
+        }),
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.equal(result.original, false);
+      assert.equal(result.wrapped, true);
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some(
+            (event) =>
+              event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
+          ) && events.some((event) => event.name === 'node.tool.execution'),
+      );
+      const start = events.find(
+        (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      const end = events.find(
+        (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
+      );
+      const mark = events.find((event) => event.name === 'node.tool.execution');
+      assert.ok(start, 'expected tool start event');
+      assert.ok(end, 'expected tool end event');
+      assert.ok(mark, 'expected tool execution pending mark');
+      assert.equal(mark.parent_uuid, start.uuid);
+      assert.ok(events.indexOf(end) < events.indexOf(mark), 'expected tool end before pending mark');
+      assert.ok(mark.timestamp > end.timestamp, 'expected pending mark timestamp after tool end');
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_repl');
+      deregisterSubscriber('node_tool_exec_mark_sub');
+    }
   });
 
   it('execution intercept propagates Error messages', async () => {
@@ -675,6 +704,33 @@ describe('Tool intercepts', () => {
       );
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_throw');
+    }
+  });
+
+  it('execution intercept rejects legacy raw results', async () => {
+    registerToolExecutionIntercept('node_tool_exec_legacy', 10, async () => ({ legacyResult: true }));
+    try {
+      await assert.rejects(
+        () => toolCallExecute('legacy_tool', {}, (args) => args, null, null, null, null),
+        /invalid JS tool execution intercept outcome/i,
+      );
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_legacy');
+    }
+  });
+
+  it('execution intercept rejects unknown pending-mark fields', async () => {
+    registerToolExecutionIntercept('node_tool_exec_bad_mark', 10, async () => ({
+      result: { ok: true },
+      pendingMarks: [{ name: 'node.bad.mark', category_profile: { subtype: 'invalid.snake.case' } }],
+    }));
+    try {
+      await assert.rejects(
+        () => toolCallExecute('bad_mark_tool', {}, (args) => args, null, null, null, null),
+        /unknown field.*category_profile/i,
+      );
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_bad_mark');
     }
   });
 

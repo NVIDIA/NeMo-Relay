@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -71,9 +70,10 @@ nemo-relay plugins edit --project
 ```
 
 The editor creates or updates the nearest project plugin file at
-`.nemo-relay/plugins.toml`. In the menu:
+`.nemo-relay/plugins.toml`. In the top-level menu, select **Observability**,
+then configure these sections:
 
-1. Enable the `Observability` component.
+1. Toggle the Observability component on.
 2. Open `ATOF`, toggle the section `[on]`
 
    Optionally set:
@@ -85,7 +85,7 @@ The editor creates or updates the nearest project plugin file at
    Optionally set:
    - `output_directory` to `.nemo-relay/atif`
    - `filename_template` to `trajectory-{session_id}.json`
-4. Press `p` to preview the generated TOML.
+4. Return to the top-level menu and press `p` to preview the generated TOML.
 5. Press `s` to save.
 
 > [!NOTE]
@@ -252,9 +252,8 @@ flowchart LR
 ## Support Status
 
 > [!NOTE]
-> The main supported paths today are Rust, Python, and Node.js. Go,
-> WebAssembly, and raw C FFI are available for source-first users, but they are
-> still experimental.
+> The main supported paths today are Rust, Python, and Node.js. Go and raw C FFI
+> are available for source-first users, but they are still experimental.
 
 The following table shows which language bindings and CLI features are currently supported:
 
@@ -265,7 +264,6 @@ The following table shows which language bindings and CLI features are currently
 | Rust | Fully supported | Documented with Quick Start and Guides. |
 | NeMo Relay CLI | Supported | Local observability and hook-backed security are supported; optimization is partial and host-dependent. |
 | Go | Experimental | Source-first under `go/nemo_relay`. |
-| WebAssembly | Experimental | Source-first under `crates/wasm`. |
 | FFI | Experimental | Source-first under `crates/ffi`. |
 
 ### Agent Harness Support

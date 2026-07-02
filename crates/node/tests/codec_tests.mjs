@@ -153,6 +153,42 @@ describe('Codec pipeline integration', () => {
     }
   });
 
+  it('rejects raw request content edits before provider execution', async () => {
+    let providerCalled = false;
+    registerLlmRequestIntercept('raw-content-test', 10, false, ({ request, annotated }) => ({
+      request: {
+        ...request,
+        content: {
+          ...request.content,
+          model: 'raw-model-edit',
+        },
+      },
+      annotated,
+    }));
+
+    const handle = pushScope('raw-content-scope', ScopeType.Agent);
+    try {
+      await assert.rejects(
+        () =>
+          execWithCodec(
+            'test-llm',
+            makeRequest(),
+            async () => {
+              providerCalled = true;
+              return { choices: [] };
+            },
+            mockDecode,
+            mockEncode,
+          ),
+        /request\.content/,
+      );
+      assert.equal(providerCalled, false);
+    } finally {
+      popScope(handle);
+      deregisterLlmRequestIntercept('raw-content-test');
+    }
+  });
+
   it('different codec functions produce different results', async () => {
     let usedModel = null;
 

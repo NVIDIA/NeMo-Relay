@@ -322,7 +322,7 @@ fn request_affinity_key_reads_messages_content_blocks() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("anthropic.messages", &request).as_deref(),
         Some("Analyze the python binding with detail.")
     );
 }
@@ -340,7 +340,7 @@ fn request_affinity_key_reads_chat_completion_string_messages() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("openai.chat_completions", &request).as_deref(),
         Some("Review the Rust CLI gateway alignment code.")
     );
 }
@@ -360,7 +360,7 @@ fn request_affinity_key_preserves_leading_tagged_context_text() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("anthropic.messages", &request).as_deref(),
         Some(
             "<runtime-context> Trace run 7. </runtime-context> <system-reminder> Today is 2026-05-19. </system-reminder> Review the gateway correlation logic."
         )
@@ -383,7 +383,7 @@ fn request_affinity_key_keeps_task_after_large_prefix() {
         }),
     };
 
-    let key = request_affinity_key(&request).unwrap();
+    let key = request_affinity_key("anthropic.messages", &request).unwrap();
     assert!(key.starts_with("<runtime-context>volatile context"));
     assert!(
         key.ends_with(task),
@@ -406,7 +406,7 @@ fn request_affinity_key_preserves_fully_tagged_prompt_text() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("anthropic.messages", &request).as_deref(),
         Some("<task>Review the gateway correlation logic.</task>")
     );
 }
@@ -434,7 +434,7 @@ fn request_affinity_key_prefers_latest_task_message_over_root_history() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("openai.chat_completions", &request).as_deref(),
         Some("Thoroughly explore the crates/ffi directory.")
     );
 }
@@ -465,11 +465,11 @@ fn request_affinity_key_reads_responses_input_items_and_prompt() {
     };
 
     assert_eq!(
-        request_affinity_key(&responses_request).as_deref(),
+        request_affinity_key("openai.responses", &responses_request).as_deref(),
         Some("Analyze the Node binding architecture.")
     );
     assert_eq!(
-        request_affinity_key(&prompt_request).as_deref(),
+        request_affinity_key("openai.responses", &prompt_request).as_deref(),
         Some("Summarize the Go binding architecture.")
     );
 }
@@ -481,7 +481,10 @@ fn request_affinity_key_ignores_count_token_style_payloads() {
         content: json!("// source text without a chat user task"),
     };
 
-    assert_eq!(request_affinity_key(&request), None);
+    assert_eq!(
+        request_affinity_key("anthropic.count_tokens", &request),
+        None
+    );
 }
 
 #[test]
@@ -515,9 +518,18 @@ fn request_affinity_key_ignores_tool_results_and_sidecar_json() {
         }),
     };
 
-    assert_eq!(request_affinity_key(&tool_result), None);
-    assert_eq!(request_affinity_key(&sidecar_json), None);
-    assert_eq!(request_affinity_key(&sidecar_json_array), None);
+    assert_eq!(
+        request_affinity_key("anthropic.messages", &tool_result),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("openai.responses", &sidecar_json),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("openai.responses", &sidecar_json_array),
+        None
+    );
 }
 
 #[test]
@@ -613,6 +625,14 @@ fn json_helpers_and_metadata_merge_cover_edge_shapes() {
     assert_eq!(
         json_value_at(&payload, &[&["object"][..]]),
         Some(json!({ "nested": true }))
+    );
+    assert_eq!(
+        json_string_at(
+            &payload,
+            &[&["object"][..], &["empty"][..], &["string"][..]]
+        )
+        .as_deref(),
+        Some("value")
     );
 
     let mut inserted = Map::new();

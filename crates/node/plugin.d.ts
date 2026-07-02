@@ -45,6 +45,27 @@ export interface PluginConfig {
   policy?: ConfigPolicy;
 }
 
+/** A mark Relay materializes under a managed lifecycle. */
+export interface PendingMarkSpec {
+  name: string;
+  category?: string | null;
+  categoryProfile?: Json;
+  data?: Json;
+  metadata?: Json;
+}
+
+/**
+ * Canonical result returned by a tool execution intercept.
+ *
+ * `result` is passed to the remaining middleware and application. `pendingMarks`
+ * are Relay-owned lifecycle metadata emitted after the tool-end event and are
+ * not included in the application-visible result.
+ */
+export interface ToolExecutionInterceptOutcome {
+  result: Json;
+  pendingMarks?: PendingMarkSpec[];
+}
+
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
   /** Register an infallible event subscriber for this component. */
@@ -84,7 +105,8 @@ export interface PluginContext {
     breakChain: boolean,
     callback: (args: { name: string; request: Json; annotated: Json | null }) => {
       request: Json;
-      annotated: Json | null;
+      annotated?: Json | null;
+      pendingMarks?: PendingMarkSpec[];
     },
   ): void;
   /** Register an LLM execution intercept for this component. */
@@ -109,11 +131,17 @@ export interface PluginContext {
     breakChain: boolean,
     callback: (name: string, args: Json) => Json,
   ): void;
-  /** Register a tool execution intercept for this component. */
+  /**
+   * Register tool execution middleware that returns a canonical outcome.
+   * The `next` callback resolves to the raw downstream result.
+   */
   registerToolExecutionIntercept(
     name: string,
     priority: number,
-    callback: (args: Json, next: (args: Json) => Json | Promise<Json>) => Json | Promise<Json>,
+    callback: (
+      args: Json,
+      next: (args: Json) => Json | Promise<Json>,
+    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
   ): void;
 }
 

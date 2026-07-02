@@ -3,8 +3,8 @@
 
 [advisories]
 ignore = [
-    { id = "RUSTSEC-2026-0176", reason = "PyO3 0.29 fixes this, but pyo3-async-runtimes and pythonize are still on the PyO3 0.28 line." },
-    { id = "RUSTSEC-2026-0177", reason = "PyO3 0.29 fixes this, but pyo3-async-runtimes and pythonize are still on the PyO3 0.28 line." },
+    { id = "RUSTSEC-2026-0194", reason = "The released object_store versions still depend on quick-xml before 0.41.0; remove this exception when object_store publishes the fixed dependency." },
+    { id = "RUSTSEC-2026-0195", reason = "The released object_store versions still depend on quick-xml before 0.41.0; remove this exception when object_store publishes the fixed dependency." },
 ]
 
 [bans]
@@ -22,6 +22,7 @@ allow = [
     "BSL-1.0",      # Boost Software License, required by xxhash-rust
     "ISC",
     "MIT",
+    "MIT-0",       # required by borrow-or-share through jsonschema/referencing
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",        # required by foldhash through tonic-prost-build/prost-build

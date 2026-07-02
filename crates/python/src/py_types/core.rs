@@ -4,10 +4,13 @@
 use pyo3::prelude::*;
 
 use super::{
-    Bound, CoreScopeType, FlowResult, LlmAttributes, LlmHandle, LlmRequest, PyAny, PyErr, PyRef,
-    PyResult, Python, ScopeAttributes, ScopeHandle, ScopeStackHandle, ToolAttributes, ToolHandle,
-    json_to_py, opt_json_to_py, py_to_json,
+    AnnotatedLLMRequest, Bound, CoreScopeType, FlowResult, LlmAttributes, LlmHandle, LlmRequest,
+    PyAnnotatedLLMRequest, PyAny, PyErr, PyRef, PyResult, Python, ScopeAttributes, ScopeHandle,
+    ScopeStackHandle, ToolAttributes, ToolHandle, json_to_py, opt_json_to_py, py_to_json,
 };
+use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
+use nemo_relay::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 
 // ---------------------------------------------------------------------------
 // LlmStream (async iterator)
@@ -595,5 +598,170 @@ impl PyLLMRequest {
 
     pub(crate) fn __repr__(&self) -> String {
         "LLMRequest(...)".to_string()
+    }
+}
+
+/// A mark to emit immediately after the managed LLM start event.
+#[pyclass(name = "PendingMarkSpec", from_py_object)]
+#[derive(Clone)]
+pub struct PyPendingMarkSpec {
+    pub inner: PendingMarkSpec,
+}
+
+#[pymethods]
+impl PyPendingMarkSpec {
+    #[new]
+    #[pyo3(signature = (name, category=None, category_profile=None, data=None, metadata=None))]
+    fn new(
+        name: String,
+        category: Option<String>,
+        category_profile: Option<&Bound<'_, PyAny>>,
+        data: Option<&Bound<'_, PyAny>>,
+        metadata: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let category = category
+            .map(|value| serde_json::from_value::<EventCategory>(serde_json::Value::String(value)))
+            .transpose()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let category_profile = category_profile
+            .map(py_to_json)
+            .transpose()?
+            .map(serde_json::from_value::<CategoryProfile>)
+            .transpose()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        Ok(Self {
+            inner: PendingMarkSpec {
+                name,
+                category,
+                category_profile,
+                data: data.map(py_to_json).transpose()?,
+                metadata: metadata.map(py_to_json).transpose()?,
+            },
+        })
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    #[getter]
+    fn category(&self) -> Option<String> {
+        self.inner
+            .category
+            .as_ref()
+            .and_then(|value| serde_json::to_value(value).ok())
+            .and_then(|value| value.as_str().map(str::to_owned))
+    }
+
+    #[getter]
+    fn category_profile(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(
+            py,
+            &self
+                .inner
+                .category_profile
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?,
+        )
+    }
+
+    #[getter]
+    fn data(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.data)
+    }
+
+    #[getter]
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.metadata)
+    }
+}
+
+/// Canonical result returned by Python LLM request intercepts.
+#[pyclass(name = "LLMRequestInterceptOutcome", from_py_object)]
+#[derive(Clone)]
+pub struct PyLLMRequestInterceptOutcome {
+    pub inner: LlmRequestInterceptOutcome,
+}
+
+#[pymethods]
+impl PyLLMRequestInterceptOutcome {
+    #[new]
+    #[pyo3(signature = (request, annotated_request=None, pending_marks=Vec::new()))]
+    fn new(
+        request: PyLLMRequest,
+        annotated_request: Option<PyAnnotatedLLMRequest>,
+        pending_marks: Vec<PyPendingMarkSpec>,
+    ) -> Self {
+        Self {
+            inner: LlmRequestInterceptOutcome {
+                request: request.inner,
+                annotated_request: annotated_request.map(|value| value.inner),
+                pending_marks: pending_marks.into_iter().map(|value| value.inner).collect(),
+            },
+        }
+    }
+
+    #[getter]
+    fn request(&self) -> PyLLMRequest {
+        PyLLMRequest {
+            inner: self.inner.request.clone(),
+        }
+    }
+
+    #[getter]
+    fn annotated_request(&self) -> Option<PyAnnotatedLLMRequest> {
+        self.inner
+            .annotated_request
+            .clone()
+            .map(|inner: AnnotatedLLMRequest| PyAnnotatedLLMRequest { inner })
+    }
+
+    #[getter]
+    fn pending_marks(&self) -> Vec<PyPendingMarkSpec> {
+        self.inner
+            .pending_marks
+            .iter()
+            .cloned()
+            .map(|inner| PyPendingMarkSpec { inner })
+            .collect()
+    }
+}
+
+/// Canonical result returned by Python tool execution intercepts.
+#[pyclass(name = "ToolExecutionInterceptOutcome", from_py_object)]
+#[derive(Clone)]
+pub struct PyToolExecutionInterceptOutcome {
+    pub inner: ToolExecutionInterceptOutcome,
+}
+
+#[pymethods]
+impl PyToolExecutionInterceptOutcome {
+    #[new]
+    #[pyo3(signature = (result, pending_marks=Vec::new()))]
+    fn new(result: &Bound<'_, PyAny>, pending_marks: Vec<PyPendingMarkSpec>) -> PyResult<Self> {
+        Ok(Self {
+            inner: ToolExecutionInterceptOutcome {
+                result: py_to_json(result)?,
+                pending_marks: pending_marks.into_iter().map(|value| value.inner).collect(),
+            },
+        })
+    }
+
+    #[getter]
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &self.inner.result)
+    }
+
+    #[getter]
+    fn pending_marks(&self) -> Vec<PyPendingMarkSpec> {
+        self.inner
+            .pending_marks
+            .iter()
+            .cloned()
+            .map(|inner| PyPendingMarkSpec { inner })
+            .collect()
     }
 }

@@ -21,6 +21,9 @@ Public data types:
     LlmRequest: A Relay LLM request represented as a JSON object.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
+    PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
+    LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
+    ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
     ScopeType: Semantic category for a Relay execution scope.
@@ -62,16 +65,19 @@ from ._api import (
     LlmNext,
     LlmRequest,
     LlmRequestCallback,
+    LlmRequestInterceptOutcome,
     LlmSanitizeRequestCallback,
     LlmSanitizeResponseCallback,
     LlmStreamExecutionCallback,
     LlmStreamNext,
+    PendingMarkSpec,
     PluginContext,
     PluginRuntime,
     ScopeType,
     SubscriberCallback,
     ToolConditionalCallback,
     ToolExecutionCallback,
+    ToolExecutionInterceptOutcome,
     ToolNext,
     ToolRequestCallback,
     ToolSanitizeCallback,
@@ -91,16 +97,19 @@ __all__ = [
     "LlmNext",
     "LlmRequest",
     "LlmRequestCallback",
+    "LlmRequestInterceptOutcome",
     "LlmSanitizeRequestCallback",
     "LlmSanitizeResponseCallback",
     "LlmStreamNext",
     "LlmStreamExecutionCallback",
     "PluginContext",
     "PluginRuntime",
+    "PendingMarkSpec",
     "ScopeType",
     "SubscriberCallback",
     "ToolConditionalCallback",
     "ToolExecutionCallback",
+    "ToolExecutionInterceptOutcome",
     "ToolNext",
     "ToolRequestCallback",
     "ToolSanitizeCallback",

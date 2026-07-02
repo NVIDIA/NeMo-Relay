@@ -28,10 +28,13 @@ fn maps_claude_canonical_tool_payload() {
             assert_eq!(event.tool_call_id, "toolu-1");
             assert_eq!(event.tool_name, "Read");
             assert_eq!(event.arguments, json!({ "file_path": "README.md" }));
+            assert!(event.metadata.get("transcript_path").is_none());
+            assert!(event.metadata.get("cwd").is_none());
             assert_eq!(
-                event.metadata["transcript_path"],
+                event.payload["transcript_path"],
                 json!("/tmp/transcript.jsonl")
             );
+            assert_eq!(event.payload["cwd"], json!("/workspace"));
         }
         event => panic!("unexpected event: {event:?}"),
     }
@@ -181,6 +184,24 @@ fn stop_hook_emits_turn_ended_for_codex() {
 }
 
 #[test]
+fn multi_event_hooks_reuse_synthetic_session_id() {
+    let outcome = codex::adapt(
+        json!({ "hook_event_name": "UserPromptSubmit" }),
+        &HeaderMap::new(),
+    );
+    assert_eq!(outcome.events.len(), 2);
+    let prompt_session_id = outcome.events[0].session_id();
+    assert!(prompt_session_id.starts_with("hook-"));
+    assert_eq!(outcome.events[1].session_id(), prompt_session_id);
+
+    let outcome = codex::adapt(json!({ "hook_event_name": "Stop" }), &HeaderMap::new());
+    assert_eq!(outcome.events.len(), 2);
+    let hint_session_id = outcome.events[0].session_id();
+    assert!(hint_session_id.starts_with("hook-"));
+    assert_eq!(outcome.events[1].session_id(), hint_session_id);
+}
+
+#[test]
 fn stop_hook_emits_turn_ended_for_claude() {
     let outcome = claude_code::adapt(
         json!({ "session_id": "claude-session", "hook_event_name": "Stop" }),
@@ -206,6 +227,278 @@ fn adapter_string_lookup_accepts_scalar_values_only() {
     assert_eq!(string_at(&payload, &["number"]).as_deref(), Some("7"));
     assert_eq!(string_at(&payload, &["boolean"]).as_deref(), Some("false"));
     assert_eq!(string_at(&payload, &["object"]), None);
+}
+
+#[test]
+fn agent_extractors_keep_fallbacks_at_adapter_boundary() {
+    let headers = HeaderMap::new();
+    let payload = json!({});
+
+    fn assert_fallbacks(
+        extractor: &dyn AgentPayloadExtractor,
+        kind: AgentKind,
+        payload: &serde_json::Value,
+        headers: &HeaderMap,
+    ) {
+        assert_eq!(extractor.session_id(payload, headers), None);
+        assert_eq!(extractor.event_name(payload), None);
+        assert_eq!(extractor.subagent_id(payload, headers), None);
+        assert_eq!(
+            extractor.llm_hint(payload, headers),
+            ExtractedLlmHint::default()
+        );
+        assert_eq!(
+            extractor.tool_call(payload, headers, "PreToolUse"),
+            ExtractedToolCall {
+                tool_call_id: None,
+                tool_name: None,
+                subagent_id: None,
+                arguments: None,
+                result: None,
+                status: None,
+            }
+        );
+
+        assert!(session_id(payload, headers, extractor).starts_with("hook-"));
+        assert_eq!(event_name(payload, extractor), "unknown");
+
+        let event = common_tool_event_with_fallback(payload, headers, kind, extractor, "hook-test");
+        assert!(event.tool_call_id.starts_with("tool-"));
+        assert_eq!(event.tool_name, "unknown_tool");
+        assert_eq!(event.arguments, json!(null));
+        assert_eq!(event.result, json!(null));
+    }
+
+    assert_fallbacks(
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR,
+        AgentKind::ClaudeCode,
+        &payload,
+        &headers,
+    );
+    assert_fallbacks(
+        &CODEX_PAYLOAD_EXTRACTOR,
+        AgentKind::Codex,
+        &payload,
+        &headers,
+    );
+    assert_fallbacks(
+        &HERMES_PAYLOAD_EXTRACTOR,
+        AgentKind::Hermes,
+        &payload,
+        &headers,
+    );
+}
+
+#[test]
+fn codex_extractor_reads_agent_hint_and_tool_call_fields() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "subagent_id": "worker-1",
+        "agent": {
+            "id": "agent-1",
+            "type": "reviewer"
+        },
+        "conversationId": "conversation-1",
+        "generation": { "id": "generation-1" },
+        "request": { "id": "request-1" },
+        "modelName": "gpt-test",
+        "tool_call_id": "tool-call-1",
+        "tool": { "name": "search" },
+        "arguments": { "query": "needle" },
+        "result": { "matches": 2 },
+        "status": "success"
+    });
+
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR.llm_hint(&payload, &headers),
+        ExtractedLlmHint {
+            subagent_id: Some("worker-1".into()),
+            agent_id: Some("agent-1".into()),
+            agent_type: Some("reviewer".into()),
+            conversation_id: Some("conversation-1".into()),
+            generation_id: Some("generation-1".into()),
+            request_id: Some("request-1".into()),
+            model: Some("gpt-test".into()),
+        }
+    );
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "PostToolUse"),
+        ExtractedToolCall {
+            tool_call_id: Some("tool-call-1".into()),
+            tool_name: Some("search".into()),
+            subagent_id: Some("worker-1".into()),
+            arguments: Some(json!({ "query": "needle" })),
+            result: Some(json!({ "matches": 2 })),
+            status: Some("success".into()),
+        }
+    );
+}
+
+#[test]
+fn agent_extractors_prefer_extra_call_ids_over_structural_ids() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "hook_event_name": "PostToolUse",
+        "tool": { "id": "tool-structural" },
+        "tool_input": { "id": "argument-id" },
+        "id": "event-id",
+        "extra": {
+            "call_id": "extra-call"
+        }
+    });
+
+    for extractor in [
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
+        &CODEX_PAYLOAD_EXTRACTOR,
+        &HERMES_PAYLOAD_EXTRACTOR,
+    ] {
+        assert_eq!(
+            extractor
+                .tool_call(&payload, &headers, "PostToolUse")
+                .tool_call_id
+                .as_deref(),
+            Some("extra-call")
+        );
+    }
+}
+
+#[test]
+fn agent_extractors_keep_hook_event_name_precedence() {
+    let payload = json!({
+        "hook_event_name": "hook-winner",
+        "event_name": "event-name-loser",
+        "eventName": "event-name-camel-loser",
+        "event": "event-loser"
+    });
+
+    for extractor in [
+        &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
+        &CODEX_PAYLOAD_EXTRACTOR,
+        &HERMES_PAYLOAD_EXTRACTOR,
+    ] {
+        assert_eq!(
+            extractor.event_name(&payload).as_deref(),
+            Some("hook-winner")
+        );
+    }
+}
+
+#[test]
+fn claude_extractor_prefers_native_tool_use_id() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_use_id": "claude-toolu",
+        "tool_call_id": "generic-tool",
+        "extra": {
+            "call_id": "extra-call"
+        }
+    });
+
+    assert_eq!(
+        CLAUDE_CODE_PAYLOAD_EXTRACTOR
+            .tool_call(&payload, &headers, "PreToolUse")
+            .tool_call_id
+            .as_deref(),
+        Some("claude-toolu")
+    );
+}
+
+#[test]
+fn codex_extractor_prefers_codex_specific_fields() {
+    let headers = HeaderMap::new();
+    let payload = json!({
+        "source": {
+            "subagent": {
+                "thread_spawn": {
+                    "agent_nickname": "codex-reviewer"
+                }
+            }
+        },
+        "subagent": { "id": "nested-subagent" },
+        "arguments": { "cmd": "cargo test" },
+        "tool_input": { "cmd": "ignored", "id": "argument-id" },
+        "extra": { "call_id": "extra-call" }
+    });
+    let tool_call = CODEX_PAYLOAD_EXTRACTOR.tool_call(&payload, &headers, "toolEnded");
+
+    assert_eq!(tool_call.subagent_id.as_deref(), Some("codex-reviewer"));
+    assert_eq!(tool_call.tool_call_id.as_deref(), Some("extra-call"));
+    assert_eq!(tool_call.arguments, Some(json!({ "cmd": "cargo test" })));
+}
+
+#[test]
+fn hermes_extractor_prefers_child_subagent_and_claude_session_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-claude-code-session-id",
+        "claude-session".parse().unwrap(),
+    );
+    let payload = json!({
+        "subagent_id": "generic-subagent",
+        "child_subagent_id": "hermes-child"
+    });
+
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("claude-session")
+    );
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .subagent_id(&payload, &headers)
+            .as_deref(),
+        Some("hermes-child")
+    );
+
+    let nested_payload = json!({
+        "subagent": { "id": "nested-subagent" },
+        "extra": {
+            "subagent_id": "extra-subagent"
+        }
+    });
+    assert_eq!(
+        HERMES_PAYLOAD_EXTRACTOR
+            .subagent_id(&nested_payload, &headers)
+            .as_deref(),
+        Some("nested-subagent")
+    );
+}
+
+#[test]
+fn codex_extractor_ignores_claude_session_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-claude-code-session-id",
+        "claude-session".parse().unwrap(),
+    );
+
+    // RelayOnly: unlike Claude Code and Hermes, Codex must not adopt the Claude
+    // installed-mode session header. With no native session id the extractor
+    // returns None, and the adapter boundary applies the synthetic fallback.
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR.session_id(&json!({}), &headers),
+        None
+    );
+
+    // The Claude header must not win over the native payload session id either.
+    let payload = json!({ "session_id": "codex-native" });
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("codex-native")
+    );
+
+    // The NeMo Relay session header is still honored and takes precedence.
+    headers.insert("x-nemo-relay-session-id", "relay-session".parse().unwrap());
+    assert_eq!(
+        CODEX_PAYLOAD_EXTRACTOR
+            .session_id(&payload, &headers)
+            .as_deref(),
+        Some("relay-session")
+    );
 }
 
 #[test]
@@ -624,6 +917,59 @@ fn maps_hermes_null_request_as_lossy_summary() {
             assert_eq!(event.metadata["provider_payload_exact"], json!(false));
         }
         event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn normalizes_mark_style_events_and_header_session_ids() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-nemo-relay-session-id", "header-session".parse().unwrap());
+    headers.insert("x-nemo-relay-config-profile", "coverage".parse().unwrap());
+
+    for (event_name, expected) in [
+        ("UserPromptSubmit", "prompt"),
+        ("afterAgentResponse", "response"),
+        ("PreCompact", "compact"),
+        ("Notification", "notification"),
+        ("Unrecognized.Event", "hook"),
+    ] {
+        let outcome = codex::adapt(
+            json!({
+                "eventName": event_name,
+                "model": "model-a",
+                "cwd": "/repo"
+            }),
+            &headers,
+        );
+        let (session_id, metadata, payload) = match &outcome.events[0] {
+            NormalizedEvent::PromptSubmitted(event) if expected == "prompt" => {
+                (event.session_id.as_str(), &event.metadata, &event.payload)
+            }
+            NormalizedEvent::LlmHint(event) if expected == "response" => {
+                (event.session_id.as_str(), &event.metadata, &event.payload)
+            }
+            NormalizedEvent::Compaction(event) if expected == "compact" => {
+                (event.session_id.as_str(), &event.metadata, &event.payload)
+            }
+            NormalizedEvent::Notification(event) if expected == "notification" => {
+                (event.session_id.as_str(), &event.metadata, &event.payload)
+            }
+            NormalizedEvent::HookMark(event) if expected == "hook" => {
+                (event.session_id.as_str(), &event.metadata, &event.payload)
+            }
+            event => panic!("unexpected event for {event_name}: {event:?}"),
+        };
+        if expected == "prompt" {
+            assert!(
+                matches!(outcome.events.get(1), Some(NormalizedEvent::LlmHint(_))),
+                "prompt hooks should also emit a private LLM hint"
+            );
+        }
+        assert_eq!(session_id, "header-session");
+        assert_eq!(metadata["model"], json!("model-a"));
+        assert!(metadata.get("cwd").is_none());
+        assert_eq!(payload["cwd"], json!("/repo"));
+        assert_eq!(metadata["gateway_config_profile"], json!("coverage"));
     }
 }
 

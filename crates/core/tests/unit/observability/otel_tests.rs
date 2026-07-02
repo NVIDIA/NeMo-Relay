@@ -404,7 +404,6 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert!(defaults.resource_attributes.is_empty());
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn grpc_config_requires_a_tokio_runtime() {
     let err = match OpenTelemetrySubscriber::new(OpenTelemetryConfig::grpc("demo-agent")) {
@@ -414,7 +413,6 @@ fn grpc_config_requires_a_tokio_runtime() {
     assert!(matches!(err, OpenTelemetryError::MissingTokioRuntime));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn invalid_grpc_headers_are_rejected() {
     let err = build_grpc_metadata(&HashMap::from([(
@@ -510,7 +508,6 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
     );
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
@@ -1454,7 +1451,6 @@ fn provider_builders_cover_success_paths() {
     subscriber.shutdown().unwrap();
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn grpc_metadata_and_runtime_builder_paths_succeed() {
     let metadata = build_grpc_metadata(&HashMap::from([(

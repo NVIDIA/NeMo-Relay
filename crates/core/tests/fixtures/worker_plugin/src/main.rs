@@ -3,9 +3,11 @@
 
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolNext, WorkerPlugin,
-    WorkerSdkError, serve_plugin,
+    ToolExecutionInterceptOutcome, WorkerSdkError, serve_plugin,
 };
-use nemo_relay_worker::{ConfigDiagnostic, DiagnosticLevel, Json, LlmRequest};
+use nemo_relay_worker::{
+    ConfigDiagnostic, DiagnosticLevel, Json, LlmRequest, PendingMarkSpec,
+};
 use serde_json::json;
 
 struct FixtureWorkerPlugin;
@@ -153,7 +155,17 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                 let result = next
                     .call(mark_json(args, "worker_plugin_tool_execution_request"))
                     .await?;
-                Ok(mark_json(result, "worker_plugin_tool_execution"))
+                Ok(
+                    ToolExecutionInterceptOutcome::new(mark_json(
+                        result,
+                        "worker_plugin_tool_execution",
+                    ))
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("fixture.worker.tool_execution.mark")
+                            .build(),
+                    ),
+                )
             },
         );
 
@@ -182,13 +194,29 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                         "fixture LLM request error requested".into(),
                     ));
                 }
-                let annotated = annotated.map(|mut annotated| {
-                    annotated
-                        .extra
-                        .insert("worker_plugin_annotated_request".into(), json!(true));
-                    annotated
-                });
-                Ok((mark_llm_request(request, "worker_plugin_llm_request_intercept"), annotated))
+                let (request, annotated) = match annotated {
+                    Some(mut annotated) => {
+                        annotated
+                            .extra
+                            .insert("worker_plugin_annotated_request".into(), json!(true));
+                        (request, Some(annotated))
+                    }
+                    None => (
+                        mark_llm_request(request, "worker_plugin_llm_request_intercept"),
+                        None,
+                    ),
+                };
+                Ok(nemo_relay_worker::LlmRequestInterceptOutcome::new(
+                    request,
+                    annotated,
+                )
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("fixture.worker.llm_request.mark")
+                        .data(json!({ "source": "worker_request_intercept" }))
+                        .metadata(json!({ "fixture": true }))
+                        .build(),
+                ))
             },
         );
         ctx.register_llm_execution_intercept(

@@ -139,6 +139,31 @@ impl EditableComponent {
         Ok(())
     }
 
+    pub(super) fn clear_field(&mut self, field: EditorFieldSpec) -> Result<bool, CliError> {
+        if !field.optional {
+            return Ok(false);
+        }
+        match self {
+            Self::Observability(state) => {
+                remove_struct_field(&mut state.config, field.name)?;
+                state.mark_config_touched();
+            }
+            Self::Adaptive(state) => {
+                remove_struct_field(&mut state.config, field.name)?;
+                state.mark_config_touched();
+            }
+            Self::NemoGuardrails(state) => {
+                remove_struct_field(&mut state.config, field.name)?;
+                state.mark_config_touched();
+            }
+            Self::PiiRedaction(state) => {
+                remove_struct_field(&mut state.config, field.name)?;
+                state.mark_config_touched();
+            }
+        }
+        Ok(true)
+    }
+
     pub(super) fn store(&self, config: &mut PluginConfig) -> Result<(), CliError> {
         match self {
             Self::Observability(state) => store_observability_state(config, state),
@@ -151,14 +176,18 @@ impl EditableComponent {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum MenuAction {
-    ToggleComponent(usize),
-    EditField {
-        component_index: usize,
-        field_index: usize,
-    },
+    EditComponent(usize),
+    EditDynamic(usize),
     Preview,
     Save,
     Cancel,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ComponentMenuAction {
+    Toggle,
+    EditField(usize),
+    Back,
 }
 
 pub(super) fn editable_components(
@@ -174,34 +203,24 @@ pub(super) fn editable_components(
 
 pub(super) fn plugin_menu_items(
     components: &[EditableComponent],
+    dynamic_plugins: &[(String, String)],
     path: &Path,
 ) -> (Vec<super::MenuItem>, Vec<MenuAction>) {
     let mut items = Vec::new();
     let mut actions = Vec::new();
     for (component_index, component) in components.iter().enumerate() {
         items.push(super::MenuItem::new(format!(
-            "Toggle {} component [{}]",
+            "{} [{}] — {}",
             component.label(),
-            super::status_label(component.enabled())
+            super::status_label(component.enabled()),
+            component.summary()
         )));
-        actions.push(MenuAction::ToggleComponent(component_index));
+        actions.push(MenuAction::EditComponent(component_index));
+    }
 
-        items.extend(component.fields().iter().map(|field| {
-            super::MenuItem::new(super::configured_label(
-                component.field_configured(*field),
-                format!("Edit {} {}", component.label(), field.label),
-            ))
-        }));
-        actions.extend(
-            component
-                .fields()
-                .iter()
-                .enumerate()
-                .map(|(field_index, _)| MenuAction::EditField {
-                    component_index,
-                    field_index,
-                }),
-        );
+    for (dynamic_index, (label, summary)) in dynamic_plugins.iter().enumerate() {
+        items.push(super::MenuItem::new(format!("{label} — {summary}")));
+        actions.push(MenuAction::EditDynamic(dynamic_index));
     }
 
     items.push(super::MenuItem::new(super::shortcut_label(
@@ -217,6 +236,32 @@ pub(super) fn plugin_menu_items(
     items.push(super::MenuItem::new(super::shortcut_label("Cancel", "q")));
     actions.push(MenuAction::Cancel);
 
+    (items, actions)
+}
+
+pub(super) fn component_menu_items(
+    component: &EditableComponent,
+) -> (Vec<super::MenuItem>, Vec<ComponentMenuAction>) {
+    let mut items = vec![super::MenuItem::new(format!(
+        "Toggle component [{}]",
+        super::status_label(component.enabled())
+    ))];
+    let mut actions = vec![ComponentMenuAction::Toggle];
+    items.extend(component.fields().iter().map(|field| {
+        super::MenuItem::new(super::configured_label(
+            component.field_configured(*field),
+            format!("Edit {}", field.label),
+        ))
+    }));
+    actions.extend(
+        component
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(field_index, _)| ComponentMenuAction::EditField(field_index)),
+    );
+    items.push(super::MenuItem::new(super::shortcut_label("Back", "q")));
+    actions.push(ComponentMenuAction::Back);
     (items, actions)
 }
 
