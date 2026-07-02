@@ -51,47 +51,20 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Installation
 
-Install the latest stable CLI release on Linux x86_64, Linux ARM64, or macOS
-ARM64:
+From a Unix shell:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
 
-The installer downloads the matching GitHub Release binary, verifies its
-published SHA-256 checksum, and installs it to `$HOME/.local/bin` without
-using `sudo`. Verify the installation with:
+From Windows PowerShell:
 
-```bash
-nemo-relay --version
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 
-To install a specific release, set `NEMO_RELAY_VERSION` to its raw SemVer tag.
-An optional leading `v` is accepted:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
-```
-
-Run the installer with `--help` for the full interface, or use `--install-dir`
-to choose another destination:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
-```
-
-Rerunning the installer verifies the new download before atomically replacing
-an existing `nemo-relay` binary. The installer never invokes `sudo` or edits
-your shell configuration. If the destination is not on `PATH`, add it before
-running `nemo-relay`.
-
-For unsupported platforms or source-based installation, use Cargo. If you
-already have `cargo-binstall`, it can use the same GitHub Release assets:
-
-```bash
-cargo install nemo-relay-cli
-cargo binstall nemo-relay-cli
-```
+For version pinning, custom installation directories, checksum verification,
+and troubleshooting, see the [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
 
 ## Getting Started
 

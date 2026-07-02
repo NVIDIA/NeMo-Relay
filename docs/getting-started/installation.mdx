@@ -30,14 +30,23 @@ boundary, start from [Supported Integrations](/supported-integrations/about).
 Install the NeMo Relay CLI when you want the `nemo-relay` executable for
 coding-agent hook and LLM gateway observability.
 
-Install the latest stable release:
+Install the latest stable release from a Unix shell:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
 
-The installer downloads the matching GitHub Release binary to
-`$HOME/.local/bin`. Verify that the command is available:
+Install the latest stable release from Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+The Unix installer downloads the matching GitHub Release binary to
+`$HOME/.local/bin`. The PowerShell installer downloads `nemo-relay.exe` to
+`%LOCALAPPDATA%\nemo-relay\bin`, adds that directory to the persistent user
+`PATH`, and updates the installing PowerShell process. Newly opened shells
+inherit the persistent `PATH` change. Verify that the command is available:
 
 ```bash
 nemo-relay --version
@@ -55,9 +64,10 @@ See [Plugin Installation](/nemo-relay-cli/plugin-installation) for the host
 plugin workflow.
 
 <Note>
-The installer downloads the published SHA-256 checksum for the selected release
-asset and fails without replacing an existing binary if verification does not
-succeed. It does not invoke `sudo` or edit your shell configuration.
+The installers download the published SHA-256 checksum for the selected release
+asset and fail without replacing an existing binary if verification does not
+succeed. They do not invoke `sudo`. The PowerShell installer updates the Windows
+user `PATH`; the Unix installer does not edit shell configuration.
 </Note>
 
 ### Supported Platforms
@@ -67,33 +77,57 @@ succeed. It does not invoke `sudo` or edit your shell configuration.
 | Linux | x86_64 | `x86_64-unknown-linux-musl` |
 | Linux | ARM64 | `aarch64-unknown-linux-musl` |
 | macOS | Apple Silicon | `aarch64-apple-darwin` |
+| Windows | x86_64 | `x86_64-pc-windows-msvc` |
+| Windows | ARM64 | `aarch64-pc-windows-msvc` |
 
 The installer reports the detected operating system and architecture when no
-matching asset exists. Native Windows and Intel macOS installations are not
-supported by `install.sh`.
+matching asset exists. Intel macOS is not supported because no matching release
+asset is published.
 
 ### Installer Reference
 
-Install a specific version:
+Install a specific version from a Unix shell:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
 ```
 
-Install into another directory:
+In PowerShell, set the same environment variable before invoking the installer:
+
+```powershell
+$env:NEMO_RELAY_VERSION = '0.5.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+Install into another directory from a Unix shell:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
 ```
 
+To choose a PowerShell installation directory, download the script and pass
+`-InstallDir`:
+
+```powershell
+iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -InstallDir "$HOME\bin"
+```
+
+On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use the Unix command.
+They install the matching Windows `.exe` asset into the same
+`%LOCALAPPDATA%\nemo-relay\bin` default directory and invoke PowerShell to
+persist the Windows user `PATH` update.
+
 | Interface | Purpose |
 | --- | --- |
 | `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
-| `--install-dir DIR` | Destination directory; defaults to `$HOME/.local/bin` |
-| `-h`, `--help` | Display installer usage |
+| `--install-dir DIR` | Unix installer destination; defaults to `$HOME/.local/bin` or `%LOCALAPPDATA%\nemo-relay\bin` in Windows POSIX shells |
+| `-h`, `--help` | Display Unix installer usage |
+| `-InstallDir DIR` | PowerShell installer destination; defaults to `%LOCALAPPDATA%\nemo-relay\bin` |
+| `-Help` | Display PowerShell installer usage |
 
 Rerun the installer to upgrade or replace the existing binary. It verifies the
-new download before replacing `nemo-relay` in the selected installation directory.
+new download before replacing the binary in the selected installation directory.
 
 ### Alternative Installation Methods
 
@@ -109,8 +143,8 @@ If `cargo-binstall` is available, it can install the published release asset:
 cargo binstall nemo-relay-cli
 ```
 
-For PATH, permission, and unsupported-platform guidance, see the
-[CLI installation notes](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/cli/README.md#installation).
+For source installation and unsupported-platform guidance, see the
+[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/cli/README.md#installation).
 
 ## Python
 

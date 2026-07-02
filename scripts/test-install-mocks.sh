@@ -93,7 +93,23 @@ EOF
 printf '%s  %s\n' "$MOCK_ACTUAL_CHECKSUM" "$1"
 EOF
 
-    chmod +x "${mock_bin}/uname" "${mock_bin}/curl" "${mock_bin}/sha256sum"
+    cat >"${mock_bin}/cygpath" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    -u) printf '%s\n' "$2" ;;
+    -w) printf 'C:%s\n' "${2#/}" ;;
+    *) exit 1 ;;
+esac
+EOF
+
+    cat >"${mock_bin}/powershell.exe" <<'EOF'
+#!/bin/sh
+[ -n "${NEMO_RELAY_INSTALL_DIR:-}" ] || exit 99
+printf '%s\n' "$NEMO_RELAY_INSTALL_DIR" >>"$MOCK_POWERSHELL_LOG"
+EOF
+
+    chmod +x "${mock_bin}/uname" "${mock_bin}/curl" "${mock_bin}/sha256sum" \
+        "${mock_bin}/cygpath" "${mock_bin}/powershell.exe"
 }
 
 new_case() {
@@ -102,8 +118,10 @@ new_case() {
     home_dir="${case_root}/home"
     mock_bin="${case_root}/bin"
     curl_log="${case_root}/curl.log"
+    powershell_log="${case_root}/powershell.log"
     mkdir -p "$home_dir"
     : >"$curl_log"
+    : >"$powershell_log"
     make_mock_commands "$mock_bin"
 
     MOCK_UNAME_S=Linux
@@ -116,9 +134,10 @@ new_case() {
     HOME=$home_dir
     PATH="${mock_bin}:${original_path}"
     MOCK_CURL_LOG=$curl_log
+    MOCK_POWERSHELL_LOG=$powershell_log
     export MOCK_UNAME_S MOCK_UNAME_M MOCK_API_RESPONSE
     export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM MOCK_CHECKSUM_MISSING
-    export NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG
+    export NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG MOCK_POWERSHELL_LOG
 }
 
 run_installer() {
@@ -146,6 +165,32 @@ test_macos_arm64_mapping() {
     run_installer
     assert_success
     assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-apple-darwin-0.5.0"
+}
+
+test_git_bash_windows_x86_64_mapping_and_path_update() {
+    new_case
+    MOCK_UNAME_S=MINGW64_NT-10.0
+    MOCK_UNAME_M=x86_64
+    LOCALAPPDATA="${HOME}/AppData/Local"
+    export MOCK_UNAME_S MOCK_UNAME_M LOCALAPPDATA
+    run_installer
+    assert_success
+    assert_file_contains "$curl_log" "nemo-relay-cli-x86_64-pc-windows-msvc-0.5.0.exe"
+    [ -f "${LOCALAPPDATA}/nemo-relay/bin/nemo-relay.exe" ] || fail "Windows install did not create nemo-relay.exe"
+    assert_file_contains "$powershell_log" "C:${LOCALAPPDATA#/}/nemo-relay/bin"
+}
+
+test_git_bash_windows_arm64_mapping() {
+    new_case
+    MOCK_UNAME_S=MSYS_NT-10.0
+    MOCK_UNAME_M=arm64
+    LOCALAPPDATA="${HOME}/AppData/Local"
+    export MOCK_UNAME_S MOCK_UNAME_M LOCALAPPDATA
+    run_installer --install-dir "${HOME}/custom-bin"
+    assert_success
+    assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-pc-windows-msvc-0.5.0.exe"
+    [ -f "${HOME}/custom-bin/nemo-relay.exe" ] || fail "Windows ARM64 install did not create nemo-relay.exe"
+    assert_file_contains "$powershell_log" "C:${HOME#/}/custom-bin"
 }
 
 test_unsupported_platform() {
@@ -196,6 +241,8 @@ test_checksum_mismatch_preserves_existing_binary() {
 
 test_linux_arm64_mapping
 test_macos_arm64_mapping
+test_git_bash_windows_x86_64_mapping_and_path_update
+test_git_bash_windows_arm64_mapping
 test_unsupported_platform
 test_malformed_release_response
 test_missing_checksum_fails_closed

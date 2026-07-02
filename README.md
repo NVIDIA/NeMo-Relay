@@ -54,19 +54,19 @@ trajectories.
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
 
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
 Verify that the installed binary is available:
 
 ```bash
 nemo-relay --version
 ```
 
-The installer supports Linux x86_64, Linux ARM64, and macOS ARM64. To install
-with a Rust toolchain instead, use either of these commands:
-
-```bash
-cargo install nemo-relay-cli
-cargo binstall nemo-relay-cli
-```
+The installer supports Linux x86_64/ARM64, macOS Apple Silicon, and Windows
+x86_64/ARM64. See the [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation)
+for version pinning, custom directories, and source-based installation.
 
 #### 2. Enable Local Observability Output
 
