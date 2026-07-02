@@ -93,7 +93,26 @@ unsafe extern "C" fn tool_exec_intercept_cb(
         serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
     unsafe { nemo_relay_string_free_internal(result_ptr) };
     result["intercepted"] = json!(true);
-    CString::new(result.to_string()).unwrap().into_raw()
+    CString::new(
+        json!({
+            "result": result,
+            "pending_marks": [],
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
+unsafe extern "C" fn tool_exec_legacy_intercept_cb(
+    _user_data: *mut libc::c_void,
+    _args_json: *const c_char,
+    _next_fn: NemoRelayToolExecNextFn,
+    _next_ctx: *mut libc::c_void,
+) -> *mut c_char {
+    CString::new(r#"{"legacy_result":true}"#)
+        .unwrap()
+        .into_raw()
 }
 
 /// Intercept-specific callback with the unified annotated-aware signature
@@ -270,8 +289,20 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
     let intercepted = runtime
         .block_on(intercept("tool", json!({"v": 1}), next))
         .unwrap();
-    assert_eq!(intercepted["intercepted"], json!(true));
-    assert_eq!(intercepted["from_next"]["v"], json!(1));
+    assert_eq!(intercepted.result["intercepted"], json!(true));
+    assert_eq!(intercepted.result["from_next"]["v"], json!(1));
+    assert!(intercepted.pending_marks.is_empty());
+
+    let legacy_intercept =
+        wrap_tool_exec_intercept_fn(tool_exec_legacy_intercept_cb, std::ptr::null_mut(), None);
+    let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let err = runtime
+        .block_on(legacy_intercept("tool", json!({}), next))
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("invalid tool execution intercept outcome JSON")
+    );
 
     let failing_intercept =
         wrap_tool_exec_intercept_fn(tool_exec_intercept_cb, std::ptr::null_mut(), None);

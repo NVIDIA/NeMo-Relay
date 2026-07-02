@@ -61,6 +61,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
     event as emit_scope_mark, pop_scope, push_scope,
 };
+use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
@@ -1180,7 +1181,7 @@ impl WorkerPluginCallback {
         tool_name: &str,
         value: Json,
         next: ToolExecutionNextFn,
-    ) -> FlowResult<Json> {
+    ) -> FlowResult<ToolExecutionInterceptOutcome> {
         let continuation_id = self
             .host_state
             .insert_continuation(Continuation::Tool(next))?;
@@ -1190,7 +1191,28 @@ impl WorkerPluginCallback {
             Some(continuation_id),
             Some(invoke_request_payload_tool(tool_name, value)),
         );
-        json_from_invoke_response(self.invoke_async(request).await?)
+        let response = self.invoke_async(request).await?;
+        match response.result {
+            Some(invoke_response_result::Result::ToolExecution(result)) => {
+                let outcome =
+                    required_envelope(result.outcome, "tool execution intercept outcome")?;
+                if outcome.schema != "nemo.relay.ToolExecutionInterceptOutcome@1" {
+                    return Err(FlowError::Internal(format!(
+                        "worker returned unsupported tool execution intercept outcome schema: {}",
+                        outcome.schema
+                    )));
+                }
+                decode_json_envelope(&outcome).map_err(|err| {
+                    FlowError::Internal(format!(
+                        "worker returned invalid tool execution intercept outcome: {err}"
+                    ))
+                })
+            }
+            Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
+            _ => Err(FlowError::Internal(
+                "worker tool execution intercept returned unexpected result".into(),
+            )),
+        }
     }
 
     fn invoke_llm_request_json(

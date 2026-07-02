@@ -364,7 +364,7 @@ pub struct MarkEvent {
     pub category_profile: Option<CategoryProfile>,
 }
 
-/// Mark requested by middleware before its owning runtime scope exists.
+/// Mark requested by middleware for materialization by a lifecycle owner.
 ///
 /// The runtime assigns the parent UUID, event UUID, and timestamp when it
 /// materializes the mark at the appropriate lifecycle boundary.

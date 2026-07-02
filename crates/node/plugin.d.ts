@@ -45,6 +45,21 @@ export interface PluginConfig {
   policy?: ConfigPolicy;
 }
 
+/** A mark Relay materializes under a managed lifecycle. */
+export interface PendingMarkSpec {
+  name: string;
+  category?: string | null;
+  categoryProfile?: Json;
+  data?: Json;
+  metadata?: Json;
+}
+
+/** Canonical result returned by a tool execution intercept. */
+export interface ToolExecutionInterceptOutcome {
+  result: Json;
+  pendingMarks?: PendingMarkSpec[];
+}
+
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
   /** Register an infallible event subscriber for this component. */
@@ -120,7 +135,10 @@ export interface PluginContext {
   registerToolExecutionIntercept(
     name: string,
     priority: number,
-    callback: (args: Json, next: (args: Json) => Json | Promise<Json>) => Json | Promise<Json>,
+    callback: (
+      args: Json,
+      next: (args: Json) => Json | Promise<Json>,
+    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
   ): void;
 }
 

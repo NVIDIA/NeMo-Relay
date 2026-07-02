@@ -157,8 +157,9 @@ type ToolExecutionFunc func(args json.RawMessage) (json.RawMessage, error)
 // following the middleware chain pattern. It receives the tool arguments and
 // a `next` function. Call `next` to invoke the next intercept in the chain
 // (or the original tool implementation if this is the innermost intercept).
-// Skip calling `next` to short-circuit the chain entirely.
-type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error)
+// Skip calling `next` to short-circuit the chain entirely. The callback returns
+// the canonical outcome containing the tool result and any pending marks.
+type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error)
 
 // LLMResponseFunc is a callback that transforms an LLM response. It receives
 // the response as plain JSON and must return the (possibly modified) response
@@ -218,7 +219,7 @@ type LLMRequestDTO struct {
 	Content json.RawMessage `json:"content"`
 }
 
-// PendingMarkSpec describes a mark Relay emits after starting a managed LLM call.
+// PendingMarkSpec describes a mark Relay materializes under a managed lifecycle.
 type PendingMarkSpec struct {
 	Name            string          `json:"name"`
 	Category        *string         `json:"category,omitempty"`
@@ -232,6 +233,12 @@ type LLMRequestInterceptOutcome struct {
 	Request          LLMRequestDTO     `json:"request"`
 	AnnotatedRequest json.RawMessage   `json:"annotated_request"`
 	PendingMarks     []PendingMarkSpec `json:"pending_marks"`
+}
+
+// ToolExecutionInterceptOutcome is the canonical result of a tool execution intercept.
+type ToolExecutionInterceptOutcome struct {
+	Result       json.RawMessage   `json:"result"`
+	PendingMarks []PendingMarkSpec `json:"pending_marks"`
 }
 
 // LLMRequestInterceptFunc is a callback for LLM request intercepts. When
@@ -484,12 +491,20 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, ne
 		defer C.nemo_relay_string_free(result)
 		return json.RawMessage(C.GoString(result)), nil
 	}
-	result, err := fn(goArgs, goNext)
+	outcome, err := fn(goArgs, goNext)
 	if err != nil {
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	if outcome.PendingMarks == nil {
+		outcome.PendingMarks = []PendingMarkSpec{}
+	}
+	outcomeJSON, err := jsonMarshal(outcome)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(outcomeJSON))
 }
 
 //export goLlmExecInterceptTrampoline

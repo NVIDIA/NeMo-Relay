@@ -111,6 +111,7 @@ from nemo_relay._native import (
     ScopeStack,
     ScopeType,
     ToolAttributes,
+    ToolExecutionInterceptOutcome,
     ToolHandle,
 )
 from nemo_relay._native import create_scope_stack as _create_scope_stack
@@ -164,7 +165,7 @@ ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json]
 #: next callable. It may await and return ``next(args)`` or short-circuit.
 ToolExecutionIntercept: TypeAlias = Callable[
     [str, Json, Callable[[Json], Awaitable[Json]]],
-    Json | Awaitable[Json],
+    ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
 #: Request intercept callback that returns the canonical request, annotation,
 #: and pending-mark outcome passed to later intercepts and managed execution.
@@ -458,6 +459,7 @@ __all__ = [
     "MarkEvent",
     "ScopeHandle",
     "ToolHandle",
+    "ToolExecutionInterceptOutcome",
     "LLMHandle",
     "LLMRequest",
     "LLMRequestInterceptOutcome",

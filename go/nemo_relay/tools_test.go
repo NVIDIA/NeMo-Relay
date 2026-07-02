@@ -314,8 +314,8 @@ func TestToolRequestInterceptRegisterDeregister(t *testing.T) {
 
 func TestToolExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterToolExecutionIntercept("go_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(args)
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			return toolExecutionOutcome(next(args))
 		},
 	)
 	if err != nil {
@@ -368,9 +368,9 @@ func TestToolRequestInterceptModifiesArgs(t *testing.T) {
 
 func TestToolExecutionInterceptReplacesFunc(t *testing.T) {
 	RegisterToolExecutionIntercept("go_exec_replace", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			// Short-circuit: don't call next, return directly
-			return json.RawMessage(`{"from_intercept": true}`), nil
+			return ToolExecutionInterceptOutcome{Result: json.RawMessage(`{"from_intercept": true}`)}, nil
 		},
 	)
 
@@ -454,16 +454,16 @@ func TestToolFullPipelineInterceptsAndExecute(t *testing.T) {
 
 	// Register an execution intercept that wraps the callable
 	RegisterToolExecutionIntercept("go_pipe_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
-				return nil, err
+				return ToolExecutionInterceptOutcome{}, err
 			}
 			var m map[string]interface{}
 			json.Unmarshal(result, &m)
 			m["exec_intercepted"] = true
 			out, _ := json.Marshal(m)
-			return out, nil
+			return ToolExecutionInterceptOutcome{Result: out}, nil
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_pipe_exec_int")
@@ -668,7 +668,7 @@ func TestToolCallableErrorPropagation(t *testing.T) {
 func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 	// Register an execution intercept that modifies args and result
 	RegisterToolExecutionIntercept("go_wrap_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			// Before: modify args
 			var m map[string]interface{}
 			json.Unmarshal(args, &m)
@@ -678,7 +678,7 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 			// Call the next function in the chain
 			result, err := next(modifiedArgs)
 			if err != nil {
-				return nil, err
+				return ToolExecutionInterceptOutcome{}, err
 			}
 
 			// After: modify result
@@ -686,7 +686,7 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 			json.Unmarshal(result, &out)
 			out["after_exec"] = true
 			final, _ := json.Marshal(out)
-			return final, nil
+			return ToolExecutionInterceptOutcome{Result: final}, nil
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_wrap_exec_int")
@@ -720,8 +720,8 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 
 func TestToolExecutionInterceptSeesNextError(t *testing.T) {
 	RegisterToolExecutionIntercept("go_wrap_exec_err", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(args)
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			return toolExecutionOutcome(next(args))
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_wrap_exec_err")

@@ -166,6 +166,7 @@ message InvokeResponse {
     GuardrailResult guardrail = 3;
     LlmRequestInterceptResult llm_request = 4;
     WorkerError error = 5;
+    ToolExecutionInterceptResult tool_execution = 6;
   }
 }
 
@@ -181,6 +182,10 @@ message GuardrailResult {
 }
 
 message LlmRequestInterceptResult {
+  JsonEnvelope outcome = 1;
+}
+
+message ToolExecutionInterceptResult {
   JsonEnvelope outcome = 1;
 }
 

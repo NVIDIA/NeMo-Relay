@@ -8,7 +8,8 @@ use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json, LlmJsonStream,
     LlmRequest, LlmRequestInterceptOutcome, NemoRelayNativeHostApiV1,
     NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayStatus,
-    NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+    NemoRelayNativeToolNextFn, NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime,
+    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 
@@ -95,7 +96,21 @@ impl NativePlugin for FixtureNativePlugin {
                 } else {
                     next.call(args)?
                 };
-                Ok(mark_json(result, "native_plugin_tool_execution"))
+                let result = mark_json(result, "native_plugin_tool_execution");
+                Ok(
+                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("fixture.native.tool_execution.mark")
+                            .category(EventCategory::custom())
+                            .category_profile(CategoryProfile {
+                                subtype: Some("fixture.native.tool_execution".into()),
+                                ..CategoryProfile::default()
+                            })
+                            .data(json!({ "source": "native_tool_execution" }))
+                            .metadata(json!({ "fixture": true }))
+                            .build(),
+                    ),
+                )
             }
         })?;
 
@@ -350,6 +365,23 @@ pub unsafe extern "C" fn nemo_relay_fixture_register_error(
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "fixture_native",
+            None,
+            None,
+            Some(raw_register_tool_outcome_errors),
+        )
+    }
+}
+
 type RawValidate = unsafe extern "C" fn(
     *mut c_void,
     *const NemoRelayNativeString,
@@ -432,6 +464,80 @@ unsafe extern "C" fn raw_register_error(
     NemoRelayStatus::Internal
 }
 
+unsafe extern "C" fn raw_register_tool_outcome_errors(
+    user_data: *mut c_void,
+    _plugin_config_json: *const NemoRelayNativeString,
+    ctx: *mut NemoRelayNativePluginContext,
+) -> NemoRelayStatus {
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let name = unsafe { raw_host_string(host, "fixture_raw_tool_outcome") };
+    if name.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    let status = unsafe {
+        (host.plugin_context_register_tool_execution_intercept)(
+            ctx,
+            name,
+            0,
+            raw_tool_outcome_callback,
+            user_data,
+            None,
+        )
+    };
+    unsafe { (host.string_free)(name) };
+    status
+}
+
+unsafe extern "C" fn raw_tool_outcome_callback(
+    user_data: *mut c_void,
+    name: *const NemoRelayNativeString,
+    _args_json: *const NemoRelayNativeString,
+    _next_fn: NemoRelayNativeToolNextFn,
+    _next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_outcome_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_outcome_json = ptr::null_mut() };
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let Some(name) = (unsafe { raw_host_string_value(host, name) }) else {
+        return NemoRelayStatus::InvalidUtf8;
+    };
+    match name.as_str() {
+        "fixture-null-outcome" => NemoRelayStatus::Ok,
+        "fixture-malformed-outcome" => {
+            unsafe {
+                *out_outcome_json = raw_host_string(host, r#"{"pending_marks":[]}"#);
+            }
+            NemoRelayStatus::Ok
+        }
+        "fixture-status-error-outcome" => {
+            unsafe {
+                *out_outcome_json = raw_host_string(
+                    host,
+                    r#"{"result":{"stale":true},"pending_marks":[]}"#,
+                );
+                set_raw_last_error_from_user_data(user_data, "fixture tool execution failed");
+            }
+            NemoRelayStatus::Internal
+        }
+        _ => {
+            unsafe {
+                *out_outcome_json = raw_host_string(
+                    host,
+                    r#"{"result":{"raw_tool_outcome":true},"pending_marks":[]}"#,
+                );
+            }
+            NemoRelayStatus::Ok
+        }
+    }
+}
+
 unsafe extern "C" fn raw_drop_host(user_data: *mut c_void) {
     if !user_data.is_null() {
         drop(unsafe { Box::from_raw(user_data as *mut NemoRelayNativeHostApiV1) });
@@ -479,4 +585,24 @@ unsafe fn raw_host_string(
     } else {
         ptr::null_mut()
     }
+}
+
+unsafe fn raw_host_string_value(
+    host: &NemoRelayNativeHostApiV1,
+    value: *const NemoRelayNativeString,
+) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let len = unsafe { (host.string_len)(value) };
+    let data = unsafe { (host.string_data)(value) };
+    if data.is_null() && len > 0 {
+        return None;
+    }
+    let bytes = if len == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
 }

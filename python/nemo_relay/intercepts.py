@@ -128,6 +128,7 @@ def register_tool_execution(name: str, priority: int, fn: ToolExecutionIntercept
         fn: Callable invoked as ``fn(tool_name, args, next_call)``. The
             callback may await or call ``next_call(args)`` to continue the
             chain, modify the result, or bypass downstream execution entirely.
+            It must return ``ToolExecutionInterceptOutcome``.
 
     Returns:
         None: This function returns after the intercept is registered.

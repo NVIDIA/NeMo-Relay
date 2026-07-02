@@ -494,8 +494,10 @@ describe('Scope-local auto-cleanup on scope pop', () => {
         fromPoppedScope: true,
       });
       return {
-        ...result,
-        wrapped: true,
+        result: {
+          ...result,
+          wrapped: true,
+        },
       };
     });
     popScope(scope);
@@ -699,8 +701,10 @@ describe('Priority merge of global and scope-local middleware', () => {
         from_global: true,
       });
       return {
-        ...result,
-        global_exec: true,
+        result: {
+          ...result,
+          global_exec: true,
+        },
       };
     });
 
@@ -711,8 +715,10 @@ describe('Priority merge of global and scope-local middleware', () => {
         from_scope: true,
       });
       return {
-        ...result,
-        scope_exec: true,
+        result: {
+          ...result,
+          scope_exec: true,
+        },
       };
     });
 
@@ -1253,7 +1259,10 @@ describe('Scope-local subscriber receives events', () => {
       () => scopeDeregisterToolConditionalExecutionGuardrail('not-a-uuid', 'bad_tool_cond'),
       () => scopeRegisterToolRequestIntercept('not-a-uuid', 'bad_tool_int', 10, false, (_name, args) => args),
       () => scopeDeregisterToolRequestIntercept('not-a-uuid', 'bad_tool_int'),
-      () => scopeRegisterToolExecutionIntercept('not-a-uuid', 'bad_tool_exec', 10, async (args, next) => next(args)),
+      () =>
+        scopeRegisterToolExecutionIntercept('not-a-uuid', 'bad_tool_exec', 10, async (args, next) => ({
+          result: await next(args),
+        })),
       () => scopeDeregisterToolExecutionIntercept('not-a-uuid', 'bad_tool_exec'),
       () => scopeRegisterLlmSanitizeRequestGuardrail('not-a-uuid', 'bad_llm_req', 10, (request) => request),
       () => scopeDeregisterLlmSanitizeRequestGuardrail('not-a-uuid', 'bad_llm_req'),

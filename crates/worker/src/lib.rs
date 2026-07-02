@@ -37,6 +37,7 @@ pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{Event, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
+pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -47,8 +48,8 @@ use nemo_relay_worker_proto::v1::{
     HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
-    WorkerError,
+    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
+    ValidateResponse, WorkerAck, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
@@ -120,7 +121,9 @@ type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
-type ToolExecutionFn = Arc<dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<Json> + Send + Sync>;
+type ToolExecutionFn = Arc<
+    dyn Fn(&str, Json, ToolNext) -> BoxFutureResult<ToolExecutionInterceptOutcome> + Send + Sync,
+>;
 type LlmSanitizeRequestFn = Arc<dyn Fn(LlmRequest) -> LlmRequest + Send + Sync>;
 type LlmSanitizeResponseFn = Arc<dyn Fn(Json) -> Json + Send + Sync>;
 type LlmConditionalFn = Arc<dyn Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync>;
@@ -278,7 +281,7 @@ impl PluginContext {
         callback: F,
     ) where
         F: Fn(&str, Json, ToolNext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<Json>> + Send + 'static,
+        Fut: Future<Output = Result<ToolExecutionInterceptOutcome>> + Send + 'static,
     {
         self.push_registration(
             name,
@@ -1364,7 +1367,7 @@ impl WorkerService {
                 };
                 let future =
                     with_thread_scope(&scope, || handler(&payload.tool_name, payload.value, next));
-                Ok(json_response(future.await?))
+                Ok(tool_execution_response(future.await?)?)
             }
             RegistrationSurface::LlmSanitizeRequestGuardrail => {
                 let payload = llm_payload(request.payload)?;
@@ -1663,6 +1666,21 @@ fn llm_request_response(outcome: LlmRequestInterceptOutcome) -> Result<InvokeRes
                 LlmRequestInterceptResult {
                     outcome: Some(json_envelope(
                         "nemo.relay.LlmRequestInterceptOutcome@1",
+                        &outcome,
+                    )?),
+                },
+            ),
+        ),
+    })
+}
+
+fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<InvokeResponse> {
+    Ok(InvokeResponse {
+        result: Some(
+            nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
+                ToolExecutionInterceptResult {
+                    outcome: Some(json_envelope(
+                        "nemo.relay.ToolExecutionInterceptOutcome@1",
                         &outcome,
                     )?),
                 },

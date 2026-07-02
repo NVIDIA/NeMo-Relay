@@ -13,8 +13,8 @@ use std::sync::{
 };
 
 use nemo_relay_plugin::{
-    AnnotatedLlmRequest, ConfigDiagnostic, DiagnosticLevel, Event, Json, LlmJsonStream, LlmNext,
-    LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
+    AnnotatedLlmRequest, CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory,
+    Json, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
     NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSubscriberCb,
     NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb,
     NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
@@ -23,7 +23,8 @@ use nemo_relay_plugin::{
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
     NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
     NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType, ToolNext,
+    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -2464,7 +2465,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_tool_execution_intercept("tool-exec", 0, |_name, value, _next| Ok(value))
+    ctx.register_tool_execution_intercept("tool-exec", 0, |_name, value, _next| Ok(value.into()))
         .unwrap();
     let registration = take_tool_execution_registration();
     let name = host_string(&host, "tool");
@@ -2789,7 +2790,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_tool_execution_intercept("tool-exec", 0, |_name, value, _next| Ok(value))
+    ctx.register_tool_execution_intercept("tool-exec", 0, |_name, value, _next| Ok(value.into()))
         .unwrap();
     let registration = take_tool_execution_registration();
     let name = host_string(&host, "tool");
@@ -3486,7 +3487,21 @@ fn typed_tool_execution_registration_calls_next() {
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
     ctx.register_tool_execution_intercept("tool", 23, |_name, args, next: ToolNext<'_>| {
-        next.call(args)
+        let result = next.call(args)?;
+        Ok(
+            ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                PendingMarkSpec::builder()
+                    .name("plugin.tool.completed")
+                    .category(EventCategory::custom())
+                    .category_profile(CategoryProfile {
+                        subtype: Some("plugin.tool.pending".into()),
+                        ..CategoryProfile::default()
+                    })
+                    .data(json!({ "saved_tokens": 7 }))
+                    .metadata(json!({ "source": "typed-test" }))
+                    .build(),
+            ),
+        )
     })
     .unwrap();
 
@@ -3512,11 +3527,62 @@ fn typed_tool_execution_registration_calls_next() {
     };
     assert_eq!(status, NemoRelayStatus::Ok);
     assert_eq!(called.load(Ordering::SeqCst), 1);
-    assert_eq!(read_json_and_free(&host, out)["next_called"], json!(true));
+    let outcome = read_json_and_free(&host, out);
+    assert_eq!(outcome["result"]["next_called"], json!(true));
+    assert_eq!(outcome["pending_marks"][0]["name"], "plugin.tool.completed");
+    assert_eq!(outcome["pending_marks"][0]["category"], "custom");
+    assert_eq!(
+        outcome["pending_marks"][0]["category_profile"]["subtype"],
+        "plugin.tool.pending"
+    );
+    assert_eq!(outcome["pending_marks"][0]["data"]["saved_tokens"], 7);
+    assert_eq!(
+        outcome["pending_marks"][0]["metadata"]["source"],
+        "typed-test"
+    );
     unsafe {
         (host.string_free)(name);
         (host.string_free)(args);
         drop(Box::from_raw(next_state));
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_tool_execution_does_not_publish_partial_outcome() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_tool_execution_intercept("tool", 0, |_name, args, _next| {
+        Ok(ToolExecutionInterceptOutcome::new(args))
+    })
+    .unwrap();
+
+    let registration = take_tool_execution_registration();
+    let name = host_string(&host, "tool");
+    let args = json_host_string(&host, json!({ "input": true }));
+    let stale_outcome = host_string(&host, r#"{"stale":true}"#);
+    let mut out_outcome = stale_outcome;
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
+    let live_before = live_host_strings();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            name,
+            args,
+            fake_tool_next,
+            ptr::null_mut(),
+            &mut out_outcome,
+        )
+    };
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = None;
+    assert_eq!(status, NemoRelayStatus::Internal);
+    assert!(out_outcome.is_null());
+    assert_eq!(live_host_strings(), live_before);
+    unsafe {
+        (host.string_free)(stale_outcome);
+        (host.string_free)(name);
+        (host.string_free)(args);
         registration.free();
     }
 }
@@ -3528,7 +3594,7 @@ fn typed_tool_execution_surfaces_next_status_failures() {
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
     ctx.register_tool_execution_intercept("tool", 0, |_name, args, next: ToolNext<'_>| {
-        next.call(args)
+        next.call(args).map(Into::into)
     })
     .unwrap();
 
@@ -3572,7 +3638,7 @@ fn typed_tool_execution_surfaces_invalid_next_json() {
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
     ctx.register_tool_execution_intercept("tool", 0, |_name, args, next: ToolNext<'_>| {
-        next.call(args)
+        next.call(args).map(Into::into)
     })
     .unwrap();
 
@@ -3618,7 +3684,7 @@ fn typed_tool_execution_surfaces_null_next_output() {
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
     ctx.register_tool_execution_intercept("tool", 0, |_name, args, next: ToolNext<'_>| {
-        next.call(args)
+        next.call(args).map(Into::into)
     })
     .unwrap();
 

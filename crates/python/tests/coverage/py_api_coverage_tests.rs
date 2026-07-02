@@ -177,7 +177,7 @@ async def tool_exec(args):
 async def tool_exec_intercept(name, args, next):
     result = await next({"value": args["value"] + 3})
     result["tool_intercepted"] = True
-    return result
+    return ToolExecutionInterceptOutcome(result)
 
 def llm_sanitize_request(request):
     return request
@@ -332,6 +332,14 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
             .setattr(
                 "LLMRequestInterceptOutcome",
                 types_module.getattr("LLMRequestInterceptOutcome").unwrap(),
+            )
+            .unwrap();
+        helpers
+            .setattr(
+                "ToolExecutionInterceptOutcome",
+                types_module
+                    .getattr("ToolExecutionInterceptOutcome")
+                    .unwrap(),
             )
             .unwrap();
         helpers

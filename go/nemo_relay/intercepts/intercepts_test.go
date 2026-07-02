@@ -47,16 +47,16 @@ func runGlobalToolInterceptShorthandChecks(t *testing.T) {
 	}
 
 	if err := intercepts.RegisterToolExecution("intercepts_tool_exec", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
-				return nil, err
+				return nemo_relay.ToolExecutionInterceptOutcome{}, err
 			}
 			var payload map[string]interface{}
 			_ = json.Unmarshal(result, &payload)
 			payload["wrapped"] = true
 			out, _ := json.Marshal(payload)
-			return out, nil
+			return nemo_relay.ToolExecutionInterceptOutcome{Result: out}, nil
 		},
 	); err != nil {
 		t.Fatalf("RegisterToolExecution failed: %v", err)
@@ -174,8 +174,9 @@ func runScopeLocalToolInterceptShorthandChecks(t *testing.T, scopeUUID string) {
 		t.Fatalf("ScopeRegisterToolRequest failed: %v", err)
 	}
 	if err := intercepts.ScopeRegisterToolExecution(scopeUUID, "intercepts_scope_tool_exec", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(args)
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (nemo_relay.ToolExecutionInterceptOutcome, error) {
+			result, err := next(args)
+			return nemo_relay.ToolExecutionInterceptOutcome{Result: result}, err
 		},
 	); err != nil {
 		t.Fatalf("ScopeRegisterToolExecution failed: %v", err)
