@@ -45,6 +45,21 @@ curl_with_timeouts() {
     curl -fsSL --connect-timeout 10 --max-time 300 "$@"
 }
 
+github_api_curl() {
+    if [ -n "${GH_TOKEN:-}" ]; then
+        curl_with_timeouts \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: nemo-relay-install-script' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "$@"
+    else
+        curl_with_timeouts \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'User-Agent: nemo-relay-install-script' \
+            "$@"
+    fi
+}
+
 version="${NEMO_RELAY_VERSION:-}"
 install_dir=""
 install_dir_set=0
@@ -106,9 +121,7 @@ fi
 
 if [ -z "$version" ]; then
     printf 'Finding the latest stable NeMo Relay release...\n'
-    release_json=$(curl_with_timeouts \
-        -H 'Accept: application/vnd.github+json' \
-        -H 'User-Agent: nemo-relay-install-script' \
+    release_json=$(github_api_curl \
         "${GITHUB_API_URL}/releases/latest") || error "could not resolve the latest stable release"
     version=$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')
     [ -n "$version" ] || error "latest release response did not contain a tag name"

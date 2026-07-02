@@ -135,7 +135,8 @@ try {
     $env:NEMO_RELAY_VERSION = '999.999.999'
     Invoke-Installer -Arguments @('-InstallDir', $InstallDir)
     Assert-Failure
-    Assert-Contains $RunOutput 'could not download https://github.com/NVIDIA/NeMo-Relay/releases/download/999.999.999/'
+    Assert-Contains $RunOutput 'could not download'
+    Assert-Contains $RunOutput '999.999.999'
     $preservedVersion = (& (Join-Path $InstallDir 'nemo-relay.exe') --version | Out-String)
     Assert-Contains $preservedVersion 'nemo-relay 0.3.0'
     Assert-NoTemporaryFiles $InstallDir

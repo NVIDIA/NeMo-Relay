@@ -60,10 +60,14 @@ output=""
 url=""
 connect_timeout=""
 max_time=""
+authorization=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -o) output=$2; shift 2 ;;
-        -H) shift 2 ;;
+        -H)
+            [ "$2" = "Authorization: Bearer ${MOCK_GH_TOKEN:-}" ] && authorization=1
+            shift 2
+            ;;
         --connect-timeout) connect_timeout=$2; shift 2 ;;
         --max-time) max_time=$2; shift 2 ;;
         -*) shift ;;
@@ -76,6 +80,7 @@ done
 printf '%s\n' "$url" >>"$MOCK_CURL_LOG"
 case "$url" in
     */releases/latest)
+        [ -z "${MOCK_GH_TOKEN:-}" ] || [ "$authorization" = 1 ] || exit 99
         printf '%s\n' "$MOCK_API_RESPONSE"
         ;;
     *.sha256)
@@ -130,14 +135,16 @@ new_case() {
     MOCK_EXPECTED_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     MOCK_ACTUAL_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     MOCK_CHECKSUM_MISSING=0
+    MOCK_GH_TOKEN=mock-github-token
     NEMO_RELAY_VERSION=0.5.0
     HOME=$home_dir
     PATH="${mock_bin}:${original_path}"
     MOCK_CURL_LOG=$curl_log
     MOCK_POWERSHELL_LOG=$powershell_log
+    GH_TOKEN=$MOCK_GH_TOKEN
     export MOCK_UNAME_S MOCK_UNAME_M MOCK_API_RESPONSE
-    export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM MOCK_CHECKSUM_MISSING
-    export NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG MOCK_POWERSHELL_LOG
+    export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM MOCK_CHECKSUM_MISSING MOCK_GH_TOKEN
+    export GH_TOKEN NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG MOCK_POWERSHELL_LOG
 }
 
 run_installer() {

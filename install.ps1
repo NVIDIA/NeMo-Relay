@@ -45,10 +45,14 @@ function Get-ReleaseVersion {
     if ([string]::IsNullOrWhiteSpace($version)) {
         Write-Host 'Finding the latest stable NeMo Relay release...'
         try {
-            $release = Invoke-RestMethod -Uri "$GitHubApiUrl/releases/latest" -Headers @{
+            $headers = @{
                 Accept = 'application/vnd.github+json'
                 'User-Agent' = 'nemo-relay-install-script'
-            } -TimeoutSec 300
+            }
+            if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+                $headers.Authorization = "Bearer $env:GH_TOKEN"
+            }
+            $release = Invoke-RestMethod -Uri "$GitHubApiUrl/releases/latest" -Headers $headers -TimeoutSec 300
         }
         catch {
             Fail 'could not resolve the latest stable release'
