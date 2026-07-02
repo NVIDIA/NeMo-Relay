@@ -111,6 +111,12 @@ curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh |
 
 Add the selected directory to `PATH` before running `nemo-relay` if it is not
 already present.
+
+| Interface | Purpose |
+| --- | --- |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
+| `--install-dir DIR` | Installer destination; defaults to `$HOME/.local/bin` or `%LOCALAPPDATA%\nemo-relay\bin` in Windows POSIX shells |
+| `-h`, `--help` | Display installer usage |
 </Tab>
 
 <Tab title="Windows PowerShell">
@@ -128,6 +134,12 @@ To choose an installation directory, download the script and pass `-InstallDir`:
 iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 -OutFile install.ps1
 .\install.ps1 -InstallDir "$HOME\bin"
 ```
+
+| Interface | Purpose |
+| --- | --- |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
+| `-InstallDir DIR` | Installer destination; defaults to `%LOCALAPPDATA%\nemo-relay\bin` |
+| `-Help` | Display installer usage |
 </Tab>
 
 </Tabs>
@@ -136,14 +148,6 @@ On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use the Unix command.
 They install the matching Windows `.exe` asset into the same
 `%LOCALAPPDATA%\nemo-relay\bin` default directory and invoke PowerShell to
 persist the Windows user `PATH` update.
-
-| Interface | Purpose |
-| --- | --- |
-| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
-| `--install-dir DIR` | Unix installer destination; defaults to `$HOME/.local/bin` or `%LOCALAPPDATA%\nemo-relay\bin` in Windows POSIX shells |
-| `-h`, `--help` | Display Unix installer usage |
-| `-InstallDir DIR` | PowerShell installer destination; defaults to `%LOCALAPPDATA%\nemo-relay\bin` |
-| `-Help` | Display PowerShell installer usage |
 
 Rerun the installer to upgrade or replace the existing binary. It verifies the
 new download before replacing the binary in the selected installation directory.
@@ -223,6 +227,20 @@ Use the package name `nemo-relay-openclaw` for installation. Use the plugin ID
 `nemo-relay` in OpenClaw configuration, inspection, and gateway status commands.
 See the [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin) for
 configuration and verification steps.
+
+### Hermes Agent
+
+Install the latest NeMo Relay Python package in the environment that runs
+Hermes, then enable the bundled Hermes plugin:
+
+```bash
+pip install nemo-relay
+hermes plugins enable observability/nemo_relay
+```
+
+The plugin ID is `observability/nemo_relay`. See the
+[Hermes NeMo Relay plugin guide](https://github.com/NousResearch/hermes-agent/tree/main/plugins/observability/nemo_relay)
+for configuration and verification steps.
 
 ### Python Framework Integrations
 
