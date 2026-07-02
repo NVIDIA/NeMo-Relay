@@ -14,7 +14,7 @@ Built-in observability plugin component.
 
 This module packages NeMo Relay's first-party observability exporters behind the shared plugin configuration system. Each exporter section is opt-in: omitted sections and sections with `enabled = false` validate but do not register subscribers or construct exporters.
 
-The plugin intentionally infers subscriber names from the component namespace so configuration remains portable across bindings. Agent Trajectory Observability Format (ATOF), OpenTelemetry, and OpenInference each register one global subscriber when enabled. Agent Trajectory Interchange Format (ATIF) uses a global dispatcher that detects top-level agent scopes and creates one scope-local exporter for each trajectory run. Coding-agent turns that need bounded traces are represented as agent scopes with role metadata.
+The plugin intentionally infers subscriber names from the component namespace so configuration remains portable across bindings. Agent Trajectory Observability Format (ATOF), OpenTelemetry, and OpenInference each register one global subscriber when enabled. Agent Trajectory Interchange Format (ATIF) uses a global dispatcher that detects top-level agent or turn scopes and creates one scope-local exporter for each trajectory run. Coding-agent turns that need bounded traces carry role metadata; their declared scope type is preserved in the exported event stream.
 
 ## Structs
 
