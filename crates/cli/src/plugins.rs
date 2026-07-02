@@ -324,7 +324,7 @@ fn clear_component_menu_item(
 }
 
 fn cancelled_error() -> CliError {
-    CliError::Config("plugin edit cancelled; no config saved".into())
+    CliError::Config("plugin edit cancelled; no plugin changes saved".into())
 }
 
 fn edit_component_field(
@@ -610,7 +610,7 @@ fn menu_error(error: std::io::Error) -> CliError {
         error.kind(),
         std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
     ) {
-        CliError::Config("plugin edit cancelled; no config saved".into())
+        CliError::Config("plugin edit cancelled; no plugin changes saved".into())
     } else {
         CliError::Config(format!("plugin editor terminal error: {error}"))
     }
@@ -1369,7 +1369,7 @@ fn editor_error(err: dialoguer::Error) -> CliError {
                 std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
             ) =>
         {
-            CliError::Config("plugin edit cancelled; no config saved".into())
+            CliError::Config("plugin edit cancelled; no plugin changes saved".into())
         }
         other => CliError::Config(format!("plugin edit error: {other}")),
     }

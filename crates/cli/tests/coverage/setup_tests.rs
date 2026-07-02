@@ -574,3 +574,81 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
         "error was: {error}"
     );
 }
+
+#[test]
+fn plugins_edit_command_for_scope_targets_expected_plugin_scope() {
+    use crate::plugins::config_io::{TargetScope, target_scope};
+
+    let cases = [
+        (ConfigScope::Project, TargetScope::Project),
+        (ConfigScope::Global, TargetScope::User),
+        (ConfigScope::Both, TargetScope::Project),
+    ];
+
+    for (scope, expected) in cases {
+        let command = plugins_edit_command_for_scope(scope);
+        assert_eq!(
+            target_scope(&command.scope).unwrap(),
+            expected,
+            "unexpected plugin target scope for {scope:?}"
+        );
+    }
+}
+
+#[test]
+fn plugins_resume_command_matches_scope() {
+    let cases = [
+        (ConfigScope::Project, "nemo-relay plugins edit --project"),
+        (ConfigScope::Both, "nemo-relay plugins edit --project"),
+        (ConfigScope::Global, "nemo-relay plugins edit"),
+    ];
+
+    for (scope, expected) in cases {
+        assert_eq!(
+            plugins_resume_command(scope),
+            expected,
+            "unexpected resume command for {scope:?}"
+        );
+    }
+}
+
+#[test]
+fn plugin_prompt_error_reports_cancellation_with_base_saved_and_resume() {
+    let error = plugin_prompt_error(
+        ConfigScope::Project,
+        dialoguer::Error::IO(std::io::Error::from(std::io::ErrorKind::Interrupted)),
+    );
+    let message = error.to_string();
+    assert!(message.contains("cancelled"), "message: {message}");
+    assert!(
+        message.contains("base configuration remains saved"),
+        "message: {message}"
+    );
+    assert!(
+        message.contains("nemo-relay plugins edit --project"),
+        "message: {message}"
+    );
+}
+
+#[test]
+fn plugin_prompt_error_reports_failure_with_cause_and_resume() {
+    let error = plugin_prompt_error(
+        ConfigScope::Global,
+        dialoguer::Error::IO(std::io::Error::other("boom")),
+    );
+    let message = error.to_string();
+    assert!(message.contains("did not complete"), "message: {message}");
+    assert!(
+        message.contains("base configuration remains saved"),
+        "message: {message}"
+    );
+    assert!(
+        message.contains("Cause: IO error: boom"),
+        "message: {message}"
+    );
+    assert!(
+        message.contains("Resume with `nemo-relay plugins edit`"),
+        "message: {message}"
+    );
+    assert!(!message.contains("--project"), "message: {message}");
+}
