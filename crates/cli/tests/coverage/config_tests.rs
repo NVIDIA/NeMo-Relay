@@ -778,9 +778,11 @@ mode = "strict"
     )
     .unwrap();
 
-    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path])
+    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path.clone()])
         .unwrap()
         .unwrap();
+
+    assert!(resolved.contributing_sources.contains(&plugins_path));
 
     assert_eq!(
         resolved.value,
@@ -874,9 +876,11 @@ attestation = "signature_required"
     )
     .unwrap();
 
-    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path])
+    let resolved = load_plugin_toml_config_from_paths(vec![plugins_path.clone()])
         .unwrap()
         .unwrap();
+
+    assert!(resolved.contributing_sources.contains(&plugins_path));
 
     assert_eq!(
         resolved.value,
@@ -1013,11 +1017,17 @@ allowed = true
     )
     .unwrap();
 
-    let resolved = load_plugin_toml_config_from_paths(vec![project_plugins, user_plugins])
-        .unwrap()
-        .unwrap();
+    let resolved =
+        load_plugin_toml_config_from_paths(vec![project_plugins.clone(), user_plugins.clone()])
+            .unwrap()
+            .unwrap();
 
     assert_eq!(resolved.value, None);
+    assert_eq!(
+        resolved.contributing_sources,
+        vec![project_plugins, user_plugins],
+        "policy-only layers still affect runtime dynamic-plugin behavior"
+    );
     assert_eq!(
         resolved.dynamic_plugin_policy.defaults.startup,
         Some(DynamicPluginStartupClass::Required)

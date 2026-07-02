@@ -33,8 +33,9 @@ with the installed `nemo-relay` command rather than link against the crate.
   user config and install the hook files needed by supported agents.
 - 📡 **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
   streams, or OpenInference spans from one shared config model.
-- 🩺 **Diagnose the machine**: Check config layers, agent binaries, hook status,
-  observability outputs, and shell completions with `nemo-relay doctor`.
+- 🩺 **Diagnose setup readiness**: Check config layers, `plugins.toml` discovery,
+  agent binaries, persistent host-plugin installs, hook status, observability
+  outputs, and shell completions with `nemo-relay doctor`.
 
 ## What You Get
 

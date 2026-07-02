@@ -898,6 +898,11 @@ fn plugin_config_paths(
     implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
 }
 
+/// Returns the implicit `plugins.toml` discovery paths used by the gateway and doctor.
+pub(crate) fn default_plugin_config_paths() -> Vec<PathBuf> {
+    plugin_config_paths(None, None)
+}
+
 fn implicit_plugin_config_paths(
     cwd: Option<&std::path::Path>,
     user_config_dir: Option<PathBuf>,
@@ -1001,6 +1006,7 @@ struct PluginTomlConfig {
     value: Option<Value>,
     dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     dynamic_plugin_policy: DynamicPluginHostPolicy,
+    contributing_sources: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1026,6 +1032,18 @@ fn load_plugin_toml_config(
     load_plugin_toml_config_from_paths(plugin_config_paths(explicit, plugin_config_path))
 }
 
+/// Returns the physical `plugins.toml` files that contribute effective runtime or dynamic
+/// plugin configuration under the default discovery rules.
+pub(crate) fn effective_plugin_toml_sources() -> Result<Vec<PathBuf>, CliError> {
+    let Some(config) = load_plugin_toml_config(None, None)? else {
+        return Ok(Vec::new());
+    };
+    let mut sources = config.contributing_sources;
+    sources.sort();
+    sources.dedup();
+    Ok(sources)
+}
+
 fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlConfig>, CliError>
 where
     I: IntoIterator<Item = PathBuf>,
@@ -1034,6 +1052,7 @@ where
     let mut dynamic_plugins = Vec::new();
     let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
     let mut seen_plugin_ids = HashSet::new();
+    let mut contributing_sources = Vec::new();
     let mut runtime_documents = Vec::new();
 
     for path in &paths {
@@ -1051,6 +1070,11 @@ where
             })?;
         let resolved_plugins =
             resolve_dynamic_plugin_refs(path, &mut parsed, &mut seen_plugin_ids)?;
+        if !resolved_plugins.dynamic_plugins.is_empty()
+            || resolved_plugins.dynamic_plugin_policy != DynamicPluginHostPolicy::default()
+        {
+            contributing_sources.push(path.clone());
+        }
         dynamic_plugins.extend(resolved_plugins.dynamic_plugins);
         dynamic_plugin_policy.merge_from(resolved_plugins.dynamic_plugin_policy);
         runtime_documents.push((
@@ -1067,17 +1091,24 @@ where
         other => CliError::Config(other.to_string()),
     })?;
     match resolved {
-        Some((value, _sources)) => Ok(Some(PluginTomlConfig {
-            value: plugin_toml_runtime_value(value),
-            dynamic_plugins,
-            dynamic_plugin_policy,
-        })),
+        Some((value, sources)) => {
+            contributing_sources.extend(sources.iter().cloned());
+            contributing_sources.sort();
+            contributing_sources.dedup();
+            Ok(Some(PluginTomlConfig {
+                value: plugin_toml_runtime_value(value),
+                dynamic_plugins,
+                dynamic_plugin_policy,
+                contributing_sources,
+            }))
+        }
         None => Ok((!dynamic_plugins.is_empty()
             || dynamic_plugin_policy != DynamicPluginHostPolicy::default())
         .then_some(PluginTomlConfig {
             value: None,
             dynamic_plugins,
             dynamic_plugin_policy,
+            contributing_sources,
         })),
     }
 }
@@ -1137,12 +1168,18 @@ fn resolve_dynamic_plugin_refs(
     for dynamic in plugins.dynamic {
         let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
         let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
-            .map_err(|error| CliError::Config(error.to_string()))?;
+            .map_err(|error| {
+                CliError::Config(format!(
+                    "invalid dynamic plugin manifest referenced by {}: {error}",
+                    source.display()
+                ))
+            })?;
         let plugin_id = manifest.plugin.id.trim().to_owned();
         if !seen_plugin_ids.insert(plugin_id.clone()) {
             return Err(CliError::Config(format!(
-                "duplicate dynamic plugin id '{}' across plugins.toml sources",
-                plugin_id
+                "duplicate dynamic plugin id '{}' in {} across plugins.toml sources",
+                plugin_id,
+                source.display()
             )));
         }
         resolved.push(ResolvedDynamicPluginConfig {
