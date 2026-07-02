@@ -10,11 +10,10 @@
 use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
-use crate::api::runtime::callbacks::ToolExecutionCallback;
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
 
@@ -34,7 +33,7 @@ pub(crate) struct ScopeLocalRegistries {
     /// Tool request intercepts that can rewrite arguments before execution.
     pub(crate) tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Tool execution intercepts that wrap or replace callback execution.
-    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionCallback>>,
+    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
     /// LLM request sanitizers applied to emitted LLM-start payloads.
     pub(crate) llm_sanitize_request_guardrails: SortedRegistry<Guardrail<LlmSanitizeRequestFn>>,
     /// LLM response sanitizers applied to emitted LLM-end payloads.

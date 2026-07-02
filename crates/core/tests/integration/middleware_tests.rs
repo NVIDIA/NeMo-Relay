@@ -457,7 +457,7 @@ async fn test_execution_intercept_calls_next() {
         Arc::new(|_name, args, next| {
             Box::pin(async move {
                 // Call next — this should reach the original callable
-                next(args).await
+                next(args).await.map(Into::into)
             })
         }),
     )
@@ -506,7 +506,7 @@ async fn test_execution_intercept_skips_next() {
         Arc::new(|_name, _args, _next| {
             Box::pin(async move {
                 // Return a custom result without calling next
-                Ok(json!({"intercepted": true}))
+                Ok(json!({"intercepted": true}).into())
             })
         }),
     )
@@ -559,7 +559,7 @@ async fn test_execution_intercept_chain_ordering() {
                 o.lock().unwrap().push("intercept_1_before".into());
                 let result = next(args).await;
                 o.lock().unwrap().push("intercept_1_after".into());
-                result
+                result.map(Into::into)
             })
         }),
     )
@@ -576,7 +576,7 @@ async fn test_execution_intercept_chain_ordering() {
                 o.lock().unwrap().push("intercept_2_before".into());
                 let result = next(args).await;
                 o.lock().unwrap().push("intercept_2_after".into());
-                result
+                result.map(Into::into)
             })
         }),
     )
@@ -632,7 +632,7 @@ async fn test_execution_intercept_modifies_args() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("injected".into(), json!(true));
-                next(args).await
+                next(args).await.map(Into::into)
             })
         }),
     )
@@ -673,7 +673,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
 
     let mut plugin_ctx = PluginRegistrationContext::new();
     plugin_ctx
-        .register_tool_execution_outcome_intercept(
+        .register_tool_execution_intercept(
             "outcome_outer",
             1,
             Arc::new(|_name, args, next| {
@@ -692,13 +692,13 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         )
         .unwrap();
     register_tool_execution_intercept(
-        "raw_between_outcomes",
+        "passthrough_between_outcomes",
         2,
-        Arc::new(|_name, args, next| Box::pin(async move { next(args).await })),
+        Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
     )
     .unwrap();
     plugin_ctx
-        .register_tool_execution_outcome_intercept(
+        .register_tool_execution_intercept(
             "outcome_inner",
             3,
             Arc::new(|_name, args, next| {
@@ -712,7 +712,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
                                 .category(EventCategory::custom())
                                 .category_profile(
                                     CategoryProfile::builder()
-                                        .subtype("nvidia.visor.compression")
+                                        .subtype("example.tool.compression")
                                         .build(),
                                 )
                                 .data(json!({"saved_tokens": 12}))
@@ -777,13 +777,13 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         inner
             .category_profile()
             .and_then(|profile| profile.subtype.as_deref()),
-        Some("nvidia.visor.compression")
+        Some("example.tool.compression")
     );
     assert_eq!(inner.data().unwrap()["saved_tokens"], 12);
     assert_eq!(inner.metadata().unwrap()["source"], "test");
     drop(captured);
 
-    deregister_tool_execution_intercept("raw_between_outcomes").unwrap();
+    deregister_tool_execution_intercept("passthrough_between_outcomes").unwrap();
     let mut registrations = plugin_ctx.into_registrations();
     rollback_registrations(&mut registrations);
     deregister_subscriber("tool_outcome_mark_observer").unwrap();
@@ -816,7 +816,7 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
     .unwrap();
     let mut plugin_ctx = PluginRegistrationContext::new();
     plugin_ctx
-        .register_tool_execution_outcome_intercept(
+        .register_tool_execution_intercept(
             "outcome_before_error",
             2,
             Arc::new(|_name, args, next| {
@@ -881,7 +881,7 @@ async fn test_managed_tool_reuses_start_subscriber_snapshot_for_end_and_marks() 
     let captured_replacement = replacement_events.clone();
     let mut plugin_ctx = PluginRegistrationContext::new();
     plugin_ctx
-        .register_tool_execution_outcome_intercept(
+        .register_tool_execution_intercept(
             "mutate_tool_subscribers",
             1,
             Arc::new(move |_name, args, next| {
@@ -1030,7 +1030,8 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
                 Ok(json!({
                     "first": first?,
                     "second": second?,
-                }))
+                })
+                .into())
             })
         }),
     )
@@ -1040,7 +1041,7 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
     let captured_completion_order = completion_order.clone();
     let mut plugin_ctx = PluginRegistrationContext::new();
     plugin_ctx
-        .register_tool_execution_outcome_intercept(
+        .register_tool_execution_intercept(
             "delayed_outcomes",
             2,
             Arc::new(move |_name, args, next| {
@@ -1434,7 +1435,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
         1,
         Arc::new(move |_name, args, next| {
             ic.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -1592,7 +1593,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
                 o.lock().unwrap().push("global_before".into());
                 let r = next(args).await;
                 o.lock().unwrap().push("global_after".into());
-                r
+                r.map(Into::into)
             })
         }),
     )
@@ -1610,7 +1611,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
                 o.lock().unwrap().push("local_before".into());
                 let r = next(args).await;
                 o.lock().unwrap().push("local_after".into());
-                r
+                r.map(Into::into)
             })
         }),
     )
@@ -1733,7 +1734,7 @@ async fn test_conditional_rejection_prevents_execution() {
         1,
         Arc::new(move |_name, args, next| {
             ec.store(true, Ordering::SeqCst);
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -2272,7 +2273,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args, next| {
             record_middleware_callback(&tracked, "tool_execution_global");
             assert_middleware_callback_locks_are_free();
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -2284,7 +2285,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args, next| {
             record_middleware_callback(&tracked, "tool_execution_scope");
             assert_middleware_callback_locks_are_free();
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -2676,7 +2677,7 @@ async fn test_full_pipeline_integration() {
             let o = o4.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("execution_intercept".into());
-                next(args).await
+                next(args).await.map(Into::into)
             })
         }),
     )

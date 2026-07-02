@@ -25,6 +25,7 @@ use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -625,21 +626,35 @@ pub fn wrap_js_response_codec(
     })
 }
 
-/// Wrap a JS function `(args, next) => result` for tool execution intercept.
+/// Wrap a JS function `(args, next) => { result, pendingMarks? }` for tool execution intercept.
 ///
 /// The JS callback receives the tool arguments and a real `next(args)` function
 /// that returns a Promise for the downstream result.
 pub fn wrap_js_tool_exec_intercept_fn(
     func: Arc<PromiseAwareFn>,
-) -> Arc<
-    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> nemo_relay::api::runtime::ToolExecutionFn {
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let func = func.clone();
         let next_json: JsonNextFn = Arc::new(move |next_args| next(next_args));
-        Box::pin(async move { func.call_with_json_next(args, next_json).await })
+        Box::pin(async move {
+            let result = func.call_with_json_next(args, next_json).await?;
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct JsOutcome {
+                result: Json,
+                #[serde(default)]
+                pending_marks: Vec<JsPendingMarkSpec>,
+            }
+            let outcome: JsOutcome = serde_json::from_value(result).map_err(|error| {
+                FlowError::Internal(format!(
+                    "invalid JS tool execution intercept outcome: {error}"
+                ))
+            })?;
+            Ok(ToolExecutionInterceptOutcome {
+                result: outcome.result,
+                pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+            })
+        })
     })
 }
 

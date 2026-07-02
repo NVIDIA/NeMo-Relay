@@ -29,14 +29,13 @@ use crate::api::registry::{
     register_llm_execution_intercept, register_llm_request_intercept,
     register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
     register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_execution_outcome_intercept,
-    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
-    register_tool_sanitize_response_guardrail,
+    register_tool_execution_intercept, register_tool_request_intercept,
+    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionOutcomeFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -648,37 +647,6 @@ impl PluginRegistrationContext {
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
                             "tool execution intercept deregistration failed: {err}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
-    }
-
-    /// Registers a tool execution outcome intercept and records its rollback closure.
-    pub fn register_tool_execution_outcome_intercept(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: ToolExecutionOutcomeFn,
-    ) -> Result<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_execution_outcome_intercept(&qualified_name, priority, callback).map_err(
-            |err| {
-                PluginError::RegistrationFailed(format!("tool execution outcome intercept: {err}"))
-            },
-        )?;
-
-        let name_owned = qualified_name;
-        self.registrations.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_tool_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|err| {
-                        PluginError::RegistrationFailed(format!(
-                            "tool execution outcome intercept deregistration failed: {err}"
                         ))
                     })
             }),

@@ -383,7 +383,7 @@ class LLMRequest:
         ...
 
 class PendingMarkSpec:
-    """A runtime-owned mark specification returned by request middleware."""
+    """A runtime-owned mark specification returned by lifecycle middleware."""
     def __init__(
         self,
         name: str,
@@ -415,6 +415,18 @@ class LLMRequestInterceptOutcome:
     def request(self) -> LLMRequest: ...
     @property
     def annotated_request(self) -> Optional[AnnotatedLLMRequest]: ...
+    @property
+    def pending_marks(self) -> list[PendingMarkSpec]: ...
+
+class ToolExecutionInterceptOutcome:
+    """Canonical result returned by a tool execution intercept."""
+    def __init__(
+        self,
+        result: _Json,
+        pending_marks: list[PendingMarkSpec] = ...,
+    ) -> None: ...
+    @property
+    def result(self) -> _Json: ...
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 

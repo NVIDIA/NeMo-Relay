@@ -36,7 +36,7 @@ use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn, ToolExecutionOutcomeFn,
+    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
@@ -1215,7 +1215,7 @@ unsafe extern "C" fn native_plugin_context_register_tool_execution_intercept(
         Ok(name) => name,
         Err(status) => return status,
     };
-    match ctx.register_tool_execution_outcome_intercept(
+    match ctx.register_tool_execution_intercept(
         &name,
         priority,
         wrap_tool_execution_fn(instance, cb, user_data, free_fn),
@@ -1513,7 +1513,7 @@ fn wrap_tool_execution_fn(
     cb: NemoRelayNativeToolExecutionCb,
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
-) -> ToolExecutionOutcomeFn {
+) -> ToolExecutionFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, args, next| {
         let name = name.to_owned();

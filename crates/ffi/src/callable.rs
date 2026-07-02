@@ -25,13 +25,14 @@ use libc::c_char;
 use nemo_relay::api::runtime::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
@@ -81,6 +82,8 @@ pub type NemoRelayToolExecNextFn =
 /// Callback for tool execution intercepts. Receives arguments as JSON plus
 /// a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
 /// the next layer in the middleware chain, or return directly to short-circuit.
+/// The returned JSON must contain a `result` field and may contain a
+/// `pending_marks` array.
 pub type NemoRelayToolExecInterceptCb = unsafe extern "C" fn(
     user_data: *mut libc::c_void,
     args_json: *const c_char,
@@ -335,19 +338,16 @@ pub fn wrap_tool_exec_fn(
     })
 }
 
-/// Wrap a C tool execution intercept callback into an `Arc<dyn Fn(Json, ToolExecutionNextFn) -> ...>`.
+/// Wrap a C tool execution intercept callback into a [`ToolExecutionFn`].
 ///
 /// The wrapper packages the Rust `ToolExecutionNextFn` into a C-callable
-/// `(next_fn, next_ctx)` pair and passes both to the C intercept callback.
+/// `(next_fn, next_ctx)` pair and passes both to the C intercept callback. The
+/// callback must return a serialized [`ToolExecutionInterceptOutcome`].
 pub fn wrap_tool_exec_intercept_fn(
     cb: NemoRelayToolExecInterceptCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> Arc<
-    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> ToolExecutionFn {
     let ud = make_user_data(user_data, free_fn);
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let ud = ud.clone();
@@ -387,10 +387,14 @@ pub fn wrap_tool_exec_intercept_fn(
             let result_ptr = unsafe { cb(ud.ptr, c_args, tool_next_trampoline, next_ctx) };
             unsafe { drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn)) };
             unsafe { nemo_relay_string_free_internal(c_args) };
-            let result =
+            let outcome_json =
                 json_result_from_ptr(result_ptr, "tool execution intercept callback failed")?;
             unsafe { nemo_relay_string_free_internal(result_ptr) };
-            Ok(result)
+            serde_json::from_value::<ToolExecutionInterceptOutcome>(outcome_json).map_err(|error| {
+                FlowError::Internal(format!(
+                    "invalid tool execution intercept outcome JSON: {error}"
+                ))
+            })
         })
     })
 }

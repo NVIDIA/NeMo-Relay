@@ -135,8 +135,8 @@ func TestRegisterDeregisterReregisterToolRequestIntercept(t *testing.T) {
 
 func TestRegisterDeregisterReregisterToolExecutionIntercept(t *testing.T) {
 	name := "go_reregister_exec_int"
-	fn := func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-		return next(args)
+	fn := func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		return toolExecutionOutcome(next(args))
 	}
 
 	err := RegisterToolExecutionIntercept(name, 1, fn)
@@ -235,8 +235,8 @@ func TestDeregisterAllInterceptTypes(t *testing.T) {
 		func(n string, args json.RawMessage) json.RawMessage { return args },
 	)
 	RegisterToolExecutionIntercept("go_dereg_all_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(args)
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			return toolExecutionOutcome(next(args))
 		},
 	)
 

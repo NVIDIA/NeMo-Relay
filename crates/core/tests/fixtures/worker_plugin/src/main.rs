@@ -3,7 +3,7 @@
 
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolNext, WorkerPlugin,
-    WorkerSdkError, serve_plugin,
+    ToolExecutionInterceptOutcome, WorkerSdkError, serve_plugin,
 };
 use nemo_relay_worker::{
     ConfigDiagnostic, DiagnosticLevel, Json, LlmRequest, PendingMarkSpec,
@@ -155,7 +155,17 @@ impl WorkerPlugin for FixtureWorkerPlugin {
                 let result = next
                     .call(mark_json(args, "worker_plugin_tool_execution_request"))
                     .await?;
-                Ok(mark_json(result, "worker_plugin_tool_execution"))
+                Ok(
+                    ToolExecutionInterceptOutcome::new(mark_json(
+                        result,
+                        "worker_plugin_tool_execution",
+                    ))
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("fixture.worker.tool_execution.mark")
+                            .build(),
+                    ),
+                )
             },
         );
 

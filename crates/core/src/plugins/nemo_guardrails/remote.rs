@@ -938,13 +938,14 @@ pub(super) fn register_remote_backend(
                 };
 
                 let tool_result = next(current_args.clone()).await?;
-                if !enable_tool_output {
-                    return Ok(tool_result);
-                }
-
-                runtime
-                    .check_tool_output(&tool_name, &current_args, &tool_result)
-                    .await
+                let tool_result = if enable_tool_output {
+                    runtime
+                        .check_tool_output(&tool_name, &current_args, &tool_result)
+                        .await?
+                } else {
+                    tool_result
+                };
+                Ok(tool_result.into())
             })
         });
         ctx.register_tool_execution_intercept(

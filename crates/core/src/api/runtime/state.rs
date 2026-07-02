@@ -23,7 +23,7 @@ use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::callbacks::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionCallback, ToolExecutionNextFn,
+    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
     ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::subscriber_dispatcher;
@@ -58,7 +58,7 @@ pub struct NemoRelayContextState {
     /// Global tool request intercepts that can rewrite arguments before execution.
     pub(crate) tool_request_intercepts: SortedRegistry<Intercept<ToolInterceptFn>>,
     /// Global tool execution intercepts that wrap or replace callback execution.
-    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionCallback>>,
+    pub(crate) tool_execution_intercepts: SortedRegistry<ExecutionIntercept<ToolExecutionFn>>,
     /// Global LLM request sanitizers applied to emitted LLM-start payloads.
     pub(crate) llm_sanitize_request_guardrails: SortedRegistry<Guardrail<LlmSanitizeRequestFn>>,
     /// Global LLM response sanitizers applied to emitted LLM-end payloads.
@@ -824,13 +824,13 @@ impl NemoRelayContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// A composed [`ToolExecutionNextFn`] that wraps `default_fn` in every
-    /// matching execution intercept.
+    /// A composed [`ToolExecutionOutcomeNextFn`] that wraps `default_fn` in
+    /// every matching execution intercept.
     pub(crate) fn tool_build_execution_chain(
         &self,
         name: &str,
         default_fn: ToolExecutionNextFn,
-        scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionCallback>>],
+        scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
     ) -> ToolExecutionOutcomeNextFn {
         let matching =
             merge_execution_intercept_callables(&self.tool_execution_intercepts, scope_locals);
@@ -870,14 +870,7 @@ impl NemoRelayContextState {
                     })
                 };
                 Box::pin(async move {
-                    let mut outcome = match callable {
-                        ToolExecutionCallback::Raw(callable) => ToolExecutionInterceptOutcome::new(
-                            callable(&current_name, args, raw_next).await?,
-                        ),
-                        ToolExecutionCallback::Outcome(callable) => {
-                            callable(&current_name, args, raw_next).await?
-                        }
-                    };
+                    let mut outcome = callable(&current_name, args, raw_next).await?;
                     let mut downstream_batches = std::mem::take(
                         &mut *downstream_marks
                             .lock()

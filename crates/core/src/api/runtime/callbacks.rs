@@ -82,7 +82,9 @@ pub type ToolInterceptFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>
 ///   chain.
 ///
 /// # Returns
-/// A future resolving to the tool result JSON.
+/// A future resolving to the downstream tool result JSON. Pending marks from
+/// downstream intercepts are retained by the runtime and are not exposed
+/// through this continuation.
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
@@ -99,23 +101,13 @@ pub type ToolExecutionNextFn =
 /// - Third argument: Continuation for the remaining execution chain.
 ///
 /// # Returns
-/// A future resolving to the tool result JSON.
+/// A future resolving to the canonical tool execution outcome, containing the
+/// tool result and any pending lifecycle marks produced by this intercept.
 ///
 /// # Errors
 /// The future resolves to an error when the intercept or remaining execution
 /// chain fails.
 pub type ToolExecutionFn = Arc<
-    dyn Fn(&str, Json, ToolExecutionNextFn) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>>
-        + Send
-        + Sync,
->;
-
-/// Wrap or replace tool execution while scheduling lifecycle marks.
-///
-/// This callback receives the same raw-result continuation as
-/// [`ToolExecutionFn`]. The runtime retains marks returned by downstream
-/// outcome callbacks and prepends them to the marks returned here.
-pub type ToolExecutionOutcomeFn = Arc<
     dyn Fn(
             &str,
             Json,
@@ -124,15 +116,6 @@ pub type ToolExecutionOutcomeFn = Arc<
         + Send
         + Sync,
 >;
-
-/// Mixed representation stored by tool execution registries.
-#[derive(Clone)]
-pub(crate) enum ToolExecutionCallback {
-    /// Existing raw JSON execution callback.
-    Raw(ToolExecutionFn),
-    /// Outcome callback capable of scheduling tool lifecycle marks.
-    Outcome(ToolExecutionOutcomeFn),
-}
 
 /// Internal continuation carrying both a tool result and accumulated marks.
 pub(crate) type ToolExecutionOutcomeNextFn = Arc<

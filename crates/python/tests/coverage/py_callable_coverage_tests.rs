@@ -51,7 +51,7 @@ def sync_tool_exec(args):
     return {"sync_tool": args["x"] + 1}
 
 def sync_tool_intercept(name, args, next):
-    return {"name": name, "value": args["x"] + 2}
+    return ToolOutcome({"name": name, "value": args["x"] + 2})
 
 def sync_llm_exec(request):
     return {"model": request.content["model"], "mode": "sync"}
@@ -99,6 +99,12 @@ class RaisingResponseCodec:
                 py.get_type::<crate::py_types::PyLLMRequestInterceptOutcome>(),
             )
             .unwrap();
+        module
+            .setattr(
+                "ToolOutcome",
+                py.get_type::<crate::py_types::PyToolExecutionInterceptOutcome>(),
+            )
+            .unwrap();
 
         let tool_exec_py: Py<PyAny> = module.getattr("sync_tool_exec").unwrap().unbind();
         let tool_intercept_py: Py<PyAny> = module.getattr("sync_tool_intercept").unwrap().unbind();
@@ -120,7 +126,7 @@ class RaisingResponseCodec:
                 tool_intercept("tool", json!({"x": 3}), tool_next)
                     .await
                     .unwrap(),
-                json!({"name": "tool", "value": 5})
+                json!({"name": "tool", "value": 5}).into()
             );
 
             let llm_exec = wrap_py_llm_exec_fn(llm_exec_py);
