@@ -656,14 +656,26 @@ describe('Tool intercepts', () => {
       );
       assert.equal(result.original, false);
       assert.equal(result.wrapped, true);
-      await waitForSubscriberCallbacks(() => events.some((event) => event.name === 'node.tool.execution'));
+      await waitForSubscriberCallbacks(
+        () =>
+          events.some(
+            (event) =>
+              event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
+          ) && events.some((event) => event.name === 'node.tool.execution'),
+      );
       const start = events.find(
         (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'start',
       );
+      const end = events.find(
+        (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
+      );
       const mark = events.find((event) => event.name === 'node.tool.execution');
       assert.ok(start, 'expected tool start event');
+      assert.ok(end, 'expected tool end event');
       assert.ok(mark, 'expected tool execution pending mark');
       assert.equal(mark.parent_uuid, start.uuid);
+      assert.ok(events.indexOf(end) < events.indexOf(mark), 'expected tool end before pending mark');
+      assert.ok(mark.timestamp > end.timestamp, 'expected pending mark timestamp after tool end');
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_repl');
       deregisterSubscriber('node_tool_exec_mark_sub');
