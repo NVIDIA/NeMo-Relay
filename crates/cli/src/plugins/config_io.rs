@@ -26,6 +26,234 @@ pub(crate) enum TargetScope {
     Global,
 }
 
+/// A physical `plugins.toml` document together with its typed runtime plugin config.
+///
+/// The raw TOML remains the source of truth for host-only sections such as
+/// `[[plugins.dynamic]]`. Rendering patches the typed runtime fields back into that raw document
+/// instead of reconstructing the whole file from [`PluginConfig`].
+#[derive(Debug, Clone)]
+pub(crate) struct PluginConfigDocument {
+    path: PathBuf,
+    root: toml::Value,
+    config: PluginConfig,
+}
+
+/// One dynamic plugin reference declared in the physical document.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DynamicPluginConfigEntry {
+    /// Original index in `plugins.dynamic`; suitable for updating this document clone.
+    pub(crate) index: usize,
+    /// Manifest reference exactly as declared in TOML.
+    pub(crate) manifest: String,
+    /// Manifest path resolved relative to the physical `plugins.toml` file.
+    pub(crate) manifest_path: PathBuf,
+    /// `None` distinguishes an omitted config from an explicitly empty object.
+    pub(crate) config: Option<Map<String, Value>>,
+}
+
+impl PluginConfigDocument {
+    pub(crate) fn read(path: &Path) -> Result<Self, CliError> {
+        let root = read_plugin_toml_root(path)?;
+        let config = plugin_config_from_toml(&root)?;
+        Ok(Self {
+            path: path.to_path_buf(),
+            root,
+            config,
+        })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn config(&self) -> &PluginConfig {
+        &self.config
+    }
+
+    pub(crate) fn config_mut(&mut self) -> &mut PluginConfig {
+        &mut self.config
+    }
+
+    pub(crate) fn set_config(&mut self, config: PluginConfig) {
+        self.config = config;
+    }
+
+    pub(crate) fn dynamic_entries(&self) -> Result<Vec<DynamicPluginConfigEntry>, CliError> {
+        let Some(dynamic) = dynamic_plugin_entries(&self.root, &self.path)? else {
+            return Ok(Vec::new());
+        };
+
+        dynamic
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let entry = entry.as_table().ok_or_else(|| {
+                    invalid_dynamic_entry_error(&self.path, index, "must be a table")
+                })?;
+                let manifest = entry
+                    .get("manifest")
+                    .and_then(toml::Value::as_str)
+                    .ok_or_else(|| {
+                        invalid_dynamic_entry_error(&self.path, index, "manifest must be a string")
+                    })?
+                    .to_owned();
+                let config = entry
+                    .get("config")
+                    .map(|config| dynamic_config_from_toml(config, &self.path, index))
+                    .transpose()?;
+                Ok(DynamicPluginConfigEntry {
+                    index,
+                    manifest_path: resolve_manifest_ref(&self.path, &manifest),
+                    manifest,
+                    config,
+                })
+            })
+            .collect()
+    }
+
+    /// Set a dynamic plugin config, including an explicitly empty config object.
+    pub(crate) fn set_dynamic_config(
+        &mut self,
+        index: usize,
+        config: Map<String, Value>,
+    ) -> Result<(), CliError> {
+        let entry = self.dynamic_entry_mut(index)?;
+        let config = toml::Value::try_from(Value::Object(config)).map_err(|error| {
+            CliError::Config(format!(
+                "could not convert dynamic plugin config to TOML: {error}"
+            ))
+        })?;
+        entry.insert("config".to_owned(), config);
+        Ok(())
+    }
+
+    /// Remove a dynamic plugin config while retaining its manifest reference.
+    pub(crate) fn remove_dynamic_config(&mut self, index: usize) -> Result<(), CliError> {
+        self.dynamic_entry_mut(index)?.remove("config");
+        Ok(())
+    }
+
+    /// Patches a dynamic config relative to the JSON view that was originally loaded.
+    ///
+    /// Unchanged TOML values remain in the raw document. This matters for host extensions that
+    /// use TOML-native values, such as datetimes, which do not have an equivalent JSON type.
+    pub(crate) fn patch_dynamic_config(
+        &mut self,
+        index: usize,
+        original: Option<&Map<String, Value>>,
+        updated: Option<Map<String, Value>>,
+    ) -> Result<(), CliError> {
+        match (original, updated) {
+            (_, None) => self.remove_dynamic_config(index),
+            (None, Some(updated)) => self.set_dynamic_config(index, updated),
+            (Some(original), Some(updated)) => {
+                let entry = self.dynamic_entry_mut(index)?;
+                let Some(raw) = entry.get_mut("config") else {
+                    let updated = json_to_toml(Value::Object(updated))?;
+                    entry.insert("config".to_owned(), updated);
+                    return Ok(());
+                };
+                patch_json_value(
+                    raw,
+                    &Value::Object(original.clone()),
+                    &Value::Object(updated),
+                )
+            }
+        }
+    }
+
+    /// Render a full document after overlaying the typed runtime config onto the raw TOML.
+    pub(crate) fn render(&self) -> Result<String, CliError> {
+        let mut root = self.root.clone();
+        patch_plugin_config(&mut root, &self.config)?;
+        toml::to_string_pretty(&root)
+            .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))
+    }
+
+    pub(crate) fn write(&self) -> Result<(), CliError> {
+        let rendered = self.render()?;
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&self.path, rendered)?;
+        Ok(())
+    }
+
+    fn dynamic_entry_mut(
+        &mut self,
+        index: usize,
+    ) -> Result<&mut toml::map::Map<String, toml::Value>, CliError> {
+        let dynamic = dynamic_plugin_entries_mut(&mut self.root, &self.path)?.ok_or_else(|| {
+            CliError::Config(format!(
+                "dynamic plugin index {index} is out of range in {}",
+                self.path.display()
+            ))
+        })?;
+        let entry = dynamic.get_mut(index).ok_or_else(|| {
+            CliError::Config(format!(
+                "dynamic plugin index {index} is out of range in {}",
+                self.path.display()
+            ))
+        })?;
+        entry
+            .as_table_mut()
+            .ok_or_else(|| invalid_dynamic_entry_error(&self.path, index, "must be a table"))
+    }
+}
+
+fn patch_json_value(
+    raw: &mut toml::Value,
+    original: &Value,
+    updated: &Value,
+) -> Result<(), CliError> {
+    if original == updated {
+        return Ok(());
+    }
+    match (raw, original, updated) {
+        (toml::Value::Table(raw), Value::Object(original), Value::Object(updated)) => {
+            for key in original.keys() {
+                if !updated.contains_key(key) {
+                    raw.remove(key);
+                }
+            }
+            for (key, updated) in updated {
+                match (raw.get_mut(key), original.get(key)) {
+                    (Some(raw), Some(original)) => patch_json_value(raw, original, updated)?,
+                    _ => {
+                        raw.insert(key.clone(), json_to_toml(updated.clone())?);
+                    }
+                }
+            }
+            Ok(())
+        }
+        (toml::Value::Array(raw), Value::Array(original), Value::Array(updated))
+            if raw.len() == original.len() =>
+        {
+            let shared_len = original.len().min(updated.len());
+            for index in 0..shared_len {
+                patch_json_value(&mut raw[index], &original[index], &updated[index])?;
+            }
+            raw.truncate(updated.len());
+            for value in &updated[shared_len..] {
+                raw.push(json_to_toml(value.clone())?);
+            }
+            Ok(())
+        }
+        (raw, _, updated) => {
+            *raw = json_to_toml(updated.clone())?;
+            Ok(())
+        }
+    }
+}
+
+fn json_to_toml(value: Value) -> Result<toml::Value, CliError> {
+    toml::Value::try_from(value).map_err(|error| {
+        CliError::Config(format!(
+            "could not convert dynamic plugin config value to TOML: {error}"
+        ))
+    })
+}
+
 pub(crate) fn target_scope(command: &PluginsScopeArgs) -> Result<TargetScope, CliError> {
     let selected = [command.user, command.project, command.global]
         .into_iter()
@@ -67,20 +295,12 @@ pub(crate) fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn read_plugin_config(path: &Path) -> Result<PluginConfig, CliError> {
-    if !path.exists() {
-        return Ok(PluginConfig::default());
-    }
-    let raw = std::fs::read_to_string(path)?;
-    let parsed = raw
-        .parse::<toml::Table>()
-        .map(toml::Value::Table)
-        .map_err(|error| {
-            CliError::Config(format!(
-                "invalid plugin TOML in {}: {error}",
-                path.display()
-            ))
-        })?;
+    Ok(PluginConfigDocument::read(path)?.config)
+}
+
+fn plugin_config_from_toml(parsed: &toml::Value) -> Result<PluginConfig, CliError> {
     serde_json::from_value(
         serde_json::to_value(parsed)
             .map_err(|error| CliError::Config(format!("invalid plugin TOML shape: {error}")))?,
@@ -88,20 +308,11 @@ pub(crate) fn read_plugin_config(path: &Path) -> Result<PluginConfig, CliError> 
     .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))
 }
 
+#[cfg(test)]
 pub(crate) fn write_plugin_config(path: &Path, config: &PluginConfig) -> Result<(), CliError> {
-    let mut value = serde_json::to_value(config)
-        .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
-    prune_plugin_defaults(&mut value);
-    let toml_value: toml::Value = serde_json::from_value(value).map_err(|error| {
-        CliError::Config(format!("could not convert plugin config to TOML: {error}"))
-    })?;
-    let rendered = toml::to_string_pretty(&toml_value)
-        .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, rendered)?;
-    Ok(())
+    let mut document = PluginConfigDocument::read(path)?;
+    document.set_config(config.clone());
+    document.write()
 }
 
 pub(crate) fn append_dynamic_plugin_reference(
@@ -247,7 +458,207 @@ fn write_plugin_toml_root(path: &Path, root: &toml::Value) -> Result<(), CliErro
     Ok(())
 }
 
-fn resolve_manifest_ref(source: &Path, manifest: &str) -> PathBuf {
+fn dynamic_plugin_entries<'a>(
+    root: &'a toml::Value,
+    path: &Path,
+) -> Result<Option<&'a Vec<toml::Value>>, CliError> {
+    let Some(plugins) = root.as_table().and_then(|root| root.get("plugins")) else {
+        return Ok(None);
+    };
+    let plugins = plugins.as_table().ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: [plugins] must be a table",
+            path.display()
+        ))
+    })?;
+    let Some(dynamic) = plugins.get("dynamic") else {
+        return Ok(None);
+    };
+    dynamic.as_array().map(Some).ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: plugins.dynamic must be an array of tables",
+            path.display()
+        ))
+    })
+}
+
+fn dynamic_plugin_entries_mut<'a>(
+    root: &'a mut toml::Value,
+    path: &Path,
+) -> Result<Option<&'a mut Vec<toml::Value>>, CliError> {
+    let Some(plugins) = root.as_table_mut().and_then(|root| root.get_mut("plugins")) else {
+        return Ok(None);
+    };
+    let plugins = plugins.as_table_mut().ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: [plugins] must be a table",
+            path.display()
+        ))
+    })?;
+    let Some(dynamic) = plugins.get_mut("dynamic") else {
+        return Ok(None);
+    };
+    dynamic.as_array_mut().map(Some).ok_or_else(|| {
+        CliError::Config(format!(
+            "invalid plugin TOML in {}: plugins.dynamic must be an array of tables",
+            path.display()
+        ))
+    })
+}
+
+fn dynamic_config_from_toml(
+    config: &toml::Value,
+    path: &Path,
+    index: usize,
+) -> Result<Map<String, Value>, CliError> {
+    if !config.is_table() {
+        return Err(invalid_dynamic_entry_error(
+            path,
+            index,
+            "config must be a table",
+        ));
+    }
+    let config = serde_json::to_value(config).map_err(|error| {
+        invalid_dynamic_entry_error(path, index, &format!("config is invalid: {error}"))
+    })?;
+    config
+        .as_object()
+        .cloned()
+        .ok_or_else(|| invalid_dynamic_entry_error(path, index, "config must be a table"))
+}
+
+fn invalid_dynamic_entry_error(path: &Path, index: usize, message: &str) -> CliError {
+    CliError::Config(format!(
+        "invalid plugin TOML in {}: plugins.dynamic[{index}] {message}",
+        path.display()
+    ))
+}
+
+fn patch_plugin_config(root: &mut toml::Value, config: &PluginConfig) -> Result<(), CliError> {
+    let desired = pruned_plugin_config_toml(config)?;
+    let desired = desired
+        .as_table()
+        .expect("serialized plugin config is always a table");
+    let root = root
+        .as_table_mut()
+        .expect("root plugin TOML is always a table");
+
+    patch_required_field(root, desired, "version");
+    patch_policy(root, desired);
+    patch_components(root, desired);
+    Ok(())
+}
+
+fn pruned_plugin_config_toml(config: &PluginConfig) -> Result<toml::Value, CliError> {
+    let mut value = serde_json::to_value(config)
+        .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
+    prune_plugin_defaults(&mut value);
+    serde_json::from_value(value).map_err(|error| {
+        CliError::Config(format!("could not convert plugin config to TOML: {error}"))
+    })
+}
+
+fn patch_required_field(
+    root: &mut toml::map::Map<String, toml::Value>,
+    desired: &toml::map::Map<String, toml::Value>,
+    key: &str,
+) {
+    root.insert(
+        key.to_owned(),
+        desired
+            .get(key)
+            .expect("serialized plugin config contains required fields")
+            .clone(),
+    );
+}
+
+fn patch_policy(
+    root: &mut toml::map::Map<String, toml::Value>,
+    desired: &toml::map::Map<String, toml::Value>,
+) {
+    const POLICY_FIELDS: [&str; 3] = ["unknown_component", "unknown_field", "unsupported_value"];
+    let desired_policy = desired.get("policy").and_then(toml::Value::as_table);
+    let existing_policy = root.get_mut("policy").and_then(toml::Value::as_table_mut);
+
+    match (existing_policy, desired_policy) {
+        (Some(existing), desired) => {
+            for key in POLICY_FIELDS {
+                match desired.and_then(|policy| policy.get(key)) {
+                    Some(value) => {
+                        existing.insert(key.to_owned(), value.clone());
+                    }
+                    None => {
+                        existing.remove(key);
+                    }
+                }
+            }
+            if existing.is_empty() {
+                root.remove("policy");
+            }
+        }
+        (None, Some(desired)) => {
+            root.insert("policy".to_owned(), toml::Value::Table(desired.clone()));
+        }
+        (None, None) => {}
+    }
+}
+
+fn patch_components(
+    root: &mut toml::map::Map<String, toml::Value>,
+    desired: &toml::map::Map<String, toml::Value>,
+) {
+    let desired = desired
+        .get("components")
+        .and_then(toml::Value::as_array)
+        .expect("serialized plugin config components are an array");
+    let existing = root
+        .get("components")
+        .and_then(toml::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut consumed = vec![false; existing.len()];
+    let mut patched = Vec::with_capacity(desired.len());
+
+    for desired_component in desired {
+        let kind = desired_component
+            .as_table()
+            .and_then(|component| component.get("kind"))
+            .and_then(toml::Value::as_str);
+        let matching_index = existing.iter().enumerate().position(|(index, component)| {
+            !consumed[index]
+                && component
+                    .as_table()
+                    .and_then(|component| component.get("kind"))
+                    .and_then(toml::Value::as_str)
+                    == kind
+        });
+        let Some(index) = matching_index else {
+            patched.push(desired_component.clone());
+            continue;
+        };
+        consumed[index] = true;
+        let mut component = existing[index].clone();
+        if let (Some(component), Some(desired_component)) =
+            (component.as_table_mut(), desired_component.as_table())
+        {
+            for key in ["kind", "enabled", "config"] {
+                match desired_component.get(key) {
+                    Some(value) => {
+                        component.insert(key.to_owned(), value.clone());
+                    }
+                    None => {
+                        component.remove(key);
+                    }
+                }
+            }
+        }
+        patched.push(component);
+    }
+
+    root.insert("components".to_owned(), toml::Value::Array(patched));
+}
+
+pub(crate) fn resolve_manifest_ref(source: &Path, manifest: &str) -> PathBuf {
     let manifest = PathBuf::from(manifest);
     if manifest.is_absolute() {
         manifest
@@ -259,7 +670,19 @@ fn resolve_manifest_ref(source: &Path, manifest: &str) -> PathBuf {
     }
 }
 
+#[cfg(test)]
 pub(super) fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
+    print_rendered_preview(
+        &toml::to_string_pretty(&pruned_plugin_config_toml(config)?)
+            .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?,
+    )
+}
+
+pub(super) fn print_document_preview(document: &PluginConfigDocument) -> Result<(), CliError> {
+    print_rendered_preview(&document.render()?)
+}
+
+fn print_rendered_preview(rendered: &str) -> Result<(), CliError> {
     println!();
     println!(
         "{} {}",
@@ -267,14 +690,6 @@ pub(super) fn print_preview(config: &PluginConfig) -> Result<(), CliError> {
         style("plugins.toml preview").bold()
     );
     println!("{}", style("─".repeat(58)).black().bright());
-    let mut value = serde_json::to_value(config)
-        .map_err(|error| CliError::Config(format!("could not serialize plugin config: {error}")))?;
-    prune_plugin_defaults(&mut value);
-    let toml_value: toml::Value = serde_json::from_value(value).map_err(|error| {
-        CliError::Config(format!("could not convert plugin config to TOML: {error}"))
-    })?;
-    let rendered = toml::to_string_pretty(&toml_value)
-        .map_err(|error| CliError::Config(format!("could not render plugin TOML: {error}")))?;
     print!("{rendered}");
     println!("{}", style("─".repeat(58)).black().bright());
     Ok(())

@@ -17,9 +17,7 @@ use crate::config::{
     PricingValidateCommand, ServerArgs, resolve_server_config,
 };
 use crate::error::CliError;
-use crate::plugins::config_io::{
-    TargetScope, read_plugin_config, target_path, validate_config, write_plugin_config,
-};
+use crate::plugins::config_io::{PluginConfigDocument, TargetScope, target_path, validate_config};
 
 const PRICING_PLUGIN_KIND: &str = "pricing";
 
@@ -37,13 +35,13 @@ pub(crate) fn validate(command: PricingValidateCommand) -> Result<(), CliError> 
 pub(crate) fn init(command: PricingInitCommand) -> Result<(), CliError> {
     let scope = target_pricing_scope(&command.scope)?;
     let path = target_path(scope)?;
-    let mut plugin_config = read_plugin_config(&path)?;
-    let index = ensure_pricing_component(&mut plugin_config)?;
-    let pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
-    store_pricing_config(&mut plugin_config.components[index], &pricing_config)?;
-    plugin_config.components[index].enabled = true;
-    validate_config(&plugin_config)?;
-    write_plugin_config(&path, &plugin_config)?;
+    update_plugin_config_document(&path, |plugin_config| {
+        let index = ensure_pricing_component(plugin_config)?;
+        let pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
+        store_pricing_config(&mut plugin_config.components[index], &pricing_config)?;
+        plugin_config.components[index].enabled = true;
+        Ok(())
+    })?;
     println!("Initialized model pricing config: {}", path.display());
     Ok(())
 }
@@ -58,29 +56,38 @@ pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliErro
     read_pricing_catalog(&source_path)?;
     let scope = target_pricing_scope(&command.scope)?;
     let path = target_path(scope)?;
-    let mut plugin_config = read_plugin_config(&path)?;
-    let index = ensure_pricing_component(&mut plugin_config)?;
-    let mut pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
     let source = PricingSourceConfig::File { path: source_path };
 
-    if !pricing_config.sources.contains(&source) {
-        if command.append {
-            pricing_config.sources.push(source);
-        } else {
-            pricing_config.sources.insert(0, source);
+    update_plugin_config_document(&path, |plugin_config| {
+        let index = ensure_pricing_component(plugin_config)?;
+        let mut pricing_config = pricing_config_from_component(&plugin_config.components[index])?;
+        if !pricing_config.sources.contains(&source) {
+            if command.append {
+                pricing_config.sources.push(source);
+            } else {
+                pricing_config.sources.insert(0, source);
+            }
         }
-    }
-
-    store_pricing_config(&mut plugin_config.components[index], &pricing_config)?;
-    plugin_config.components[index].enabled = true;
-    validate_config(&plugin_config)?;
-    write_plugin_config(&path, &plugin_config)?;
+        store_pricing_config(&mut plugin_config.components[index], &pricing_config)?;
+        plugin_config.components[index].enabled = true;
+        Ok(())
+    })?;
     println!(
         "Added model pricing source: {} -> {}",
         command.path.display(),
         path.display()
     );
     Ok(())
+}
+
+fn update_plugin_config_document(
+    path: &Path,
+    update: impl FnOnce(&mut PluginConfig) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    let mut document = PluginConfigDocument::read(path)?;
+    update(document.config_mut())?;
+    validate_config(document.config())?;
+    document.write()
 }
 
 pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {

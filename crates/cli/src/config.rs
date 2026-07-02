@@ -197,7 +197,7 @@ pub(crate) struct PluginJsonContext<'a> {
 /// Plugin configuration subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum PluginsSubcommand {
-    /// Interactively create or edit built-in plugin configuration in `plugins.toml`.
+    /// Interactively create or edit built-in and dynamic plugin configuration.
     Edit(PluginsEditCommand),
     /// Register a manifest-backed dynamic plugin in `plugins.toml`.
     Add(PluginsAddCommand),

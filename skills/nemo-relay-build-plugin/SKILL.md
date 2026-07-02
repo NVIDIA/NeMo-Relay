@@ -72,6 +72,11 @@ Do not build a plugin when a narrower NeMo Relay surface is enough:
    failure rollback.
 8. Document how to enable the plugin, what config fields are supported, and how
    to roll back the component.
+9. For a dynamic plugin that should provide structured fields in
+   `nemo-relay plugins edit`, declare the `config_schema` capability and
+   reference a local Draft 7 or Draft 2020-12 JSON Schema file from
+   `[config_schema].path` in `relay-plugin.toml`. Schema-less plugins remain
+   editable as raw JSON objects.
 
 ## Config Shape
 
@@ -139,6 +144,8 @@ helper functions can be `camelCase`, but plugin config objects remain
 - [ ] A forced registration failure does not leave partial runtime behavior
       active.
 - [ ] Docs or examples show how to enable and roll back the plugin.
+- [ ] Dynamic plugins that need structured CLI editing package a valid local
+      JSON Schema and declare `config_schema` in `relay-plugin.toml`.
 
 ## Use Another Skill When
 

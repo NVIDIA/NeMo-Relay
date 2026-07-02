@@ -4,11 +4,10 @@
 use super::*;
 use crate::config::{AgentCommandConfig, GatewayConfig};
 use std::ffi::OsString;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 fn current_dir_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    &crate::test_support::CWD_TEST_LOCK
 }
 
 struct EnvScope {

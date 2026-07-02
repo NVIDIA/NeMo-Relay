@@ -27,6 +27,7 @@ use crate::plugins::policy::{
 use super::config_io::{
     append_dynamic_plugin_reference, remove_dynamic_plugin_reference, target_scope,
 };
+use super::schema::PluginConfigSchema;
 
 mod environment;
 mod responses;
@@ -66,6 +67,7 @@ fn add_with_environment_runner(
     let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
     let (manifest, manifest_ref) = load_manifest_for_action("add", &command.path)?;
     let plugin_id = manifest.plugin.id.trim().to_owned();
+    load_config_schema_for_manifest(&manifest, &manifest_ref)?;
     let revived = match find_record_by_id(&scopes, &plugin_id)? {
         Some(existing) if !existing.record.is_tombstoned() => {
             return Err(CliError::Config(format!(
@@ -234,6 +236,7 @@ pub(crate) fn validate(
             }
             let resolved = resolve_plugins_config(server.config.as_ref())?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &path)?;
+            load_config_schema_for_manifest(&manifest, &manifest_ref)?;
             let policy =
                 evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
             let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
@@ -272,6 +275,13 @@ pub(crate) fn validate(
             let entry = find_registered_entry(&scopes, "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
+            if let Some(schema) = load_config_schema_for_manifest(&manifest, &manifest_ref)? {
+                let config = host_config_by_id
+                    .get(&plugin_id)
+                    .map(|host_config| Value::Object(host_config.config.clone()))
+                    .unwrap_or_else(|| Value::Object(Map::new()));
+                schema.validate(&config)?;
+            }
             let policy =
                 evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
             let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
@@ -806,6 +816,23 @@ fn load_manifest_for_action(
     let path = path.into();
     DynamicPluginManifest::load_from_path(&path)
         .map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
+}
+
+fn load_config_schema_for_manifest(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+) -> Result<Option<PluginConfigSchema>, CliError> {
+    let schema_path = manifest
+        .resolve_config_schema_path(manifest_ref)
+        .map_err(|error| {
+            CliError::Config(format!(
+                "dynamic plugin '{}' config schema path could not be resolved from '{}': {error}",
+                manifest.plugin.id, manifest_ref
+            ))
+        })?;
+    schema_path
+        .map(|path| PluginConfigSchema::load(manifest.plugin.id.trim(), path))
+        .transpose()
 }
 
 fn manifest_ref_from_record(record: &DynamicPluginRecord) -> Result<String, CliError> {

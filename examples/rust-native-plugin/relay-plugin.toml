@@ -15,7 +15,10 @@ native_api = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_native"]
+items = ["plugin_native", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
 
 [source]
 # Keep this path aligned with `load.library` when materializing the manifest.
