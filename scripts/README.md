@@ -14,7 +14,8 @@ Keep `scripts/` focused on helpers that are still script-native:
 
 - `build-docs.sh`: compatibility wrapper around the Fern documentation validation recipe; it regenerates ignored Fern API reference pages before checking the site
 - `generate_attributions.sh`: regenerate attribution documents
-- `test-install.sh`: run mocked integration scenarios for the curl-based CLI installer
+- `test-install.sh`: run live GitHub release and local interface checks for the curl-based CLI installer
+- `test-install-mocks.sh`: run installer scenarios that require simulated platforms or failures
 
 ## Internal Layout
 

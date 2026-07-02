@@ -50,7 +50,14 @@ jobs:
         run: |
           sh -n install.sh
           sh -n scripts/test-install.sh
-          sh scripts/test-install.sh
+
+      - name: Run live installer tests
+        run: sh scripts/test-install.sh
+
+      - name: Run mock-only installer tests
+        run: |
+          sh -n scripts/test-install-mocks.sh
+          sh scripts/test-install-mocks.sh
 
   check:
     name: Run
