@@ -325,6 +325,9 @@ typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
  * Callback for tool execution intercepts. Receives arguments as JSON plus
  * a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
  * the next layer in the middleware chain, or return directly to short-circuit.
+ * The `result` field is passed to the remaining middleware and application;
+ * `pending_marks` are Relay-owned lifecycle metadata emitted after the
+ * tool-end event and are not included in the application-visible result.
  * The returned JSON must contain a `result` field and may contain a
  * `pending_marks` array. The returned string must be allocated with `malloc`
  * or an equivalent allocation compatible with `nemo_relay_string_free`.

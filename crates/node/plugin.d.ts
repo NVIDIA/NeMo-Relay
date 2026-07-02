@@ -54,7 +54,13 @@ export interface PendingMarkSpec {
   metadata?: Json;
 }
 
-/** Canonical result returned by a tool execution intercept. */
+/**
+ * Canonical result returned by a tool execution intercept.
+ *
+ * `result` is passed to the remaining middleware and application. `pendingMarks`
+ * are Relay-owned lifecycle metadata emitted after the tool-end event and are
+ * not included in the application-visible result.
+ */
 export interface ToolExecutionInterceptOutcome {
   result: Json;
   pendingMarks?: PendingMarkSpec[];

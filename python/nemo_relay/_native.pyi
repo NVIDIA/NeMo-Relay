@@ -419,7 +419,12 @@ class LLMRequestInterceptOutcome:
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 
 class ToolExecutionInterceptOutcome:
-    """Canonical result returned by a tool execution intercept."""
+    """Canonical result returned by a tool execution intercept.
+
+    ``result`` is passed to the remaining middleware and application.
+    ``pending_marks`` are Relay-owned lifecycle metadata emitted after the
+    tool-end event and are not included in the application-visible result.
+    """
     def __init__(
         self,
         result: _Json,

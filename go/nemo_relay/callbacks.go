@@ -235,7 +235,10 @@ type LLMRequestInterceptOutcome struct {
 	PendingMarks     []PendingMarkSpec `json:"pending_marks"`
 }
 
-// ToolExecutionInterceptOutcome is the canonical result of a tool execution intercept.
+// ToolExecutionInterceptOutcome is the canonical result of a tool execution
+// intercept. Result is passed to the remaining middleware and application;
+// PendingMarks are Relay-owned lifecycle metadata emitted after the tool-end
+// event and are not included in the application-visible result.
 type ToolExecutionInterceptOutcome struct {
 	Result       json.RawMessage   `json:"result"`
 	PendingMarks []PendingMarkSpec `json:"pending_marks"`

@@ -18,7 +18,11 @@ bitflags! {
     }
 }
 
-/// Result of a tool execution intercept that can schedule lifecycle marks.
+/// Canonical result returned by a tool execution intercept.
+///
+/// `result` is passed to the remaining middleware and application. `pending_marks`
+/// are Relay-owned lifecycle metadata retained separately and emitted after the
+/// tool-end event; they are not included in the application-visible result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolExecutionInterceptOutcome {
     /// Tool result returned to the remaining middleware and application.
