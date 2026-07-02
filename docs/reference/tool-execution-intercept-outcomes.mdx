@@ -1,0 +1,77 @@
+---
+title: "Tool Execution Intercept Outcomes"
+description: "Canonical result returned by tool execution intercepts and its managed lifecycle behavior."
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+A tool execution intercept wraps or short-circuits a managed tool callback.
+Every intercept returns one canonical outcome so Relay can keep lifecycle
+control data separate from the application-visible tool result.
+
+```json
+{
+  "result": {},
+  "pending_marks": []
+}
+```
+
+`result` is required and is the value that reaches the remaining middleware and
+the application. `pending_marks` defaults to an empty list. Each pending mark
+contains `name`, optional `category` and `category_profile`, and optional
+`data` and `metadata`. Relay assigns event UUIDs, parent UUIDs, and timestamps.
+
+## Continuation Semantics
+
+The default tool callback and an intercept's `next(args)` continuation both
+remain raw JSON APIs. `next(args)` returns only the downstream tool result; it
+does not expose downstream pending marks. Relay retains those marks, combines
+them in effective middleware order, and materializes them only after the final
+outcome succeeds.
+
+There is no mark-specific registration path. Use the existing global,
+scope-local, or plugin-context tool execution registration APIs and return the
+canonical outcome from every registered callback. Legacy raw intercept returns
+are rejected at public and dynamic-plugin boundaries.
+
+## Managed Lifecycle
+
+On successful managed execution, Relay emits the tool end event before any
+pending marks. The end timestamp is no earlier than one microsecond after the
+tool start timestamp. Relay emits pending marks in their resolved middleware
+order, assigns each mark the managed tool UUID as its parent, and gives each
+mark a timestamp after the tool end event.
+
+If execution or an intercept fails, Relay emits the error end event and
+discards accumulated pending marks. Pending marks are never included in the
+application-visible tool result or passed to sanitize-response guardrails.
+
+## Binding Contract
+
+The following callbacks return the same logical outcome in their native type
+or object shape:
+
+- Python callbacks return `ToolExecutionInterceptOutcome`.
+- Rust callbacks and native plugins return `ToolExecutionInterceptOutcome`.
+- Go callbacks return `ToolExecutionInterceptOutcome`.
+- Node.js callbacks return `{ result, pendingMarks? }`, where JavaScript
+  pending-mark DTOs use `categoryProfile`.
+- Public C callbacks return canonical JSON with `result` and optional
+  `pending_marks`.
+- `grpc-v1` worker SDKs return a `ToolExecutionInterceptOutcome` in a
+  `JsonEnvelope` with schema `nemo.relay.ToolExecutionInterceptOutcome@1`.
+
+Canonical JSON uses `pending_marks` and `category_profile` across bindings.
+
+## Migration
+
+This finalizes the unpublished tool execution intercept contract. Update every
+registered tool execution intercept to return the canonical outcome, while
+leaving the default tool callback and `next(args)` continuation as raw JSON.
+Rebuild development native plugins and workers against the current Relay main
+branch.
+
+## Related Topics
+
+- [LLM Request Intercept Outcomes](/reference/llm-request-intercept-outcomes)
+- [Add Middleware](/instrument-applications/advanced-guide)
