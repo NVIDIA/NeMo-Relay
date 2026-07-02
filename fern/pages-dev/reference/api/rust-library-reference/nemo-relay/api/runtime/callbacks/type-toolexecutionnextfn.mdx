@@ -21,7 +21,7 @@ Execution intercepts receive this callable as their `next` continuation and can 
 
 ## Returns
 
-A future resolving to the tool result JSON.
+A future resolving to the downstream tool result JSON. Pending marks from downstream intercepts are retained by the runtime and are not exposed through this continuation.
 
 ## Errors
 

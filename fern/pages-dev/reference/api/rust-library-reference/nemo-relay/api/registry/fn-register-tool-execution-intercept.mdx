@@ -1,7 +1,7 @@
 ---
 title: "Function register_tool_execution_intercept"
 sidebar-title: "register_tool_execution_intercept"
-description: "Register a global tool execution intercept. Execution intercepts can wrap or replace the tool callback."
+description: "Register a global tool execution intercept. Execution intercepts can wrap or replace the tool callback. Each callback returns a canonical tool execution outcome, while its continuation resolves to the raw downstream result JSON."
 position: 19
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_execution_intercept(\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callable: <a href=\"../runtime/callbacks/type-toolexecutionfn\">ToolExecutionFn</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
-Register a global tool execution intercept. Execution intercepts can wrap or replace the tool callback.
+Register a global tool execution intercept. Execution intercepts can wrap or replace the tool callback. Each callback returns a canonical tool execution outcome, while its continuation resolves to the raw downstream result JSON.
 
 ## Parameters
 

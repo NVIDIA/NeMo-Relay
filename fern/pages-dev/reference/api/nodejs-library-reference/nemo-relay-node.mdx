@@ -744,7 +744,7 @@ Register a tool execution intercept following the middleware chain pattern.
 The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
 
 ```ts
-export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (...args: any[]) => any): void
+export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
 ```
 
 ### `deregisterToolExecutionIntercept`
@@ -994,7 +994,7 @@ Register a scope-local tool execution intercept following the middleware chain p
 The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
 
 ```ts
-export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (...args: any[]) => any): void
+export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
 ```
 
 ### `scopeDeregisterToolExecutionIntercept`
