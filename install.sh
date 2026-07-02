@@ -13,12 +13,12 @@ usage() {
 Install the NeMo Relay CLI from GitHub Releases.
 
 Usage:
-  install.sh [VERSION] [--install-dir DIR]
+  install.sh [--install-dir DIR]
   install.sh --help
 
-Arguments:
-  VERSION              Release to install, for example 0.5.0 or v0.5.0.
-                       Defaults to NEMO_RELAY_VERSION, then the latest stable release.
+Environment:
+  NEMO_RELAY_VERSION   Release to install, for example 0.5.0 or v0.5.0.
+                       Defaults to the latest stable release.
 
 Options:
   --install-dir DIR    Destination directory (default: $HOME/.local/bin).
@@ -26,7 +26,7 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
-  curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- 0.5.0
+  curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
   curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
 EOF
 }
@@ -46,7 +46,6 @@ curl_with_timeouts() {
 
 version="${NEMO_RELAY_VERSION:-}"
 install_dir="${HOME:+${HOME}/.local/bin}"
-positional_version=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -70,16 +69,10 @@ while [ "$#" -gt 0 ]; do
             error "unknown option: $1"
             ;;
         *)
-            [ -z "$positional_version" ] || error "only one VERSION may be specified"
-            positional_version=$1
-            shift
+            error "unexpected argument: $1"
             ;;
     esac
 done
-
-if [ -n "$positional_version" ]; then
-    version=$positional_version
-fi
 
 [ -n "$install_dir" ] || error "install directory must not be empty"
 require_command curl

@@ -153,6 +153,11 @@ run_installer() {
     fi
 }
 
+set_version() {
+    NEMO_RELAY_VERSION=$1
+    export NEMO_RELAY_VERSION
+}
+
 test_latest_linux_x86_64() {
     new_case
     run_installer
@@ -161,15 +166,6 @@ test_latest_linux_x86_64() {
     assert_file_contains "$curl_log" "/releases/latest"
     assert_file_contains "$curl_log" "/0.5.0/nemo-relay-cli-x86_64-unknown-linux-musl-0.5.0"
     assert_no_temporary_files "${HOME}/.local/bin"
-}
-
-test_positional_version_precedence_and_v_normalization() {
-    new_case
-    NEMO_RELAY_VERSION=0.4.0
-    export NEMO_RELAY_VERSION
-    run_installer v0.5.0
-    assert_success
-    assert_file_contains "$curl_log" "/0.5.0/nemo-relay-cli-x86_64-unknown-linux-musl-0.5.0"
 }
 
 test_environment_version_and_linux_arm64() {
@@ -189,7 +185,8 @@ test_macos_arm64() {
     MOCK_UNAME_S=Darwin
     MOCK_UNAME_M=arm64
     export MOCK_UNAME_S MOCK_UNAME_M
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_success
     assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-apple-darwin-0.5.0"
 }
@@ -213,7 +210,8 @@ test_checksum_mismatch_preserves_existing_binary() {
     printf 'existing binary\n' >"${install_dir}/nemo-relay"
     MOCK_ACTUAL_CHECKSUM=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
     export MOCK_ACTUAL_CHECKSUM
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_failure
     assert_contains "$run_output" "checksum verification failed"
     assert_file_contains "${install_dir}/nemo-relay" "existing binary"
@@ -224,7 +222,8 @@ test_missing_checksum_fails_closed() {
     new_case
     MOCK_CHECKSUM_DOWNLOAD_FAIL=1
     export MOCK_CHECKSUM_DOWNLOAD_FAIL
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_failure
     assert_contains "$run_output" "could not download"
     [ ! -e "${HOME}/.local/bin/nemo-relay" ] || fail "binary installed without a checksum"
@@ -244,7 +243,8 @@ test_asset_download_failure() {
     new_case
     MOCK_ASSET_DOWNLOAD_FAIL=1
     export MOCK_ASSET_DOWNLOAD_FAIL
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_failure
     assert_contains "$run_output" "could not download"
     [ ! -e "${HOME}/.local/bin/nemo-relay" ] || fail "binary installed after asset download failure"
@@ -258,7 +258,8 @@ test_asset_download_404_preserves_existing_binary() {
     printf 'existing binary\n' >"${install_dir}/nemo-relay"
     MOCK_ASSET_HTTP_STATUS=404
     export MOCK_ASSET_HTTP_STATUS
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_failure
     assert_contains "$run_output" "could not download https://github.com/NVIDIA/NeMo-Relay/releases/download/0.5.0/nemo-relay-cli-x86_64-unknown-linux-musl-0.5.0"
     assert_file_contains "${install_dir}/nemo-relay" "existing binary"
@@ -270,7 +271,8 @@ test_replace_existing_binary() {
     install_dir="${HOME}/.local/bin"
     mkdir -p "$install_dir"
     printf 'existing binary\n' >"${install_dir}/nemo-relay"
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_success
     assert_file_contains "${install_dir}/nemo-relay" "mock nemo-relay"
     assert_no_temporary_files "$install_dir"
@@ -287,22 +289,27 @@ test_help_and_invalid_inputs() {
     assert_failure
     assert_contains "$run_output" "unknown option"
 
-    run_installer not-a-version
+    run_installer 0.5.0
+    assert_failure
+    assert_contains "$run_output" "unexpected argument"
+
+    set_version not-a-version
+    run_installer
     assert_failure
     assert_contains "$run_output" "unsupported version"
 
     HOME=""
     export HOME
-    run_installer 0.5.0
+    set_version 0.5.0
+    run_installer
     assert_failure
     assert_contains "$run_output" "install directory must not be empty"
 
-    run_installer 0.5.0 --install-dir "${case_root}/no-home-bin"
+    run_installer --install-dir "${case_root}/no-home-bin"
     assert_success
 }
 
 test_latest_linux_x86_64
-test_positional_version_precedence_and_v_normalization
 test_environment_version_and_linux_arm64
 test_macos_arm64
 test_unsupported_platform

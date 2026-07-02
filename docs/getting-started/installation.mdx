@@ -74,19 +74,10 @@ supported by `install.sh`.
 
 ### Installer Reference
 
-Set `VERSION` to a raw SemVer release tag, such as a stable or release-candidate
-tag, before using the pinned examples.
-
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- "$VERSION"
-```
-
-Select the version through the environment for automation:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION="$VERSION" sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
 ```
 
 Install into another directory:
@@ -97,8 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh |
 
 | Interface | Purpose |
 | --- | --- |
-| `VERSION` | Optional positional release tag; accepts an optional leading `v` |
-| `NEMO_RELAY_VERSION` | Release tag used when no positional version is supplied |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
 | `--install-dir DIR` | Destination directory; defaults to `$HOME/.local/bin` |
 | `-h`, `--help` | Display installer usage |
 

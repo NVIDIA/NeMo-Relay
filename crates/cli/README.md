@@ -66,17 +66,15 @@ using `sudo`. Verify the installation with:
 nemo-relay --version
 ```
 
-To install a specific release, pass its raw SemVer tag. An optional leading
-`v` is accepted:
+To install a specific release, set `NEMO_RELAY_VERSION` to its raw SemVer tag.
+An optional leading `v` is accepted:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- <version>
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
 ```
 
-`NEMO_RELAY_VERSION` provides the same version selection for automation. A
-positional version takes precedence when both are supplied. Run the installer
-with `--help` for the full interface, or use `--install-dir` to choose another
-destination:
+Run the installer with `--help` for the full interface, or use `--install-dir`
+to choose another destination:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
