@@ -24,10 +24,6 @@ readiness.
 The CLI is a Rust package in this repository, but most users should interact
 with the installed `nemo-relay` command rather than link against the crate.
 
-For a verified release binary, use the platform installer described in the
-[NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
-It includes Unix and Windows commands, version pinning, and checksum verification.
-
 ## Why Use It?
 
 - 🧭 **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
@@ -53,15 +49,30 @@ It includes Unix and Windows commands, version pinning, and checksum verificatio
 - ✅ **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
 
-## Installation
+## Installation Options
 
-To build the CLI from source:
+Cargo:
 
 ```bash
 cargo install nemo-relay-cli
 ```
 
-That command installs the binary as:
+Unix curl:
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+For version pinning, custom installation directories, verification,
+troubleshooting, and CLI usage, refer to the
+[NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
+
+The above commands install the binary as:
 
 ```bash
 nemo-relay --version
@@ -113,6 +124,11 @@ plugin config with:
 ```bash
 nemo-relay plugins edit
 ```
+
+The top-level editor menu contains one entry per supported built-in, followed by
+the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
+plugins with a manifest-declared JSON Schema provide structured field controls.
+Other dynamic plugins use a raw JSON object editor.
 
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or
