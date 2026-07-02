@@ -201,7 +201,7 @@ same values as `nemo_relay.uuid` and `nemo_relay.parent_uuid` attributes.
 
 When present, a step's `metrics` can carry `prompt_tokens`, `completion_tokens`,
 `cached_tokens` (cache read + write), and `cost_usd` (USD only); the trajectory
-`final_metrics` sums the metrics present on its steps as `total_*`. See
+`final_metrics` sums the metrics present on its steps as `total_*`. Refer to
 [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
 for the full mapping, including how ATIF sources these values from the codec
 annotation and the raw payload.
