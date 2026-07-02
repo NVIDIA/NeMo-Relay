@@ -455,7 +455,8 @@ fn write_or_merge_recovers_from_non_table_agents_value() {
 agents = "not-a-table"
 
 [plugins]
-enabled = true
+config = { version = 1, components = [] }
+
 "#,
     )
     .unwrap();
@@ -470,7 +471,7 @@ enabled = true
     let merged = std::fs::read_to_string(path).unwrap();
     assert!(merged.contains("[agents.codex]"));
     assert!(merged.contains(r#"command = "codex""#));
-    assert!(merged.contains("[plugins]"));
+    assert!(!merged.contains("[plugins]"));
 }
 
 #[test]

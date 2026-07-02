@@ -147,6 +147,7 @@ fn cli_help_exits_successfully() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Coding-agent gateway"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("plugin-config"));
 }
 
 #[test]
@@ -1511,6 +1512,27 @@ command = "codex --full-auto"
 "#,
     )
     .unwrap();
+    let plugin_config = temp.path().join("override-plugins.toml");
+    std::fs::write(
+        &plugin_config,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "append"
+"#,
+    )
+    .unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&nested)
@@ -1521,6 +1543,7 @@ command = "codex --full-auto"
         .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
         .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
         .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
+        .env("NEMO_RELAY_PLUGIN_CONFIG_PATH", &plugin_config)
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -1534,6 +1557,8 @@ command = "codex --full-auto"
     assert!(!stdout.contains("atif_dir"));
     assert!(!stdout.contains("openinference_endpoint"));
     assert!(stdout.contains("argv = codex"));
+    let expected_atof_path = std::path::Path::new("logs").join("events.jsonl");
+    assert!(stdout.contains(&format!("ATOF {}", expected_atof_path.display())));
 }
 
 #[test]
@@ -1608,8 +1633,6 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "coverage",
             "--session-metadata",
             r#"{"team":"cli"}"#,
-            "--plugin-config",
-            r#"{"components":[]}"#,
             "--gateway-mode",
             "passthrough",
             "--fail-closed",
