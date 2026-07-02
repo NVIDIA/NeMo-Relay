@@ -30,6 +30,12 @@ owns event UUIDs, parent UUIDs, and timestamps.
 The provider-body source of truth only depends on whether a request codec is
 active:
 
+Request codecs translate provider-specific request payloads into Relay's
+normalized annotated request for intercepts, then encode accepted annotated
+edits back into the provider request before execution. They normalize the
+payload shape rather than translating between providers; response codecs are a
+separate response-side path used to attach normalized data to lifecycle events.
+
 | Request codec | Provider body source | Header source |
 | --- | --- | --- |
 | No codec | `outcome.request.content` | `outcome.request.headers` |
