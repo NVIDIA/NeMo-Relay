@@ -10,11 +10,17 @@ use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
+use crate::api::scope::ScopeType;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::LlmCodec;
 use crate::error::{FlowError, Result};
 use crate::json::{Json, merge_json};
 use crate::shared_runtime::ensure_process_runtime_owner;
+
+/// Header carrying the current Dynamo agent session ID.
+pub const DYNAMO_SESSION_ID_HEADER_KEY: &str = "x-dynamo-session-id";
+/// Header carrying the parent Dynamo agent session ID.
+pub const DYNAMO_PARENT_SESSION_ID_HEADER_KEY: &str = "x-dynamo-parent-session-id";
 
 pub(crate) fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
     Some(
@@ -36,6 +42,65 @@ pub(crate) fn snapshot_event_subscribers(
 
 pub(crate) fn ensure_runtime_owner() -> Result<()> {
     ensure_process_runtime_owner()
+}
+
+/// Resolve the current and parent agent session IDs from the active scope stack.
+///
+/// The most recent two explicit Agent scopes are used.
+/// Harness-specific session metadata takes precedence over the scope name, while
+/// names keep application-created scopes useful when no metadata is attached.
+pub(crate) fn resolve_agent_session_ids() -> Option<(String, Option<String>)> {
+    let stack = current_scope_stack();
+    let stack = stack.read().ok()?;
+    let mut agent_scopes = stack
+        .scopes()
+        .iter()
+        .skip(1)
+        .filter(|scope| matches!(scope.scope_type, ScopeType::Agent))
+        .rev();
+    let current = agent_scopes.next().map(agent_scope_id)?;
+    let parent = agent_scopes.next().map(agent_scope_id);
+    Some((current, parent))
+}
+
+fn agent_scope_id(scope: &ScopeHandle) -> String {
+    scope
+        .metadata
+        .as_ref()
+        .and_then(|metadata| {
+            [
+                "codex_subagent_session_id",
+                "subagent_session_id",
+                "subagent_id",
+                "session_id",
+            ]
+            .into_iter()
+            .find_map(|key| metadata.get(key).and_then(|value| value.as_str()))
+        })
+        .unwrap_or(&scope.name)
+        .to_string()
+}
+
+pub(crate) fn inject_dynamo_session_ids(request: &mut LlmRequest) {
+    let Some((current, parent)) = resolve_agent_session_ids() else {
+        return;
+    };
+
+    request.headers.insert(
+        DYNAMO_SESSION_ID_HEADER_KEY.to_string(),
+        Json::String(current),
+    );
+    match parent {
+        Some(parent) => {
+            request.headers.insert(
+                DYNAMO_PARENT_SESSION_ID_HEADER_KEY.to_string(),
+                Json::String(parent),
+            );
+        }
+        None => {
+            request.headers.remove(DYNAMO_PARENT_SESSION_ID_HEADER_KEY);
+        }
+    }
 }
 
 pub(crate) fn metadata_with_otel_status(
@@ -105,15 +170,17 @@ pub(crate) fn run_request_intercepts_with_codec(
             &entries,
             codec.is_some(),
         )?;
+    let mut request = outcome.request;
+    inject_dynamo_session_ids(&mut request);
     let pending_marks = outcome.pending_marks;
 
     match (codec, outcome.annotated_request) {
         (Some(codec), Some(annotated)) => {
-            let mut encoded = codec.encode(&annotated, &outcome.request)?;
-            encoded.headers = outcome.request.headers;
+            let mut encoded = codec.encode(&annotated, &request)?;
+            encoded.headers.extend(request.headers);
             Ok((encoded, Some(Arc::new(annotated)), pending_marks))
         }
-        (_, annotated) => Ok((outcome.request, annotated.map(Arc::new), pending_marks)),
+        (_, annotated) => Ok((request, annotated.map(Arc::new), pending_marks)),
     }
 }
 

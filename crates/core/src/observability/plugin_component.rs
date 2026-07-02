@@ -12,9 +12,10 @@
 //! so configuration remains portable across bindings. Agent Trajectory
 //! Observability Format (ATOF), OpenTelemetry, and OpenInference each register
 //! one global subscriber when enabled. Agent Trajectory Interchange Format
-//! (ATIF) uses a global dispatcher that detects top-level agent scopes and
-//! creates one scope-local exporter for each trajectory run. Coding-agent turns
-//! that need bounded traces are represented as agent scopes with role metadata.
+//! (ATIF) uses a global dispatcher that detects top-level agent or turn scopes
+//! and creates one scope-local exporter for each trajectory run. Coding-agent
+//! turns that need bounded traces carry role metadata; their declared scope
+//! type is preserved in the exported event stream.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -1315,7 +1316,14 @@ fn is_top_level_trajectory_start(event: &Event) -> bool {
     if event.scope_category() != Some(ScopeCategory::Start) {
         return false;
     }
-    if event.scope_type() != Some(ScopeType::Agent) {
+    let is_agent_scope = event.scope_type() == Some(ScopeType::Agent);
+    let is_turn_scope = event.scope_type() == Some(ScopeType::Custom)
+        && event
+            .metadata()
+            .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
+            .and_then(Json::as_str)
+            == Some("turn");
+    if !is_agent_scope && !is_turn_scope {
         return false;
     }
     let Some(parent_uuid) = event.parent_uuid() else {

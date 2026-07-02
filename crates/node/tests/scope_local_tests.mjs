@@ -267,6 +267,7 @@ describe('Scope-local guardrail registration and execution', () => {
       assert.deepEqual(start.data, {
         headers: {
           'X-Scope-Local': 'yes',
+          'x-dynamo-session-id': 'sl_llm_guard_req_exec',
         },
         content: {
           messages: [],

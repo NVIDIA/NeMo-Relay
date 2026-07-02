@@ -32,6 +32,13 @@ Create a scope for the active request or agent run before adding LLM instrumenta
 
 The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Relay.
 
+For every managed LLM request, Relay automatically propagates agent lineage to
+Dynamo using `x-dynamo-session-id` and, when a parent agent scope is active,
+`x-dynamo-parent-session-id`. The current and parent IDs come from the most
+recent explicit `Agent` scopes in the active scope stack; the implicit root
+scope is ignored. Harness session metadata is used when present; application
+scope names are used otherwise. No plugin or configuration is required.
+
 If you want Relay to add cost estimates, initialize the built-in `pricing`
 plugin before the LLM call and attach a response codec that decodes `model` and
 token `usage` from the provider response. Provider- or framework-reported cost
