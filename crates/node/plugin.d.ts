@@ -100,13 +100,7 @@ export interface PluginContext {
     callback: (args: { name: string; request: Json; annotated: Json | null }) => {
       request: Json;
       annotated?: Json | null;
-      pendingMarks?: Array<{
-        name: string;
-        category?: string | null;
-        categoryProfile?: Json;
-        data?: Json;
-        metadata?: Json;
-      }>;
+      pendingMarks?: PendingMarkSpec[];
     },
   ): void;
   /** Register an LLM execution intercept for this component. */
