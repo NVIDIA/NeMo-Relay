@@ -33,6 +33,23 @@ env:
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
+  install-script:
+    name: Install script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Validate installer
+        run: |
+          sh -n install.sh
+          sh -n scripts/test-install.sh
+          sh scripts/test-install.sh
+
   check:
     name: Run
     runs-on: ubuntu-latest

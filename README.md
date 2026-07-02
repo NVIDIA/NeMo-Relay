@@ -51,12 +51,20 @@ trajectories.
 #### 1. Install the CLI
 
 ```bash
-cargo install nemo-relay-cli
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
 
-If using `cargo-binstall`, the CLI can also be installed with:
+Verify that the installed binary is available:
 
 ```bash
+nemo-relay --version
+```
+
+The installer supports Linux x86_64, Linux ARM64, and macOS ARM64. To install
+with a Rust toolchain instead, use either of these commands:
+
+```bash
+cargo install nemo-relay-cli
 cargo binstall nemo-relay-cli
 ```
 

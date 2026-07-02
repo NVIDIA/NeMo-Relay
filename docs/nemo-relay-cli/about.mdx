@@ -11,11 +11,14 @@ Use this section when you want the `nemo-relay` binary to observe local coding
 agent sessions through hooks, a passthrough LLM gateway, and NVIDIA NeMo Relay
 observability exporters.
 
-The NeMo Relay CLI is installed by the `nemo-relay-cli` Cargo package. It can run
-supported coding agents through a managed local gateway, forward agent hook
-payloads into NeMo Relay lifecycle events, route OpenAI-compatible or
-Anthropic-compatible model traffic through the gateway, and diagnose local
-configuration.
+Install the NeMo Relay CLI with the curl-based installer described in
+[Installation](/getting-started/installation). The installer provides the
+`nemo-relay` binary without requiring a Rust toolchain. The CLI can run supported
+coding agents through a managed local gateway, forward agent hook payloads into
+NeMo Relay lifecycle events, route OpenAI-compatible or Anthropic-compatible
+model traffic through the gateway, and diagnose local configuration. The
+`nemo-relay-cli` Cargo package remains available for source-based installation
+and unsupported platforms.
 
 ## Start Here When
 

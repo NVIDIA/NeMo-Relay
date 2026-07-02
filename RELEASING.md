@@ -320,8 +320,10 @@ After the release is live, verify:
 2. The `nemo-relay` wheel is visible on PyPI.
 3. The `nemo-relay-node` and `nemo-relay-openclaw` packages
    are visible on npm.
-4. The Fern documentation site shows the expected version and release notes.
-5. The GitHub Release page is complete and accurate.
+4. `install.sh` resolves the new stable tag and verifies the matching CLI
+   release asset checksum on a supported platform.
+5. The Fern documentation site shows the expected version and release notes.
+6. The GitHub Release page is complete and accurate.
 
 ## If Something Fails
 

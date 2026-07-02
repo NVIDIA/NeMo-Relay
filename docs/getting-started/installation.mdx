@@ -30,8 +30,17 @@ boundary, start from [Supported Integrations](/supported-integrations/about).
 Install the NeMo Relay CLI when you want the `nemo-relay` executable for
 coding-agent hook and LLM gateway observability.
 
+Install the latest stable release:
+
 ```bash
-cargo install nemo-relay-cli@0.5.0
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+
+The installer downloads the matching GitHub Release binary to
+`$HOME/.local/bin`. Verify that the command is available:
+
+```bash
+nemo-relay --version
 ```
 
 After installation, `nemo-relay` can also install persistent Claude Code and
@@ -44,6 +53,74 @@ nemo-relay install codex
 
 See [Plugin Installation](/nemo-relay-cli/plugin-installation) for the host
 plugin workflow.
+
+<Note>
+The installer downloads the published SHA-256 checksum for the selected release
+asset and fails without replacing an existing binary if verification does not
+succeed. It does not invoke `sudo` or edit your shell configuration.
+</Note>
+
+### Supported Platforms
+
+| Operating system | Architecture | Release target |
+| --- | --- | --- |
+| Linux | x86_64 | `x86_64-unknown-linux-musl` |
+| Linux | ARM64 | `aarch64-unknown-linux-musl` |
+| macOS | Apple Silicon | `aarch64-apple-darwin` |
+
+The installer reports the detected operating system and architecture when no
+matching asset exists. Native Windows and Intel macOS installations are not
+supported by `install.sh`.
+
+### Installer Reference
+
+Set `VERSION` to a raw SemVer release tag, such as a stable or release-candidate
+tag, before using the pinned examples.
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- "$VERSION"
+```
+
+Select the version through the environment for automation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION="$VERSION" sh
+```
+
+Install into another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
+```
+
+| Interface | Purpose |
+| --- | --- |
+| `VERSION` | Optional positional release tag; accepts an optional leading `v` |
+| `NEMO_RELAY_VERSION` | Release tag used when no positional version is supplied |
+| `--install-dir DIR` | Destination directory; defaults to `$HOME/.local/bin` |
+| `-h`, `--help` | Display installer usage |
+
+Rerun the installer to upgrade or replace the existing binary. It verifies the
+new download before replacing `$HOME/.local/bin/nemo-relay`.
+
+### Alternative Installation Methods
+
+Use Cargo on unsupported platforms or when you prefer to build from source:
+
+```bash
+cargo install nemo-relay-cli
+```
+
+If `cargo-binstall` is available, it can install the published release asset:
+
+```bash
+cargo binstall nemo-relay-cli
+```
+
+For PATH, permission, and unsupported-platform guidance, see the
+[CLI installation notes](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/cli/README.md#installation).
 
 ## Python
 

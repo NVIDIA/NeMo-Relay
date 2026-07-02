@@ -51,16 +51,48 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Installation
 
-Install the CLI:
+Install the latest stable CLI release on Linux x86_64, Linux ARM64, or macOS
+ARM64:
 
 ```bash
-cargo install nemo-relay-cli
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
 
-That command installs the binary as:
+The installer downloads the matching GitHub Release binary, verifies its
+published SHA-256 checksum, and installs it to `$HOME/.local/bin` without
+using `sudo`. Verify the installation with:
 
 ```bash
 nemo-relay --version
+```
+
+To install a specific release, pass its raw SemVer tag. An optional leading
+`v` is accepted:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- <version>
+```
+
+`NEMO_RELAY_VERSION` provides the same version selection for automation. A
+positional version takes precedence when both are supplied. Run the installer
+with `--help` for the full interface, or use `--install-dir` to choose another
+destination:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
+```
+
+Rerunning the installer verifies the new download before atomically replacing
+an existing `nemo-relay` binary. The installer never invokes `sudo` or edits
+your shell configuration. If the destination is not on `PATH`, add it before
+running `nemo-relay`.
+
+For unsupported platforms or source-based installation, use Cargo. If you
+already have `cargo-binstall`, it can use the same GitHub Release assets:
+
+```bash
+cargo install nemo-relay-cli
+cargo binstall nemo-relay-cli
 ```
 
 ## Getting Started
