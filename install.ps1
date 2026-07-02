@@ -143,6 +143,7 @@ try {
     $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
     $downloadFile = Join-Path $InstallDir ".nemo-relay.download.$([guid]::NewGuid().ToString('N'))"
     $checksumFile = Join-Path $InstallDir ".nemo-relay.checksum.$([guid]::NewGuid().ToString('N'))"
+    $backupFile = Join-Path $InstallDir ".nemo-relay.backup.$([guid]::NewGuid().ToString('N'))"
     $destination = Join-Path $InstallDir 'nemo-relay.exe'
 
     try {
@@ -160,14 +161,14 @@ try {
         }
 
         if (Test-Path -LiteralPath $destination) {
-            [System.IO.File]::Replace($downloadFile, $destination, $null)
+            [System.IO.File]::Replace($downloadFile, $destination, $backupFile)
         }
         else {
             [System.IO.File]::Move($downloadFile, $destination)
         }
     }
     finally {
-        Remove-Item -LiteralPath $downloadFile, $checksumFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $downloadFile, $checksumFile, $backupFile -Force -ErrorAction SilentlyContinue
     }
 
     Add-InstallDirectoryToPath $InstallDir

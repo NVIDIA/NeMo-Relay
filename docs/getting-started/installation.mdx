@@ -42,6 +42,10 @@ Install the latest stable release from Windows PowerShell:
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 
+These commands intentionally download the installer from `main` and install the
+latest stable CLI release. The version of this documentation page does not
+select the CLI version; set `NEMO_RELAY_VERSION` to install a specific release.
+
 The Unix installer downloads the matching GitHub Release binary to
 `$HOME/.local/bin`. The PowerShell installer downloads `nemo-relay.exe` to
 `%LOCALAPPDATA%\nemo-relay\bin`, adds that directory to the persistent user
@@ -105,6 +109,9 @@ Install into another directory from a Unix shell:
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
 ```
 
+Add the selected directory to `PATH` before running `nemo-relay` if it is not
+already present.
+
 To choose a PowerShell installation directory, download the script and pass
 `-InstallDir`:
 
@@ -131,13 +138,16 @@ new download before replacing the binary in the selected installation directory.
 
 ### Alternative Installation Methods
 
-Use Cargo on unsupported platforms or when you prefer to build from source:
+Use the installers on a supported platform when you want a prebuilt release
+asset. Use Cargo on unsupported platforms or when you prefer to build from
+source:
 
 ```bash
 cargo install nemo-relay-cli
 ```
 
-If `cargo-binstall` is available, it can install the published release asset:
+If you already use `cargo-binstall`, it can download the same published release
+asset through the Cargo interface:
 
 ```bash
 cargo binstall nemo-relay-cli

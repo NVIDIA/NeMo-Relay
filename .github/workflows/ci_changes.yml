@@ -36,6 +36,9 @@ on:
       run_go:
         description: 'Whether Go jobs should run'
         value: ${{ jobs.changes.outputs.run_go }}
+      run_installer:
+        description: 'Whether installer jobs should run'
+        value: ${{ jobs.changes.outputs.run_installer }}
       run_node:
         description: 'Whether Node.js jobs should run'
         value: ${{ jobs.changes.outputs.run_node }}
@@ -73,6 +76,7 @@ jobs:
       run_dependencies: ${{ inputs.full_ci || steps.filter.outputs.dependencies == 'true' }}
       run_docs: ${{ (inputs.full_ci || startsWith(inputs.ref_name, 'pull-request/')) && (inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.docs == 'true') }}
       run_go: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.go == 'true' }}
+      run_installer: ${{ inputs.full_ci || steps.filter.outputs.installer == 'true' }}
       run_node: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' || steps.filter.outputs.openclaw == 'true' }}
       run_node_package: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.node_package == 'true' }}
       run_openclaw: ${{ inputs.full_ci || steps.filter.outputs.ci == 'true' || steps.filter.outputs.shared == 'true' || steps.filter.outputs.node == 'true' || steps.filter.outputs.openclaw == 'true' }}
