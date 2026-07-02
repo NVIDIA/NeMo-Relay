@@ -101,6 +101,7 @@ case "$url" in
         ;;
     *)
         [ "${MOCK_ASSET_DOWNLOAD_FAIL:-0}" != 1 ] || exit 22
+        [ "${MOCK_ASSET_HTTP_STATUS:-200}" = 200 ] || exit 22
         printf '#!/bin/sh\nprintf "mock nemo-relay\\n"\n' >"$output"
         ;;
 esac
@@ -131,6 +132,7 @@ new_case() {
     MOCK_ACTUAL_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     MOCK_RELEASE_LOOKUP_FAIL=0
     MOCK_ASSET_DOWNLOAD_FAIL=0
+    MOCK_ASSET_HTTP_STATUS=200
     MOCK_CHECKSUM_DOWNLOAD_FAIL=0
     NEMO_RELAY_VERSION=""
     HOME=$home_dir
@@ -138,7 +140,8 @@ new_case() {
     MOCK_CURL_LOG=$curl_log
     export MOCK_UNAME_S MOCK_UNAME_M MOCK_LATEST_VERSION
     export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM
-    export MOCK_RELEASE_LOOKUP_FAIL MOCK_ASSET_DOWNLOAD_FAIL MOCK_CHECKSUM_DOWNLOAD_FAIL
+    export MOCK_RELEASE_LOOKUP_FAIL MOCK_ASSET_DOWNLOAD_FAIL MOCK_ASSET_HTTP_STATUS
+    export MOCK_CHECKSUM_DOWNLOAD_FAIL
     export NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG
 }
 
@@ -248,6 +251,20 @@ test_asset_download_failure() {
     assert_no_temporary_files "${HOME}/.local/bin"
 }
 
+test_asset_download_404_preserves_existing_binary() {
+    new_case
+    install_dir="${HOME}/.local/bin"
+    mkdir -p "$install_dir"
+    printf 'existing binary\n' >"${install_dir}/nemo-relay"
+    MOCK_ASSET_HTTP_STATUS=404
+    export MOCK_ASSET_HTTP_STATUS
+    run_installer 0.5.0
+    assert_failure
+    assert_contains "$run_output" "could not download https://github.com/NVIDIA/NeMo-Relay/releases/download/0.5.0/nemo-relay-cli-x86_64-unknown-linux-musl-0.5.0"
+    assert_file_contains "${install_dir}/nemo-relay" "existing binary"
+    assert_no_temporary_files "$install_dir"
+}
+
 test_replace_existing_binary() {
     new_case
     install_dir="${HOME}/.local/bin"
@@ -293,6 +310,7 @@ test_checksum_mismatch_preserves_existing_binary
 test_missing_checksum_fails_closed
 test_release_lookup_failure
 test_asset_download_failure
+test_asset_download_404_preserves_existing_binary
 test_replace_existing_binary
 test_help_and_invalid_inputs
 
