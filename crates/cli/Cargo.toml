@@ -38,8 +38,11 @@ console = "0.16"
 futures-util = "0.3"
 http = "1"
 http-body-util = "0.1"
-dialoguer = { version = "0.11", default-features = false }
+dialoguer = { version = "0.11", default-features = false, features = ["password"] }
+jsonschema = { version = "0.46.6", default-features = false }
+percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls-native-roots", "stream"] }
+regex = "1"
 ring = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

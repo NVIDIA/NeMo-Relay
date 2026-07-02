@@ -515,6 +515,9 @@ enabled = false
 [capabilities]
 items = ["plugin_worker", "config_schema"]
 
+[config_schema]
+path = "config.schema.json"
+
 [load]
 runtime = "python"
 entrypoint = "acme_guardrails.plugin:register"
@@ -627,6 +630,9 @@ items = [
   "config_schema",
 ]
 
+[config_schema]
+path = "schemas/config.schema.json"
+
 [load]
 runtime = "python"
 entrypoint = "acme_guardrails.plugin:register"
@@ -640,6 +646,255 @@ entrypoint = "acme_guardrails.plugin:register"
             DynamicPluginCapability::PluginWorker,
             DynamicPluginCapability::ConfigSchema,
         ]
+    );
+    assert_eq!(
+        manifest.config_schema,
+        Some(DynamicPluginManifestConfigSchema {
+            path: "schemas/config.schema.json".into(),
+        })
+    );
+}
+
+#[test]
+fn manifest_requires_config_schema_section_for_capability() {
+    let err = DynamicPluginManifest::parse_toml(
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.guardrails.missing-schema"
+kind = "worker"
+
+[compat]
+relay = ">=0.1.0,<0.2.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[load]
+runtime = "python"
+entrypoint = "acme_guardrails.plugin:register"
+"#,
+    )
+    .expect_err("config_schema capability without section should fail");
+
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(
+                message.contains("requires a [config_schema] section"),
+                "{message}"
+            );
+        }
+        other => panic!("unexpected missing config schema error: {other}"),
+    }
+}
+
+#[test]
+fn manifest_requires_config_schema_capability_for_section() {
+    let err = DynamicPluginManifest::parse_toml(
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.guardrails.missing-capability"
+kind = "worker"
+
+[compat]
+relay = ">=0.1.0,<0.2.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[config_schema]
+path = "config.schema.json"
+
+[load]
+runtime = "python"
+entrypoint = "acme_guardrails.plugin:register"
+"#,
+    )
+    .expect_err("config_schema section without capability should fail");
+
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("requires capabilities.items"), "{message}");
+        }
+        other => panic!("unexpected missing config schema capability error: {other}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_empty_config_schema_path() {
+    let err = DynamicPluginManifest::parse_toml(
+        &valid_worker_manifest_toml().replace("path = \"config.schema.json\"", "path = \"   \""),
+    )
+    .expect_err("empty config schema path should fail");
+
+    match err {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("config_schema.path"), "{message}");
+        }
+        other => panic!("unexpected empty config schema path error: {other}"),
+    }
+}
+
+#[test]
+fn manifest_rejects_uri_config_schema_paths() {
+    for path in [
+        "https://example.com/config.schema.json",
+        "http://example.com/config.schema.json",
+        "file:///tmp/config.schema.json",
+        "schema+custom://example/config.schema.json",
+    ] {
+        let err = DynamicPluginManifest::parse_toml(&valid_worker_manifest_toml().replace(
+            "path = \"config.schema.json\"",
+            &format!("path = \"{path}\""),
+        ))
+        .expect_err("URI config schema path should fail");
+
+        match err {
+            PluginError::InvalidConfig(message) => {
+                assert!(message.contains("local filesystem path"), "{message}");
+            }
+            other => panic!("unexpected URI config schema path error: {other}"),
+        }
+    }
+}
+
+#[test]
+fn manifest_rejects_unc_config_schema_paths() {
+    for path_declaration in [
+        r#"path = '\\server\share\config.schema.json'"#,
+        r#"path = '\\?\UNC\server\share\config.schema.json'"#,
+        r#"path = "//server/share/config.schema.json""#,
+    ] {
+        let err = DynamicPluginManifest::parse_toml(
+            &valid_worker_manifest_toml()
+                .replace(r#"path = "config.schema.json""#, path_declaration),
+        )
+        .expect_err("UNC config schema path should fail");
+
+        match err {
+            PluginError::InvalidConfig(message) => {
+                assert!(message.contains("local filesystem path"), "{message}");
+            }
+            other => panic!("unexpected UNC config schema path error: {other}"),
+        }
+    }
+}
+
+#[test]
+fn manifest_accepts_windows_drive_config_schema_paths() {
+    for path_declaration in [
+        r#"path = "C:/schemas/config.schema.json""#,
+        r#"path = 'C:\schemas\config.schema.json'"#,
+    ] {
+        DynamicPluginManifest::parse_toml(
+            &valid_worker_manifest_toml()
+                .replace(r#"path = "config.schema.json""#, path_declaration),
+        )
+        .expect("Windows drive schema path should be accepted");
+    }
+}
+
+#[test]
+fn manifest_accepts_local_config_schema_paths_containing_colons() {
+    for path_declaration in [
+        r#"path = "schemas:v2/config.schema.json""#,
+        r#"path = "C:relative.schema.json""#,
+    ] {
+        DynamicPluginManifest::parse_toml(
+            &valid_worker_manifest_toml()
+                .replace(r#"path = "config.schema.json""#, path_declaration),
+        )
+        .expect("local schema paths containing colons should be accepted");
+    }
+}
+
+#[test]
+fn manifest_resolves_relative_config_schema_path_from_manifest_parent() {
+    let dir = temp_dir("dynamic-plugin-config-schema-relative");
+    let manifest_path = dir.join(DYNAMIC_PLUGIN_MANIFEST_FILENAME);
+    fs::write(&manifest_path, valid_worker_manifest_toml()).expect("write manifest");
+    let canonical_manifest_path = fs::canonicalize(&manifest_path).expect("canonicalize manifest");
+    let manifest =
+        DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).expect("parse manifest");
+
+    assert_eq!(
+        manifest
+            .resolve_config_schema_path(&canonical_manifest_path)
+            .expect("resolve schema path"),
+        Some(
+            canonical_manifest_path
+                .parent()
+                .expect("canonical manifest parent")
+                .join("config.schema.json"),
+        )
+    );
+}
+
+#[test]
+fn manifest_resolver_rejects_mutated_non_local_config_schema_paths() {
+    let mut manifest =
+        DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).expect("parse manifest");
+
+    for path in [
+        "https://example.com/config.schema.json",
+        r"\\server\share\config.schema.json",
+        "//server/share/config.schema.json",
+    ] {
+        manifest.config_schema.as_mut().unwrap().path = path.to_owned();
+        let error = manifest
+            .resolve_config_schema_path("/plugins/native/relay-plugin.toml")
+            .expect_err("public resolver must reject non-local paths");
+        match error {
+            PluginError::InvalidConfig(message) => {
+                assert!(message.contains("local filesystem path"), "{message}");
+            }
+            other => panic!("unexpected config schema path error: {other}"),
+        }
+    }
+}
+
+#[test]
+fn manifest_resolves_absolute_config_schema_path_without_filesystem_access() {
+    let dir = temp_dir("dynamic-plugin-config-schema-absolute");
+    let manifest_path = dir.join(DYNAMIC_PLUGIN_MANIFEST_FILENAME);
+    fs::write(&manifest_path, valid_worker_manifest_toml()).expect("write manifest");
+    let canonical_manifest_path = fs::canonicalize(&manifest_path).expect("canonicalize manifest");
+    let absolute_schema_path = dir.join("missing.schema.json");
+    let manifest_source = valid_worker_manifest_toml().replace(
+        "path = \"config.schema.json\"",
+        &format!("path = {:?}", absolute_schema_path.to_string_lossy()),
+    );
+    let manifest = DynamicPluginManifest::parse_toml(&manifest_source).expect("parse manifest");
+
+    assert_eq!(
+        manifest
+            .resolve_config_schema_path(&canonical_manifest_path)
+            .expect("resolve schema path"),
+        Some(absolute_schema_path)
+    );
+}
+
+#[test]
+fn manifest_without_config_schema_resolves_to_none() {
+    let manifest =
+        DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).expect("parse manifest");
+
+    assert_eq!(
+        manifest
+            .resolve_config_schema_path("/plugins/native/relay-plugin.toml")
+            .expect("resolve absent schema path"),
+        None
     );
 }
 

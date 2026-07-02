@@ -22,6 +22,7 @@ allow = [
     "BSL-1.0",      # Boost Software License, required by xxhash-rust
     "ISC",
     "MIT",
+    "MIT-0",       # required by borrow-or-share through jsonschema/referencing
     "MPL-2.0",
     "Unicode-3.0",
     "Zlib",        # required by foldhash through tonic-prost-build/prost-build

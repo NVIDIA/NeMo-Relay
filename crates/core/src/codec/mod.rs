@@ -23,3 +23,7 @@ pub mod resolve;
 pub mod response;
 pub mod streaming;
 pub mod traits;
+
+#[cfg(test)]
+#[path = "../../tests/unit/codec/parity_tests.rs"]
+mod parity_tests;

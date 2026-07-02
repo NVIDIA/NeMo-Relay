@@ -1199,6 +1199,8 @@ test-python-plugin-e2e:
     cargo build -p nemo-relay-cli
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
+    # Explicit --config paths must exist; plugin state is written to sibling files.
+    : > "$config"
     manifest="$NEMO_RELAY_REPO_ROOT/examples/python-grpc-worker-plugin/relay-plugin.toml"
     PIP_FIND_LINKS="$tmp/wheels" NEMO_RELAY_PYTHON="$python_executable" \
         "$cli" --config "$config" plugins add "$manifest"

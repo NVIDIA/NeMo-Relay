@@ -1484,6 +1484,32 @@ command = "hermes --yolo chat"
 }
 
 #[test]
+fn cli_run_dry_run_rejects_missing_explicit_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-config.toml");
+
+    let output = Command::new(gateway_bin())
+        .args([
+            "run",
+            "--config",
+            missing.to_str().unwrap(),
+            "--agent",
+            "codex",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("does not exist"), "{stderr}");
+    assert!(
+        stderr.contains(missing.to_string_lossy().as_ref()),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");

@@ -22,6 +22,10 @@ pub mod openinference;
 pub mod otel;
 pub mod plugin_component;
 
+#[cfg(all(test, feature = "otel", feature = "openinference"))]
+#[path = "../../tests/unit/observability/exporter_parity_tests.rs"]
+mod exporter_parity_tests;
+
 #[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn estimate_cost_for_response_or_requested_model(
     event: &crate::api::event::Event,

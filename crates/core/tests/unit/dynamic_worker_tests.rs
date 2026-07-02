@@ -863,18 +863,19 @@ fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
             .expect("scope cleanup lock")
             .iter()
             .any(|handle| Arc::ptr_eq(handle, &stack));
-        if cleanup_registered {
+        if cleanup_registered
+            && state.scope_stacks.try_lock().is_ok()
+            && state.pending_scope_cleanups.try_lock().is_ok()
+        {
             break;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "scope cleanup should register before unwinding"
+            "scope cleanup should release host state locks before unwinding"
         );
         std::thread::yield_now();
     }
 
-    assert!(state.scope_stacks.try_lock().is_ok());
-    assert!(state.pending_scope_cleanups.try_lock().is_ok());
     drop(stack_guard);
     done_rx
         .recv_timeout(std::time::Duration::from_secs(1))

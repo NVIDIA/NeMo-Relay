@@ -39,6 +39,7 @@ impl Drop for CurrentDirGuard {
 
 struct EnvScope {
     _guard: MutexGuard<'static, ()>,
+    _cwd_guard: crate::test_support::CwdTestScope,
     values: Vec<(&'static str, Option<OsString>)>,
 }
 
@@ -54,6 +55,10 @@ impl EnvScope {
     }
 
     fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        // Acquire process-global locks in the same CWD-then-environment order as
+        // the rest of the CLI test suite. Lifecycle tests also change CWD while
+        // this scope is alive.
+        let cwd_guard = crate::test_support::CwdTestScope::locked();
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -71,6 +76,7 @@ impl EnvScope {
         }
         Self {
             _guard: guard,
+            _cwd_guard: cwd_guard,
             values: previous,
         }
     }
@@ -151,6 +157,34 @@ entrypoint = "plugin.py"
             capabilities = capabilities,
             signature_line = signature_line,
         ),
+    )
+    .unwrap();
+    manifest_path
+}
+
+fn write_dynamic_manifest_with_config_schema(
+    dir: &Path,
+    plugin_id: &str,
+    schema: &serde_json::Value,
+) -> PathBuf {
+    let manifest_path = write_dynamic_manifest_with_options(
+        dir,
+        plugin_id,
+        &["plugin_worker", "config_schema"],
+        None,
+    );
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest.push_str(
+        r#"
+
+[config_schema]
+path = "config.schema.json"
+"#,
+    );
+    std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(
+        dir.join("config.schema.json"),
+        serde_json::to_vec_pretty(schema).unwrap(),
     )
     .unwrap();
     manifest_path
@@ -478,11 +512,15 @@ fn materialize_native_example_manifest(dir: &Path) -> (PathBuf, PathBuf) {
         repository_root.join("examples/rust-native-plugin/relay-plugin.toml"),
     )
     .unwrap();
+    let config_schema =
+        std::fs::read(repository_root.join("examples/rust-native-plugin/config.schema.json"))
+            .unwrap();
     let manifest = template
         .replace("<platform-library-file>", &artifact_name)
         .replace("<artifact-sha256>", &digest);
     let manifest_path = dir.join("relay-plugin.toml");
     std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(dir.join("config.schema.json"), config_schema).unwrap();
     (manifest_path, artifact_path)
 }
 
@@ -583,6 +621,124 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let resolved = resolve_plugins_config(None).unwrap();
     assert_eq!(resolved.dynamic_plugins.len(), 1);
     assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.guardrail");
+}
+
+#[test]
+fn add_rejects_unreadable_declared_config_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("schema-missing");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_config_schema(
+        &plugin_dir,
+        "acme.schema-missing",
+        &serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object"
+        }),
+    );
+    std::fs::remove_file(plugin_dir.join("config.schema.json")).unwrap();
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("acme.schema-missing"), "{error}");
+    assert!(error.contains("config.schema.json"), "{error}");
+    assert!(error.contains("failed to read schema"), "{error}");
+}
+
+#[test]
+fn validate_path_rejects_invalid_declared_config_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("schema-invalid");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_config_schema(
+        &plugin_dir,
+        "acme.schema-invalid",
+        &serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": 42
+        }),
+    );
+
+    let error = validate(
+        PluginsValidateCommand {
+            target: plugin_dir.to_string_lossy().into_owned(),
+            json: false,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("acme.schema-invalid"), "{error}");
+    assert!(error.contains("schema is invalid"), "{error}");
+}
+
+#[test]
+fn validate_id_checks_resolved_host_config_against_declared_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("schema-config");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_config_schema(
+        &plugin_dir,
+        "acme.schema-config",
+        &serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {"port": {"type": "integer"}}
+        }),
+    );
+    let server = ServerArgs::default();
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let mut rendered = std::fs::read_to_string(&plugins_toml).unwrap();
+    rendered.push_str(
+        r#"
+[plugins.dynamic.config]
+port = "not-an-integer"
+"#,
+    );
+    std::fs::write(&plugins_toml, rendered).unwrap();
+
+    let error = validate(
+        PluginsValidateCommand {
+            target: "acme.schema-config".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("acme.schema-config"), "{error}");
+    assert!(error.contains("JSON pointer '/port'"), "{error}");
 }
 
 #[test]
@@ -1278,9 +1434,11 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.explicit-conflict");
+    let config_path = config_dir.join("gateway.toml");
+    std::fs::write(&config_path, "").unwrap();
 
     let server = ServerArgs {
-        config: Some(config_dir.join("gateway.toml")),
+        config: Some(config_path),
         ..ServerArgs::default()
     };
 
@@ -1650,9 +1808,11 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.explicit");
+    let config_path = config_dir.join("gateway.toml");
+    std::fs::write(&config_path, "").unwrap();
 
     let server = ServerArgs {
-        config: Some(config_dir.join("gateway.toml")),
+        config: Some(config_path),
         ..ServerArgs::default()
     };
 

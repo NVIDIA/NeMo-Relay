@@ -68,6 +68,18 @@ block_llms = false
 emit_isolated_scope = true
 ```
 
+The manifest declares the `config_schema` capability and references
+`config.schema.json`. After adding the plugin, use the editor for the same
+configuration target (`--user`, `--project`, or `--global`) to configure the
+fields without loading the native library:
+
+```bash
+nemo-relay plugins edit
+```
+
+The editor reads the schema file relative to `relay-plugin.toml`. It does not
+run the plugin during schema discovery.
+
 Start the gateway normally after the dynamic record is enabled:
 
 ```bash
