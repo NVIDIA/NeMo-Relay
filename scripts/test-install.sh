@@ -58,6 +58,8 @@ EOF
 #!/bin/sh
 output=""
 url=""
+connect_timeout=""
+max_time=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -o)
@@ -65,6 +67,14 @@ while [ "$#" -gt 0 ]; do
             shift 2
             ;;
         -H)
+            shift 2
+            ;;
+        --connect-timeout)
+            connect_timeout=$2
+            shift 2
+            ;;
+        --max-time)
+            max_time=$2
             shift 2
             ;;
         -*)
@@ -77,9 +87,12 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+[ "$connect_timeout" = 10 ] || exit 97
+[ "$max_time" = 300 ] || exit 98
 printf '%s\n' "$url" >>"$MOCK_CURL_LOG"
 case "$url" in
     */releases/latest)
+        [ "${MOCK_RELEASE_LOOKUP_FAIL:-0}" != 1 ] || exit 22
         printf '{"url":"mock","tag_name":"%s","prerelease":false}\n' "$MOCK_LATEST_VERSION"
         ;;
     *.sha256)
@@ -87,6 +100,7 @@ case "$url" in
         printf '%s  %s\n' "$MOCK_EXPECTED_CHECKSUM" "${url##*/}" >"$output"
         ;;
     *)
+        [ "${MOCK_ASSET_DOWNLOAD_FAIL:-0}" != 1 ] || exit 22
         printf '#!/bin/sh\nprintf "mock nemo-relay\\n"\n' >"$output"
         ;;
 esac
@@ -115,13 +129,16 @@ new_case() {
     MOCK_LATEST_VERSION=0.5.0
     MOCK_EXPECTED_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     MOCK_ACTUAL_CHECKSUM=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    MOCK_RELEASE_LOOKUP_FAIL=0
+    MOCK_ASSET_DOWNLOAD_FAIL=0
     MOCK_CHECKSUM_DOWNLOAD_FAIL=0
     NEMO_RELAY_VERSION=""
     HOME=$home_dir
     PATH="${mock_bin}:${original_path}"
     MOCK_CURL_LOG=$curl_log
     export MOCK_UNAME_S MOCK_UNAME_M MOCK_LATEST_VERSION
-    export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM MOCK_CHECKSUM_DOWNLOAD_FAIL
+    export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM
+    export MOCK_RELEASE_LOOKUP_FAIL MOCK_ASSET_DOWNLOAD_FAIL MOCK_CHECKSUM_DOWNLOAD_FAIL
     export NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG
 }
 
@@ -211,6 +228,26 @@ test_missing_checksum_fails_closed() {
     assert_no_temporary_files "${HOME}/.local/bin"
 }
 
+test_release_lookup_failure() {
+    new_case
+    MOCK_RELEASE_LOOKUP_FAIL=1
+    export MOCK_RELEASE_LOOKUP_FAIL
+    run_installer
+    assert_failure
+    assert_contains "$run_output" "could not resolve the latest stable release"
+}
+
+test_asset_download_failure() {
+    new_case
+    MOCK_ASSET_DOWNLOAD_FAIL=1
+    export MOCK_ASSET_DOWNLOAD_FAIL
+    run_installer 0.5.0
+    assert_failure
+    assert_contains "$run_output" "could not download"
+    [ ! -e "${HOME}/.local/bin/nemo-relay" ] || fail "binary installed after asset download failure"
+    assert_no_temporary_files "${HOME}/.local/bin"
+}
+
 test_replace_existing_binary() {
     new_case
     install_dir="${HOME}/.local/bin"
@@ -254,6 +291,8 @@ test_macos_arm64
 test_unsupported_platform
 test_checksum_mismatch_preserves_existing_binary
 test_missing_checksum_fails_closed
+test_release_lookup_failure
+test_asset_download_failure
 test_replace_existing_binary
 test_help_and_invalid_inputs
 

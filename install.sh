@@ -40,6 +40,10 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || error "required command not found: $1"
 }
 
+curl_with_timeouts() {
+    curl -fsSL --connect-timeout 10 --max-time 300 "$@"
+}
+
 version="${NEMO_RELAY_VERSION:-}"
 install_dir="${HOME:+${HOME}/.local/bin}"
 positional_version=""
@@ -84,7 +88,7 @@ require_command mktemp
 
 if [ -z "$version" ]; then
     printf 'Finding the latest stable NeMo Relay release...\n'
-    release_json=$(curl -fsSL \
+    release_json=$(curl_with_timeouts \
         -H 'Accept: application/vnd.github+json' \
         -H 'User-Agent: nemo-relay-install-script' \
         "${GITHUB_API_URL}/releases/latest") || error "could not resolve the latest stable release"
@@ -135,8 +139,8 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 printf 'Downloading NeMo Relay CLI %s for %s...\n' "$version" "$target"
-curl -fsSL -o "$download_file" "$asset_url" || error "could not download ${asset_url}"
-curl -fsSL -o "$checksum_file" "$checksum_url" || error "could not download ${checksum_url}"
+curl_with_timeouts -o "$download_file" "$asset_url" || error "could not download ${asset_url}"
+curl_with_timeouts -o "$checksum_file" "$checksum_url" || error "could not download ${checksum_url}"
 
 expected_checksum=$(sed -n '1{s/[[:space:]].*//;p;}' "$checksum_file" | tr 'A-F' 'a-f')
 printf '%s\n' "$expected_checksum" | grep -Eq '^[0-9a-f]{64}$' || \
