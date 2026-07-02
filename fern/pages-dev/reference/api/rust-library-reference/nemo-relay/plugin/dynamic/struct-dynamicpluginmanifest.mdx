@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginManifest &#123;\n    pub manifest_version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub plugin: <a href=\"struct-dynamicpluginmanifestplugin\">DynamicPluginManifestPlugin</a>,\n    pub compat: <a href=\"struct-dynamicpluginmanifestcompat\">DynamicPluginManifestCompat</a>,\n    pub defaults: <a href=\"struct-dynamicpluginmanifestdefaults\">DynamicPluginManifestDefaults</a>,\n    pub capabilities: <a href=\"struct-dynamicpluginmanifestcapabilities\">DynamicPluginManifestCapabilities</a>,\n    pub load: <a href=\"enum-dynamicpluginmanifestload\">DynamicPluginManifestLoad</a>,\n    pub source: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestsource\">DynamicPluginManifestSource</a>&gt;,\n    pub integrity: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestintegrity\">DynamicPluginManifestIntegrity</a>&gt;,\n    pub description: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct DynamicPluginManifest &#123;\n    pub manifest_version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub plugin: <a href=\"struct-dynamicpluginmanifestplugin\">DynamicPluginManifestPlugin</a>,\n    pub compat: <a href=\"struct-dynamicpluginmanifestcompat\">DynamicPluginManifestCompat</a>,\n    pub defaults: <a href=\"struct-dynamicpluginmanifestdefaults\">DynamicPluginManifestDefaults</a>,\n    pub capabilities: <a href=\"struct-dynamicpluginmanifestcapabilities\">DynamicPluginManifestCapabilities</a>,\n    pub config_schema: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestconfigschema\">DynamicPluginManifestConfigSchema</a>&gt;,\n    pub load: <a href=\"enum-dynamicpluginmanifestload\">DynamicPluginManifestLoad</a>,\n    pub source: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestsource\">DynamicPluginManifestSource</a>&gt;,\n    pub integrity: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-dynamicpluginmanifestintegrity\">DynamicPluginManifestIntegrity</a>&gt;,\n    pub description: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n&#125;"}} /></pre>
 
 Authored `relay-plugin.toml` manifest.
 
@@ -34,6 +34,10 @@ Default desired-state settings.
 ### `capabilities: DynamicPluginManifestCapabilities`
 
 Required capability declarations.
+
+### `config_schema: Option<DynamicPluginManifestConfigSchema>`
+
+Optional static configuration schema reference.
 
 ### `load: DynamicPluginManifestLoad`
 
@@ -74,6 +78,14 @@ Loads and validates a `relay-plugin.toml` manifest from a file path or directory
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn validate(&amp;self) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Validates the authored manifest against the v1 contract.
+
+#### `resolve_config_schema_path`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn resolve_config_schema_path(\n    &amp;self,\n    canonical_manifest_path: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.AsRef.html\">AsRef</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.Path.html\">Path</a>&gt;,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>&gt;&gt;"}} /></pre>
+
+Resolves the declared configuration schema path without accessing it.
+
+Relative schema paths are resolved from the parent directory of the canonical `relay-plugin.toml` path. Absolute local paths are returned unchanged.
 
 #### `into_record`
 
