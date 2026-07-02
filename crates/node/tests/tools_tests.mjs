@@ -707,6 +707,21 @@ describe('Tool intercepts', () => {
     }
   });
 
+  it('execution intercept rejects unknown pending-mark fields', async () => {
+    registerToolExecutionIntercept('node_tool_exec_bad_mark', 10, async () => ({
+      result: { ok: true },
+      pendingMarks: [{ name: 'node.bad.mark', category_profile: { subtype: 'invalid.snake.case' } }],
+    }));
+    try {
+      await assert.rejects(
+        () => toolCallExecute('bad_mark_tool', {}, (args) => args, null, null, null, null),
+        /unknown field.*category_profile/i,
+      );
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_bad_mark');
+    }
+  });
+
   it('async execute falls back to unknown error for primitive rejections', async () => {
     await assert.rejects(
       () =>

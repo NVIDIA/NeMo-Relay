@@ -1757,7 +1757,10 @@ def register_tool_execution_intercept(name: str, priority: int, callable: _ToolE
     Args:
         name: Unique intercept name.
         priority: Execution order; lower values run first.
-        callable: Middleware callback that may call or short-circuit ``next``.
+        callable: Middleware callback returning
+            ``ToolExecutionInterceptOutcome``. It may call or short-circuit
+            ``next``; ``next`` resolves to the raw downstream result while
+            Relay retains downstream pending marks.
 
     Returns:
         ``None``.
@@ -1987,7 +1990,10 @@ def scope_register_tool_execution_intercept(
         scope_uuid: UUID of the owning scope.
         name: Unique intercept name within that scope.
         priority: Execution order; lower values run first.
-        callable: Middleware callback used while the owning scope is active.
+        callable: Middleware callback returning
+            ``ToolExecutionInterceptOutcome`` while the owning scope is active.
+            Its ``next`` continuation resolves to the raw downstream result
+            while Relay retains downstream pending marks.
 
     Returns:
         ``None``.

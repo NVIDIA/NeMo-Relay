@@ -96,7 +96,13 @@ unsafe extern "C" fn tool_exec_intercept_cb(
     CString::new(
         json!({
             "result": result,
-            "pending_marks": [],
+            "pending_marks": [{
+                "name": "ffi.tool.execution",
+                "category": "custom",
+                "category_profile": { "subtype": "ffi.tool.execution" },
+                "data": { "source": "c" },
+                "metadata": { "fixture": true },
+            }],
         })
         .to_string(),
     )
@@ -291,7 +297,21 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
         .unwrap();
     assert_eq!(intercepted.result["intercepted"], json!(true));
     assert_eq!(intercepted.result["from_next"]["v"], json!(1));
-    assert!(intercepted.pending_marks.is_empty());
+    assert_eq!(intercepted.pending_marks.len(), 1);
+    let mark = &intercepted.pending_marks[0];
+    assert_eq!(mark.name, "ffi.tool.execution");
+    assert_eq!(
+        mark.category.as_ref().map(|category| category.as_str()),
+        Some("custom")
+    );
+    assert_eq!(
+        mark.category_profile
+            .as_ref()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("ffi.tool.execution")
+    );
+    assert_eq!(mark.data.as_ref().unwrap()["source"], "c");
+    assert_eq!(mark.metadata.as_ref().unwrap()["fixture"], true);
 
     let legacy_intercept =
         wrap_tool_exec_intercept_fn(tool_exec_legacy_intercept_cb, std::ptr::null_mut(), None);

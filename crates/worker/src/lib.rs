@@ -274,6 +274,10 @@ impl PluginContext {
     }
 
     /// Registers a tool execution intercept.
+    ///
+    /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
+    /// [`ToolNext::call`] continues the chain and returns only the raw
+    /// downstream result JSON; Relay retains downstream pending marks.
     pub fn register_tool_execution_intercept<F, Fut>(
         &mut self,
         name: &str,

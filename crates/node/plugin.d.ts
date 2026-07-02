@@ -131,7 +131,10 @@ export interface PluginContext {
     breakChain: boolean,
     callback: (name: string, args: Json) => Json,
   ): void;
-  /** Register a tool execution intercept for this component. */
+  /**
+   * Register tool execution middleware that returns a canonical outcome.
+   * The `next` callback resolves to the raw downstream result.
+   */
   registerToolExecutionIntercept(
     name: string,
     priority: number,
