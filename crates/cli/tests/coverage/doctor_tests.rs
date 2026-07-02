@@ -8,6 +8,8 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::config::ResolvedDynamicPluginConfig;
+
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -258,6 +260,22 @@ fn format_human_emits_fixed_section_order() {
 }
 
 #[test]
+fn format_human_distinguishes_plugin_files_from_plugin_resolution() {
+    let mut report = empty_report();
+    report.configuration.plugin_configs.push(ConfigLayer {
+        path: PathBuf::from("/tmp/plugins.toml"),
+        status: Status::Pass,
+        active: true,
+        details: "discovered and contributes to plugin resolution".into(),
+    });
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Plugin files"));
+    assert!(rendered.contains("Plugins    · plugins.toml not configured"));
+}
+
+#[test]
 fn format_human_reports_all_checks_passed_on_clean_report() {
     let report = empty_report();
     let rendered = format_human(&report);
@@ -453,6 +471,77 @@ fn plugin_layer_status_surfaces_source_specific_semantic_errors() {
     assert_eq!(layer.status, Status::Fail);
     assert!(!layer.active);
     assert!(layer.details.contains("invalid plugin configuration"));
+}
+
+#[test]
+fn plugin_resolution_check_covers_all_resolution_outcomes() {
+    let valid = Check {
+        name: "Resolution",
+        status: Status::Pass,
+        details: "valid".into(),
+    };
+    let failed = Check {
+        name: "Resolution",
+        status: Status::Fail,
+        details: "merged configuration failed".into(),
+    };
+    let mut with_runtime_config = ResolvedConfig::default();
+    with_runtime_config.gateway.plugin_config = Some(serde_json::json!({"version": 1}));
+    let mut with_dynamic_plugin = ResolvedConfig::default();
+    with_dynamic_plugin
+        .dynamic_plugins
+        .push(ResolvedDynamicPluginConfig {
+            plugin_id: "acme.worker".into(),
+            manifest_ref: "/tmp/relay-plugin.toml".into(),
+            config: serde_json::Map::new(),
+            has_explicit_config: false,
+            source: PathBuf::from("/tmp/plugins.toml"),
+        });
+
+    let cases = [
+        (
+            ResolvedConfig::default(),
+            &valid,
+            Some("invalid plugin TOML"),
+            Status::Fail,
+            "could not resolve plugins.toml",
+        ),
+        (
+            ResolvedConfig::default(),
+            &failed,
+            None,
+            Status::Fail,
+            "merged configuration failed",
+        ),
+        (
+            with_runtime_config,
+            &valid,
+            None,
+            Status::Info,
+            "effective plugin configuration loaded",
+        ),
+        (
+            with_dynamic_plugin,
+            &valid,
+            None,
+            Status::Info,
+            "dynamic plugin configuration loaded",
+        ),
+        (
+            ResolvedConfig::default(),
+            &valid,
+            None,
+            Status::Info,
+            "plugins.toml not configured",
+        ),
+    ];
+
+    for (resolved, resolution, plugin_error, status, detail) in cases {
+        let check = plugin_resolution_check(&resolved, resolution, plugin_error);
+        assert_eq!(check.name, "Plugin resolution");
+        assert_eq!(check.status, status);
+        assert!(check.details.contains(detail));
+    }
 }
 
 #[test]

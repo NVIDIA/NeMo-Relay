@@ -12,11 +12,51 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::MutexGuard;
 
 use crate::plugins::policy::{
     DynamicPluginHostPolicy, DynamicPluginHostPolicyEffect, DynamicPluginHostPolicyRule,
     evaluate_dynamic_plugin_host_policy,
 };
+
+struct PluginConfigDiscoveryScope {
+    _guard: MutexGuard<'static, ()>,
+    previous_cwd: PathBuf,
+    previous_xdg_config_home: Option<OsString>,
+}
+
+impl PluginConfigDiscoveryScope {
+    fn enter(cwd: &std::path::Path, xdg_config_home: &std::path::Path) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous_cwd = std::env::current_dir().unwrap();
+        let previous_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
+        }
+        std::env::set_current_dir(cwd).unwrap();
+        Self {
+            _guard: guard,
+            previous_cwd,
+            previous_xdg_config_home,
+        }
+    }
+}
+
+impl Drop for PluginConfigDiscoveryScope {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.previous_cwd).unwrap();
+        unsafe {
+            match self.previous_xdg_config_home.take() {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+}
 
 fn config() -> GatewayConfig {
     GatewayConfig {
@@ -29,6 +69,32 @@ fn config() -> GatewayConfig {
         max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
         max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
+}
+
+#[test]
+fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+
+    assert_eq!(
+        effective_plugin_toml_sources().unwrap(),
+        Vec::<PathBuf>::new()
+    );
+
+    let project_plugins = project.join(".nemo-relay/plugins.toml");
+    let user_plugins = xdg.join("nemo-relay/plugins.toml");
+    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(user_plugins.parent().unwrap()).unwrap();
+    std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
+    std::fs::write(&user_plugins, "version = 1\ncomponents = []\n").unwrap();
+
+    let mut expected = vec![project_plugins.canonicalize().unwrap(), user_plugins];
+    expected.sort();
+    assert_eq!(effective_plugin_toml_sources().unwrap(), expected);
 }
 
 fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {

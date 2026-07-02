@@ -1393,7 +1393,11 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     }
     if !report.configuration.plugin_configs.is_empty() {
         for (index, layer) in report.configuration.plugin_configs.iter().enumerate() {
-            let label = if index == 0 { "Plugins" } else { "           " };
+            let label = if index == 0 {
+                "Plugin files"
+            } else {
+                "            "
+            };
             out.push_str(&format!("    {label:<10}{}\n", format_layer(layer)));
         }
     }

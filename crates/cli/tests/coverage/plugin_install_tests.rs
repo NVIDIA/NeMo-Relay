@@ -1429,6 +1429,89 @@ fn readiness_report_rejects_invalid_generated_manifest_contents() {
 }
 
 #[test]
+fn readiness_report_accepts_generated_plugin_manifest_from_an_older_version() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list",
+            "nemo-relay-plugin@nemo-relay-local installed, enabled\n",
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            "nemo-relay-local /tmp/nemo-relay-local\n",
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let mut manifest = plugin_manifest(PluginHost::Codex);
+    manifest["version"] = json!("0.0.0");
+    std::fs::write(
+        &layout.plugin_manifest,
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+
+    assert!(report.ok());
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == "Generated plugin" && check.ok)
+    );
+}
+
+#[test]
+fn doctor_json_preserves_unknown_host_registration_state() {
+    let dir = tempdir().unwrap();
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+
+    let report = doctor_host_json_value(
+        PluginHost::Codex,
+        &options,
+        &MockRunner::default(),
+        &setup_runner,
+    )
+    .unwrap();
+
+    assert_eq!(report["host_registration"]["ok"], json!(false));
+    assert!(report["host_registration"]["host_plugin_registered"].is_null());
+    assert!(report["host_registration"]["host_marketplace_registered"].is_null());
+}
+
+#[test]
+fn timed_out_host_plugin_readiness_is_actionable() {
+    let state_path = PathBuf::from("/tmp/nemo-relay/codex.json");
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _sender = sender;
+
+    let report = receive_host_plugin_readiness(
+        PendingHostPluginReadiness {
+            host: PluginHost::Codex,
+            state_path: state_path.clone(),
+            receiver,
+        },
+        Duration::ZERO,
+    );
+
+    assert!(!report.ok());
+    assert_eq!(report.state_path, state_path);
+    assert_eq!(report.remediation, "nemo-relay install codex --force");
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == "Host readiness" && !check.ok)
+    );
+}
+
+#[test]
 fn stopped_lazy_sidecar_does_not_fail_host_readiness() {
     let mut readiness = HostPluginReadiness {
         host: "codex".into(),

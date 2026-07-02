@@ -10,6 +10,8 @@ mod state;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -37,6 +39,7 @@ pub(super) const DEFAULT_GATEWAY_URL: &str = "http://127.0.0.1:47632";
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
 pub(super) const RELAY_COMMAND: &str = "nemo-relay";
+const DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One non-mutating readiness check for an installed coding-agent plugin.
 ///
@@ -90,25 +93,96 @@ impl HostPluginReadiness {
     }
 }
 
+struct PendingHostPluginReadiness {
+    host: PluginHost,
+    state_path: PathBuf,
+    receiver: Receiver<HostPluginReadiness>,
+}
+
 /// Collects default-location host-plugin readiness without printing or mutating state.
 ///
 /// Only hosts with a persisted install-state record are included. This keeps ordinary
 /// transparent-run users from failing the top-level doctor merely because they have not opted
 /// into the persistent host-plugin workflow.
 pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness> {
-    let options = PluginInstallOptions {
-        install_dir: default_install_dir().canonicalize_or_self(),
-        force: false,
-        dry_run: false,
-        skip_doctor: true,
-    };
-    let runner = RealCommandRunner;
-    let setup_runner = RealPluginSetupRunner;
-    [PluginHost::Codex, PluginHost::ClaudeCode]
+    let install_dir = default_install_dir().canonicalize_or_self();
+    let pending = [PluginHost::Codex, PluginHost::ClaudeCode]
         .into_iter()
-        .filter(|host| state_path(*host, &options.install_dir).exists())
-        .map(|host| collect_host_plugin_readiness(host, &options, &runner, &setup_runner))
+        .filter(|host| state_path(*host, &install_dir).exists())
+        .map(|host| spawn_default_host_plugin_readiness(host, install_dir.clone()))
+        .collect::<Vec<_>>();
+    pending
+        .into_iter()
+        .map(|pending| {
+            receive_host_plugin_readiness(pending, DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT)
+        })
         .collect()
+}
+
+fn spawn_default_host_plugin_readiness(
+    host: PluginHost,
+    install_dir: PathBuf,
+) -> PendingHostPluginReadiness {
+    let state_path = state_path(host, &install_dir);
+    let (sender, receiver) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let options = PluginInstallOptions {
+            install_dir,
+            force: false,
+            dry_run: false,
+            skip_doctor: true,
+        };
+        let runner = RealCommandRunner;
+        let setup_runner = RealPluginSetupRunner;
+        let readiness = collect_host_plugin_readiness(host, &options, &runner, &setup_runner);
+        let _ = sender.send(readiness);
+    });
+    PendingHostPluginReadiness {
+        host,
+        state_path,
+        receiver,
+    }
+}
+
+fn receive_host_plugin_readiness(
+    pending: PendingHostPluginReadiness,
+    timeout: Duration,
+) -> HostPluginReadiness {
+    match pending.receiver.recv_timeout(timeout) {
+        Ok(readiness) => readiness,
+        Err(mpsc::RecvTimeoutError::Timeout) => failed_host_plugin_readiness(
+            pending.host,
+            pending.state_path,
+            "timed out while collecting host-plugin readiness",
+        ),
+        Err(mpsc::RecvTimeoutError::Disconnected) => failed_host_plugin_readiness(
+            pending.host,
+            pending.state_path,
+            "host-plugin readiness collector stopped unexpectedly",
+        ),
+    }
+}
+
+fn failed_host_plugin_readiness(
+    host: PluginHost,
+    state_path: PathBuf,
+    details: impl Into<String>,
+) -> HostPluginReadiness {
+    let layout = PluginLayout::new(host, state_path.parent().unwrap_or_else(|| Path::new(".")));
+    let mut readiness = HostPluginReadiness {
+        host: host_arg(host).to_string(),
+        remediation: format!("nemo-relay install {} --force", host_arg(host)),
+        state_path,
+        marketplace: Some(layout.marketplace_root),
+        plugin: Some(layout.plugin_root),
+        checks: Vec::new(),
+        relay: None,
+        host_plugin_registered: None,
+        host_marketplace_registered: None,
+        plugin_setup: None,
+    };
+    readiness.push("Host readiness", Err(details.into()));
+    readiness
 }
 
 pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
@@ -415,8 +489,8 @@ fn doctor_host_json_value(
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<Value, String> {
     let readiness = collect_host_plugin_readiness(host, options, runner, setup_runner);
-    let host_plugin_registered = readiness.host_plugin_registered.unwrap_or(false);
-    let host_marketplace_registered = readiness.host_marketplace_registered.unwrap_or(false);
+    let host_registration_ok = readiness.host_plugin_registered == Some(true)
+        && readiness.host_marketplace_registered == Some(true);
     Ok(json!({
         "ok": readiness.ok(),
         "host": readiness.host,
@@ -425,9 +499,9 @@ fn doctor_host_json_value(
         "marketplace": readiness.marketplace,
         "plugin": readiness.plugin,
         "host_registration": {
-            "ok": host_plugin_registered && host_marketplace_registered,
-            "host_plugin_registered": host_plugin_registered,
-            "host_marketplace_registered": host_marketplace_registered
+            "ok": host_registration_ok,
+            "host_plugin_registered": readiness.host_plugin_registered,
+            "host_marketplace_registered": readiness.host_marketplace_registered
         },
         "checks": readiness.plugin_setup,
         "state_path": readiness.state_path,
@@ -575,6 +649,13 @@ fn append_plugin_setup_checks(readiness: &mut HostPluginReadiness, report: &Valu
     }
 }
 
+fn without_version(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("version");
+    }
+    value
+}
+
 fn generated_manifest_check(path: &Path, expected: &Value, label: &str) -> Result<String, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         format!(
@@ -584,7 +665,7 @@ fn generated_manifest_check(path: &Path, expected: &Value, label: &str) -> Resul
     })?;
     let actual = serde_json::from_str::<Value>(&raw)
         .map_err(|error| format!("invalid {label} manifest {}: {error}", path.display()))?;
-    if actual == *expected {
+    if without_version(actual) == without_version(expected.clone()) {
         Ok(format!("valid at {}", path.display()))
     } else {
         Err(format!(
