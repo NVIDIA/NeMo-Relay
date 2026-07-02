@@ -22,7 +22,6 @@ mod plugins;
 mod server;
 mod session;
 mod setup;
-mod tls;
 
 use std::process::ExitCode;
 

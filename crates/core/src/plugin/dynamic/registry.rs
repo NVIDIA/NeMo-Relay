@@ -170,6 +170,20 @@ impl DynamicPluginRegistry {
         Ok(())
     }
 
+    /// Replaces the resolved worker environment and its validation state.
+    pub fn update_environment(
+        &mut self,
+        plugin_id: &str,
+        environment_ref: Option<String>,
+        environment: DynamicPluginCheckState,
+    ) -> Result<()> {
+        let record = self.lookup_mut(plugin_id)?;
+        record.source.environment_ref = environment_ref;
+        record.status.validation.environment = environment;
+        record.status.validation.checked_at = Some(super::current_timestamp());
+        Ok(())
+    }
+
     /// Replaces the current host-policy outcome without mutating desired state.
     pub fn update_policy_status(
         &mut self,

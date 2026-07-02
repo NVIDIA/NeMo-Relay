@@ -10,6 +10,7 @@ use super::{
 };
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 
 // ---------------------------------------------------------------------------
 // LlmStream (async iterator)
@@ -716,6 +717,42 @@ impl PyLLMRequestInterceptOutcome {
             .annotated_request
             .clone()
             .map(|inner: AnnotatedLLMRequest| PyAnnotatedLLMRequest { inner })
+    }
+
+    #[getter]
+    fn pending_marks(&self) -> Vec<PyPendingMarkSpec> {
+        self.inner
+            .pending_marks
+            .iter()
+            .cloned()
+            .map(|inner| PyPendingMarkSpec { inner })
+            .collect()
+    }
+}
+
+/// Canonical result returned by Python tool execution intercepts.
+#[pyclass(name = "ToolExecutionInterceptOutcome", from_py_object)]
+#[derive(Clone)]
+pub struct PyToolExecutionInterceptOutcome {
+    pub inner: ToolExecutionInterceptOutcome,
+}
+
+#[pymethods]
+impl PyToolExecutionInterceptOutcome {
+    #[new]
+    #[pyo3(signature = (result, pending_marks=Vec::new()))]
+    fn new(result: &Bound<'_, PyAny>, pending_marks: Vec<PyPendingMarkSpec>) -> PyResult<Self> {
+        Ok(Self {
+            inner: ToolExecutionInterceptOutcome {
+                result: py_to_json(result)?,
+                pending_marks: pending_marks.into_iter().map(|value| value.inner).collect(),
+            },
+        })
+    }
+
+    #[getter]
+    fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &self.inner.result)
     }
 
     #[getter]

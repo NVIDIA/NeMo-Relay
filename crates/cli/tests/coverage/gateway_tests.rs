@@ -13,7 +13,6 @@ use http_body_util::BodyExt;
 use reqwest::Client;
 
 fn test_http_client() -> Client {
-    crate::tls::install_rustls_crypto_provider();
     Client::new()
 }
 

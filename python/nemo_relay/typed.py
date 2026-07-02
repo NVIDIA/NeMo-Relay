@@ -39,6 +39,7 @@ import base64
 import dataclasses
 import importlib
 import inspect
+import io
 import json
 import pickle
 import typing
@@ -72,6 +73,23 @@ class _SupportsModelValidate(Protocol[T]):
 
 _RUNTIME_TYPE_REGISTRY: weakref.WeakValueDictionary[str, type[object]] = weakref.WeakValueDictionary()
 _NO_RECONSTRUCTION = object()
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """Unpickle only the builtin containers used by the fallback codec."""
+
+    _ALLOWED_GLOBALS = {
+        ("builtins", "dict"),
+        ("builtins", "frozenset"),
+        ("builtins", "list"),
+        ("builtins", "set"),
+        ("builtins", "tuple"),
+    }
+
+    def find_class(self, module: str, name: str) -> object:
+        if (module, name) not in self._ALLOWED_GLOBALS:
+            raise pickle.UnpicklingError(f"global '{module}.{name}' is not allowed")
+        return super().find_class(module, name)
 
 
 def _serialize_dataclass_instance(value: DataclassInstance) -> Json:
@@ -284,6 +302,8 @@ class BestEffortAnyCodec(Codec[object]):
 
     It prefers JSON-native encodings, then dataclass or Pydantic-style model
     support, and finally falls back to pickle or string encoding when needed.
+    Pickle decoding is restricted to a small allowlist of builtin containers;
+    arbitrary classes and callable globals are never reconstructed.
 
     Notes:
         This codec favors resilience over strictness. If it cannot preserve the
@@ -394,8 +414,8 @@ class BestEffortAnyCodec(Codec[object]):
             if payload is None:
                 return _NO_RECONSTRUCTION
 
-            decoded = base64.b64decode(payload)
-            return pickle.loads(decoded)
+            decoded = base64.b64decode(payload, validate=True)
+            return _RestrictedUnpickler(io.BytesIO(decoded)).load()
         except Exception:
             return _NO_RECONSTRUCTION
 
@@ -420,6 +440,7 @@ class BestEffortAnyCodec(Codec[object]):
         Recognises the ``__nv_pydantic__``, ``__nv_dataclass__``,
         ``__nv_pickle__``, and ``__nv_fallback_str__`` tags produced by
         ``to_json`` and dispatches to the appropriate reconstruction strategy.
+        Pickle tags are decoded only for allowlisted builtin containers.
         Falls through to returning the raw data if no tag is recognised.
         """
         if isinstance(data, dict) and "data" in data:

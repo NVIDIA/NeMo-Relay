@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginKind,
-    DynamicPluginLoadContract, DynamicPluginManifest, DynamicPluginRecord,
-    DynamicPluginValidationStatus,
+    DynamicPluginCheckState, DynamicPluginCompatibility, DynamicPluginFailure,
+    DynamicPluginFailurePhase, DynamicPluginKind, DynamicPluginLoadContract, DynamicPluginManifest,
+    DynamicPluginRecord, DynamicPluginValidationStatus,
 };
 use serde_json::{Map, Value};
 
@@ -27,12 +27,18 @@ use crate::plugins::policy::{
 use super::config_io::{
     append_dynamic_plugin_reference, remove_dynamic_plugin_reference, target_scope,
 };
+use super::schema::PluginConfigSchema;
 
+mod environment;
 mod responses;
 mod state;
 mod target;
 mod trust;
 
+use self::environment::{
+    ProcessPythonEnvironmentCommandRunner, PythonEnvironmentCommandRunner, environment_state,
+    provision_python_environment, remove_managed_environment,
+};
 use self::responses::{
     ValidateResponseInput, failure, generic_failure, inspect_data, inspect_success, list_success,
     print_response_json, validate_success,
@@ -47,12 +53,21 @@ use self::trust::{EvaluatedDynamicPluginTrust, evaluate_dynamic_plugin_trust};
 const VALIDATION_MESSAGE: &str = "validated by CLI";
 
 pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(), CliError> {
+    add_with_environment_runner(command, server, &ProcessPythonEnvironmentCommandRunner)
+}
+
+fn add_with_environment_runner(
+    command: PluginsAddCommand,
+    server: &ServerArgs,
+    environment_runner: &impl PythonEnvironmentCommandRunner,
+) -> Result<(), CliError> {
     const COMMAND: &str = "plugins add";
 
     let resolved = resolve_plugins_config(server.config.as_ref())?;
     let mut scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
     let (manifest, manifest_ref) = load_manifest_for_action("add", &command.path)?;
     let plugin_id = manifest.plugin.id.trim().to_owned();
+    load_config_schema_for_manifest(&manifest, &manifest_ref)?;
     let revived = match find_record_by_id(&scopes, &plugin_id)? {
         Some(existing) if !existing.record.is_tombstoned() => {
             return Err(CliError::Config(format!(
@@ -97,16 +112,70 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
             failure.display(&plugin_id).to_string(),
         ));
     }
-    let record = validated_record_from_manifest(manifest, manifest_ref.clone(), &policy, &trust)?;
+    let environment_ref = provision_python_environment(
+        &manifest,
+        &manifest_ref,
+        &scopes[scope_index].state_path,
+        environment_runner,
+    )
+    .map_err(|message| {
+        plugin_failed_with_code(
+            COMMAND,
+            Some(plugin_id.clone()),
+            "environment_failed",
+            message,
+        )
+    })?;
+    let environment_ref_string = environment_ref
+        .as_ref()
+        .map(|environment| environment.display().to_string());
+    let record = match validated_record_from_manifest(
+        manifest,
+        manifest_ref.clone(),
+        environment_ref_string,
+        &scopes[scope_index].state_path,
+        &policy,
+        &trust,
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            cleanup_provisioned_environment(
+                &scopes[scope_index].state_path,
+                &plugin_id,
+                environment_ref.as_deref(),
+            );
+            return Err(error);
+        }
+    };
     let original_plugins_toml = std::fs::read(&plugins_toml_path).ok();
 
-    scopes[scope_index]
+    if let Err(error) = scopes[scope_index]
         .registry
         .add(record)
-        .map_err(|error| CliError::Config(error.to_string()))?;
-    append_dynamic_plugin_reference(&plugins_toml_path, &manifest_ref)?;
+        .map_err(|error| CliError::Config(error.to_string()))
+    {
+        cleanup_provisioned_environment(
+            &scopes[scope_index].state_path,
+            &plugin_id,
+            environment_ref.as_deref(),
+        );
+        return Err(error);
+    }
+    if let Err(error) = append_dynamic_plugin_reference(&plugins_toml_path, &manifest_ref) {
+        cleanup_provisioned_environment(
+            &scopes[scope_index].state_path,
+            &plugin_id,
+            environment_ref.as_deref(),
+        );
+        return Err(error);
+    }
     if let Err(error) = scopes[scope_index].save() {
         let _ = restore_plugins_toml(&plugins_toml_path, original_plugins_toml.as_deref());
+        cleanup_provisioned_environment(
+            &scopes[scope_index].state_path,
+            &plugin_id,
+            environment_ref.as_deref(),
+        );
         return Err(error);
     }
 
@@ -116,6 +185,16 @@ pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(),
         plugin_id
     );
     Ok(())
+}
+
+fn cleanup_provisioned_environment(state_path: &Path, plugin_id: &str, environment: Option<&Path>) {
+    if let Some(environment) = environment {
+        let _ = remove_managed_environment(
+            state_path,
+            plugin_id,
+            environment.to_string_lossy().as_ref(),
+        );
+    }
 }
 
 pub(crate) fn enforce_required_dynamic_plugin_startup(
@@ -157,6 +236,7 @@ pub(crate) fn validate(
             }
             let resolved = resolve_plugins_config(server.config.as_ref())?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &path)?;
+            load_config_schema_for_manifest(&manifest, &manifest_ref)?;
             let policy =
                 evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
             let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
@@ -195,12 +275,20 @@ pub(crate) fn validate(
             let entry = find_registered_entry(&scopes, "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
+            if let Some(schema) = load_config_schema_for_manifest(&manifest, &manifest_ref)? {
+                let config = host_config_by_id
+                    .get(&plugin_id)
+                    .map(|host_config| Value::Object(host_config.config.clone()))
+                    .unwrap_or_else(|| Value::Object(Map::new()));
+                schema.validate(&config)?;
+            }
             let policy =
                 evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
             let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
             update_registry_validation_status(
                 &mut scopes[entry.scope_index],
                 &plugin_id,
+                &manifest,
                 &policy,
                 &trust,
             )?;
@@ -321,6 +409,7 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
     }
     let entry = find_registered_entry(&scopes, "plugins remove", &command.id)?;
     let original_plugins_toml = std::fs::read(&entry.plugins_toml_path).ok();
+    let environment_ref = entry.record.source.environment_ref.clone();
 
     scopes[entry.scope_index]
         .registry
@@ -336,6 +425,16 @@ pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Resu
         return Err(error);
     }
 
+    if let Some(environment_ref) = environment_ref {
+        remove_managed_environment(&entry.state_path, &command.id, &environment_ref)
+            .map_err(CliError::Config)?;
+        scopes[entry.scope_index]
+            .registry
+            .update_environment(&command.id, None, DynamicPluginCheckState::Unknown)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        scopes[entry.scope_index].save()?;
+    }
+
     println!("Removed dynamic plugin {}", command.id);
     Ok(())
 }
@@ -345,6 +444,7 @@ pub(crate) struct ActiveDynamicPluginComponent {
     pub(crate) plugin_id: String,
     pub(crate) kind: DynamicPluginKind,
     pub(crate) manifest_ref: Option<String>,
+    pub(crate) environment_ref: Option<String>,
     pub(crate) config: Map<String, Value>,
 }
 
@@ -381,6 +481,7 @@ pub(crate) fn active_dynamic_plugin_components(
                 DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(&entry.record)?),
                 DynamicPluginKind::Worker => entry.record.source.manifest_ref.clone(),
             },
+            environment_ref: entry.record.source.environment_ref.clone(),
             config: host_config.config.clone(),
         });
     }
@@ -421,6 +522,7 @@ fn mutate_enabled_state(
         update_registry_validation_status(
             &mut scopes[entry.scope_index],
             &plugin_id,
+            &manifest,
             &policy,
             &trust,
         )?;
@@ -445,6 +547,21 @@ fn mutate_enabled_state(
                 Some(plugin_id.clone()),
                 trust_refusal_code(&trust),
                 failure.display(&plugin_id).to_string(),
+            ));
+        }
+        if let Some(environment_error) = scopes[entry.scope_index]
+            .registry
+            .get(&plugin_id)
+            .and_then(|record| record.status.last_error.as_ref())
+            .filter(|error| error.code == "environment_failed")
+        {
+            let message = environment_error.message.clone();
+            scopes[entry.scope_index].save()?;
+            return Err(plugin_refused_with_code(
+                command,
+                Some(plugin_id.clone()),
+                "environment_failed",
+                message,
             ));
         }
         scopes
@@ -521,18 +638,23 @@ fn load_and_hydrate_scopes_with_updates(
             update_registry_validation_status(
                 &mut scopes[scope_index],
                 &plugin.plugin_id,
+                &manifest,
                 &policy,
                 &trust,
             )?;
         } else {
+            let state_path = scopes[scope_index].state_path.clone();
+            let record = validated_record_from_manifest(
+                manifest,
+                manifest_ref,
+                None,
+                &state_path,
+                &policy,
+                &trust,
+            )?;
             scopes[scope_index]
                 .registry
-                .add(validated_record_from_manifest(
-                    manifest,
-                    manifest_ref,
-                    &policy,
-                    &trust,
-                )?)
+                .add(record)
                 .map_err(|error| CliError::Config(error.to_string()))?;
         }
     }
@@ -542,17 +664,21 @@ fn load_and_hydrate_scopes_with_updates(
 fn validated_record_from_manifest(
     manifest: DynamicPluginManifest,
     manifest_ref: String,
+    environment_ref: Option<String>,
+    state_path: &Path,
     policy: &EvaluatedDynamicPluginHostPolicy,
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<DynamicPluginRecord, CliError> {
+    let environment = environment_state(&manifest, state_path, environment_ref.as_deref());
     let mut record = manifest
         .into_record(Some(manifest_ref))
         .map_err(|error| CliError::Config(error.to_string()))?;
+    record.source.environment_ref = environment_ref;
     record.status.validation = DynamicPluginValidationStatus {
         manifest: DynamicPluginCheckState::Valid,
         compatibility: DynamicPluginCheckState::Valid,
         integrity: trust.integrity,
-        environment: DynamicPluginCheckState::Unknown,
+        environment,
         authenticity: trust.authenticity,
         policy_satisfied: policy.check_state(),
         checked_at: None,
@@ -562,7 +688,14 @@ fn validated_record_from_manifest(
     record.status.attestation_mode = Some(policy.attestation_mode);
     record.status.last_error = policy
         .last_error(&record.metadata.id)
-        .or_else(|| trust.last_error(&record.metadata.id));
+        .or_else(|| trust.last_error(&record.metadata.id))
+        .or_else(|| {
+            environment_last_error(
+                &record.metadata.id,
+                environment,
+                record.source.environment_ref.as_deref(),
+            )
+        });
     Ok(record)
 }
 
@@ -595,9 +728,16 @@ fn update_registry_policy_status(
 fn update_registry_validation_status(
     scope: &mut ScopedRegistry,
     plugin_id: &str,
+    manifest: &DynamicPluginManifest,
     policy: &EvaluatedDynamicPluginHostPolicy,
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<(), CliError> {
+    let environment_ref = scope
+        .registry
+        .get(plugin_id)
+        .and_then(|record| record.source.environment_ref.as_deref());
+    let environment = environment_state(manifest, &scope.state_path, environment_ref);
+    let environment_error = environment_last_error(plugin_id, environment, environment_ref);
     scope
         .registry
         .update_validation_status(
@@ -606,7 +746,7 @@ fn update_registry_validation_status(
                 manifest: DynamicPluginCheckState::Valid,
                 compatibility: DynamicPluginCheckState::Valid,
                 integrity: trust.integrity,
-                environment: DynamicPluginCheckState::Unknown,
+                environment,
                 authenticity: trust.authenticity,
                 policy_satisfied: policy.check_state(),
                 checked_at: None,
@@ -621,9 +761,35 @@ fn update_registry_validation_status(
             plugin_id,
             policy
                 .last_error(plugin_id)
-                .or_else(|| trust.last_error(plugin_id)),
+                .or_else(|| trust.last_error(plugin_id))
+                .or(environment_error),
         )
         .map_err(|error| CliError::Config(error.to_string()))
+}
+
+fn environment_last_error(
+    plugin_id: &str,
+    environment: DynamicPluginCheckState,
+    environment_ref: Option<&str>,
+) -> Option<DynamicPluginFailure> {
+    (environment == DynamicPluginCheckState::Invalid).then(|| DynamicPluginFailure {
+        phase: DynamicPluginFailurePhase::Validation,
+        code: "environment_failed".into(),
+        message: environment_ref.map_or_else(
+            || {
+                format!(
+                    "dynamic plugin '{}' has no lifecycle-managed Python environment; run `nemo-relay plugins remove {}` to remove the manual registration, then run `nemo-relay plugins add <path>`",
+                    plugin_id, plugin_id
+                )
+            },
+            |environment_ref| {
+                format!(
+                    "dynamic plugin '{}' configured Python environment {} is unavailable",
+                    plugin_id, environment_ref
+                )
+            },
+        ),
+    })
 }
 
 fn find_registered_entry(
@@ -650,6 +816,23 @@ fn load_manifest_for_action(
     let path = path.into();
     DynamicPluginManifest::load_from_path(&path)
         .map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
+}
+
+fn load_config_schema_for_manifest(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+) -> Result<Option<PluginConfigSchema>, CliError> {
+    let schema_path = manifest
+        .resolve_config_schema_path(manifest_ref)
+        .map_err(|error| {
+            CliError::Config(format!(
+                "dynamic plugin '{}' config schema path could not be resolved from '{}': {error}",
+                manifest.plugin.id, manifest_ref
+            ))
+        })?;
+    schema_path
+        .map(|path| PluginConfigSchema::load(manifest.plugin.id.trim(), path))
+        .transpose()
 }
 
 fn manifest_ref_from_record(record: &DynamicPluginRecord) -> Result<String, CliError> {
@@ -732,6 +915,19 @@ fn required_startup_failure(
                 .as_ref()
                 .map(|error| error.message.as_str())
                 .unwrap_or("required dynamic plugin trust verification failed")
+        ));
+    }
+    if entry.record.status.validation.environment == DynamicPluginCheckState::Invalid {
+        return Some(format!(
+            "- {}: {}",
+            entry.record.metadata.id,
+            entry
+                .record
+                .status
+                .last_error
+                .as_ref()
+                .map(|error| error.message.as_str())
+                .unwrap_or("required dynamic plugin environment is unavailable")
         ));
     }
 
@@ -844,6 +1040,21 @@ fn plugin_refused_with_code(
     }
 }
 
+fn plugin_failed_with_code(
+    command: &'static str,
+    target: Option<String>,
+    code: &'static str,
+    message: impl Into<String>,
+) -> CliError {
+    CliError::PluginLifecycle {
+        command,
+        target,
+        kind: PluginLifecycleFailureKind::Failed,
+        code: Some(code),
+        message: message.into(),
+    }
+}
+
 fn trust_refusal_code(trust: &EvaluatedDynamicPluginTrust) -> &'static str {
     trust.refusal_code().unwrap_or("refused")
 }
@@ -853,6 +1064,7 @@ fn list_validation_state(record: &DynamicPluginRecord) -> DynamicPluginCheckStat
     if validation.manifest == DynamicPluginCheckState::Invalid
         || validation.compatibility == DynamicPluginCheckState::Invalid
         || validation.integrity == DynamicPluginCheckState::Invalid
+        || validation.environment == DynamicPluginCheckState::Invalid
         || validation.authenticity == DynamicPluginCheckState::Invalid
         || validation.policy_satisfied == DynamicPluginCheckState::Invalid
     {
@@ -1016,8 +1228,24 @@ struct PluginValidationSummaryView<'a> {
 
 impl fmt::Display for PluginValidationSummaryView<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.policy.policy_satisfied && self.trust.is_satisfied() {
+        let environment = self
+            .entry
+            .map(|entry| entry.record.status.validation.environment)
+            .unwrap_or(DynamicPluginCheckState::Unknown);
+        if self.policy.policy_satisfied
+            && self.trust.is_satisfied()
+            && environment != DynamicPluginCheckState::Invalid
+        {
             writeln!(f, "Dynamic plugin '{}' is valid.", self.manifest.plugin.id)?;
+        } else if self.policy.policy_satisfied
+            && self.trust.is_satisfied()
+            && environment == DynamicPluginCheckState::Invalid
+        {
+            writeln!(
+                f,
+                "Dynamic plugin '{}' manifest is valid, but its runtime environment is unavailable.",
+                self.manifest.plugin.id
+            )?;
         } else if self.policy.policy_satisfied {
             writeln!(
                 f,
@@ -1041,6 +1269,11 @@ impl fmt::Display for PluginValidationSummaryView<'_> {
             f,
             "integrity_state: {}",
             <&'static str>::from(self.trust.integrity)
+        )?;
+        writeln!(
+            f,
+            "environment_state: {}",
+            <&'static str>::from(environment)
         )?;
         writeln!(
             f,

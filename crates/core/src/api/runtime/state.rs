@@ -10,7 +10,8 @@
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
@@ -23,12 +24,14 @@ use crate::api::runtime::callbacks::{
     EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
     LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
 use crate::api::tool::ToolHandle;
-use crate::api::tool::{CreateToolHandleParams, EndToolHandleParams};
+use crate::api::tool::{
+    CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
+};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
@@ -821,22 +824,68 @@ impl NemoRelayContextState {
     ///   from the active scope stack.
     ///
     /// # Returns
-    /// A composed [`ToolExecutionNextFn`] that wraps `default_fn` in every
-    /// matching execution intercept.
+    /// A composed [`ToolExecutionOutcomeNextFn`] that wraps `default_fn` in
+    /// every matching execution intercept.
     pub(crate) fn tool_build_execution_chain(
         &self,
         name: &str,
         default_fn: ToolExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
-    ) -> ToolExecutionNextFn {
+    ) -> ToolExecutionOutcomeNextFn {
         let matching =
             merge_execution_intercept_callables(&self.tool_execution_intercepts, scope_locals);
-        let mut next = default_fn;
+        let mut next: ToolExecutionOutcomeNextFn = Arc::new(move |args| {
+            let default_fn = default_fn.clone();
+            Box::pin(async move {
+                default_fn(args)
+                    .await
+                    .map(ToolExecutionInterceptOutcome::new)
+            })
+        });
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
             let current_next = next.clone();
             let current_name = name.clone();
-            next = Arc::new(move |args| callable(&current_name, args, current_next.clone()));
+            next = Arc::new(move |args| {
+                let callable = callable.clone();
+                let current_name = current_name.clone();
+                let next_sequence = Arc::new(AtomicUsize::new(0));
+                let downstream_marks = Arc::new(Mutex::new(Vec::new()));
+                let raw_next: ToolExecutionNextFn = {
+                    let current_next = current_next.clone();
+                    let next_sequence = next_sequence.clone();
+                    let downstream_marks = downstream_marks.clone();
+                    Arc::new(move |args| {
+                        let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
+                        let current_next = current_next.clone();
+                        let downstream_marks = downstream_marks.clone();
+                        Box::pin(async move {
+                            let outcome = current_next(args).await?;
+                            downstream_marks
+                                .lock()
+                                .expect("tool pending mark accumulator lock poisoned")
+                                .push((sequence, outcome.pending_marks));
+                            Ok(outcome.result)
+                        })
+                    })
+                };
+                Box::pin(async move {
+                    let mut outcome = callable(&current_name, args, raw_next).await?;
+                    let mut downstream_batches = std::mem::take(
+                        &mut *downstream_marks
+                            .lock()
+                            .expect("tool pending mark accumulator lock poisoned"),
+                    );
+                    downstream_batches.sort_by_key(|(sequence, _)| *sequence);
+                    let mut marks = downstream_batches
+                        .into_iter()
+                        .flat_map(|(_, marks)| marks)
+                        .collect::<Vec<_>>();
+                    marks.append(&mut outcome.pending_marks);
+                    outcome.pending_marks = marks;
+                    Ok(outcome)
+                })
+            });
         }
         next
     }

@@ -4,11 +4,10 @@
 use super::*;
 use crate::config::{AgentCommandConfig, GatewayConfig};
 use std::ffi::OsString;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 fn current_dir_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    &crate::test_support::CWD_TEST_LOCK
 }
 
 struct EnvScope {
@@ -392,6 +391,51 @@ fn exporter_destinations_describe_observability_outputs() {
         destinations
             .iter()
             .any(|line| line == "OpenInference OTLP endpoint from environment/default")
+    );
+}
+
+#[test]
+fn exporter_destinations_describe_atif_remote_storage_instead_of_local_path() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": "trajectories",
+                        "filename_template": "agent-{session_id}.json",
+                        "storage": [
+                            {"type": "s3", "bucket": "traj-bucket", "key_prefix": "runs/"},
+                            {"type": "http", "endpoint": "https://collector.example/ingest"}
+                        ]
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let destinations = exporter_destinations(&gateway);
+
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATIF s3://traj-bucket/runs")
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATIF https://collector.example/ingest")
+    );
+    // The local path is skipped at runtime when storage is configured, so it must not be reported.
+    assert!(
+        !destinations
+            .iter()
+            .any(|line| line.contains("agent-{session_id}.json"))
     );
 }
 

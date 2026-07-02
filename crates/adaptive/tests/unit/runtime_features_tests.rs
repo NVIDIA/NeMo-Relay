@@ -206,14 +206,22 @@ fn assert_llm_stream_execution_intercept_absent(name: &str) {
 
 fn assert_tool_execution_intercept_registered(name: &str) {
     assert_already_registered(
-        register_tool_execution_intercept(name, i32::MAX, Arc::new(|_name, args, next| next(args))),
+        register_tool_execution_intercept(
+            name,
+            i32::MAX,
+            Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+        ),
         name,
     );
 }
 
 fn assert_tool_execution_intercept_absent(name: &str) {
-    register_tool_execution_intercept(name, i32::MAX, Arc::new(|_name, args, next| next(args)))
-        .unwrap();
+    register_tool_execution_intercept(
+        name,
+        i32::MAX,
+        Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+    )
+    .unwrap();
     deregister_tool_execution_intercept(name).unwrap();
 }
 
@@ -753,7 +761,7 @@ async fn registration_context_registers_all_supported_callback_types() {
     ctx.register_tool_execution_intercept(
         "adaptive_test_tool",
         8,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
 

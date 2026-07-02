@@ -130,6 +130,7 @@ collect:github-artifacts:
       fi
 
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'plugin-wheel' --dir downloaded/wheels
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name npm-consolidated --dir downloaded/node
 
       find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;

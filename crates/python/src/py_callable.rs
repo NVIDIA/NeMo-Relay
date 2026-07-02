@@ -36,6 +36,7 @@ use tokio_stream::Stream;
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -43,6 +44,7 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
+    PyToolExecutionInterceptOutcome,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -393,26 +395,21 @@ impl PyLlmStreamNextFn {
     }
 }
 
-/// Wrap a Python callable `(Json, next) -> Json` for tool execution intercepts.
+/// Wrap a Python callable `(Json, next) -> ToolExecutionInterceptOutcome` for tool execution intercepts.
 /// The `next` parameter is a `PyToolNextFn` that the Python code can `await`.
 pub fn wrap_py_tool_exec_intercept_fn(
     py_fn: Py<PyAny>,
-) -> Arc<
-    dyn Fn(
-            &str,
-            Json,
-            ToolExecutionNextFn,
-        ) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
-        + Send
-        + Sync,
-> {
+) -> nemo_relay::api::runtime::ToolExecutionFn {
     let py_fn = Arc::new(py_fn);
     Arc::new(move |name: &str, args: Json, next: ToolExecutionNextFn| {
         let py_fn = py_fn.clone();
         let name = name.to_string();
         Box::pin(async move {
             let outcome: FlowResult<
-                Result<Json, Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>>,
+                Result<
+                    ToolExecutionInterceptOutcome,
+                    Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>,
+                >,
             > = Python::attach(|py| {
                 let py_args =
                     json_to_py(py, &args).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
@@ -440,9 +437,14 @@ pub fn wrap_py_tool_exec_intercept_fn(
                             Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>,
                         >))
                 } else {
-                    let json =
-                        py_to_json(bound).map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
-                    Ok(Ok(json))
+                    let outcome = result
+                        .extract::<PyToolExecutionInterceptOutcome>(py)
+                        .map_err(|e| {
+                            FlowError::Internal(format!(
+                                "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
+                            ))
+                        })?;
+                    Ok(Ok(outcome.inner))
                 }
             });
 
@@ -453,8 +455,14 @@ pub fn wrap_py_tool_exec_intercept_fn(
                         .await
                         .map_err(|e| FlowError::Internal(e.to_string()))?;
                     Python::attach(|py| {
-                        py_to_json(py_result.bind(py))
-                            .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
+                        py_result
+                            .extract::<PyToolExecutionInterceptOutcome>(py)
+                            .map(|value| value.inner)
+                            .map_err(|e| {
+                                FlowError::Internal(format!(
+                                    "tool execution intercept must return ToolExecutionInterceptOutcome: {e}"
+                                ))
+                            })
                     })
                 }
             }

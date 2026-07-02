@@ -437,7 +437,6 @@ fn endpoint_field_name_policy_preserves_raw_json_and_falls_back_for_invalid_json
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn endpoint_http_helper_edges_are_safe() {
-    install_rustls_crypto_provider();
     assert_eq!(
         AtofEndpointFieldNamePolicy::parse("unknown"),
         None,

@@ -184,10 +184,11 @@ import nemo_relay
 from nemo_relay import LLMRequest
 
 rewritten_args = nemo_relay.tools.request_intercepts("search", {"query": "weather"})
-rewritten_request = nemo_relay.llm.request_intercepts(
+outcome = nemo_relay.llm.request_intercepts(
     "demo-provider",
     LLMRequest({}, {"messages": []}),
 )
+rewritten_request = outcome.request
 ```
 </Tab>
 
@@ -196,7 +197,8 @@ rewritten_request = nemo_relay.llm.request_intercepts(
 import { LlmRequest, llmRequestIntercepts, toolRequestIntercepts } from 'nemo-relay-node';
 
 const rewrittenArgs = await toolRequestIntercepts('search', { query: 'weather' });
-const rewrittenRequest = await llmRequestIntercepts('demo-provider', new LlmRequest({}, { messages: [] }));
+const outcome = await llmRequestIntercepts('demo-provider', new LlmRequest({}, { messages: [] }));
+const rewrittenRequest = outcome.request;
 ```
 </Tab>
 
@@ -208,7 +210,8 @@ use serde_json::json;
 
 let rewritten_args = tool_request_intercepts("search", json!({"query": "weather"}))?;
 let request = LlmRequest { headers: Default::default(), content: json!({"messages": []}) };
-let rewritten_request = llm_request_intercepts("demo-provider", request)?;
+let outcome = llm_request_intercepts("demo-provider", request)?;
+let rewritten_request = outcome.request;
 ```
 </Tab>
 

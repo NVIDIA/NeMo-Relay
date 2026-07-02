@@ -87,8 +87,10 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
     let server = ServerArgs {
-        config: Some(temp.path().join("config.toml")),
+        config: Some(config_path),
         ..ServerArgs::default()
     };
 
@@ -169,8 +171,10 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
 fn safe_dispatch_plugin_json_errors_return_exit_codes() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
     let server = ServerArgs {
-        config: Some(temp.path().join("config.toml")),
+        config: Some(config_path),
         ..ServerArgs::default()
     };
 

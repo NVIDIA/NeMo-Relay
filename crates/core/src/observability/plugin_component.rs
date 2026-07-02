@@ -2317,7 +2317,6 @@ impl AtifRemoteStorage {
         std::thread::Builder::new()
             .name("nemo-relay-atif-storage".to_string())
             .spawn(move || {
-                install_rustls_crypto_provider();
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -2386,7 +2385,6 @@ impl AtifRemoteStorage {
         std::thread::Builder::new()
             .name("nemo-relay-atif-storage".to_string())
             .spawn(move || {
-                install_rustls_crypto_provider();
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -2567,11 +2565,6 @@ async fn post_atif_http(
             response.status()
         )))
     }
-}
-
-#[cfg(feature = "object-store")]
-fn install_rustls_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 #[cfg(feature = "object-store")]

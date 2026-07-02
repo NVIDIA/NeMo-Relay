@@ -14,6 +14,7 @@ import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal, cast
+from unittest import mock
 
 import pytest
 
@@ -31,6 +32,7 @@ from nemo_relay_plugin import (  # noqa: E402
     PluginContext,
     PluginRuntime,
     ScopeType,
+    ToolExecutionInterceptOutcome,
     ToolNext,
     WorkerPlugin,
     WorkerSdkError,
@@ -43,11 +45,13 @@ from nemo_relay_plugin._api import (  # noqa: E402
     JSON_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
     _decode_required_envelope,
     _grpc_target,
     _json_envelope,
+    _open_host_channel,
     _required_env,
     _unlink_unix_socket,
     _WorkerService,
@@ -190,9 +194,12 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def tool_request(name: str, value: Json) -> Json:
             return _tag(value, f"request_{name}")
 
-        async def tool_execution(name: str, value: Json, next_call: ToolNext) -> Json:
+        async def tool_execution(name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
             result = await next_call.call(_tag(value, f"execute_{name}"))
-            return _tag(result, "tool_execution")
+            return ToolExecutionInterceptOutcome(
+                result=_tag(result, "tool_execution"),
+                pending_marks=[PendingMarkSpec("worker.tool.execution")],
+            )
 
         def llm_sanitize_request(request: Json) -> Json:
             return _tag_llm_request(request, "llm_sanitize_request")
@@ -903,9 +910,10 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
 
     tool_request = await _invoke_json_async(service, "tool_request", pb.TOOL_REQUEST_INTERCEPT)
     assert tool_request["tag"] == "request_lookup"
-    tool_execution = await _invoke_json_async(service, "tool_execution", pb.TOOL_EXECUTION_INTERCEPT)
-    assert tool_execution["tag"] == "tool_execution"
-    assert tool_execution["next_tool"]["tag"] == "execute_lookup"
+    tool_execution = await _invoke_tool_execution_async(service, "tool_execution")
+    assert tool_execution["result"]["tag"] == "tool_execution"
+    assert tool_execution["result"]["next_tool"]["tag"] == "execute_lookup"
+    assert tool_execution["pending_marks"][0]["name"] == "worker.tool.execution"
 
     llm_sanitize_request = await _invoke_json_async(
         service,
@@ -1062,6 +1070,30 @@ async def test_llm_request_intercept_rejects_non_object_typed_results(invalid_pa
 
     assert response.WhichOneof("result") == "error"
     assert "must be a JSON object" in response.error.message
+
+
+async def test_tool_execution_intercept_rejects_legacy_raw_result():
+    class LegacyResultPlugin(WorkerPlugin):
+        plugin_id = "tests.legacy_tool_execution_result"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def legacy_result(name: str, value: Json, next_call: ToolNext) -> Any:
+                del name, value, next_call
+                return {"legacy_result": True}
+
+            ctx.register_tool_execution_intercept("legacy", legacy_result)
+
+    service = _service(LegacyResultPlugin(), RecordingHostStub())
+    await _register(service)
+    response = await service.Invoke(
+        _tool_request("legacy", pb.TOOL_EXECUTION_INTERCEPT, {}),
+        AbortContext(),
+    )
+
+    assert response.WhichOneof("result") == "error"
+    assert "must return ToolExecutionInterceptOutcome" in response.error.message
 
 
 @pytest.mark.parametrize(
@@ -1549,7 +1581,7 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
         def register(self, ctx: PluginContext, config: Json) -> None:
             del config
 
-            async def tool_execution(tool_name: str, value: Json, next_call: ToolNext) -> Json:
+            async def tool_execution(tool_name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
                 del tool_name, value, next_call
                 started.set()
                 try:
@@ -1558,6 +1590,7 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
                     cancelled.set()
                     await release.wait()
                     raise
+                raise AssertionError("unreachable")
 
             ctx.register_tool_execution_intercept("cancel", tool_execution)
 
@@ -1753,6 +1786,28 @@ def test_required_environment_reports_missing_value(monkeypatch: pytest.MonkeyPa
         _required_env("NEMO_RELAY_WORKER_SOCKET")
 
 
+def test_unix_host_channel_uses_valid_authority(monkeypatch: pytest.MonkeyPatch):
+    calls: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+
+    def insecure_channel(
+        target: str,
+        *,
+        options: tuple[tuple[str, str], ...] = (),
+    ) -> object:
+        calls.append((target, options))
+        return object()
+
+    monkeypatch.setattr(plugin_api.grpc.aio, "insecure_channel", insecure_channel)
+
+    _open_host_channel("unix:///tmp/relay-host.sock")
+    _open_host_channel("http://127.0.0.1:50051")
+
+    assert calls == [
+        ("unix:/tmp/relay-host.sock", (("grpc.default_authority", "localhost"),)),
+        ("127.0.0.1:50051", ()),
+    ]
+
+
 async def test_endpoint_helpers_normalize_and_refuse_non_socket_unix_targets(tmp_path: Any):
     assert _grpc_target("tcp://127.0.0.1:50051") == "127.0.0.1:50051"
     assert _grpc_target("http://127.0.0.1:50051") == "127.0.0.1:50051"
@@ -1897,7 +1952,7 @@ async def test_unlink_unix_socket_removes_an_existing_socket():
 async def test_unlink_unix_socket_refuses_an_active_socket():
     with tempfile.TemporaryDirectory(prefix="nr-plugin-", dir="/tmp") as directory:
         socket_path = Path(directory) / "active.sock"
-        server = await asyncio.start_unix_server(lambda reader, writer: None, path=socket_path)
+        server = await asyncio.start_unix_server(lambda _reader, writer: writer.close(), path=socket_path)
         try:
             with pytest.raises(WorkerSdkError, match="already active"):
                 await _unlink_unix_socket(f"unix://{socket_path}")
@@ -1905,6 +1960,29 @@ async def test_unlink_unix_socket_refuses_an_active_socket():
         finally:
             server.close()
             await server.wait_closed()
+            socket_path.unlink(missing_ok=True)
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Unix sockets are unavailable")
+async def test_unlink_unix_socket_still_refuses_active_socket_when_close_wait_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with tempfile.TemporaryDirectory(prefix="nr-plugin-", dir="/tmp") as directory:
+        socket_path = Path(directory) / "active.sock"
+        writer = mock.AsyncMock(spec=asyncio.StreamWriter)
+        writer.wait_closed.side_effect = TimeoutError
+
+        async def open_unix_connection(_path: Path) -> tuple[object, mock.AsyncMock]:
+            return object(), writer
+
+        monkeypatch.setattr(plugin_api.asyncio, "open_unix_connection", open_unix_connection)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as unix_socket:
+                unix_socket.bind(str(socket_path))
+                with pytest.raises(WorkerSdkError, match="already active"):
+                    await _unlink_unix_socket(f"unix://{socket_path}")
+                assert socket_path.exists()
+        finally:
             socket_path.unlink(missing_ok=True)
 
 
@@ -2202,6 +2280,19 @@ async def _invoke_json_async(
     response = await service.Invoke(request, AbortContext())
     assert response.WhichOneof("result") == "json", response
     return _envelope_value(response.json.value)
+
+
+async def _invoke_tool_execution_async(
+    service: _WorkerService,
+    registration_name: str,
+) -> Json:
+    response = await service.Invoke(
+        _tool_request(registration_name, pb.TOOL_EXECUTION_INTERCEPT, {"query": "relay"}),
+        AbortContext(),
+    )
+    assert response.WhichOneof("result") == "tool_execution", response
+    assert response.tool_execution.outcome.schema == TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA
+    return _envelope_value(response.tool_execution.outcome)
 
 
 def _envelope_value(envelope: Any) -> Json:

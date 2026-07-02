@@ -698,16 +698,16 @@ func TestScopeLocalToolExecutionIntercept(t *testing.T) {
 	stack.Run(func() {
 		handle, _ := PushScope("exec_intercept_scope", ScopeTypeAgent)
 		defer PopScope(handle)
-		err := ScopeRegisterToolExecutionIntercept(handle.UUID(), "scope_exec_int", 1, func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		err := ScopeRegisterToolExecutionIntercept(handle.UUID(), "scope_exec_int", 1, func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
-				return nil, err
+				return ToolExecutionInterceptOutcome{}, err
 			}
 			var m map[string]interface{}
 			json.Unmarshal(result, &m)
 			m["exec_intercepted"] = true
 			out, _ := json.Marshal(m)
-			return out, nil
+			return ToolExecutionInterceptOutcome{Result: out}, nil
 		})
 		if err != nil {
 			t.Fatalf("ScopeRegisterToolExecutionIntercept failed: %v", err)
@@ -1034,9 +1034,9 @@ func assertScopeLocalToolWrappersDeregister(t *testing.T, scopeUUID string) {
 		&executionInterceptCalls,
 		func() error {
 			return ScopeRegisterToolExecutionIntercept(scopeUUID, "tool_scope_exec_int", 1,
-				func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+				func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 					executionInterceptCalls++
-					return next(args)
+					return toolExecutionOutcome(next(args))
 				},
 			)
 		},

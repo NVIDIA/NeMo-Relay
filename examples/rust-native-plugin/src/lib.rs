@@ -4,7 +4,7 @@
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json, LlmJsonStream,
     LlmRequest, LlmRequestInterceptOutcome, NativePlugin, PendingMarkSpec, PluginContext,
-    PluginRuntime, ScopeCategory, ScopeType,
+    PluginRuntime, ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 
@@ -215,7 +215,20 @@ impl NativePlugin for ExampleNativePlugin {
             move |_name, args, next| {
                 let request = tag_json(args, "native_tool_execution_request", &tag);
                 let result = next.call(request)?;
-                Ok(tag_json(result, "native_tool_execution_response", &tag))
+                let result = tag_json(result, "native_tool_execution_response", &tag);
+                Ok(
+                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("example.native.tool_execution")
+                            .category(EventCategory::custom())
+                            .category_profile(CategoryProfile {
+                                subtype: Some("example.native.tool_result_rewrite".into()),
+                                ..CategoryProfile::default()
+                            })
+                            .data(json!({ "tag": &tag }))
+                            .build(),
+                    ),
+                )
             }
         })?;
 

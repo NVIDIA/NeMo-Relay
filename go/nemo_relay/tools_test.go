@@ -314,8 +314,8 @@ func TestToolRequestInterceptRegisterDeregister(t *testing.T) {
 
 func TestToolExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterToolExecutionIntercept("go_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(args)
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			return toolExecutionOutcome(next(args))
 		},
 	)
 	if err != nil {
@@ -368,9 +368,9 @@ func TestToolRequestInterceptModifiesArgs(t *testing.T) {
 
 func TestToolExecutionInterceptReplacesFunc(t *testing.T) {
 	RegisterToolExecutionIntercept("go_exec_replace", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			// Short-circuit: don't call next, return directly
-			return json.RawMessage(`{"from_intercept": true}`), nil
+			return ToolExecutionInterceptOutcome{Result: json.RawMessage(`{"from_intercept": true}`)}, nil
 		},
 	)
 
@@ -454,16 +454,16 @@ func TestToolFullPipelineInterceptsAndExecute(t *testing.T) {
 
 	// Register an execution intercept that wraps the callable
 	RegisterToolExecutionIntercept("go_pipe_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
-				return nil, err
+				return ToolExecutionInterceptOutcome{}, err
 			}
 			var m map[string]interface{}
 			json.Unmarshal(result, &m)
 			m["exec_intercepted"] = true
 			out, _ := json.Marshal(m)
-			return out, nil
+			return ToolExecutionInterceptOutcome{Result: out}, nil
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_pipe_exec_int")
@@ -668,7 +668,7 @@ func TestToolCallableErrorPropagation(t *testing.T) {
 func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 	// Register an execution intercept that modifies args and result
 	RegisterToolExecutionIntercept("go_wrap_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
 			// Before: modify args
 			var m map[string]interface{}
 			json.Unmarshal(args, &m)
@@ -678,7 +678,7 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 			// Call the next function in the chain
 			result, err := next(modifiedArgs)
 			if err != nil {
-				return nil, err
+				return ToolExecutionInterceptOutcome{}, err
 			}
 
 			// After: modify result
@@ -686,7 +686,7 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 			json.Unmarshal(result, &out)
 			out["after_exec"] = true
 			final, _ := json.Marshal(out)
-			return final, nil
+			return ToolExecutionInterceptOutcome{Result: final}, nil
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_wrap_exec_int")
@@ -718,10 +718,115 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 	}
 }
 
+func TestToolExecutionInterceptEmitsPendingMarks(t *testing.T) {
+	const (
+		interceptName  = "go_pending_mark_exec"
+		subscriberName = "go_pending_mark_sub"
+		toolName       = "go_pending_mark_tool"
+		markName       = "go.tool.execution"
+	)
+
+	var mu sync.Mutex
+	events := make([]Event, 0, 3)
+	if err := RegisterSubscriber(subscriberName, func(event Event) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	t.Cleanup(func() { _ = DeregisterSubscriber(subscriberName) })
+
+	category := "custom"
+	if err := RegisterToolExecutionIntercept(
+		interceptName,
+		1,
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			result, err := next(args)
+			if err != nil {
+				return ToolExecutionInterceptOutcome{}, err
+			}
+			return ToolExecutionInterceptOutcome{
+				Result: result,
+				PendingMarks: []PendingMarkSpec{{
+					Name:            markName,
+					Category:        &category,
+					CategoryProfile: json.RawMessage(`{"subtype":"go.tool.execution"}`),
+					Data:            json.RawMessage(`{"source":"go"}`),
+					Metadata:        json.RawMessage(`{"fixture":true}`),
+				}},
+			}, nil
+		},
+	); err != nil {
+		t.Fatalf(registerFailed, err)
+	}
+	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept(interceptName) })
+
+	result, err := ToolCallExecute(
+		toolName,
+		json.RawMessage(`{"value":42}`),
+		func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+	)
+	if err != nil {
+		t.Fatalf(toolCallExecuteFailed, err)
+	}
+	var applicationResult map[string]any
+	if err := json.Unmarshal(result, &applicationResult); err != nil {
+		t.Fatalf("decode tool result: %v", err)
+	}
+	if applicationResult["value"] != float64(42) {
+		t.Fatalf("unexpected tool result: %s", result)
+	}
+	if _, leaked := applicationResult["pending_marks"]; leaked {
+		t.Fatalf("pending marks leaked into tool result: %s", result)
+	}
+
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(toolFlushSubscribersFailed, err)
+	}
+	mu.Lock()
+	captured := append([]Event(nil), events...)
+	mu.Unlock()
+
+	startIndex, endIndex, markIndex := -1, -1, -1
+	var start, mark Event
+	for index, event := range captured {
+		switch {
+		case event.Name() == toolName && event.Kind() == "scope" && event.ScopeCategory() == "start":
+			startIndex, start = index, event
+		case event.Name() == toolName && event.Kind() == "scope" && event.ScopeCategory() == "end":
+			endIndex = index
+		case event.Name() == markName && event.Kind() == "mark":
+			markIndex, mark = index, event
+		}
+	}
+	if startIndex < 0 || endIndex < 0 || markIndex < 0 {
+		t.Fatalf("missing lifecycle events: start=%d end=%d mark=%d", startIndex, endIndex, markIndex)
+	}
+	if !(startIndex < endIndex && endIndex < markIndex) {
+		t.Fatalf("unexpected lifecycle order: start=%d end=%d mark=%d", startIndex, endIndex, markIndex)
+	}
+	if mark.ParentUUID() != start.UUID() {
+		t.Fatalf("mark parent %q does not match tool UUID %q", mark.ParentUUID(), start.UUID())
+	}
+	if mark.Category() != category {
+		t.Fatalf("mark category = %q, expected %q", mark.Category(), category)
+	}
+	assertJSONFieldString(t, mark.CategoryProfile(), "subtype", "go.tool.execution")
+	assertJSONFieldString(t, mark.Data(), "source", "go")
+	var metadata map[string]any
+	if err := json.Unmarshal(mark.Metadata(), &metadata); err != nil {
+		t.Fatalf("decode mark metadata: %v", err)
+	}
+	if metadata["fixture"] != true {
+		t.Fatalf("unexpected mark metadata: %s", mark.Metadata())
+	}
+}
+
 func TestToolExecutionInterceptSeesNextError(t *testing.T) {
 	RegisterToolExecutionIntercept("go_wrap_exec_err", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (json.RawMessage, error) {
-			return next(args)
+		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			return toolExecutionOutcome(next(args))
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_wrap_exec_err")

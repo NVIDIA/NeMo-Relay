@@ -8,9 +8,12 @@ from typing import cast
 import pytest
 
 from nemo_relay import (
+    MarkEvent,
+    PendingMarkSpec,
     ScopeEvent,
     ScopeType,
     ToolAttributes,
+    ToolExecutionInterceptOutcome,
     ToolHandle,
     guardrails,
     intercepts,
@@ -274,7 +277,7 @@ class TestToolIntercepts:
         intercepts.register_tool_execution(
             "py_exec_int",
             1,
-            lambda name, args, next: {"intercepted": True},
+            lambda name, args, next: ToolExecutionInterceptOutcome({"intercepted": True}),
         )
         assert intercepts.deregister_tool_execution("py_exec_int")
 
@@ -327,7 +330,7 @@ class TestToolInterceptsAsync:
         intercepts.register_tool_execution(
             "py_exec_replace",
             1,
-            lambda name, args, next: {"from_intercept": True},
+            lambda name, args, next: ToolExecutionInterceptOutcome({"from_intercept": True}),
         )
 
         def original_func(args):
@@ -340,12 +343,15 @@ class TestToolInterceptsAsync:
         intercepts.deregister_tool_execution("py_exec_replace")
 
     async def test_execution_intercept_can_await_next(self):
+        events = []
+
         async def middleware(name, args, next):
             result = await next({"value": args["value"] + 1})
             result["from_intercept"] = True
-            return result
+            return ToolExecutionInterceptOutcome(result, [PendingMarkSpec("python.tool.execution")])
 
         intercepts.register_tool_execution("py_exec_next", 1, middleware)
+        subscribers.register("py_exec_mark_sub", lambda event: events.append(event))
 
         def original(args):
             return {"value": args["value"] * 2}
@@ -353,8 +359,29 @@ class TestToolInterceptsAsync:
         try:
             result = await tools.execute("next_tool", {"value": 2}, original)
             assert result == {"value": 6, "from_intercept": True}
+            subscribers.flush()
+            start = _tool_event(events, "next_tool", "start")
+            end = _tool_event(events, "next_tool", "end")
+            mark = next(
+                event for event in events if isinstance(event, MarkEvent) and event.name == "python.tool.execution"
+            )
+            assert mark.parent_uuid == start.uuid
+            assert events.index(end) < events.index(mark)
         finally:
             intercepts.deregister_tool_execution("py_exec_next")
+            subscribers.deregister("py_exec_mark_sub")
+
+    async def test_execution_intercept_rejects_legacy_raw_result(self):
+        intercepts.register_tool_execution(
+            "py_exec_legacy",
+            1,
+            lambda name, args, next: {"legacy_result": True},  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
+        )
+        try:
+            with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome"):
+                await tools.execute("legacy_tool", {}, lambda args: args)
+        finally:
+            intercepts.deregister_tool_execution("py_exec_legacy")
 
     async def test_request_intercept_break_chain(self):
         def first_fn(name, args):

@@ -271,7 +271,8 @@ def register_tool_execution(scope_handle, name, priority, fn):
         priority: Execution order for the intercept. Lower values run first.
         fn: Callable invoked as ``fn(tool_name, args, next_call)``. It may call
             ``next_call(args)`` to continue execution, modify the result, or
-            short-circuit the tool call entirely.
+            short-circuit the tool call entirely. It must return
+            ``ToolExecutionInterceptOutcome``.
 
     Returns:
         None: This function returns after the scope-local intercept is

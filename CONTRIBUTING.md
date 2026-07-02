@@ -214,11 +214,12 @@ This section describes how to prepare and submit changes for review.
 
 Complete these checks before opening or updating a pull request.
 
-1. Ensure all pre-commit hooks pass.
-2. Run the relevant test suites and confirm they pass.
-3. Verify your changes compile cleanly with the relevant target-specific build recipe, such as `just build-rust` or `just build-python`.
-4. Update the relevant documentation entry points and references.
-5. Rebase your branch on the latest `main` to avoid merge conflicts.
+1. Open or identify an issue describing the proposed enhancement or bug fix before submitting a pull request. External contributors should use a GitHub issue; NVIDIA contributors may use a GitHub or Linear issue.
+2. Ensure all pre-commit hooks pass.
+3. Run the relevant test suites and confirm they pass.
+4. Verify your changes compile cleanly with the relevant target-specific build recipe, such as `just build-rust` or `just build-python`.
+5. Update the relevant documentation entry points and references.
+6. Rebase your branch on the latest `main` to avoid merge conflicts.
 
 ### PR Description
 

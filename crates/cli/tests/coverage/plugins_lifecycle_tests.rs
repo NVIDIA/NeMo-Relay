@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::path::{Path, PathBuf};
-use std::{ffi::OsString, sync::MutexGuard};
+use std::{
+    ffi::{OsStr, OsString},
+    sync::{Mutex, MutexGuard},
+};
 
 use super::*;
 use crate::config::{
@@ -36,6 +39,7 @@ impl Drop for CurrentDirGuard {
 
 struct EnvScope {
     _guard: MutexGuard<'static, ()>,
+    _cwd_guard: crate::test_support::CwdTestScope,
     values: Vec<(&'static str, Option<OsString>)>,
 }
 
@@ -46,10 +50,15 @@ impl EnvScope {
         Self::set(&[
             ("HOME", Some(temp.path().as_os_str())),
             ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+            ("NEMO_RELAY_PYTHON", None),
         ])
     }
 
     fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        // Acquire process-global locks in the same CWD-then-environment order as
+        // the rest of the CLI test suite. Lifecycle tests also change CWD while
+        // this scope is alive.
+        let cwd_guard = crate::test_support::CwdTestScope::locked();
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -67,6 +76,7 @@ impl EnvScope {
         }
         Self {
             _guard: guard,
+            _cwd_guard: cwd_guard,
             values: previous,
         }
     }
@@ -141,8 +151,8 @@ sha256 = "{digest}"
 {signature_line}
 
 [load]
-runtime = "python"
-entrypoint = "{plugin_id}.plugin:register"
+runtime = "command"
+entrypoint = "plugin.py"
 "#,
             capabilities = capabilities,
             signature_line = signature_line,
@@ -150,6 +160,136 @@ entrypoint = "{plugin_id}.plugin:register"
     )
     .unwrap();
     manifest_path
+}
+
+fn write_dynamic_manifest_with_config_schema(
+    dir: &Path,
+    plugin_id: &str,
+    schema: &serde_json::Value,
+) -> PathBuf {
+    let manifest_path = write_dynamic_manifest_with_options(
+        dir,
+        plugin_id,
+        &["plugin_worker", "config_schema"],
+        None,
+    );
+    let mut manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    manifest.push_str(
+        r#"
+
+[config_schema]
+path = "config.schema.json"
+"#,
+    );
+    std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(
+        dir.join("config.schema.json"),
+        serde_json::to_vec_pretty(schema).unwrap(),
+    )
+    .unwrap();
+    manifest_path
+}
+
+fn write_python_dynamic_manifest(dir: &Path, plugin_id: &str) -> PathBuf {
+    let artifact_body = "def main():\n    return None\n";
+    std::fs::write(dir.join("plugin.py"), artifact_body).unwrap();
+    std::fs::write(
+        dir.join("pyproject.toml"),
+        r#"[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-lifecycle-test-plugin"
+version = "0.1.0"
+
+[tool.setuptools]
+py-modules = ["plugin"]
+"#,
+    )
+    .unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(artifact_body.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let manifest_path = dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"
+manifest_version = 1
+
+[plugin]
+id = "{plugin_id}"
+kind = "worker"
+
+[compat]
+relay = "0.5"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+manifest_root = "."
+artifact = "plugin.py"
+
+[integrity]
+sha256 = "{digest}"
+
+[load]
+runtime = "python"
+entrypoint = "plugin:main"
+"#,
+        ),
+    )
+    .unwrap();
+    manifest_path
+}
+
+#[derive(Default)]
+struct FakePythonEnvironmentRunner {
+    fail_install: bool,
+    calls: Mutex<Vec<(OsString, Vec<OsString>)>>,
+}
+
+impl FakePythonEnvironmentRunner {
+    fn failing_install() -> Self {
+        Self {
+            fail_install: true,
+            ..Self::default()
+        }
+    }
+
+    fn calls(&self) -> Vec<(OsString, Vec<OsString>)> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl PythonEnvironmentCommandRunner for FakePythonEnvironmentRunner {
+    fn run(&self, program: &OsStr, args: &[OsString]) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((program.to_owned(), args.to_vec()));
+        if args.get(1).is_some_and(|arg| arg == "venv") {
+            let environment = PathBuf::from(args.last().expect("venv environment path"));
+            let python = environment::environment_python_path(&environment);
+            std::fs::create_dir_all(python.parent().unwrap()).unwrap();
+            std::fs::write(python, b"fake python").unwrap();
+            return Ok(());
+        }
+        if self.fail_install && args.get(1).is_some_and(|arg| arg == "pip") {
+            return Err("fixture pip failure".into());
+        }
+        Ok(())
+    }
 }
 
 fn write_detached_ed25519_signature(dir: &Path, signature_name: &str) -> String {
@@ -372,11 +512,15 @@ fn materialize_native_example_manifest(dir: &Path) -> (PathBuf, PathBuf) {
         repository_root.join("examples/rust-native-plugin/relay-plugin.toml"),
     )
     .unwrap();
+    let config_schema =
+        std::fs::read(repository_root.join("examples/rust-native-plugin/config.schema.json"))
+            .unwrap();
     let manifest = template
         .replace("<platform-library-file>", &artifact_name)
         .replace("<artifact-sha256>", &digest);
     let manifest_path = dir.join("relay-plugin.toml");
     std::fs::write(&manifest_path, manifest).unwrap();
+    std::fs::write(dir.join("config.schema.json"), config_schema).unwrap();
     (manifest_path, artifact_path)
 }
 
@@ -477,6 +621,629 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let resolved = resolve_plugins_config(None).unwrap();
     assert_eq!(resolved.dynamic_plugins.len(), 1);
     assert_eq!(resolved.dynamic_plugins[0].plugin_id, "acme.guardrail");
+}
+
+#[test]
+fn add_rejects_unreadable_declared_config_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("schema-missing");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_config_schema(
+        &plugin_dir,
+        "acme.schema-missing",
+        &serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object"
+        }),
+    );
+    std::fs::remove_file(plugin_dir.join("config.schema.json")).unwrap();
+
+    let error = add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("acme.schema-missing"), "{error}");
+    assert!(error.contains("config.schema.json"), "{error}");
+    assert!(error.contains("failed to read schema"), "{error}");
+}
+
+#[test]
+fn validate_path_rejects_invalid_declared_config_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("schema-invalid");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_config_schema(
+        &plugin_dir,
+        "acme.schema-invalid",
+        &serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": 42
+        }),
+    );
+
+    let error = validate(
+        PluginsValidateCommand {
+            target: plugin_dir.to_string_lossy().into_owned(),
+            json: false,
+        },
+        &ServerArgs::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("acme.schema-invalid"), "{error}");
+    assert!(error.contains("schema is invalid"), "{error}");
+}
+
+#[test]
+fn validate_id_checks_resolved_host_config_against_declared_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("schema-config");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest_with_config_schema(
+        &plugin_dir,
+        "acme.schema-config",
+        &serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {"port": {"type": "integer"}}
+        }),
+    );
+    let server = ServerArgs::default();
+    add(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let mut rendered = std::fs::read_to_string(&plugins_toml).unwrap();
+    rendered.push_str(
+        r#"
+[plugins.dynamic.config]
+port = "not-an-integer"
+"#,
+    );
+    std::fs::write(&plugins_toml, rendered).unwrap();
+
+    let error = validate(
+        PluginsValidateCommand {
+            target: "acme.schema-config".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("acme.schema-config"), "{error}");
+    assert!(error.contains("JSON pointer '/port'"), "{error}");
+}
+
+#[test]
+fn add_provisions_persists_and_removes_managed_python_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "  acme.python  ");
+    let runner = FakePythonEnvironmentRunner::default();
+    let server = ServerArgs::default();
+
+    add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir.clone(),
+        },
+        &server,
+        &runner,
+    )
+    .unwrap();
+
+    let scopes = load_scoped_registries(None).unwrap();
+    let added = find_record_by_id(&scopes, "acme.python")
+        .unwrap()
+        .expect("Python record should exist");
+    let environment_ref = added
+        .record
+        .source
+        .environment_ref
+        .as_deref()
+        .expect("managed environment should be persisted");
+    let environment_path = PathBuf::from(environment_ref);
+    assert!(environment_path.is_absolute());
+    let expected_environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        environment_path.file_name(),
+        Some(OsStr::new(&expected_environment_name))
+    );
+    assert!(
+        environment_path
+            .parent()
+            .is_some_and(|parent| parent.ends_with(".dynamic-plugin-environments"))
+    );
+    assert!(environment::environment_python_path(&environment_path).is_file());
+    assert_eq!(
+        added.record.status.validation.environment,
+        DynamicPluginCheckState::Valid
+    );
+    let (manifest, manifest_ref) =
+        DynamicPluginManifest::load_from_path(plugin_dir.join("relay-plugin.toml")).unwrap();
+    let inspect = serde_json::to_value(responses::inspect_success(
+        "plugins inspect",
+        "acme.python",
+        &added,
+        &manifest,
+        &manifest_ref,
+        None,
+    ))
+    .unwrap();
+    assert_eq!(
+        inspect["data"]["environment_state"],
+        serde_json::json!("valid")
+    );
+    assert_eq!(
+        inspect["data"]["source"]["environment_ref"],
+        serde_json::json!(environment_ref)
+    );
+    let calls = runner.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0].0,
+        OsString::from(if cfg!(windows) { "python" } else { "python3" })
+    );
+    assert_eq!(
+        calls[0].1,
+        vec![
+            OsString::from("-m"),
+            OsString::from("venv"),
+            environment_path.as_os_str().to_owned(),
+        ]
+    );
+    assert_eq!(
+        PathBuf::from(&calls[1].0),
+        environment::environment_python_path(&environment_path)
+    );
+    assert_eq!(
+        calls[1].1,
+        vec![
+            OsString::from("-m"),
+            OsString::from("pip"),
+            OsString::from("install"),
+            plugin_dir.canonicalize().unwrap().into_os_string(),
+        ]
+    );
+    assert!(
+        !calls[1]
+            .1
+            .iter()
+            .any(|arg| arg == "-e" || arg == "--editable")
+    );
+    enable(
+        PluginsEnableCommand {
+            id: "acme.python".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    let active = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].environment_ref.as_deref(), Some(environment_ref));
+
+    let stale_marker = environment_path.join("stale-marker");
+    std::fs::write(&stale_marker, b"stale").unwrap();
+    remove(
+        PluginsRemoveCommand {
+            id: "acme.python".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    assert!(!environment_path.exists());
+    let scopes = load_scoped_registries(None).unwrap();
+    let removed = find_record_by_id(&scopes, "acme.python")
+        .unwrap()
+        .expect("tombstone should remain");
+    assert!(removed.record.is_tombstoned());
+    assert_eq!(removed.record.source.environment_ref, None);
+
+    add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+        &runner,
+    )
+    .unwrap();
+    assert!(environment::environment_python_path(&environment_path).is_file());
+    assert!(!stale_marker.exists());
+}
+
+#[test]
+fn add_rolls_back_python_environment_when_installation_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "acme.python-failure");
+    let runner = FakePythonEnvironmentRunner::failing_install();
+
+    let error = add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+        &runner,
+    )
+    .expect_err("pip failure should abort plugin registration");
+
+    let (_, _, kind, code, message) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("environment failure should be structured");
+    assert_eq!(kind, PluginLifecycleFailureKind::Failed);
+    assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("fixture pip failure"));
+    assert_eq!(runner.calls().len(), 2);
+    let managed_root = temp
+        .path()
+        .join(".nemo-relay")
+        .join(".dynamic-plugin-environments");
+    assert!(!managed_root.exists() || std::fs::read_dir(managed_root).unwrap().next().is_none());
+    assert!(
+        resolve_plugins_config(None)
+            .unwrap()
+            .dynamic_plugins
+            .is_empty()
+    );
+}
+
+#[test]
+fn enable_rejects_missing_managed_python_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "acme.python-missing");
+    let runner = FakePythonEnvironmentRunner::default();
+    let server = ServerArgs::default();
+    add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+        &runner,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    let environment_ref = find_record_by_id(&scopes, "acme.python-missing")
+        .unwrap()
+        .unwrap()
+        .record
+        .source
+        .environment_ref
+        .clone()
+        .unwrap();
+    std::fs::remove_dir_all(&environment_ref).unwrap();
+
+    let error = enable(
+        PluginsEnableCommand {
+            id: "acme.python-missing".into(),
+        },
+        &server,
+    )
+    .expect_err("missing managed environment should prevent activation");
+
+    let (_, _, kind, code, message) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("environment failure should be structured");
+    assert_eq!(kind, PluginLifecycleFailureKind::Refused);
+    assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("is unavailable"));
+    let scopes = load_scoped_registries(None).unwrap();
+    let record = find_record_by_id(&scopes, "acme.python-missing")
+        .unwrap()
+        .unwrap()
+        .record;
+    assert!(!record.spec.enabled);
+    assert_eq!(
+        record.status.validation.environment,
+        DynamicPluginCheckState::Invalid
+    );
+}
+
+#[test]
+fn enable_rejects_python_environment_outside_managed_location() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "acme.python-outside");
+    let runner = FakePythonEnvironmentRunner::default();
+    let server = ServerArgs::default();
+    add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+        &runner,
+    )
+    .unwrap();
+
+    let outside = temp.path().join("outside");
+    let outside_python = environment::environment_python_path(&outside);
+    std::fs::create_dir_all(outside_python.parent().unwrap()).unwrap();
+    std::fs::write(&outside_python, b"not managed by Relay").unwrap();
+    let mut scopes = load_scoped_registries(None).unwrap();
+    let scope = scopes
+        .iter_mut()
+        .find(|scope| scope.registry.get("acme.python-outside").is_some())
+        .unwrap();
+    scope
+        .registry
+        .update_environment(
+            "acme.python-outside",
+            Some(outside.display().to_string()),
+            DynamicPluginCheckState::Valid,
+        )
+        .unwrap();
+    scope.save().unwrap();
+
+    let error = enable(
+        PluginsEnableCommand {
+            id: "acme.python-outside".into(),
+        },
+        &server,
+    )
+    .expect_err("an unmanaged Python environment should prevent activation");
+
+    let (_, _, kind, code, message) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("environment refusal should be structured");
+    assert_eq!(kind, PluginLifecycleFailureKind::Refused);
+    assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("is unavailable"));
+    assert!(outside.exists());
+    let scopes = load_scoped_registries(None).unwrap();
+    let record = find_record_by_id(&scopes, "acme.python-outside")
+        .unwrap()
+        .unwrap()
+        .record;
+    assert!(!record.spec.enabled);
+    assert_eq!(
+        record.status.validation.environment,
+        DynamicPluginCheckState::Invalid
+    );
+}
+
+#[test]
+fn add_requires_manifest_root_for_python_workers() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_python_dynamic_manifest(&plugin_dir, "acme.no-root");
+    let contents = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("manifest_root = \".\"\n", "");
+    std::fs::write(&manifest, contents).unwrap();
+    let runner = FakePythonEnvironmentRunner::default();
+
+    let error = add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+        &runner,
+    )
+    .expect_err("Python plugins without manifest_root should fail");
+
+    let (_, _, kind, code, message) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("environment failure should be structured");
+    assert_eq!(kind, PluginLifecycleFailureKind::Failed);
+    assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("source.manifest_root"));
+    assert!(runner.calls().is_empty());
+}
+
+#[test]
+fn managed_environment_cleanup_refuses_paths_outside_lifecycle_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let state_path = temp.path().join(".dynamic-plugins.json");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+
+    let error = environment::remove_managed_environment(
+        &state_path,
+        "acme.python",
+        outside.to_string_lossy().as_ref(),
+    )
+    .expect_err("unmanaged environment must not be removed");
+
+    assert!(error.contains("refusing to delete Python environment"));
+    assert!(outside.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_environment_cleanup_refuses_symlinked_environment() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let state_path = temp.path().join(".dynamic-plugins.json");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let environment = temp
+        .path()
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    std::fs::create_dir_all(environment.parent().unwrap()).unwrap();
+    symlink(&outside, &environment).unwrap();
+
+    let error = environment::remove_managed_environment(
+        &state_path,
+        "acme.python",
+        environment.to_string_lossy().as_ref(),
+    )
+    .expect_err("symlinked environment must not be removed");
+
+    assert!(error.contains("is not a directory"));
+    assert!(environment.is_symlink());
+    assert!(outside.exists());
+}
+
+#[test]
+fn remove_can_retry_after_guarded_environment_cleanup_failure() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_python_dynamic_manifest(&plugin_dir, "acme.python-retry");
+    let runner = FakePythonEnvironmentRunner::default();
+    let server = ServerArgs::default();
+    add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &server,
+        &runner,
+    )
+    .unwrap();
+
+    let mut scopes = load_scoped_registries(None).unwrap();
+    let scope = scopes
+        .iter_mut()
+        .find(|scope| scope.registry.get("acme.python-retry").is_some())
+        .unwrap();
+    let expected_environment = scope
+        .registry
+        .get("acme.python-retry")
+        .unwrap()
+        .source
+        .environment_ref
+        .clone()
+        .unwrap();
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    scope
+        .registry
+        .update_environment(
+            "acme.python-retry",
+            Some(outside.display().to_string()),
+            DynamicPluginCheckState::Valid,
+        )
+        .unwrap();
+    scope.save().unwrap();
+
+    let error = remove(
+        PluginsRemoveCommand {
+            id: "acme.python-retry".into(),
+        },
+        &server,
+    )
+    .expect_err("guarded cleanup should preserve unmanaged paths");
+    assert!(error.to_string().contains("refusing to delete"));
+    assert!(outside.exists());
+    let mut scopes = load_scoped_registries(None).unwrap();
+    let scope = scopes
+        .iter_mut()
+        .find(|scope| scope.registry.get("acme.python-retry").is_some())
+        .unwrap();
+    assert!(
+        scope
+            .registry
+            .get("acme.python-retry")
+            .unwrap()
+            .is_tombstoned()
+    );
+    scope
+        .registry
+        .update_environment(
+            "acme.python-retry",
+            Some(expected_environment.clone()),
+            DynamicPluginCheckState::Valid,
+        )
+        .unwrap();
+    scope.save().unwrap();
+
+    remove(
+        PluginsRemoveCommand {
+            id: "acme.python-retry".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    assert!(!Path::new(&expected_environment).exists());
+    assert!(outside.exists());
+    let scopes = load_scoped_registries(None).unwrap();
+    let record = find_record_by_id(&scopes, "acme.python-retry")
+        .unwrap()
+        .unwrap()
+        .record;
+    assert!(record.is_tombstoned());
+    assert_eq!(record.source.environment_ref, None);
 }
 
 #[test]
@@ -667,9 +1434,11 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.explicit-conflict");
+    let config_path = config_dir.join("gateway.toml");
+    std::fs::write(&config_path, "").unwrap();
 
     let server = ServerArgs {
-        config: Some(config_dir.join("gateway.toml")),
+        config: Some(config_path),
         ..ServerArgs::default()
     };
 
@@ -840,7 +1609,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     );
     assert_eq!(
         inspect_value["load"]["entrypoint"].as_str(),
-        Some("acme.guardrail.plugin:register")
+        Some("plugin.py")
     );
 }
 
@@ -1039,9 +1808,11 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.explicit");
+    let config_path = config_dir.join("gateway.toml");
+    std::fs::write(&config_path, "").unwrap();
 
     let server = ServerArgs {
-        config: Some(config_dir.join("gateway.toml")),
+        config: Some(config_path),
         ..ServerArgs::default()
     };
 
@@ -1108,6 +1879,65 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
         entry.record.source.manifest_ref.as_deref(),
         Some(canonical_manifest_path.to_string_lossy().as_ref())
     );
+}
+
+#[test]
+fn manually_configured_python_worker_cannot_enable_without_lifecycle_add() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest_path = write_python_dynamic_manifest(&plugin_dir, "acme.python-direct");
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.python-direct")
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.record.source.environment_ref, None);
+    assert_eq!(
+        entry.record.status.validation.environment,
+        DynamicPluginCheckState::Invalid
+    );
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+    let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
+    let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+    let summary = PluginValidationSummaryView {
+        manifest: &manifest,
+        manifest_ref: &manifest_ref,
+        entry: Some(&entry),
+        host_config: None,
+        policy: &policy,
+        trust: &trust,
+    }
+    .to_string();
+    assert!(summary.contains("runtime environment is unavailable"));
+
+    let error = enable(
+        PluginsEnableCommand {
+            id: "acme.python-direct".into(),
+        },
+        &ServerArgs::default(),
+    )
+    .expect_err("manually configured Python workers must not activate");
+    let (_, _, kind, code, message) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("direct Python activation error should be structured");
+    assert_eq!(kind, PluginLifecycleFailureKind::Refused);
+    assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("plugins remove acme.python-direct"));
+    assert!(message.contains("plugins add"));
 }
 
 #[test]
@@ -1845,6 +2675,10 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         serde_json::json!(manifest_ref)
     );
     assert_eq!(
+        inspect_value["data"]["environment_state"],
+        serde_json::json!("unknown")
+    );
+    assert_eq!(
         inspect_value["data"]["host_config"],
         serde_json::Value::Null
     );
@@ -1872,6 +2706,10 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
         serde_json::json!("plugin_id")
     );
     assert_eq!(validate_value["data"]["valid"], serde_json::json!(true));
+    assert_eq!(
+        validate_value["data"]["environment_state"],
+        serde_json::json!("unknown")
+    );
     assert_eq!(
         validate_value["data"]["policy_state"],
         serde_json::json!("valid")
