@@ -30,17 +30,22 @@ boundary, start from [Supported Integrations](/supported-integrations/about).
 Install the NeMo Relay CLI when you want the `nemo-relay` executable for
 coding-agent hook and LLM gateway observability.
 
-Install the latest stable release from a Unix shell:
+Install the latest stable release:
 
+<Tabs>
+<Tab title="Unix shell">
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
+</Tab>
 
-Install the latest stable release from Windows PowerShell:
-
+<Tab title="Windows PowerShell">
 ```powershell
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
+</Tab>
+
+</Tabs>
 
 These commands intentionally download the installer from `main` and install the
 latest stable CLI release. The version of this documentation page does not
@@ -90,20 +95,15 @@ asset is published.
 
 ### Installer Reference
 
-Install a specific version from a Unix shell:
+<Tabs>
+<Tab title="Unix shell">
+Install a specific version:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
 ```
 
-In PowerShell, set the same environment variable before invoking the installer:
-
-```powershell
-$env:NEMO_RELAY_VERSION = '0.5.0'
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
-```
-
-Install into another directory from a Unix shell:
+Install into another directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
@@ -111,14 +111,26 @@ curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh |
 
 Add the selected directory to `PATH` before running `nemo-relay` if it is not
 already present.
+</Tab>
 
-To choose a PowerShell installation directory, download the script and pass
-`-InstallDir`:
+<Tab title="Windows PowerShell">
+Set the same environment variable before invoking the installer to install a
+specific version:
+
+```powershell
+$env:NEMO_RELAY_VERSION = '0.5.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+To choose an installation directory, download the script and pass `-InstallDir`:
 
 ```powershell
 iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 -OutFile install.ps1
 .\install.ps1 -InstallDir "$HOME\bin"
 ```
+</Tab>
+
+</Tabs>
 
 On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use the Unix command.
 They install the matching Windows `.exe` asset into the same
@@ -153,7 +165,7 @@ asset through the Cargo interface:
 cargo binstall nemo-relay-cli
 ```
 
-For source installation and unsupported-platform guidance, see the
+For source installation and unsupported-platform guidance, refer to the
 [CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/cli/README.md#installation).
 
 ## Python

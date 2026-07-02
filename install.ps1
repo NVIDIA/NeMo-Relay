@@ -110,10 +110,32 @@ function Add-ToPath([string]$Value, [string]$Directory) {
 
 function Add-InstallDirectoryToPath([string]$Directory) {
     $directory = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\')
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $updatedUserPath = Add-ToPath $userPath $directory
-    if ($updatedUserPath -ne $userPath) {
-        [Environment]::SetEnvironmentVariable('Path', $updatedUserPath, 'User')
+    $userEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    if ($null -eq $userEnvironmentKey) {
+        Fail 'could not open the Windows user environment registry key'
+    }
+    try {
+        $userPath = $userEnvironmentKey.GetValue(
+            'Path',
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+        if ($null -eq $userPath) {
+            $userPath = ''
+            $userPathKind = [Microsoft.Win32.RegistryValueKind]::String
+        }
+        else {
+            $userPath = [string]$userPath
+            $userPathKind = $userEnvironmentKey.GetValueKind('Path')
+        }
+
+        $updatedUserPath = Add-ToPath $userPath $directory
+        if ($updatedUserPath -ne $userPath) {
+            $userEnvironmentKey.SetValue('Path', $updatedUserPath, $userPathKind)
+        }
+    }
+    finally {
+        $userEnvironmentKey.Dispose()
     }
     $env:Path = Add-ToPath $env:Path $directory
 }

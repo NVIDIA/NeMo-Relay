@@ -58,6 +58,7 @@ cargo install nemo-relay-cli
 ```
 
 Unix curl:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
@@ -72,7 +73,7 @@ For version pinning, custom installation directories, verification,
 troubleshooting, and CLI usage, refer to the
 [NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
 
-The above commands install the binary as:
+After installation, verify the binary with:
 
 ```bash
 nemo-relay --version

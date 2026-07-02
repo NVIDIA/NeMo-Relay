@@ -11,7 +11,6 @@ $Installer = Join-Path $RepoRoot 'install.ps1'
 $PowerShell = (Get-Process -Id $PID).Path
 $TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("nemo-relay-install-test-" + [guid]::NewGuid().ToString('N'))
 $InstallDir = Join-Path $TestRoot 'custom-bin'
-$OriginalUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $OriginalProcessPath = $env:Path
 $OriginalVersion = $env:NEMO_RELAY_VERSION
 $TestsRun = 0
@@ -45,6 +44,14 @@ function Assert-NoTemporaryFiles([string]$Directory) {
         $temporaryFiles = Get-ChildItem -LiteralPath $Directory -Filter '.nemo-relay.*' -Force
         Assert-True ($temporaryFiles.Count -eq 0) "temporary installer files were not cleaned up in $Directory"
     }
+}
+
+function Open-UserEnvironmentKey {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    if ($null -eq $key) {
+        Fail 'could not open the Windows user environment registry key'
+    }
+    return $key
 }
 
 function Get-ExpectedTarget {
@@ -95,6 +102,24 @@ function Assert-Failure {
     Assert-True ($RunStatus -ne 0) "expected failure: $RunOutput"
 }
 
+$UserEnvironmentKey = Open-UserEnvironmentKey
+try {
+    $OriginalUserPath = $UserEnvironmentKey.GetValue(
+        'Path',
+        $null,
+        [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+    )
+    $OriginalUserPathKind = if ($null -eq $OriginalUserPath) {
+        $null
+    }
+    else {
+        $UserEnvironmentKey.GetValueKind('Path')
+    }
+}
+finally {
+    $UserEnvironmentKey.Dispose()
+}
+
 try {
     New-Item -ItemType Directory -Force -Path $TestRoot | Out-Null
 
@@ -109,6 +134,18 @@ try {
     Assert-Failure
     Assert-Contains $RunOutput 'unsupported version'
 
+    $UserEnvironmentKey = Open-UserEnvironmentKey
+    try {
+        $UserEnvironmentKey.SetValue(
+            'Path',
+            '%USERPROFILE%\nemo-relay-installer-test',
+            [Microsoft.Win32.RegistryValueKind]::ExpandString
+        )
+    }
+    finally {
+        $UserEnvironmentKey.Dispose()
+    }
+
     $TestsRun++
     $env:NEMO_RELAY_VERSION = ''
     Invoke-Installer -Directory $InstallDir -CaptureProcessPath
@@ -118,6 +155,19 @@ try {
     $latestVersion = (& (Join-Path $InstallDir 'nemo-relay.exe') --version | Out-String)
     Assert-Contains $latestVersion 'nemo-relay '
     Assert-PathContains ([Environment]::GetEnvironmentVariable('Path', 'User')) $InstallDir
+    $UserEnvironmentKey = Open-UserEnvironmentKey
+    try {
+        $RawUserPath = $UserEnvironmentKey.GetValue(
+            'Path',
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+        Assert-True ($UserEnvironmentKey.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) 'installer changed the user PATH registry value kind'
+        Assert-Contains $RawUserPath '%USERPROFILE%\nemo-relay-installer-test'
+    }
+    finally {
+        $UserEnvironmentKey.Dispose()
+    }
     $processPath = ($RunOutput -split '__NEMO_RELAY_PATH__', 2)[1]
     Assert-True (-not [string]::IsNullOrWhiteSpace($processPath)) 'installer did not report its updated process PATH'
     Assert-PathContains $processPath $InstallDir
@@ -144,7 +194,18 @@ try {
     Write-Output "PASS: $TestsRun PowerShell installer scenarios"
 }
 finally {
-    [Environment]::SetEnvironmentVariable('Path', $OriginalUserPath, 'User')
+    $UserEnvironmentKey = Open-UserEnvironmentKey
+    try {
+        if ($null -eq $OriginalUserPath) {
+            $UserEnvironmentKey.DeleteValue('Path', $false)
+        }
+        else {
+            $UserEnvironmentKey.SetValue('Path', $OriginalUserPath, $OriginalUserPathKind)
+        }
+    }
+    finally {
+        $UserEnvironmentKey.Dispose()
+    }
     $env:Path = $OriginalProcessPath
     $env:NEMO_RELAY_VERSION = $OriginalVersion
     Remove-Item -LiteralPath $TestRoot -Recurse -Force -ErrorAction SilentlyContinue

@@ -89,6 +89,7 @@ test_live_latest_and_pinned_replacement() {
 test_live_asset_404_preserves_existing_binary() {
     tests_run=$((tests_run + 1))
 
+    # Depends on the prior test installing nemo-relay 0.3.0 into live_install_dir.
     run_command env NEMO_RELAY_VERSION=999.999.999 sh "$installer" --install-dir "$live_install_dir"
     assert_failure
     assert_contains "$run_output" "could not download https://github.com/NVIDIA/NeMo-Relay/releases/download/999.999.999/"
