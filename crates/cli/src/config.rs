@@ -423,9 +423,9 @@ pub(crate) struct ServerArgs {
     /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
     #[arg(long, env = "NEMO_RELAY_ANTHROPIC_BASE_URL")]
     pub(crate) anthropic_base_url: Option<String>,
-    /// Generic plugin configuration JSON for process-level gateway plugin activation.
-    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG")]
-    pub(crate) plugin_config: Option<String>,
+    /// Internal override for the plugin configuration file.
+    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
+    pub(crate) plugin_config_path: Option<PathBuf>,
     /// Maximum accepted coding-agent hook payload size, in bytes.
     #[arg(long, env = "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES")]
     pub(crate) max_hook_payload_bytes: Option<usize>,
@@ -444,7 +444,7 @@ impl ServerArgs {
         self.bind.is_some()
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
-            || self.plugin_config.is_some()
+            || self.plugin_config_path.is_some()
             || self.max_hook_payload_bytes.is_some()
             || self.max_passthrough_body_bytes.is_some()
             || self.config.is_some()
@@ -475,8 +475,6 @@ pub(crate) struct HookForwardCommand {
     pub(crate) profile: Option<String>,
     #[arg(long)]
     pub(crate) session_metadata: Option<String>,
-    #[arg(long)]
-    pub(crate) plugin_config: Option<String>,
     #[arg(long, value_enum)]
     pub(crate) gateway_mode: Option<GatewayMode>,
     #[arg(long)]
@@ -507,8 +505,9 @@ pub(crate) struct RunCommand {
     pub(crate) anthropic_base_url: Option<String>,
     #[arg(long)]
     pub(crate) session_metadata: Option<String>,
-    #[arg(long)]
-    pub(crate) plugin_config: Option<String>,
+    /// Internal override for the plugin configuration file.
+    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
+    pub(crate) plugin_config_path: Option<PathBuf>,
     #[arg(long)]
     pub(crate) dry_run: bool,
     #[arg(long)]
@@ -625,13 +624,11 @@ pub(crate) struct AgentCommandConfig {
 }
 
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
-// `GatewayConfig` / `AgentConfigs`; plugin config is passed through to the runtime's generic
-// `PluginConfig` activation path.
+// `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileConfig {
     gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
-    plugins: Option<FilePluginsConfig>,
     agents: Option<FileAgentsConfig>,
 }
 
@@ -645,12 +642,6 @@ struct FileGatewayConfig {
 struct FileUpstreamConfig {
     openai_base_url: Option<String>,
     anthropic_base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct FilePluginsConfig {
-    // Generic plugin initialization shape. The gateway activates this process-wide at startup.
-    config: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -693,7 +684,7 @@ impl Default for GatewayConfig {
 /// File discovery and merge behavior live in `load_shared_config`; this function only applies the
 /// server-facing command-line layer so launcher-only settings cannot leak into daemon mode.
 pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig, CliError> {
-    let mut resolved = load_shared_config(args.config.as_ref())?;
+    let mut resolved = load_shared_config(args.config.as_ref(), args.plugin_config_path.as_ref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     enforce_required_dynamic_plugin_startup(args.config.as_ref(), &resolved)?;
     Ok(resolved)
@@ -703,7 +694,7 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
 pub(crate) fn resolve_plugins_config(
     explicit: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
-    load_shared_config(explicit)
+    load_shared_config(explicit, None)
 }
 
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
@@ -719,18 +710,13 @@ pub(crate) fn resolve_run_config(
         .config
         .as_ref()
         .or_else(|| inherited.and_then(|args| args.config.as_ref()));
-    let mut resolved = load_shared_config(config)?;
+    let plugin_config_path = command
+        .plugin_config_path
+        .as_ref()
+        .or_else(|| inherited.and_then(|args| args.plugin_config_path.as_ref()));
+    let mut resolved = load_shared_config(config, plugin_config_path)?;
     if let Some(args) = inherited {
-        // Run-subcommand plugin config has higher precedence than inherited top-level plugin
-        // config. Skip only that inherited field so file/plugins.toml conflicts are still caught
-        // when the run-level override is applied below.
-        if command.plugin_config.is_some() && args.plugin_config.is_some() {
-            let mut inherited = args.clone();
-            inherited.plugin_config = None;
-            apply_server_overrides(&mut resolved.gateway, &inherited)?;
-        } else {
-            apply_server_overrides(&mut resolved.gateway, args)?;
-        }
+        apply_server_overrides(&mut resolved.gateway, args)?;
     }
     apply_run_overrides(&mut resolved.gateway, command)?;
     resolved.gateway.bind = "127.0.0.1:0"
@@ -770,9 +756,6 @@ fn apply_run_json_overrides(
     if let Some(value) = &command.session_metadata {
         config.metadata = Some(parse_json_option("session metadata", value)?);
     }
-    if let Some(value) = &command.plugin_config {
-        apply_cli_plugin_config(config, value)?;
-    }
     Ok(())
 }
 
@@ -787,9 +770,6 @@ fn apply_server_overrides(config: &mut GatewayConfig, args: &ServerArgs) -> Resu
     }
     if let Some(value) = &args.anthropic_base_url {
         config.anthropic_base_url = value.clone();
-    }
-    if let Some(value) = &args.plugin_config {
-        apply_cli_plugin_config(config, value)?;
     }
     if let Some(value) = args.max_hook_payload_bytes {
         config.max_hook_payload_bytes = validate_body_limit("max hook payload bytes", value)?;
@@ -807,9 +787,11 @@ pub(crate) const PLUGINS_TOML: &str = "plugins.toml";
 // shape onto runtime structs, applies a sibling/discovered plugins.toml when present, then lets
 // environment variables override file values. Invalid TOML or typed shapes fail closed because
 // they indicate an operator configuration error.
-fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliError> {
+fn load_shared_config(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
-    let mut config_toml_plugin_sources = Vec::new();
     for path in config_paths(explicit) {
         let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
             continue;
@@ -829,29 +811,21 @@ fn load_shared_config(explicit: Option<&PathBuf>) -> Result<ResolvedConfig, CliE
                 legacy_observability.join(", ")
             )));
         }
-        if has_config_toml_plugin_config(&parsed) {
-            config_toml_plugin_sources.push(path.clone());
+        if parsed.get("plugins").is_some() {
+            return Err(CliError::Config(format!(
+                "plugin configuration in {} is no longer supported; move it to plugins.toml",
+                path.display()
+            )));
         }
         merge_toml(&mut merged, parsed);
     }
-    if config_toml_plugin_sources.len() > 1 {
-        return Err(CliError::Config(format!(
-            "plugin config is defined in multiple config.toml files: {}; move it to one \
-             [plugins].config block or use plugins.toml",
-            format_paths(&config_toml_plugin_sources)
-        )));
-    }
-    let plugin_toml = load_plugin_toml_config(explicit)?;
+    let plugin_toml = load_plugin_toml_config(explicit, plugin_config_path)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
     };
     apply_file_config(&mut resolved, merged)?;
-    apply_plugin_toml_config(
-        &mut resolved,
-        config_toml_plugin_sources.first(),
-        plugin_toml,
-    )?;
+    apply_plugin_toml_config(&mut resolved, plugin_toml);
     apply_env_config(&mut resolved.gateway)?;
     Ok(resolved)
 }
@@ -908,7 +882,13 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
 // Returns the plugin config search path. An explicit gateway config path scopes plugins.toml to the
 // same directory so `--config path/to/config.toml` can be extended by `path/to/plugins.toml` without
 // reading unrelated implicit project/user/global plugin files.
-fn plugin_config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
+fn plugin_config_paths(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+) -> Vec<PathBuf> {
+    if let Some(path) = plugin_config_path {
+        return vec![path.clone()];
+    }
     if let Some(path) = explicit {
         return path
             .parent()
@@ -980,7 +960,6 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     })?;
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
-    apply_file_plugins_config(&mut resolved.gateway, config.plugins);
     apply_file_agents_config(&mut resolved.agents, config.agents);
     Ok(())
 }
@@ -1017,23 +996,11 @@ fn apply_file_upstream_config(gateway: &mut GatewayConfig, upstream: Option<File
     }
 }
 
-// Applies plugin config. The gateway activates process-level plugin config at startup; hook headers
-// still carry the value as session metadata until scoped plugin activation exists.
-fn apply_file_plugins_config(gateway: &mut GatewayConfig, plugins: Option<FilePluginsConfig>) {
-    let Some(plugins) = plugins else {
-        return;
-    };
-    if let Some(value) = plugins.config {
-        gateway.plugin_config = Some(value);
-    }
-}
-
 #[derive(Debug, Clone)]
 struct PluginTomlConfig {
     value: Option<Value>,
     dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     dynamic_plugin_policy: DynamicPluginHostPolicy,
-    sources: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1054,8 +1021,9 @@ struct FileDynamicPluginConfig {
 
 fn load_plugin_toml_config(
     explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
 ) -> Result<Option<PluginTomlConfig>, CliError> {
-    load_plugin_toml_config_from_paths(plugin_config_paths(explicit))
+    load_plugin_toml_config_from_paths(plugin_config_paths(explicit, plugin_config_path))
 }
 
 fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlConfig>, CliError>
@@ -1099,11 +1067,10 @@ where
         other => CliError::Config(other.to_string()),
     })?;
     match resolved {
-        Some((value, sources)) => Ok(Some(PluginTomlConfig {
+        Some((value, _sources)) => Ok(Some(PluginTomlConfig {
             value: plugin_toml_runtime_value(value),
             dynamic_plugins,
             dynamic_plugin_policy,
-            sources,
         })),
         None => Ok((!dynamic_plugins.is_empty()
             || dynamic_plugin_policy != DynamicPluginHostPolicy::default())
@@ -1111,34 +1078,19 @@ where
             value: None,
             dynamic_plugins,
             dynamic_plugin_policy,
-            sources: Vec::new(),
         })),
     }
 }
 
-fn apply_plugin_toml_config(
-    resolved: &mut ResolvedConfig,
-    config_toml_plugin_source: Option<&PathBuf>,
-    plugin_toml: Option<PluginTomlConfig>,
-) -> Result<(), CliError> {
+fn apply_plugin_toml_config(resolved: &mut ResolvedConfig, plugin_toml: Option<PluginTomlConfig>) {
     let Some(plugin_toml) = plugin_toml else {
-        return Ok(());
+        return;
     };
-    if let Some(config_source) = config_toml_plugin_source
-        && plugin_toml.value.is_some()
-    {
-        return Err(CliError::Config(format!(
-            "plugin config is defined in both {} and {}; choose one source",
-            config_source.display(),
-            format_paths(&plugin_toml.sources)
-        )));
-    }
     if let Some(value) = plugin_toml.value {
         resolved.gateway.plugin_config = Some(value);
     }
     resolved.dynamic_plugins = plugin_toml.dynamic_plugins;
     resolved.dynamic_plugin_policy = plugin_toml.dynamic_plugin_policy;
-    Ok(())
 }
 
 struct ResolvedDynamicPluginRefs {
@@ -1239,16 +1191,6 @@ fn remove_dynamic_plugin_sections(mut value: toml::Value) -> toml::Value {
     value
 }
 
-fn apply_cli_plugin_config(config: &mut GatewayConfig, value: &str) -> Result<(), CliError> {
-    if config.plugin_config.is_some() {
-        return Err(CliError::Config(
-            "plugin config is defined by both --plugin-config and file configuration; choose one source".into(),
-        ));
-    }
-    config.plugin_config = Some(parse_json_option("plugin config", value)?);
-    Ok(())
-}
-
 // Applies configured agent commands from the merged file configuration.
 fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileAgentsConfig>) {
     let Some(file_agents) = file_agents else {
@@ -1323,13 +1265,6 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
     }
 }
 
-fn has_config_toml_plugin_config(value: &toml::Value) -> bool {
-    value
-        .get("plugins")
-        .and_then(|plugins| plugins.get("config"))
-        .is_some()
-}
-
 fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {
     let mut sections = Vec::new();
     if value.get("exporters").is_some() {
@@ -1346,14 +1281,6 @@ fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {
         sections.push("[export.openinference]");
     }
     sections
-}
-
-fn format_paths(paths: &[PathBuf]) -> String {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 // Parses JSON-valued CLI options into runtime metadata/config values and labels errors with the
