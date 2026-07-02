@@ -101,6 +101,7 @@ pub(super) struct InspectResponse {
     source: Value,
     spec: Value,
     status: Value,
+    environment_state: DynamicPluginCheckState,
     policy_state: DynamicPluginCheckState,
     startup_class: Option<DynamicPluginStartupClass>,
     attestation_mode: Option<DynamicPluginAttestationMode>,
@@ -120,6 +121,7 @@ pub(super) struct ValidateResponse {
     kind: DynamicPluginKind,
     policy_state: DynamicPluginCheckState,
     integrity_state: DynamicPluginCheckState,
+    environment_state: DynamicPluginCheckState,
     authenticity_state: DynamicPluginCheckState,
     startup_class: DynamicPluginStartupClass,
     attestation_mode: DynamicPluginAttestationMode,
@@ -227,6 +229,7 @@ pub(super) fn inspect_data(
         spec: serde_json::to_value(&record.spec).expect("dynamic plugin spec serializes to JSON"),
         status: serde_json::to_value(&record.status)
             .expect("dynamic plugin status serializes to JSON"),
+        environment_state: record.status.validation.environment,
         policy_state: record.status.validation.policy_satisfied,
         startup_class: record.status.startup_class,
         attestation_mode: record.status.attestation_mode,
@@ -247,7 +250,13 @@ pub(super) fn validate_success(
         .and_then(|entry| entry.record.status.validation.message.clone())
         .into_iter()
         .collect::<Vec<_>>();
-    let valid = input.policy.policy_satisfied && input.trust.is_satisfied();
+    let environment_state = input
+        .entry
+        .map(|entry| entry.record.status.validation.environment)
+        .unwrap_or(DynamicPluginCheckState::Unknown);
+    let valid = input.policy.policy_satisfied
+        && input.trust.is_satisfied()
+        && environment_state != DynamicPluginCheckState::Invalid;
     let errors = input
         .policy
         .failure()
@@ -262,6 +271,13 @@ pub(super) fn validate_success(
                 .display(input.manifest.plugin.id.as_str())
                 .to_string()
         }))
+        .chain(
+            input
+                .entry
+                .and_then(|entry| entry.record.status.last_error.as_ref())
+                .filter(|error| error.code == "environment_failed")
+                .map(|error| error.message.clone()),
+        )
         .collect::<Vec<_>>();
 
     success(
@@ -281,6 +297,7 @@ pub(super) fn validate_success(
             kind: input.manifest.plugin.kind,
             policy_state: input.policy.check_state(),
             integrity_state: input.trust.integrity,
+            environment_state,
             authenticity_state: input.trust.authenticity,
             startup_class: input.policy.startup_class,
             attestation_mode: input.policy.attestation_mode,

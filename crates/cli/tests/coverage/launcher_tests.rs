@@ -395,6 +395,51 @@ fn exporter_destinations_describe_observability_outputs() {
 }
 
 #[test]
+fn exporter_destinations_describe_atif_remote_storage_instead_of_local_path() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": "trajectories",
+                        "filename_template": "agent-{session_id}.json",
+                        "storage": [
+                            {"type": "s3", "bucket": "traj-bucket", "key_prefix": "runs/"},
+                            {"type": "http", "endpoint": "https://collector.example/ingest"}
+                        ]
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let destinations = exporter_destinations(&gateway);
+
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATIF s3://traj-bucket/runs")
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATIF https://collector.example/ingest")
+    );
+    // The local path is skipped at runtime when storage is configured, so it must not be reported.
+    assert!(
+        !destinations
+            .iter()
+            .any(|line| line.contains("agent-{session_id}.json"))
+    );
+}
+
+#[test]
 fn exporter_destinations_cover_invalid_disabled_and_missing_plugin_configs() {
     let invalid_plugin = GatewayConfig {
         plugin_config: Some(json!({"components": "not-a-list"})),

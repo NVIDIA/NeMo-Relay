@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import os
 import shutil
@@ -23,6 +24,15 @@ if os.environ.get("NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS") == "1":
 pytest.importorskip("grpc")
 
 from nemo_relay_plugin import PluginContext, PluginRuntime  # noqa: E402
+
+
+def test_manifest_integrity_matches_artifact_bytes():
+    example_root = Path(__file__).parents[3] / "examples/python-grpc-worker-plugin"
+    manifest = tomllib.loads((example_root / "relay-plugin.toml").read_text(encoding="utf-8"))
+    artifact = example_root / manifest["source"]["artifact"]
+
+    actual = f"sha256:{hashlib.sha256(artifact.read_bytes()).hexdigest()}"
+    assert actual == manifest["integrity"]["sha256"]
 
 
 @pytest.fixture(name="example", scope="module")

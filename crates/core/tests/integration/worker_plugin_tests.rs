@@ -15,7 +15,7 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::runtime::{TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
-use nemo_relay::api::subscriber::{flush_subscribers, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
@@ -27,6 +27,7 @@ use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
 };
 use serde_json::{Map, Value as Json, json};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -457,6 +458,7 @@ async fn worker_validation_diagnostics_prevent_initialization() {
     let activation = load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: config.clone(),
     }])
     .expect("worker plugin should load with validation diagnostics");
@@ -486,6 +488,7 @@ async fn worker_duplicate_component_rejected_for_single_instance_plugin() {
     let activation = load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }])
     .expect("worker plugin should load");
@@ -520,6 +523,7 @@ async fn worker_config_mismatch_prevents_initialization() {
     let activation = load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }])
     .expect("worker plugin should load");
@@ -549,6 +553,7 @@ async fn worker_registration_error_fails_activation() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::from_iter([("register_error".into(), json!(true))]),
     }]) {
         Ok(activation) => {
@@ -572,6 +577,7 @@ async fn worker_invalid_registration_plan_fails_activation() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::from_iter([("empty_registration_name".into(), json!(true))]),
     }]) {
         Ok(activation) => {
@@ -593,6 +599,7 @@ async fn worker_handshake_plugin_id_mismatch_reports_config_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -613,6 +620,7 @@ async fn worker_validation_rpc_failure_reports_activation_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::from_iter([("exit_in_validate".into(), json!(true))]),
     }]) {
         Ok(activation) => {
@@ -633,6 +641,7 @@ async fn worker_registration_rpc_failure_reports_activation_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::from_iter([("exit_in_register".into(), json!(true))]),
     }]) {
         Ok(activation) => {
@@ -653,6 +662,7 @@ fn missing_worker_executable_reports_startup_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -673,6 +683,7 @@ fn worker_manifest_id_mismatch_reports_config_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "different_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -716,6 +727,7 @@ symbol = "nemo_relay_plugin_entry"
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -740,6 +752,7 @@ fn unsupported_worker_relay_requirement_reports_compatibility_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -760,6 +773,7 @@ fn invalid_worker_relay_requirement_reports_parse_error() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -781,6 +795,7 @@ fn command_worker_entrypoint_is_resolved_relative_to_manifest() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -798,13 +813,8 @@ fn command_worker_entrypoint_is_resolved_relative_to_manifest() {
 }
 
 #[test]
-fn python_worker_uses_configured_interpreter() {
+fn python_worker_without_managed_environment_is_rejected() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
-    let missing_python = std::env::temp_dir().join(format!("missing-python-{}", Uuid::now_v7()));
-    let _env = EnvVarGuard::set(
-        "NEMO_RELAY_PYTHON",
-        missing_python.to_string_lossy().as_ref(),
-    );
     let relay = supported_relay_requirement();
     let (_manifest_dir, manifest_ref) = write_worker_manifest(
         "fixture_worker",
@@ -816,6 +826,45 @@ fn python_worker_uses_configured_interpreter() {
     let error = match load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
+    }]) {
+        Ok(activation) => {
+            activation.clear();
+            panic!("direct Python worker loading should fail");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("requires a lifecycle-managed environment_ref")
+            && error.contains("plugins add"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_worker_uses_configured_environment() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
+    let environment_name = Sha256::digest(b"fixture_worker")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let missing_environment = std::env::temp_dir()
+        .join(format!("missing-python-environment-{}", Uuid::now_v7()))
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    let relay = supported_relay_requirement();
+    let (_manifest_dir, manifest_ref) = write_worker_manifest(
+        "fixture_worker",
+        &relay,
+        "python",
+        "fixture_worker:create_plugin",
+    );
+
+    let error = match load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "fixture_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: Some(missing_environment.to_string_lossy().into_owned()),
         config: Map::new(),
     }]) {
         Ok(activation) => {
@@ -824,7 +873,73 @@ fn python_worker_uses_configured_interpreter() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains("failed to spawn python worker"), "{error}");
+    assert!(
+        error.contains("configured Python worker environment interpreter")
+            && error.contains("does not exist"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let Some(environment_ref) = std::env::var_os("NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT")
+    else {
+        eprintln!(
+            "skipping Python worker round-trip; NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT is unset"
+        );
+        return;
+    };
+    let manifest_ref = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/python-grpc-worker-plugin/relay-plugin.toml");
+    let config = Map::from_iter([("tag".into(), json!("managed-environment"))]);
+    let activation = load_worker_plugins([WorkerPluginLoadSpec {
+        plugin_id: "examples.python_grpc_worker".into(),
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: Some(
+            PathBuf::from(environment_ref)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        config: config.clone(),
+    }])
+    .expect("managed Python worker should load");
+    let mut cleanup = PythonWorkerCleanup::new(activation);
+
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "examples.python_grpc_worker".into(),
+        enabled: true,
+        config,
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("managed Python worker should initialize");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "python_worker_host_runtime_round_trip";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    cleanup.subscriber_name = Some(subscriber_name);
+
+    let rewritten = tool_request_intercepts("lookup", json!({ "query": "relay" }))
+        .expect("Python callback should emit a mark and return its mutation");
+    assert_eq!(
+        rewritten["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    flush_subscribers().expect("Python callback mark should flush");
+    find_event(
+        &events.lock().unwrap(),
+        "examples.python_grpc_worker.tool_request",
+        None,
+    );
+
+    drop(cleanup);
 }
 
 struct FixtureCodec;
@@ -871,6 +986,32 @@ struct LoadedWorker {
     _manifest_dir: TempDir,
 }
 
+struct PythonWorkerCleanup {
+    activation: Option<WorkerPluginActivation>,
+    subscriber_name: Option<&'static str>,
+}
+
+impl PythonWorkerCleanup {
+    fn new(activation: WorkerPluginActivation) -> Self {
+        Self {
+            activation: Some(activation),
+            subscriber_name: None,
+        }
+    }
+}
+
+impl Drop for PythonWorkerCleanup {
+    fn drop(&mut self) {
+        if let Some(subscriber_name) = self.subscriber_name.take() {
+            let _ = deregister_subscriber(subscriber_name);
+        }
+        let _ = clear_plugin_configuration();
+        if let Some(activation) = self.activation.take() {
+            activation.clear();
+        }
+    }
+}
+
 impl LoadedWorker {
     fn clear(mut self) {
         clear_plugin_configuration().expect("worker plugin config should clear");
@@ -896,6 +1037,7 @@ async fn load_and_initialize_fixture(config: Map<String, Json>) -> LoadedWorker 
     let activation = load_worker_plugins([WorkerPluginLoadSpec {
         plugin_id: "fixture_worker".into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
         config: config.clone(),
     }])
     .expect("worker plugin should load");

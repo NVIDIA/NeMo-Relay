@@ -1185,9 +1185,8 @@ async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
     endpoint_file = os.environ.get("NEMO_RELAY_WORKER_ENDPOINT_FILE")
 
     worker_target = _grpc_target(worker_endpoint)
-    host_target = _grpc_target(host_endpoint)
     await _unlink_unix_socket(worker_endpoint)
-    host_channel = grpc.aio.insecure_channel(host_target)
+    host_channel = _open_host_channel(host_endpoint)
     runtime = PluginRuntime(
         activation_id=activation_id,
         auth_token=auth_token,
@@ -1795,6 +1794,16 @@ def _grpc_target(endpoint: str) -> str:
     return parsed.netloc
 
 
+def _open_host_channel(endpoint: str) -> Any:
+    target = _grpc_target(endpoint)
+    if endpoint.startswith("unix://"):
+        return grpc.aio.insecure_channel(
+            target,
+            options=(("grpc.default_authority", "localhost"),),
+        )
+    return grpc.aio.insecure_channel(target)
+
+
 def _announced_worker_endpoint(worker_endpoint: str, bound_port: int) -> str:
     target = _grpc_target(worker_endpoint)
     if target.startswith("unix:"):
@@ -1844,5 +1853,6 @@ async def _unlink_unix_socket(endpoint: str) -> None:
             raise WorkerSdkError(f"unable to determine whether worker socket path {path} is active") from exc
         else:
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(writer.wait_closed(), timeout=1)
             raise WorkerSdkError(f"worker socket path {path} is already active")

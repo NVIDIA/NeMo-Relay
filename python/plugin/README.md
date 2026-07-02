@@ -7,9 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 
 Python authoring SDK for NeMo Relay out-of-process dynamic worker plugins.
 
-Install this package in the Python environment used by a worker manifest with
-`load.runtime = "python"`, then expose a `module:function` entrypoint that calls
-`serve_plugin`.
+Declare this package as a dependency of a Python worker project and expose a
+`module:function` entrypoint that calls `serve_plugin`. Register the manifest
+with `nemo-relay plugins add`; Relay creates a per-plugin virtual environment,
+installs `source.manifest_root`, and records that environment for activation.
+Enable it with `nemo-relay plugins enable <plugin_id>` after registration. Python
+workers without a lifecycle-managed environment are rejected.
+
+A minimal worker plugin looks like this:
 
 ```python
 from nemo_relay_plugin import Json, PluginContext, WorkerPlugin, serve_plugin

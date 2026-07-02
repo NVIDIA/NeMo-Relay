@@ -93,14 +93,13 @@ sha256 = {digest}
 {signature_line}
 
 [load]
-runtime = "python"
-entrypoint = {entrypoint}
+runtime = "command"
+entrypoint = "plugin.py"
 "#,
             capabilities = capabilities,
             signature_line = signature_line,
             digest = toml_basic_string(&digest),
             plugin_id = toml_basic_string(plugin_id),
-            entrypoint = toml_basic_string(&format!("{plugin_id}.plugin:register")),
         ),
     )
     .unwrap();

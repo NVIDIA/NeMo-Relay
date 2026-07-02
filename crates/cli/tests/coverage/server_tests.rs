@@ -170,6 +170,40 @@ fn test_config() -> GatewayConfig {
     }
 }
 
+#[test]
+fn startup_status_reports_bound_gateway_and_exporters() {
+    let config = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "opentelemetry": {
+                        "enabled": true,
+                        "endpoint": "http://127.0.0.1:4318/v1/traces"
+                    }
+                }
+            }]
+        })),
+        ..test_config()
+    };
+
+    let output = render_startup_status("127.0.0.1:4567".parse().unwrap(), &config, false);
+
+    assert!(output.contains("NeMo Relay"));
+    assert!(output.contains("Gateway        http://127.0.0.1:4567"));
+    assert!(output.contains("OpenTelemetry http://127.0.0.1:4318/v1/traces"));
+}
+
+#[test]
+fn startup_status_reports_not_configured_when_no_exporters() {
+    let output = render_startup_status("127.0.0.1:4567".parse().unwrap(), &test_config(), false);
+
+    assert!(output.contains("Exporters      not configured"));
+}
+
 fn write_missing_native_plugin_manifest(
     dir: &std::path::Path,
     plugin_id: &str,
@@ -357,6 +391,70 @@ async fn serve_listener_honors_plugin_idle_timeout_env() {
         .expect("plugin idle timeout should stop the sidecar")
         .unwrap();
     result.unwrap();
+}
+
+#[tokio::test]
+async fn serve_listener_flushes_shutdown_scope_events_without_plugins() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let subscriber_name = "server-shutdown-flush-without-plugins-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let captured_events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("shutdown-flush-session")
+            {
+                captured_events
+                    .lock()
+                    .unwrap()
+                    .push(event.name().to_string());
+            }
+        }),
+    )
+    .unwrap();
+    let _subscriber_cleanup = SubscriberCleanup(subscriber_name);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(
+            async move { serve_listener(listener, test_config(), Some(shutdown_rx)).await },
+        );
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+    for hook_event_name in ["sessionStart", "UserPromptSubmit"] {
+        let response = client
+            .post(format!("{url}/hooks/codex"))
+            .json(&json!({
+                "session_id": "shutdown-flush-session",
+                "hook_event_name": hook_event_name
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+
+    assert!(
+        captured
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|name| name == "codex-turn"),
+        "expected shutdown scope-end event to be flushed"
+    );
 }
 
 #[tokio::test]
@@ -1735,6 +1833,7 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
             plugin_id: "cli.missing-native".into(),
             kind: DynamicPluginKind::RustDynamic,
             manifest_ref: Some(manifest_ref.to_string_lossy().into_owned()),
+            environment_ref: None,
             config: Map::new(),
         }],
         Some(shutdown_rx),
