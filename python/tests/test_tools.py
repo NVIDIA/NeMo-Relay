@@ -375,7 +375,7 @@ class TestToolInterceptsAsync:
         intercepts.register_tool_execution(
             "py_exec_legacy",
             1,
-            lambda name, args, next: {"legacy_result": True},
+            lambda name, args, next: {"legacy_result": True},  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
         )
         try:
             with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome"):

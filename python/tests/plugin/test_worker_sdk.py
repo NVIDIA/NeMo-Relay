@@ -1590,6 +1590,7 @@ async def test_cancel_invocation_stops_active_async_callback_and_is_idempotent()
                     cancelled.set()
                     await release.wait()
                     raise
+                raise AssertionError("unreachable")
 
             ctx.register_tool_execution_intercept("cancel", tool_execution)
 
