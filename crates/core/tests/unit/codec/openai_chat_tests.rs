@@ -116,6 +116,31 @@ fn test_decode_response_cached_tokens() {
 }
 
 #[test]
+fn test_decode_response_drops_completion_tokens_details() {
+    let codec = OpenAIChatCodec;
+    let response = json!({
+        "id": "chatcmpl-reasoning",
+        "model": "gpt-4o",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "Hi" },
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "completion_tokens_details": { "reasoning_tokens": 40 }
+        }
+    });
+    let resp = codec.decode_response(&response).unwrap();
+    assert_eq!(resp.usage.as_ref().unwrap().completion_tokens, Some(50));
+    let serialized = serde_json::to_string(&resp).unwrap();
+    assert!(!serialized.contains("completion_tokens_details"));
+    assert!(!serialized.contains("reasoning_tokens"));
+}
+
+#[test]
 fn test_decode_response_provider_reported_cost() {
     let codec = OpenAIChatCodec;
     let response = json!({

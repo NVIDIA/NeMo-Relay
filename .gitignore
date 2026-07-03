@@ -82,3 +82,6 @@ CHANGELOG.md
 
 # VSCode
 /.vscode
+
+# Relay
+/.nemo-relay

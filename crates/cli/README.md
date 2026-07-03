@@ -26,38 +26,55 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Why Use It?
 
-- 🧭 **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
+- **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
   Agent through a local NeMo Relay gateway without changing the agent
   itself.
-- 🛠️ **Configure hooks interactively**: Use the setup wizard to write project or
+- **Configure hooks interactively**: Use the setup wizard to write project or
   user config and install the hook files needed by supported agents.
-- 📡 **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
+- **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
   streams, or OpenInference spans from one shared config model.
-- 🩺 **Diagnose the machine**: Check config layers, agent binaries, hook status,
-  observability outputs, and shell completions with `nemo-relay doctor`.
+- **Diagnose setup readiness**: Check config layers, `plugins.toml` discovery,
+  agent binaries, persistent host-plugin installs, hook status, observability
+  outputs, and shell completions with `nemo-relay doctor`.
 
 ## What You Get
 
-- ✅ **`nemo-relay` binary**: The executable installed by the `nemo-relay-cli`
+- **`nemo-relay` binary**: The executable installed by the `nemo-relay-cli`
   Cargo package.
-- ✅ **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
+- **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
   then runs doctor once config is present.
-- ✅ **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
+- **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
   `nemo-relay hermes` start observed agent runs.
-- ✅ **Config-driven launch**: `nemo-relay run` resolves config, environment, and
+- **Config-driven launch**: `nemo-relay run` resolves config, environment, and
   CLI overrides for deterministic non-interactive use.
-- ✅ **Hook forwarding server**: A local gateway accepts agent hook events and
+- **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
 
-## Installation
+## Installation Options
 
-Install the CLI:
+Cargo:
 
 ```bash
 cargo install nemo-relay-cli
 ```
 
-That command installs the binary as:
+Unix curl:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+For version pinning, custom installation directories, verification,
+troubleshooting, and CLI usage, refer to the
+[NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
+
+After installation, verify the binary with:
 
 ```bash
 nemo-relay --version

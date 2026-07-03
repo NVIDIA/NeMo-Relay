@@ -31,7 +31,7 @@ The release pipeline publishes these package surfaces from a tag push:
 | Ecosystem | Published Surface |
 |---|---|
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-ffi`, `nemo-relay-cli` |
-| PyPI | `nemo-relay` |
+| PyPI | `nemo-relay`, `nemo-relay-plugin` |
 | npm | `nemo-relay-node`, `nemo-relay-openclaw` |
 | GitHub Releases | CLI binaries and `SHA256SUMS` |
 | Fern | The documentation site |
@@ -238,7 +238,8 @@ The release pipeline then:
    - `package-rust` packs the published Rust crates for local validation.
    - `package-node` packs the npm Node.js package.
    - `package-openclaw` packs the npm OpenClaw plugin package.
-   - `package-python` builds platform wheels.
+   - `package-python` builds platform `nemo-relay` wheels.
+   - `package-python-plugin` builds the `nemo-relay-plugin` wheel.
    - The CLI release-asset job uploads each platform `nemo-relay` binary and
      includes those binaries in `SHA256SUMS`.
 4. Publishes packages from the top-level workflow after the reusable packaging
@@ -249,8 +250,9 @@ The release pipeline then:
      `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`,
      `nemo-relay-ffi`, and `nemo-relay-cli` through trusted publishing from
      the top-level workflow
-   - `publish-python` uploads the wheel artifacts to PyPI with trusted
-     publishing from the top-level workflow
+   - `publish-python` downloads both the `nemo-relay` and `nemo-relay-plugin`
+     wheel artifacts and uploads them to PyPI with trusted publishing from the
+     top-level workflow
    - `publish-npm` publishes the Node.js and OpenClaw plugin npm packages
      through npm trusted publishing from the top-level workflow
      - Stable tags publish to the npm `latest` dist-tag
@@ -320,8 +322,10 @@ After the release is live, verify:
 2. The `nemo-relay` wheel is visible on PyPI.
 3. The `nemo-relay-node` and `nemo-relay-openclaw` packages
    are visible on npm.
-4. The Fern documentation site shows the expected version and release notes.
-5. The GitHub Release page is complete and accurate.
+4. The Unix and Windows installers resolve the new stable tag and verify
+   matching CLI release asset checksums on their supported platforms.
+5. The Fern documentation site shows the expected version and release notes.
+6. The GitHub Release page is complete and accurate.
 
 ## If Something Fails
 

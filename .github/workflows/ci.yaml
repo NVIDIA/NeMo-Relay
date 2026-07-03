@@ -120,6 +120,7 @@ jobs:
     with:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
+      run_installer: ${{ needs.ci_changes.outputs.run_installer == 'true' }}
       run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
 
   ci_license_diff:
@@ -390,6 +391,12 @@ jobs:
         with:
           pattern: wheel-*
           merge-multiple: true
+          path: dist/
+
+      - name: Download Python plugin SDK wheel artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: plugin-wheel
           path: dist/
 
       - name: Publish to PyPI with trusted publishing

@@ -26,31 +26,31 @@ Node.js bindings mirror the semantics exposed by this crate.
 
 ## Why Use It?
 
-- 🧭 **Own Rust execution context**: Hierarchical scopes preserve parent-child
+- **Own Rust execution context**: Hierarchical scopes preserve parent-child
   relationships across tools, LLM calls, middleware, subscribers, and events.
-- 🛡️ **Put policy around real calls**: Guardrails and intercepts can block work,
+- **Put policy around real calls**: Guardrails and intercepts can block work,
   sanitize observability payloads, rewrite requests, or wrap execution.
-- 📡 **Emit one lifecycle stream**: Subscribers can consume canonical runtime
+- **Emit one lifecycle stream**: Subscribers can consume canonical runtime
   events in-process or export them to Agent Trajectory Interchange Format
   (ATIF), OpenTelemetry, and OpenInference.
-- 🧩 **Integrate without changing orchestration**: Wrap framework and provider
+- **Integrate without changing orchestration**: Wrap framework and provider
   callbacks while leaving scheduling, retries, memory, and result handling in
   the owning application.
 
 ## What You Get
 
-- ✅ **Managed tool and LLM execution**: Run call boundaries through consistent
+- **Managed tool and LLM execution**: Run call boundaries through consistent
   lifecycle helpers and middleware ordering.
-- ✅ **Scope-local runtime behavior**: Attach middleware and subscribers to the
+- **Scope-local runtime behavior**: Attach middleware and subscribers to the
   scope that owns them and clean them up when that scope closes.
-- ✅ **Plugin primitives**: Register reusable runtime behavior configured from
+- **Plugin primitives**: Register reusable runtime behavior configured from
   one shared plugin system.
-- ✅ **Built-in observability plugin**: Configure first-party Agent Trajectory
+- **Built-in observability plugin**: Configure first-party Agent Trajectory
   Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
   OpenTelemetry, and OpenInference exporters from the core crate.
-- ✅ **Codec and typed helpers**: Normalize provider requests and responses for
+- **Codec and typed helpers**: Normalize provider requests and responses for
   framework integrations.
-- ✅ **Binding source of truth**: Use the runtime semantics mirrored by the
+- **Binding source of truth**: Use the runtime semantics mirrored by the
   Python and Node.js bindings.
 
 ## Installation

@@ -20,8 +20,8 @@ use crate::api::runtime::{
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid,
-    run_request_intercepts_with_codec, snapshot_event_subscribers,
+    ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_status,
+    resolve_parent_uuid, run_request_intercepts_with_codec, snapshot_event_subscribers,
 };
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -919,9 +919,11 @@ pub fn llm_request_intercepts(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_request_intercept_entries(&scope_locals)
     };
-    NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+    let mut outcome = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
         name, request, None, &entries, false,
-    )
+    )?;
+    inject_dynamo_session_ids(&mut outcome.request);
+    Ok(outcome)
 }
 
 /// Run only the LLM conditional-execution guardrail chain.

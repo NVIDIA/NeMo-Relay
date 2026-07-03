@@ -76,7 +76,7 @@ pub(crate) async fn easy_path(
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: command.command,

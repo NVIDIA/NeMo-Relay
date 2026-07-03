@@ -310,11 +310,121 @@ wrappers also enrich decoded custom response-codec output when the custom codec
 returns `model` and `usage` but omits `usage.cost`. Existing cost values are
 preserved, so provider-reported cost remains authoritative in the annotation.
 
-Observability exporters prefer an explicit cost in the raw payload, then
-normalized `Usage.cost`, then a derived estimate from model pricing. When cost is
-available, ATIF step metrics and final metrics include `cost_usd`,
-OpenInference includes the USD-denominated `llm.cost.total`, and OpenTelemetry
-includes `nemo_relay.llm.cost.total` and `nemo_relay.llm.cost.currency`.
+Observability exporters prefer codec-normalized usage and cost, then fall back to
+raw payload fields and model-pricing estimates, subject to each exporter's
+currency and reported-cost policy. When cost is available, each exporter projects
+it per the [exporter field mapping](#exporter-field-mapping) below.
+
+## Token and Cost Field Semantics
+
+This section is the stable reference for the token and cost fields on LLM end
+events, carried on `AnnotatedLlmResponse.usage`.
+
+### Granularity
+
+Every token and cost value is **per LLM call** (one provider completion) unless
+it is an explicit aggregate:
+
+- `AnnotatedLlmResponse.usage` — The single LLM end event it is attached to.
+- OpenTelemetry and OpenInference attributes — The single LLM span they appear on;
+  spans are never summed across calls.
+- ATIF steps — An exported LLM call typically yields a `user` start step (no
+  metrics) and an `agent` end step that carries the call's `metrics`.
+- ATIF `final_metrics.total_*` — The **only** aggregate: a per-trajectory sum of
+  the metric fields present on its steps. It excludes embedded subagent
+  trajectories and can be partial.
+
+No exporter emits a running cross-call total other than ATIF `final_metrics`.
+
+### Usage Fields
+
+All normalized fields are optional. A provider may omit a field, while a codec can
+compute one (such as Anthropic's `total_tokens`) and configured pricing can
+synthesize `cost`. `Usage` has no catch-all field, so provider usage fields that
+Relay does not model are dropped.
+
+| Field | Meaning |
+|---|---|
+| `prompt_tokens` | Input/prompt tokens. |
+| `completion_tokens` | Output/completion tokens, passed through unmodified. For OpenAI Responses this is the provider's `output_tokens` (which per OpenAI already includes any reasoning tokens); the reasoning count is reported separately under `api_specific` and is not added on top. |
+| `total_tokens` | Provider-reported, or computed as `prompt + completion` by some codecs (such as Anthropic) when the provider omits it. |
+| `cache_read_tokens` | Prompt-cache read tokens, when the provider reports prompt caching. |
+| `cache_write_tokens` | Prompt-cache write tokens (Anthropic-style providers). |
+| `cost` | Normalized `CostEstimate`, when reported by the provider or estimable from configured pricing. |
+
+Built-in codecs normalize provider field names as follows:
+
+| Normalized field | OpenAI Chat | OpenAI Responses | Anthropic Messages |
+|---|---|---|---|
+| `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` |
+| `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` |
+| `total_tokens` | `total_tokens` | `total_tokens` | computed |
+| `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` |
+| `cache_write_tokens` | — | — | `cache_creation_input_tokens` |
+
+Built-in codecs preserve only modeled provider-specific usage details under
+`api_specific`; other usage fields are dropped. For example, OpenAI Responses
+reasoning token counts are kept under `api_specific` (`output_tokens_details`),
+but OpenAI Chat `completion_tokens_details` is not.
+
+### Cost Fields
+
+`CostEstimate` carries cost amounts (in `currency`) plus pricing provenance. Refer to
+[Cost Estimation](#cost-estimation) above for resolution order and pricing setup.
+
+| Field | Meaning |
+|---|---|
+| `total` | Optional total cost in `currency`. When absent, some exporters derive a total from the component amounts. |
+| `currency` | ISO 4217 code; defaults to `USD`. |
+| `input` / `output` / `cache_read` / `cache_write` | Per-category amounts in `currency`. |
+| `source` | `provider_reported` (authoritative) or `model_pricing` (estimated). |
+| `pricing_provider` / `pricing_model` / `pricing_as_of` / `pricing_source` | Estimate provenance, for auditing stale pricing. |
+
+Missing is not zero: an absent `cost` or token field means unknown, while an
+explicit `0` is a reported value and is preserved. Relay does not convert
+currencies.
+
+### Exporter Field Mapping
+
+Each exporter projects `usage`/`cost` differently; projections do not change the
+canonical fields above.
+
+| | ATOF | ATIF step / `final_metrics` | OpenInference | OpenTelemetry |
+|---|---|---|---|---|
+| Prompt tokens | full `usage` preserved | `prompt_tokens` / `total_prompt_tokens` | `llm.token_count.prompt` | not emitted |
+| Completion tokens | preserved | `completion_tokens` / `total_completion_tokens` | `llm.token_count.completion` | not emitted |
+| Total tokens | preserved | no first-class field | `llm.token_count.total` | not emitted |
+| Cache read / write | preserved | summed into `cached_tokens` / `total_cached_tokens` | `llm.token_count.prompt_details.cache_read` / `…cache_write` | not emitted |
+| Cost | full `cost` preserved | `cost_usd` / `total_cost_usd` (USD only) | `llm.cost.total` (USD only) | `nemo_relay.llm.cost.total` + `nemo_relay.llm.cost.currency` (any currency) |
+
+OpenTelemetry carries cost in any currency, while ATIF and OpenInference report cost
+only when it is USD-denominated and otherwise omit it. ATIF derives metrics from
+codec-normalized usage where available and fills missing supported fields from the
+raw payload. `metrics.extra` holds only unmapped keys from the raw
+`usage`/`token_usage` object (for example reasoning token counts, or a raw
+`total_tokens`), and only when the step already has a recognized metric;
+normalized-only or total-only values are not projected.
+
+### Stability
+
+The `Usage` and `CostEstimate` field names and meanings, and the exporter
+mappings above, are stable as of ATOF `0.1` (ATIF schema `ATIF-v1.7`, pricing
+catalog `version: 1`). Future NeMo Relay releases may add new optional fields to
+the serialized JSON/ATOF shapes; renames or removals are breaking changes and are
+called out in release notes.
+
+<Note>
+The Rust `Usage` and `CostEstimate` structs and the `CostSource` enum are
+exhaustive, so adding a field or variant is a source-breaking change for Rust
+consumers.
+</Note>
+
+The following behaviors are intentional in this release but may change later:
+
+- OpenTelemetry emits cost only, not token counts.
+- ATIF and OpenInference report cost only in USD.
+- Reasoning tokens are not a first-class `Usage` field.
+- Bindings expose `usage`/`cost` as snake_case JSON rather than typed objects.
 
 ## Built-in Response Codecs
 

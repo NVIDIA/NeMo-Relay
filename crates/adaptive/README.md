@@ -26,27 +26,27 @@ framework.
 
 ## Why Use It?
 
-- ⚙️ **Install adaptive behavior through plugins**: Enable adaptive runtime
+- **Install adaptive behavior through plugins**: Enable adaptive runtime
   components through the same configuration path as other NeMo Relay plugins.
-- 📈 **Learn from observed executions**: Derive runtime hints from scope, tool,
+- **Learn from observed executions**: Derive runtime hints from scope, tool,
   and LLM events without replacing the application framework.
-- 💾 **Choose local or shared state**: Use in-memory state for local runs or the
+- **Choose local or shared state**: Use in-memory state for local runs or the
   optional Redis backend for shared persistence.
-- 🧩 **Keep adaptive behavior reusable**: Package telemetry, hint injection,
+- **Keep adaptive behavior reusable**: Package telemetry, hint injection,
   tool parallelism, and cache-governor behavior behind stable component
   settings.
 
 ## What You Get
 
-- ✅ **`AdaptiveConfig`**: A canonical config contract for the top-level
+- **`AdaptiveConfig`**: A canonical config contract for the top-level
   `adaptive` plugin component.
-- ✅ **Built-in component settings**: Typed config helpers for telemetry,
+- **Built-in component settings**: Typed config helpers for telemetry,
   adaptive hints, tool parallelism, and the Adaptive Cache Governor.
-- ✅ **State backends**: In-memory state by default and Redis-backed state behind
+- **State backends**: In-memory state by default and Redis-backed state behind
   the `redis-backend` feature.
-- ✅ **Learning primitives**: Runtime helpers and learners built on NeMo Relay
+- **Learning primitives**: Runtime helpers and learners built on NeMo Relay
   events.
-- ✅ **Adaptive Cache Governor (ACG) module surface**: The canonical
+- **Adaptive Cache Governor (ACG) module surface**: The canonical
   `nemo_relay_adaptive::acg` module for PromptIR, provider plugins, stability
   analysis, and cache telemetry normalization.
 

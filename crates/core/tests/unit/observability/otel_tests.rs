@@ -969,6 +969,43 @@ fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
 }
 
 #[test]
+fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "other", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "other",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("priced-model")),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let keys: Vec<String> = spans[0]
+        .attributes
+        .iter()
+        .map(|kv| kv.key.as_str().to_string())
+        .collect();
+
+    assert!(keys.iter().any(|k| k == "nemo_relay.llm.cost.total"));
+    assert!(keys.iter().any(|k| k == "nemo_relay.llm.cost.currency"));
+    assert!(
+        keys.iter()
+            .all(|k| !k.to_ascii_lowercase().contains("token") && !k.starts_with("gen_ai")),
+        "no token attributes expected on the LLM span: {keys:?}"
+    );
+}
+
+#[test]
 fn llm_end_with_unpriced_response_model_uses_requested_model_cost() {
     let _pricing_guard = pricing_test_mutex().lock().unwrap();
     install_openai_disambiguation_pricing("priced-model");

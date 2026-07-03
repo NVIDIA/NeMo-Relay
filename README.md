@@ -51,14 +51,22 @@ trajectories.
 #### 1. Install the CLI
 
 ```bash
-cargo install nemo-relay-cli
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
 ```
 
-If using `cargo-binstall`, the CLI can also be installed with:
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+Verify that the installed binary is available:
 
 ```bash
-cargo binstall nemo-relay-cli
+nemo-relay --version
 ```
+
+The installer supports Linux x86_64/ARM64, macOS Apple Silicon, and Windows
+x86_64/ARM64. See the [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation)
+for version pinning, custom directories, and source-based installation.
 
 #### 2. Enable Local Observability Output
 
