@@ -87,7 +87,7 @@ transport = "http_binary"
 endpoint = "http://localhost:4318/v1/traces"
 service_name = "nemo-relay"
 service_namespace = "agent"
-service_version = "0.5.0"
+service_version = "0.6.0"
 instrumentation_scope = "nemo-relay-observability"
 timeout_millis = 3000
 
@@ -104,7 +104,7 @@ transport = "http_binary"
 endpoint = "http://localhost:6006/v1/traces"
 service_name = "nemo-relay"
 service_namespace = "agent"
-service_version = "0.5.0"
+service_version = "0.6.0"
 instrumentation_scope = "nemo-relay-openinference"
 timeout_millis = 3000
 
@@ -194,7 +194,7 @@ config = plugin.PluginConfig(
                     endpoint="http://localhost:4318/v1/traces",
                     service_name="nemo-relay",
                     service_namespace="agent",
-                    service_version="0.5.0",
+                    service_version="0.6.0",
                     instrumentation_scope="nemo-relay-observability",
                     resource_attributes={"deployment.environment": "dev"},
                 ),
@@ -203,7 +203,7 @@ config = plugin.PluginConfig(
                     endpoint="http://localhost:6006/v1/traces",
                     service_name="nemo-relay",
                     service_namespace="agent",
-                    service_version="0.5.0",
+                    service_version="0.6.0",
                     instrumentation_scope="nemo-relay-openinference",
                     resource_attributes={"deployment.environment": "dev"},
                 ),
@@ -252,7 +252,7 @@ await plugin.initialize({
         endpoint: "http://localhost:4318/v1/traces",
         service_name: "nemo-relay",
         service_namespace: "agent",
-        service_version: "0.5.0",
+        service_version: "0.6.0",
         instrumentation_scope: "nemo-relay-observability",
         resource_attributes: {
           "deployment.environment": "dev",
@@ -263,7 +263,7 @@ await plugin.initialize({
         endpoint: "http://localhost:6006/v1/traces",
         service_name: "nemo-relay",
         service_namespace: "agent",
-        service_version: "0.5.0",
+        service_version: "0.6.0",
         instrumentation_scope: "nemo-relay-openinference",
         resource_attributes: {
           "deployment.environment": "dev",
@@ -314,7 +314,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
         endpoint: Some("http://localhost:4318/v1/traces".into()),
         service_name: "nemo-relay".into(),
         service_namespace: Some("agent".into()),
-        service_version: Some("0.5.0".into()),
+        service_version: Some("0.6.0".into()),
         instrumentation_scope: Some("nemo-relay-observability".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         ..OtlpSectionConfig::default()
@@ -324,7 +324,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
         endpoint: Some("http://localhost:6006/v1/traces".into()),
         service_name: "nemo-relay".into(),
         service_namespace: Some("agent".into()),
-        service_version: Some("0.5.0".into()),
+        service_version: Some("0.6.0".into()),
         instrumentation_scope: Some("nemo-relay-openinference".into()),
         resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
         ..OtlpSectionConfig::default()
