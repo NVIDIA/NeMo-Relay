@@ -92,9 +92,21 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
     std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
     std::fs::write(&user_plugins, "version = 1\ncomponents = []\n").unwrap();
 
-    let mut expected = vec![project_plugins.canonicalize().unwrap(), user_plugins];
+    let sources = effective_plugin_toml_sources().unwrap();
+    assert!(sources.is_sorted());
+    assert!(sources.windows(2).all(|paths| paths[0] != paths[1]));
+
+    let mut actual = sources
+        .iter()
+        .map(|path| path.canonicalize().unwrap())
+        .collect::<Vec<_>>();
+    actual.sort();
+    let mut expected = [project_plugins, user_plugins]
+        .iter()
+        .map(|path| path.canonicalize().unwrap())
+        .collect::<Vec<_>>();
     expected.sort();
-    assert_eq!(effective_plugin_toml_sources().unwrap(), expected);
+    assert_eq!(actual, expected);
 }
 
 fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
