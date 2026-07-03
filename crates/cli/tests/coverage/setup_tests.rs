@@ -613,42 +613,15 @@ fn plugins_resume_command_matches_scope() {
 }
 
 #[test]
-fn plugin_prompt_error_reports_cancellation_with_base_saved_and_resume() {
-    let error = plugin_prompt_error(
-        ConfigScope::Project,
-        dialoguer::Error::IO(std::io::Error::from(std::io::ErrorKind::Interrupted)),
-    );
-    let message = error.to_string();
-    assert!(message.contains("cancelled"), "message: {message}");
-    assert!(
-        message.contains("base configuration remains saved"),
-        "message: {message}"
-    );
-    assert!(
-        message.contains("nemo-relay plugins edit --project"),
-        "message: {message}"
-    );
-}
+fn plugin_prompt_interruption_recognizes_cancel_inputs() {
+    for kind in [
+        std::io::ErrorKind::Interrupted,
+        std::io::ErrorKind::UnexpectedEof,
+    ] {
+        let error = dialoguer::Error::IO(std::io::Error::from(kind));
+        assert!(plugin_prompt_was_interrupted(&error));
+    }
 
-#[test]
-fn plugin_prompt_error_reports_failure_with_cause_and_resume() {
-    let error = plugin_prompt_error(
-        ConfigScope::Global,
-        dialoguer::Error::IO(std::io::Error::other("boom")),
-    );
-    let message = error.to_string();
-    assert!(message.contains("did not complete"), "message: {message}");
-    assert!(
-        message.contains("base configuration remains saved"),
-        "message: {message}"
-    );
-    assert!(
-        message.contains("Cause: IO error: boom"),
-        "message: {message}"
-    );
-    assert!(
-        message.contains("Resume with `nemo-relay plugins edit`"),
-        "message: {message}"
-    );
-    assert!(!message.contains("--project"), "message: {message}");
+    let error = dialoguer::Error::IO(std::io::Error::other("boom"));
+    assert!(!plugin_prompt_was_interrupted(&error));
 }

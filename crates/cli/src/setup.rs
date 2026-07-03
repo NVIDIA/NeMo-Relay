@@ -143,14 +143,28 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
 /// Prompts once. On acceptance it runs the existing plugin editor targeting the scope derived
 /// from the base setup (project for `Project`/`Both`, user for `Global`). On decline it reports
 /// that the base config was saved, that plugin setup was skipped, and prints the command to
-/// resume later. Cancellation or editor failure is surfaced as an error that makes clear the
-/// base config remains saved; the saved `config.toml` is never rolled back here.
+/// resume later. Prompt interruption is treated as a skip; other prompt or editor failures
+/// surface an error that makes clear the base config remains saved. The saved `config.toml`
+/// is never rolled back here.
 fn continue_to_plugins(scope: ConfigScope) -> Result<(), CliError> {
-    let proceed = Confirm::with_theme(&ColorfulTheme::default())
+    let proceed = match Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Configure Relay plugins now?")
         .default(true)
         .interact()
-        .map_err(|error| plugin_prompt_error(scope, error))?;
+    {
+        Ok(proceed) => proceed,
+        Err(error) if plugin_prompt_was_interrupted(&error) => {
+            print_plugins_skipped(scope);
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(CliError::Config(format!(
+                "plugin setup did not complete; base configuration remains saved. \
+                 Resume with `{}`. Cause: {error}",
+                plugins_resume_command(scope)
+            )));
+        }
+    };
     if !proceed {
         print_plugins_skipped(scope);
         return Ok(());
@@ -168,26 +182,15 @@ fn continue_to_plugins(scope: ConfigScope) -> Result<(), CliError> {
     })
 }
 
-// Classifies a post-save prompt interruption: Interrupted/UnexpectedEof read as cancellation,
-// other dialoguer errors keep their cause. Both note the base config is saved and how to resume.
-fn plugin_prompt_error(scope: ConfigScope, error: dialoguer::Error) -> CliError {
-    let resume = plugins_resume_command(scope);
-    match error {
+fn plugin_prompt_was_interrupted(error: &dialoguer::Error) -> bool {
+    matches!(
+        error,
         dialoguer::Error::IO(io_error)
             if matches!(
                 io_error.kind(),
                 std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
-            ) =>
-        {
-            CliError::Config(format!(
-                "plugin setup cancelled; base configuration remains saved. Resume with `{resume}`."
-            ))
-        }
-        other => CliError::Config(format!(
-            "plugin setup did not complete; base configuration remains saved. \
-             Resume with `{resume}`. Cause: {other}"
-        )),
-    }
+            )
+    )
 }
 
 fn print_plugins_skipped(scope: ConfigScope) {
