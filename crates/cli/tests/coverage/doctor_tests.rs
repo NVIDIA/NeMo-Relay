@@ -271,7 +271,7 @@ fn format_human_distinguishes_plugin_files_from_plugin_resolution() {
 
     let rendered = format_human(&report);
 
-    assert!(rendered.contains("Plugin files"));
+    assert!(rendered.contains("Plugin files /tmp/plugins.toml"));
     assert!(rendered.contains("Plugins    · plugins.toml not configured"));
 }
 

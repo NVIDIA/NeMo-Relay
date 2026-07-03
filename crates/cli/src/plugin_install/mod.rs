@@ -11,7 +11,7 @@ mod state;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -111,10 +111,14 @@ pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness
         .filter(|host| state_path(*host, &install_dir).exists())
         .map(|host| spawn_default_host_plugin_readiness(host, install_dir.clone()))
         .collect::<Vec<_>>();
+    let deadline = Instant::now() + DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT;
     pending
         .into_iter()
         .map(|pending| {
-            receive_host_plugin_readiness(pending, DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT)
+            receive_host_plugin_readiness(
+                pending,
+                deadline.saturating_duration_since(Instant::now()),
+            )
         })
         .collect()
 }
