@@ -572,7 +572,7 @@ set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
-    set_python_package_version "$version"
+    set_python_package_version "$version" false
     set_python_plugin_package_version "$version"
     set_coding_agent_plugin_versions "$version"
 }
@@ -617,24 +617,25 @@ PY
 
 set_python_package_version() {
     local cargo_version="$1"
+    local materialize_version="${2:-true}"
     local version=""
     local python_executable=""
     version="$(semver_to_pep440 "$cargo_version")"
     python_executable="$(uv_python_executable)"
 
-    "$python_executable" - "$version" "$cargo_version" <<'PY'
+    "$python_executable" - "$version" "$materialize_version" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 version = sys.argv[1]
-cargo_version = sys.argv[2]
+materialize_version = sys.argv[2] == "true"
 path = Path("pyproject.toml")
 text = path.read_text()
 
-if 'dynamic = ["version"]' in text:
+if materialize_version and 'dynamic = ["version"]' in text:
     updated = text.replace('dynamic = ["version"]', f'version = "{version}"', 1)
-elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
+elif materialize_version and re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
     updated, count = re.subn(
         r'^version = "(.*)"$',
         f'version = "{version}"',
@@ -644,21 +645,37 @@ elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
     )
     if count != 1:
         raise SystemExit("Failed to update version in pyproject.toml")
+elif not materialize_version and 'dynamic = ["version"]' in text:
+    updated = text
+elif not materialize_version and re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
+    updated, count = re.subn(
+        r'^version = "(.*)"$',
+        'dynamic = ["version"]',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise SystemExit("Failed to restore dynamic version in pyproject.toml")
 else:
-    raise SystemExit("Failed to find dynamic or static version field in pyproject.toml")
+    raise SystemExit("Failed to find version field in pyproject.toml")
 
-path.write_text(updated)
-print(f"pyproject.toml version updated to {version}")
+if updated != text:
+    path.write_text(updated)
+if materialize_version:
+    print(f"pyproject.toml version updated to {version}")
+else:
+    print("pyproject.toml uses the dynamic Cargo version")
 
 path = Path("crates/python/Cargo.toml")
 text = path.read_text()
 
 if "version.workspace = true" in text:
-    updated = text.replace("version.workspace = true", f'version = "{cargo_version}"', 1)
+    updated = text
 elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
     updated, count = re.subn(
         r'^version = "(.*)"$',
-        f'version = "{cargo_version}"',
+        "version.workspace = true",
         text,
         count=1,
         flags=re.MULTILINE,
@@ -668,8 +685,9 @@ elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
 else:
     raise SystemExit("Failed to find workspace or static version field in crates/python/Cargo.toml")
 
-path.write_text(updated)
-print(f"crates/python/Cargo.toml version updated to {cargo_version}")
+if updated != text:
+    path.write_text(updated)
+print("crates/python/Cargo.toml uses the workspace version")
 PY
 }
 
@@ -952,6 +970,12 @@ check-python-worker-proto:
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     PY
+
+generate-worker-plugin-lockfile:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo generate-lockfile --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
 
 
 # --set [ci=true|false]
@@ -1564,10 +1588,10 @@ package-python:
         sha="$(head_git_sha)"
         version="$(read_workspace_version)"
         echo "Non-release build: appending commit hash to version"
-        set_python_package_version "${version}+${sha}"
+        set_python_package_version "${version}+${sha}" true
     else
         echo "Using explicit version {{ ref_name }}"
-        set_python_package_version "{{ ref_name }}"
+        set_python_package_version "{{ ref_name }}" true
     fi
     build_args=()
     while IFS= read -r -d '' arg; do

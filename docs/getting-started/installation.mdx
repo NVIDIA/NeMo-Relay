@@ -100,7 +100,7 @@ asset is published.
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.6.0 sh
 ```
 
 Install into another directory:
@@ -124,7 +124,7 @@ Set the same environment variable before invoking the installer to install a
 specific version:
 
 ```powershell
-$env:NEMO_RELAY_VERSION = '0.5.0'
+$env:NEMO_RELAY_VERSION = '0.6.0'
 irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
 ```
 
@@ -178,7 +178,7 @@ Install the Python package when your application uses NeMo Relay through the
 Python wrapper and owns the tool or LLM call boundary.
 
 ```bash
-uv add nemo-relay@0.5.0
+uv add nemo-relay@0.6.0
 ```
 
 Use `uv add` from an application project that has a `pyproject.toml`; it records
@@ -201,8 +201,8 @@ npm install nemo-relay-node
 Add the Rust crates when your application uses NeMo Relay directly from Rust.
 
 ```bash
-cargo add nemo-relay@0.5.0
-cargo add nemo-relay-adaptive@0.5.0
+cargo add nemo-relay@0.6.0
+cargo add nemo-relay-adaptive@0.6.0
 ```
 
 - `nemo-relay` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
@@ -219,7 +219,7 @@ Install the OpenClaw plugin through OpenClaw so OpenClaw can register and manage
 the package:
 
 ```bash
-openclaw plugins install npm:nemo-relay-openclaw@0.5.0
+openclaw plugins install npm:nemo-relay-openclaw@0.6.0
 openclaw gateway restart
 ```
 
@@ -248,7 +248,7 @@ Install the Python package with the supported framework extras when your
 application uses LangChain, LangGraph, or Deep Agents.
 
 ```bash
-uv add "nemo-relay[langchain,langgraph,deepagents]@0.5.0"
+uv add "nemo-relay[langchain,langgraph,deepagents]@0.6.0"
 ```
 
 The extras install the NeMo Relay Python package plus the dependencies needed by

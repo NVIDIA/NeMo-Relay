@@ -1496,7 +1496,7 @@ test = [
 
 [[package]]
 name = "nemo-relay-plugin"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "python/plugin" }
 dependencies = [
     { name = "grpcio" },
