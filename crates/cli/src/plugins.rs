@@ -30,6 +30,8 @@ use self::config_io::*;
 use self::dynamic_editor::*;
 use self::editor_model::*;
 
+const PLUGIN_EDIT_CANCELLED_MESSAGE: &str = "plugin edit cancelled; no plugin changes saved";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShortcut {
     Preview,
@@ -324,7 +326,7 @@ fn clear_component_menu_item(
 }
 
 fn cancelled_error() -> CliError {
-    CliError::Config("plugin edit cancelled; no plugin changes saved".into())
+    CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
 }
 
 fn edit_component_field(
@@ -610,7 +612,7 @@ fn menu_error(error: std::io::Error) -> CliError {
         error.kind(),
         std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
     ) {
-        CliError::Config("plugin edit cancelled; no plugin changes saved".into())
+        CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
     } else {
         CliError::Config(format!("plugin editor terminal error: {error}"))
     }
@@ -1369,7 +1371,7 @@ fn editor_error(err: dialoguer::Error) -> CliError {
                 std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
             ) =>
         {
-            CliError::Config("plugin edit cancelled; no plugin changes saved".into())
+            CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
         }
         other => CliError::Config(format!("plugin edit error: {other}")),
     }

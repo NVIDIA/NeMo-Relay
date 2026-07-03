@@ -616,6 +616,26 @@ fn menu_response_index_tracks_selected_and_shortcut_positions() {
 }
 
 #[test]
+fn plugin_cancellation_paths_share_message() {
+    let errors = [
+        cancelled_error(),
+        menu_error(std::io::Error::from(std::io::ErrorKind::Interrupted)),
+        editor_error(dialoguer::Error::IO(std::io::Error::from(
+            std::io::ErrorKind::UnexpectedEof,
+        ))),
+    ];
+
+    for error in errors {
+        match error {
+            CliError::Config(message) => {
+                assert_eq!(message, PLUGIN_EDIT_CANCELLED_MESSAGE);
+            }
+            other => panic!("expected config error, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn plugin_menu_marks_configured_sections_and_fields() {
     let mut observability = ObservabilityConfig::default();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
