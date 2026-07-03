@@ -100,10 +100,23 @@ nemo-relay doctor --plugin codex
 nemo-relay doctor --plugin all
 ```
 
-The plugin doctor checks host registration, generated marketplace state, provider
-routing, hook setup, and sidecar readiness assumptions. It is separate from
-`nemo-relay doctor codex`, which diagnoses the regular transparent-run
-configuration for an agent.
+`nemo-relay doctor` includes every persistent host-plugin installation found in
+the default platform install directory. It checks the generated marketplace and
+plugin files, Relay binary and hook support, host registration, provider
+routing, hooks, and lazy-sidecar assumptions. A stopped Codex lazy sidecar is
+informational; hooks start it on first use.
+
+Use the focused plugin doctor when diagnosing one host or an installation that
+uses a custom directory:
+
+```bash
+nemo-relay doctor --plugin codex --install-dir /path/to/plugins
+```
+
+If an installed host plugin is incomplete, doctor reports the failed check and
+suggests `nemo-relay install <host> --force`. Hosts without a persistent plugin
+installation remain informational, so transparent-run setup does not require a
+host plugin.
 
 ## Uninstall
 
