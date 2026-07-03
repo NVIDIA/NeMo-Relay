@@ -21,6 +21,11 @@ on:
         required: false
         default: ''
         type: string
+      run_installer:
+        description: 'Whether installer jobs should run'
+        required: false
+        default: false
+        type: boolean
 defaults:
   run:
     shell: bash
@@ -33,6 +38,87 @@ env:
   UV_PYTHON_DOWNLOADS: never
 
 jobs:
+  install-script:
+    name: Install script (${{ matrix.platform }})
+    if: ${{ inputs.run_installer }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+            run_mock_tests: true
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            run_mock_tests: false
+          - platform: macos-arm64
+            runner: macos-15
+            run_mock_tests: false
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate installer
+        run: |
+          sh -n install.sh
+          sh -n scripts/test-install.sh
+          sh -n scripts/test-install-mocks.sh
+
+      - name: Run live installer tests
+        run: sh scripts/test-install.sh
+
+      - name: Run mock-only installer tests
+        if: ${{ matrix.run_mock_tests }}
+        run: sh scripts/test-install-mocks.sh
+
+  install-script-windows:
+    name: Install script (Windows ${{ matrix.architecture }})
+    if: ${{ inputs.run_installer }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: windows-2022
+          - architecture: ARM64
+            runner: windows-11-arm
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $scripts = @('install.ps1', 'scripts/test-install.ps1')
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_ }
+              exit 1
+            }
+          }
+
+      - name: Run PowerShell installer tests
+        shell: pwsh
+        run: ./scripts/test-install.ps1
+
   check:
     name: Run
     runs-on: ubuntu-latest

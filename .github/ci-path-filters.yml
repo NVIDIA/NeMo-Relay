@@ -7,6 +7,17 @@ ci:
   - '.github/workflows/**'
   - 'codecov.yml'
 
+installer:
+  - '.github/ci-path-filters.yml'
+  - '.github/workflows/ci.yaml'
+  - '.github/workflows/ci_changes.yml'
+  - '.github/workflows/ci_check.yml'
+  - 'install.sh'
+  - 'install.ps1'
+  - 'scripts/test-install.sh'
+  - 'scripts/test-install-mocks.sh'
+  - 'scripts/test-install.ps1'
+
 shared:
   - 'crates/adaptive/Cargo.toml'
   - 'crates/adaptive/src/**'

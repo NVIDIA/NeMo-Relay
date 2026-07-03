@@ -50,15 +50,31 @@ with the installed `nemo-relay` command rather than link against the crate.
 - **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
 
-## Installation
+## Installation Options
 
-Install the CLI:
+Cargo:
 
 ```bash
 cargo install nemo-relay-cli
 ```
 
-That command installs the binary as:
+Unix curl:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+For version pinning, custom installation directories, verification,
+troubleshooting, and CLI usage, refer to the
+[NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
+
+After installation, verify the binary with:
 
 ```bash
 nemo-relay --version

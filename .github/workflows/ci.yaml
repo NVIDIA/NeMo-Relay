@@ -120,6 +120,7 @@ jobs:
     with:
       full_ci: ${{ needs.prepare.outputs.full_ci == 'true' }}
       base: ${{ needs.ci_changes.outputs.base }}
+      run_installer: ${{ needs.ci_changes.outputs.run_installer == 'true' }}
       run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
 
   ci_license_diff:
