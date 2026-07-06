@@ -1,6 +1,6 @@
 ---
 title: "OpenInference"
-description: ""
+description: "Configure OpenInference-oriented OTLP tracing for NeMo Relay events."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,15 +11,17 @@ Use the `openinference` section when you want NeMo Relay lifecycle events
 exported as OTLP trace spans with OpenInference-oriented semantics.
 
 OpenInference export maps model-centric payloads directly into trace
-attributes. Scope, tool, and LLM start inputs become `input.value`; end outputs
-become `output.value`; LLM usage metadata maps to token-count attributes when
-the provider response includes usage information. For LLM spans, NeMo Relay
-emits flattened request and response message attributes from typed codec
-annotations and supported replay request/response payloads. Typed codec
-annotations also provide tool schema, finish-reason, and invocation-parameter
-attributes when those fields are available.
+attributes. Scope, tool, and LLM start inputs become `input.value`. End outputs
+become `output.value`. LLM usage metadata maps to token-count attributes when
+provider responses include usage information. For LLM spans, NeMo Relay emits
+flattened request and response message attributes from typed codec annotations
+and supported replay request/response payloads. Typed codec annotations also
+provide tool schema, finish-reason, and invocation-parameter attributes when
+those fields are available.
 
 ## `plugins.toml` Example
+
+Add the following OpenInference exporter configuration to `plugins.toml`:
 
 ```toml
 version = 1
@@ -54,7 +56,7 @@ OpenInference-style OTLP spans to Phoenix or another compatible backend.
 ## Fields
 
 OpenInference uses the same OTLP section shape as
-[OpenTelemetry](/observability-plugin/opentelemetry):
+[OpenTelemetry](/configure-plugins/observability/opentelemetry):
 
 | Field | Default | Notes |
 |---|---|---|
@@ -84,12 +86,12 @@ transport metadata.
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and
 `step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
-the root agent span's `nemo_relay.uuid` also matches the ATIF `session_id`.
+the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
 LLM token counts appear as `llm.token_count.prompt`, `llm.token_count.completion`,
-`llm.token_count.total`, and `llm.token_count.prompt_details.cache_read`/`cache_write`;
-cost appears as USD-denominated `llm.cost.total`. Refer to
+`llm.token_count.total`, and `llm.token_count.prompt_details.cache_read`/`cache_write`.
+Cost appears as USD-denominated `llm.cost.total`. Refer to
 [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
 for the full mapping.
 
@@ -99,11 +101,19 @@ export.
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the
-OpenInference subscriber lifecycle.
+OpenInference subscriber lifecycle. The following examples configure and
+activate the OpenInference exporter through each supported language binding.
+
+`validate()` checks only the supplied in-memory object. `initialize()` also
+layers discovered `plugins.toml` configuration. For effective file-backed
+validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+and run the gateway with the same configuration path that production uses.
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 from nemo_relay import plugin
 from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
 
@@ -131,9 +141,12 @@ report = plugin.validate(config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-async with plugin.plugin(config):
-    # Run instrumented application work here.
-    pass
+async def main():
+    async with plugin.plugin(config):
+        # Run instrumented application work here.
+        pass
+
+asyncio.run(main())
 ```
 
 </Tab>
@@ -143,7 +156,8 @@ async with plugin.plugin(config):
 const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
 
-await plugin.initialize({
+void (async () => {
+  await plugin.initialize({
   version: 1,
   components: [
     observability.ComponentSpec({
@@ -165,23 +179,31 @@ await plugin.initialize({
       }),
     }),
   ],
-});
+  });
 
-try {
-  // Run instrumented application work here.
-} finally {
-  plugin.clear();
-}
+  try {
+    // Run instrumented application work here.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
     ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
 };
-use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     openinference: Some(OtlpSectionConfig {
@@ -208,7 +230,13 @@ let config = PluginConfig {
 let report = validate_plugin_config(&config);
 assert!(!report.has_errors());
 
-let active = initialize_plugins(config).await?;
+let _active = initialize_plugins(config).await?;
+
+// Run instrumented application work here.
+
+clear_plugin_configuration()?;
+Ok(())
+}
 ```
 
 </Tab>
@@ -275,25 +303,28 @@ use nemo_relay::observability::openinference::{
     OpenInferenceConfig, OpenInferenceSubscriber,
 };
 
-let config = OpenInferenceConfig::new()
-    .with_service_name("agent-service")
-    .with_endpoint("http://localhost:6006/v1/traces")
-    .with_resource_attribute("deployment.environment", "dev");
-let subscriber = OpenInferenceSubscriber::new(config)?;
-subscriber.register("openinference-exporter")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = OpenInferenceConfig::new()
+        .with_service_name("agent-service")
+        .with_endpoint("http://localhost:6006/v1/traces")
+        .with_resource_attribute("deployment.environment", "dev");
+    let subscriber = OpenInferenceSubscriber::new(config)?;
+    subscriber.register("openinference-exporter")?;
 
-// Run instrumented application work here.
+    // Run instrumented application work here.
 
-subscriber.force_flush()?;
-let _ = subscriber.deregister("openinference-exporter")?;
-subscriber.shutdown()?;
+    subscriber.force_flush()?;
+    let _ = subscriber.deregister("openinference-exporter")?;
+    subscriber.shutdown()?;
+    Ok(())
+}
 ```
 
 </Tab>
 
 </Tabs>
 
-## Common Validation Failures
+## Common Configuration and Runtime Issues
 
 - `transport` is not `http_binary` or `grpc`.
 - Headers or resource attributes are not string-to-string maps.

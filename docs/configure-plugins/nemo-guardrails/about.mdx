@@ -1,7 +1,7 @@
 ---
 title: "NeMo Guardrails Plugin"
 sidebar-title: "About"
-description: ""
+description: "Configure NeMo Guardrails policy around managed LLM and tool execution."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -14,7 +14,7 @@ system.
 The built-in plugin component has kind `nemo_guardrails` and is available as a
 first-party NeMo Relay plugin.
 
-The plugin is designed around backend modes:
+The plugin supports these backend modes:
 
 - `remote`
   - Calls a Guardrails service over HTTP(S), including streaming over the same
@@ -86,10 +86,6 @@ This distinction matters:
 - Managed surfaces also give NeMo Relay a stable runtime boundary for its own
   middleware ordering, lifecycle behavior, and observability marks.
 
-In practice:
-
-- Managed surfaces are places where NeMo Relay is holding the steering wheel.
-
 The forwarded request-default side is more mode-specific:
 
 - In `remote` mode, `request_defaults` fields are forwarded to the selected
@@ -116,6 +112,6 @@ separate managed middleware surfaces in NeMo Relay.
 
 ## Pages
 
-- [NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration)
+- [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)
   documents the built-in component shape, mode boundaries, and the detailed
   support matrix.

@@ -1,6 +1,6 @@
 ---
 title: "OpenTelemetry"
-description: ""
+description: "Configure OpenTelemetry Protocol trace export for NeMo Relay events."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -15,6 +15,8 @@ OTLP spans and you want NeMo Relay scopes, tool calls, LLM calls, and marks to
 appear in the same tracing pipeline as the rest of the application.
 
 ## `plugins.toml` Example
+
+Add the following OpenTelemetry exporter configuration to `plugins.toml`:
 
 ```toml
 version = 1
@@ -48,6 +50,8 @@ NeMo Relay trace spans to the configured OTLP endpoint.
 
 ## Fields
 
+The following table describes OpenTelemetry exporter settings:
+
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
@@ -70,7 +74,7 @@ root scope.
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and
 `step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
-the root agent span's `nemo_relay.uuid` also matches the ATIF `session_id`.
+the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
 For LLM end spans, cost is emitted as `nemo_relay.llm.cost.total` and
@@ -86,11 +90,19 @@ graceful shutdown.
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the
-OpenTelemetry subscriber lifecycle.
+OpenTelemetry subscriber lifecycle. The following examples configure and
+activate the OpenTelemetry exporter through each supported language binding.
+
+`validate()` checks only the supplied in-memory object. `initialize()` also
+layers discovered `plugins.toml` configuration. For effective file-backed
+validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+and run the gateway with the same configuration path that production uses.
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 from nemo_relay import plugin
 from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
 
@@ -118,12 +130,15 @@ report = plugin.validate(config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-await plugin.initialize(config)
-try:
-    # Run instrumented application work here.
-    pass
-finally:
-    plugin.clear()
+async def main():
+    await plugin.initialize(config)
+    try:
+        # Run instrumented application work here.
+        pass
+    finally:
+        plugin.clear()
+
+asyncio.run(main())
 ```
 
 </Tab>
@@ -133,7 +148,8 @@ finally:
 const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
 
-await plugin.initialize({
+void (async () => {
+  await plugin.initialize({
   version: 1,
   components: [
     observability.ComponentSpec({
@@ -155,23 +171,31 @@ await plugin.initialize({
       }),
     }),
   ],
-});
+  });
 
-try {
-  // Run instrumented application work here.
-} finally {
-  plugin.clear();
-}
+  try {
+    // Run instrumented application work here.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
     ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
 };
-use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     opentelemetry: Some(OtlpSectionConfig {
@@ -198,7 +222,13 @@ let config = PluginConfig {
 let report = validate_plugin_config(&config);
 assert!(!report.has_errors());
 
-let active = initialize_plugins(config).await?;
+let _active = initialize_plugins(config).await?;
+
+// Run instrumented application work here.
+
+clear_plugin_configuration()?;
+Ok(())
+}
 ```
 
 </Tab>
@@ -263,24 +293,27 @@ try {
 ```rust
 use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
 
-let config = OpenTelemetryConfig::http_binary("agent-service")
-    .with_endpoint("http://localhost:4318/v1/traces")
-    .with_resource_attribute("deployment.environment", "dev");
-let subscriber = OpenTelemetrySubscriber::new(config)?;
-subscriber.register("otel-exporter")?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = OpenTelemetryConfig::http_binary("agent-service")
+        .with_endpoint("http://localhost:4318/v1/traces")
+        .with_resource_attribute("deployment.environment", "dev");
+    let subscriber = OpenTelemetrySubscriber::new(config)?;
+    subscriber.register("otel-exporter")?;
 
-// Run instrumented application work here.
+    // Run instrumented application work here.
 
-subscriber.force_flush()?;
-let _ = subscriber.deregister("otel-exporter")?;
-subscriber.shutdown()?;
+    subscriber.force_flush()?;
+    let _ = subscriber.deregister("otel-exporter")?;
+    subscriber.shutdown()?;
+    Ok(())
+}
 ```
 
 </Tab>
 
 </Tabs>
 
-## Common Validation Failures
+## Common Configuration and Runtime Issues
 
 - `transport` is not `http_binary` or `grpc`.
 - Headers or resource attributes are not string-to-string maps.

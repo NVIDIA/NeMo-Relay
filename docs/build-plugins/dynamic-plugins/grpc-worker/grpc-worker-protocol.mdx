@@ -1,0 +1,135 @@
+---
+title: "gRPC Worker Protocol Overview"
+description: "Understand the local `grpc-v1` contract and canonical protocol definition for NeMo Relay worker plugins."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+`grpc-v1` is the stable out-of-process plugin protocol for
+`plugin.kind = "worker"`. Python, Rust, and other local executables can
+implement the `nemo.relay.worker.v1` API. Relay starts every worker and connects
+to it through local endpoints. Remote worker endpoints are not supported.
+
+Use the Rust or Python SDK unless you need another runtime. Refer to [gRPC
+Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about) for runtime
+choices and lifecycle guidance.
+
+## Service Contract
+
+Workers implement the `PluginWorker` service:
+
+- `Handshake` and `Health` identify a ready worker.
+- `Validate` returns configuration diagnostics.
+- `Register` returns declarative subscriber, guardrail, and intercept
+  registrations.
+- `Invoke` and `InvokeStream` run registered behavior.
+- `CancelInvocation` requests cancellation, and `Shutdown` requests process
+  termination.
+
+Relay implements `RelayHostRuntime` for worker-initiated operations. It lets a
+worker emit marks, manage scopes and isolated scope stacks, and call tool, LLM,
+or LLM-stream continuations during execution intercepts.
+
+This page summarizes the stable contract. Refer to the [canonical protocol
+definition](https://github.com/NVIDIA/NeMo-Relay/blob/0.5.0-alpha.20260706/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
+for every message and RPC field required to implement another runtime.
+
+## PluginWorker RPCs
+
+The worker implements the following RPCs:
+
+| RPC | Request and response | Purpose |
+| --- | --- | --- |
+| `Handshake` | `HandshakeRequest` → `HandshakeResponse` | Confirms plugin identity, `grpc-v1`, SDK/runtime details, and supported registration surfaces. |
+| `Health` | `HealthRequest` → `HealthResponse` | Reports whether the worker is ready. |
+| `Validate` | `ValidateRequest` → `ValidateResponse` | Validates the component `config` envelope and returns diagnostics or `WorkerError`. |
+| `Register` | `RegisterRequest` → `RegisterResponse` | Returns declarative registrations or `WorkerError`. |
+| `Invoke` | `InvokeRequest` → `InvokeResponse` | Runs a subscriber, guardrail, or non-streaming intercept. |
+| `InvokeStream` | `InvokeRequest` → `stream StreamChunk` | Runs a streaming LLM intercept. |
+| `CancelInvocation` | `CancelInvocationRequest` → `WorkerAck` | Requests cooperative cancellation of an invocation. |
+| `Shutdown` | `ShutdownRequest` → `WorkerAck` | Requests worker shutdown after Relay removes its proxy callbacks. |
+
+Every request carries the activation ID and authentication token. `Validate`
+and `Register` also carry the plugin ID and component configuration.
+
+## Registration and Invocation
+
+On success, `RegisterResponse` contains `Registration` records with a local
+name, surface, priority, and `break_chain` value. A failed registration can
+return `WorkerError` without registrations. The supported surfaces are:
+
+- `SUBSCRIBER`
+- `TOOL_SANITIZE_REQUEST_GUARDRAIL`, `TOOL_SANITIZE_RESPONSE_GUARDRAIL`,
+  `TOOL_CONDITIONAL_EXECUTION_GUARDRAIL`, `TOOL_REQUEST_INTERCEPT`, and
+  `TOOL_EXECUTION_INTERCEPT`
+- `LLM_SANITIZE_REQUEST_GUARDRAIL`, `LLM_SANITIZE_RESPONSE_GUARDRAIL`,
+  `LLM_CONDITIONAL_EXECUTION_GUARDRAIL`, `LLM_REQUEST_INTERCEPT`,
+  `LLM_EXECUTION_INTERCEPT`, and `LLM_STREAM_EXECUTION_INTERCEPT`
+
+`InvokeRequest` identifies the registration, surface, invocation, optional
+continuation, and scope context. Its payload is one of an event, tool
+invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
+result, guardrail result, LLM request-intercept result, tool-execution result,
+or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
+
+## RelayHostRuntime RPCs
+
+Relay implements these RPCs for worker callbacks:
+
+| RPC group | RPCs |
+| --- | --- |
+| Marks and scopes | `EmitMark`, `PushScope`, `PopScope` |
+| Isolated scope stacks | `CreateScopeStack`, `DropScopeStack` |
+| Execution continuations | `ToolNext`, `LlmNext`, `LlmStreamNext` |
+
+Every host-runtime request also carries the activation ID and authentication
+token. Scope operations include a `ScopeContext`; continuation calls include
+the continuation ID that Relay supplied for the active intercept.
+
+## Authentication and Endpoints
+
+Relay supplies an activation ID, an activation token, the worker endpoint, and
+the host endpoint when it starts the process. SDKs attach the activation ID and
+token to protocol calls. The host rejects requests with an invalid activation ID
+or token.
+
+On Unix platforms, Relay uses local Unix sockets. On other platforms, Relay
+uses loopback TCP endpoints. Workers must not accept arbitrary remote endpoint
+configuration.
+
+## Payloads
+
+Relay data values use this envelope:
+
+```proto
+message JsonEnvelope {
+  string schema = 1;
+  bytes json = 2;
+}
+```
+
+Use `JsonEnvelope` for Relay DTOs. Protobuf defines protocol control flow and
+does not duplicate Relay event, tool, LLM, scope, or diagnostic models.
+
+## Activation and Shutdown
+
+1. Run `nemo-relay plugins validate <plugin-id>` before enabling or running a
+   plugin to check its manifest, trust evidence, and optional static
+   configuration schema.
+2. Relay creates local endpoints, starts the worker, and completes health and
+   handshake checks.
+3. Relay sends component configuration to `Validate`. Error diagnostics stop
+   initialization after the worker process starts.
+4. Relay obtains registrations from `Register` and installs proxy callbacks.
+   Relay rolls back installed callbacks if initialization fails.
+5. Relay removes proxy callbacks before it sends `Shutdown` to the worker.
+
+## Errors
+
+gRPC status communicates transport, authentication, malformed protocol
+requests, and some stream failures. Registration and unary callback failures
+can return structured `WorkerError` values. A stream callback failure can
+terminate the gRPC stream with a status error. Worker implementations must
+handle both error forms.

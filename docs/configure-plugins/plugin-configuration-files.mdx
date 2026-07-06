@@ -1,20 +1,22 @@
 ---
 title: "Plugin Configuration Files"
-description: ""
+description: "Configure plugins.toml discovery, layering, validation, and interactive editing."
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use `plugins.toml` when the `nemo-relay` CLI gateway should activate plugins at
-startup. The file contains the same generic plugin configuration document used
-by the Rust, Python, and Node.js plugin APIs, but encoded as TOML at the file
-root.
+Use `plugins.toml` when Relay should activate plugins from file configuration.
+The runtime discovers and layers this generic plugin document for direct Rust,
+Python, and Node.js integrations as well as for the `nemo-relay` CLI gateway.
+The file encodes the same document that binding APIs accept, but uses TOML at
+the file root.
 
-This page documents file discovery, precedence, merge behavior, editor behavior,
-and conflict rules for the CLI gateway. Component-specific fields are documented
-in the guide for each plugin component.
+This guide documents runtime file discovery, precedence, merge behavior, and
+conflict rules. It also identifies gateway-only editor, explicit-config, and
+discoverable-plugin workflows. Each component guide documents its
+component-specific fields.
 
 <Note>
 NeMo Relay plugin configuration keys use `snake_case` regardless of language or
@@ -26,7 +28,7 @@ generic plugin document and component-local `config` objects use canonical
 
 ## Shortest Path Example
 
-Use this minimal `plugins.toml` when you want the CLI gateway to start with one
+Use this minimal `plugins.toml` when you want Relay to start with one
 plugin-managed observability exporter and no extra layering:
 
 ```toml
@@ -46,15 +48,17 @@ filename = "events.jsonl"
 mode = "append"
 ```
 
-For the most deterministic verification path, keep `plugins.toml` in the same
-directory as the gateway `config.toml` file for this run, then launch the
-wrapper with that explicit config path. For example:
+For the most deterministic CLI-gateway verification path, keep `plugins.toml`
+in the same directory as the gateway `config.toml` file for this run, then
+launch the wrapper with that explicit config path. For example:
 
 ```text
 path/to/
   config.toml
   plugins.toml
 ```
+
+Run the gateway with the following command:
 
 ```bash
 nemo-relay --config path/to/config.toml run -- codex
@@ -115,34 +119,69 @@ The top-level fields are:
 | `components` | `[]` | Ordered plugin components to validate and activate. |
 | `policy` | warn unknown components and fields, error on unsupported values | Global validation policy. |
 
-Each component has:
+Each built-in component has:
 
 | Field | Default | Notes |
 |---|---|---|
 | `kind` | Required | Registered plugin kind, such as `observability` or `adaptive`. |
-| `enabled` | `true` | Disabled components are validated but not initialized. |
+| `enabled` | `true` | Relay validates disabled components but does not initialize them. |
 | `config` | `{}` | Component-local configuration object. The shape depends on `kind`. |
 
-The gateway reads only files named `plugins.toml`.
+## Gateway Discoverable Plugin Records
 
-## Discovery
+Use `[[plugins.dynamic]]` only for a gateway-managed manifest-backed native or
+worker plugin. These records remain separate from `[[components]]`. During
+gateway activation, Relay loads each enabled dynamic adapter, synthesizes its
+internal component, and validates the component configuration.
 
-The gateway resolves plugin configuration from `plugins.toml` files and an
-optional code-driven layer.
+The following record configures a dynamic plugin:
+
+```toml
+[[plugins.dynamic]]
+manifest = "./plugins/acme/relay-plugin.toml"
+
+[plugins.dynamic.config]
+mode = "audit"
+```
+
+<Warning>
+For a Python worker, run `nemo-relay plugins add <manifest>` instead of adding
+this record manually. The command creates and records the Relay-managed Python
+environment that the worker requires at startup.
+</Warning>
+
+`manifest` is required and resolves relative to this file. `config` is optional.
+Run `nemo-relay plugins validate <plugin-id>` to validate it against the
+manifest’s optional static JSON Schema before you enable or run the plugin. Use
+`nemo-relay plugins add`, `validate`, `inspect`, and `enable` to manage the
+dynamic-plugin lifecycle. Refer to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+for manifest, trust, and policy requirements.
+
+The runtime reads only files named `plugins.toml` during default discovery.
+
+## Runtime Discovery
+
+The runtime resolves plugin configuration from `plugins.toml` files and an
+optional code-driven layer. Direct Rust, Python, and Node.js calls to
+their plugin-initialization APIs use this same discovery and layering behavior.
 
 File configuration comes from `plugins.toml`:
 
 | Source | Use case |
 |---|---|
-| `plugins.toml` | Normal operator- and project-managed gateway plugin configuration. |
+| `plugins.toml` | Normal operator- and project-managed runtime plugin configuration. |
 
-Plugin configuration is not read from `config.toml`.
+The runtime does not read plugin configuration from `config.toml`.
 
-When `--config path/to/config.toml` is supplied, plugin file discovery is scoped
-to `path/to/plugins.toml`. Implicit system, project, and user plugin files are
-not loaded for that run.
+### Gateway Explicit Config
 
-When no explicit `--config` path is supplied, the gateway checks these
+When the CLI gateway receives `--config path/to/config.toml`, it scopes plugin
+file discovery to `path/to/plugins.toml`. It does not load implicit system,
+project, or user plugin files for that run.
+
+### Default Discovery Locations
+
+When no gateway `--config` path overrides discovery, the runtime checks these
 `plugins.toml` locations from lowest to highest precedence:
 
 1. System: `/etc/nemo-relay/plugins.toml`
@@ -151,12 +190,14 @@ When no explicit `--config` path is supplied, the gateway checks these
 3. User: `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`, or
    `~/.config/nemo-relay/plugins.toml` when `XDG_CONFIG_HOME` is not set
 
-Missing files are skipped. If no plugin config source exists, the gateway starts
-without process-level plugin activation.
+The runtime skips missing files. If no plugin config source exists,
+initialization continues without process-level plugin activation.
 
-## Editing Files
+## Gateway Editing Files
 
-Use the interactive editor for Observability and Adaptive plugin configuration:
+Use the interactive editor for Observability, Adaptive, NeMo Guardrails, and
+PII Redaction configuration. The editor also updates the configuration of
+manifest-backed dynamic plugins that `plugins add` has registered:
 
 ```bash
 nemo-relay plugins edit
@@ -207,7 +248,7 @@ The editor menus support these controls:
 Text and JSON value prompts use normal line editing. Use the surrounding field
 menu to reset, clear, preview, or save.
 
-## Precedence And Merge Behavior
+## Precedence and Merge Behavior
 
 When more than one `plugins.toml` file is discovered, later files have higher
 precedence. User config overrides project config, and project config overrides
@@ -226,6 +267,8 @@ output_directory = "/var/log/nemo-relay"
 mode = "append"
 ```
 
+The following user configuration overrides only the exporter mode:
+
 ```toml
 # user plugins.toml
 [[components]]
@@ -239,10 +282,10 @@ The effective Agent Trajectory Observability Format (ATOF) config keeps
 `enabled` and `output_directory` from the system file and uses
 `mode = "overwrite"` from the user file.
 
-The top-level `components` array is special. Components are matched by `kind`
+The top-level `components` array is special. Relay matches components by `kind`
 across files. A higher-precedence component with the same `kind` merges into the
-lower-precedence component. A component with a different `kind` is added to the
-effective configuration.
+lower-precedence component. Relay adds a component with a different `kind` to
+the effective configuration.
 
 Most components follow the general merge rules above. The built-in `pricing`
 component has one additional merge rule: when both lower and
@@ -255,8 +298,8 @@ Declare each `kind` at most once inside one `plugins.toml` file. Duplicate
 component kinds in the same file fail before merge. Duplicate singleton
 components that reach plugin validation also fail validation.
 
-Arrays inside component config are replaced by the higher-precedence value.
-Tables inside component config merge recursively.
+Higher-precedence values replace arrays inside component config. Higher-precedence
+tables merge recursively inside component config.
 
 ## Configuration Layering
 
@@ -268,7 +311,7 @@ follows:
    (system → project → user), using the [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
 2. Layer the config object you pass to `initialize` over that merged base. Any
    setting it specifies overrides the file value, and the result is the
-   effective config that gets validated and activated.
+   effective config that Relay validates and activates.
 
 
 Files and code differ only in how they treat a setting you **omit**:
@@ -277,19 +320,21 @@ Files and code differ only in how they treat a setting you **omit**:
 | `version`, `policy`, or the `enabled` flag of a component you declare | Inherited from a lower-precedence file | **Always taken from code** — its default if you did not set it |
 | A whole component kind, or a key inside a component's `config` | Inherited from a lower-precedence file | Inherited from the file layer |
 
-In other words, the layers beneath a file fill its gaps. Code's typed fields
-are never gaps because they always carry a value, so they always take
-precedence. Only the open-ended parts of your code config (which components you
-include and the keys within each component's `config`) merge with the files.
+Lower-precedence files fill fields that higher-precedence files omit. Typed code
+fields always have values, so they override file values. Only component
+selection and keys inside component `config` merge with files.
 
 Without filesystem access, no files are read, so the base is empty and only
 your `initialize` config applies.
 
-## Explicit Defaults And Overrides
+## Explicit Defaults and Overrides
 
 The editor writes explicit defaults for edited Observability and Adaptive
-sections. This is intentional. In a layered config model, omitting a field means
-"inherit a lower precedence value"; it does not mean "delete that value."
+sections. It writes NeMo Guardrails, PII Redaction, and dynamic-plugin fields
+only when readers configure them. In a layered config model, omitting a field
+means "inherit a lower precedence value"; it does not mean "delete that value."
+Use the dedicated `nemo-relay model-pricing` commands to manage model-pricing
+catalog sources.
 
 For example, this user file disables ATOF even if a project file enables it:
 
@@ -302,7 +347,7 @@ enabled = false
 mode = "append"
 ```
 
-The merged config may still contain inherited ATOF sibling fields, such as
+The merged config can still contain inherited ATOF sibling fields, such as
 `output_directory`, but the runtime ignores the section because `enabled =
 false`.
 
@@ -329,13 +374,20 @@ Common validation failures include:
 - Enabled components whose build-time features are unavailable.
 - Component-specific semantic failures, such as an Agent Trajectory Interchange
   Format (ATIF) filename template that does not contain `{session_id}`.
+- Dynamic manifests that have an incompatible Relay version, unsupported
+  capability, invalid load contract, or failed trust evidence. Run
+  `nemo-relay plugins validate <plugin-id>` to check optional static schema
+  validation for dynamic component config.
 
-Use `nemo-relay doctor` to inspect the resolved gateway configuration and plugin
-diagnostics. For Observability, doctor also reports enabled exporter sections,
-checks writable file exporter directories, probes configured ATOF streaming
-endpoints, and checks reachable OTLP endpoints when those settings are present.
-For model pricing, doctor validates enabled file and inline sources and fails
-when a source is unreadable or the catalog schema is invalid.
+Use `nemo-relay doctor` to inspect the resolved gateway configuration and
+plugin diagnostics. For Observability, doctor also reports enabled exporter
+sections, checks writable file exporter directories, probes configured ATOF
+streaming endpoints, and checks reachable OTLP endpoints when those settings
+are present. For model pricing, doctor validates enabled file and inline
+sources and fails when a source is unreadable or the catalog schema is invalid.
+For dynamic-plugin validation, lifecycle state, and trust diagnostics, use
+`nemo-relay plugins validate`, `inspect`, and `list`; doctor reports only the
+resolved manifest references and host configuration status.
 
 ## Relationship to `config.toml`
 
@@ -354,7 +406,10 @@ Observability exporters through `plugins.toml`.
 
 Use the component guides for field-level configuration:
 
-- [Observability Configuration](/observability-plugin/configuration)
-- [Adaptive Configuration](/adaptive-plugin/configuration)
-- [Adaptive Cache Governor (ACG)](/adaptive-plugin/acg)
-- [Adaptive Hints](/adaptive-plugin/adaptive-hints)
+- [Observability Configuration](/configure-plugins/observability/configuration)
+- [Adaptive Configuration](/configure-plugins/adaptive/configuration)
+- [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg)
+- [Adaptive Hints](/configure-plugins/adaptive/adaptive-hints)
+- [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)
+- [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
+- [Model Pricing](/configure-plugins/model-pricing)

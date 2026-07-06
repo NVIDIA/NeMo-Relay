@@ -1,6 +1,6 @@
 ---
 title: "Adaptive Cache Governor (ACG)"
-description: ""
+description: "Configure Adaptive Cache Governor for provider-aware prompt-cache planning."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -15,6 +15,8 @@ observed runs, and plans provider-specific prompt-cache breakpoints. The `acg`
 section is optional. Omit it to keep cache planning disabled.
 
 ## `plugins.toml` Example
+
+Add the following Adaptive Cache Governor configuration to `plugins.toml`:
 
 ```toml
 version = 1
@@ -52,11 +54,19 @@ prompt samples.
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the
-Adaptive Cache Governor (ACG) runtime lifecycle.
+Adaptive Cache Governor (ACG) runtime lifecycle. The following examples
+configure and activate ACG through each supported language binding.
+
+`validate()` checks only the supplied in-memory object. `initialize()` also
+layers discovered `plugins.toml` configuration. For effective file-backed
+validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+and run the gateway with the same configuration path that production uses.
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 import nemo_relay
 
 adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
@@ -76,12 +86,15 @@ report = nemo_relay.plugin.validate(plugin_config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-await nemo_relay.plugin.initialize(plugin_config)
-try:
-    # Run instrumented application work here.
-    pass
-finally:
-    nemo_relay.plugin.clear()
+async def main():
+    await nemo_relay.plugin.initialize(plugin_config)
+    try:
+        # Run instrumented application work here.
+        pass
+    finally:
+        nemo_relay.plugin.clear()
+
+asyncio.run(main())
 ```
 </Tab>
 
@@ -104,19 +117,28 @@ if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 
-await plugin.initialize(pluginConfig);
-try {
-  // Run instrumented application work here.
-} finally {
-  plugin.clear();
-}
+void (async () => {
+  await plugin.initialize(pluginConfig);
+  try {
+    // Run instrumented application work here.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
-use nemo_relay_adaptive::plugin_component::ComponentSpec;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
+use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, BackendSpec, StateConfig, TelemetryComponentConfig,
 };
@@ -138,10 +160,17 @@ adaptive.acg = Some(AcgComponentConfig {
 let mut plugin_config = PluginConfig::default();
 plugin_config.components.push(ComponentSpec::new(adaptive).into());
 
+register_adaptive_component()?;
 let report = validate_plugin_config(&plugin_config);
 assert!(!report.has_errors());
 
-let active = initialize_plugins(plugin_config).await?;
+let _active = initialize_plugins(plugin_config).await?;
+
+// Run instrumented application work here.
+
+clear_plugin_configuration()?;
+Ok(())
+}
 ```
 </Tab>
 
@@ -155,6 +184,8 @@ directly instead of activating the top-level plugin component.
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 import nemo_relay
 
 adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
@@ -167,12 +198,12 @@ adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
 )
 
 runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
-await runtime.register()
+asyncio.run(runtime.register())
 try:
     # Run instrumented application work here.
     runtime.wait_for_idle()
 finally:
-    await runtime.shutdown()
+    asyncio.run(runtime.shutdown())
 ```
 </Tab>
 
@@ -183,6 +214,8 @@ Use the Plugin Configuration example above when activating ACG from Node.js.
 
 <Tab title="Rust" language="rust">
 ```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, AdaptiveRuntime, BackendSpec, StateConfig,
     TelemetryComponentConfig,
@@ -209,12 +242,16 @@ runtime.register().await?;
 
 runtime.wait_for_idle();
 runtime.shutdown().await?;
+Ok(())
+}
 ```
 </Tab>
 
 </Tabs>
 
 ## Fields
+
+The following table describes Adaptive Cache Governor settings:
 
 | Field | Default | Notes |
 |---|---|---|
@@ -240,7 +277,7 @@ Provider-specific cache hints are useful only when the request surface supports
 them. Validate against representative LLM traffic before enabling ACG in
 production.
 
-## Common Validation Failures
+## Common Configuration and Runtime Issues
 
 - `provider` is not one of `passthrough`, `anthropic`, or `openai`.
 - Stability thresholds are outside the supported numeric range.

@@ -1,7 +1,7 @@
 ---
 title: "NeMo Guardrails Configuration"
 sidebar-title: "Configuration"
-description: ""
+description: "Configure remote and local NeMo Guardrails backends for managed execution."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,8 +11,8 @@ Use this page when you want to configure the built-in NeMo Guardrails plugin
 component. The component kind is `nemo_guardrails`.
 
 For plugin file discovery, precedence, merge behavior, editor controls, and
-gateway conflict rules, see
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+gateway conflict rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Note>
 NeMo Relay plugin configuration uses the generic plugin document shape, so
@@ -46,12 +46,14 @@ At least one managed Guardrails surface must be enabled.
 
 ## Backend Support
 
+The following table compares remote and local backend support:
+
 | Area | `remote` | `local` |
 |---|---|---|
 | Built-in component kind and config validation | Supported | Supported |
 | Managed LLM `input` | Supported | Supported |
 | Managed LLM `output` | Supported | Supported |
-| Managed streaming LLM execution | Supported over the remote HTTP(S) contract | Supported; see [Streaming Boundary](#streaming-boundary) |
+| Managed streaming LLM execution | Supported over the remote HTTP(S) contract | Supported; refer to [Streaming Boundary](#streaming-boundary) |
 | Managed `tool_input` | Not supported against the stock Guardrails remote contract | Supported |
 | Managed `tool_output` | Supported | Supported |
 | `request_defaults` pass-through | Supported | Not supported |
@@ -76,12 +78,24 @@ Guardrails service still owns the actual policy content. In practice, NeMo
 Relay decides when managed checks run, while the Guardrails config decides what
 to block, allow, or rewrite.
 
+### Remote Settings
+
+The remote backend accepts the following settings:
+
+| Field | Default | Notes |
+|---|---|---|
+| `remote.endpoint` | Required | Base `http://` or `https://` URL for the reachable Guardrails service. |
+| `remote.config_id` | Omitted | One Guardrails configuration identifier. Set this or `remote.config_ids`, but not both. |
+| `remote.config_ids` | `[]` | Multiple Guardrails configuration identifiers to combine. Set this or `remote.config_id`, but not both. |
+| `remote.headers` | `{}` | Static string headers sent with every remote request. |
+| `remote.timeout_millis` | `3000` | Positive request timeout in milliseconds. |
+
 ### `plugins.toml` Example
 
 You can write this config directly in `plugins.toml`, or create and edit it
 through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
-precedence, merge behavior, and editor controls, see
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+precedence, merge behavior, and editor controls, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 ```toml
 version = 1
@@ -238,12 +252,25 @@ The same ownership boundary still applies:
 - NeMo Relay decides when managed checks run.
 - Guardrails-native config still decides what to block, allow, or rewrite.
 
+### Local Settings
+
+The local backend accepts the following settings:
+
+| Field | Default | Notes |
+|---|---|---|
+| `config_path` | Omitted | Native Guardrails configuration directory. Set this or `config_yaml`, but not both. |
+| `config_yaml` | Omitted | Inline native Guardrails YAML. Set this or `config_path`, but not both. |
+| `colang_content` | Omitted | Inline Colang content. Use only with `config_yaml`. |
+| `local.python_module` | `nemoguardrails` | Module that the local worker imports. Set a custom module only when the runtime exposes Guardrails through another import path. |
+| `local.python_executable` | `NEMO_RELAY_PYTHON`, otherwise `python3` | Python executable that starts the local worker. |
+| `local.python_path` | Omitted | Path prepended to the worker subprocess `PYTHONPATH`. |
+
 ### `plugins.toml` Example
 
 You can write this config directly in `plugins.toml`, or create and edit it
 through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
-precedence, merge behavior, and editor controls, see
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+precedence, merge behavior, and editor controls, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 ```toml
 version = 1
@@ -337,18 +364,18 @@ Guardrails calls the main streaming-output switch
 When `stream_first = true`, the current local mode uses pass-through-first
 streaming semantics:
 
-- provider chunks can flow to the caller immediately
-- Guardrails evaluates the streamed text in parallel
-- if Guardrails later blocks the stream, the call fails at that point even
-  though some chunks may already have been delivered
+- Provider chunks can reach the caller immediately.
+- Guardrails evaluates the streamed text in parallel.
+- If Guardrails later blocks the stream, the call fails after some chunks have
+  already reached the caller.
 
 The current local mode does not support `rails.output.streaming.stream_first = false`
 yet. That mode would require Guardrails-first chunk reconstruction:
 
-- Guardrails would need to evaluate streamed text before chunks are released to
-  the caller
-- the local backend would then need to convert Guardrails-approved text back
-  into valid provider-shaped stream chunks
+- Guardrails would need to evaluate streamed text before it releases chunks to
+  the caller.
+- The local backend would then need to convert Guardrails-approved text into
+  valid provider-shaped stream chunks.
 
 That guarded-text-to-provider-chunk adapter does not exist yet in the current
 local backend.

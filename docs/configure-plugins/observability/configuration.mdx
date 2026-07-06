@@ -1,7 +1,7 @@
 ---
 title: "Observability Configuration"
 sidebar-title: "Configuration"
-description: ""
+description: "Configure ATOF, ATIF, OpenTelemetry, and OpenInference exporters together."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -12,13 +12,13 @@ Use this page when an application should install standard observability
 exporters from one plugin configuration document instead of manually registering
 each subscriber.
 
-The plugin kind is `observability`. It is registered by the core runtime, so
+The plugin kind is `observability`. The core runtime registers it, so
 applications do not need to register a plugin implementation before validation
 or initialization.
 
 For plugin file discovery, precedence, merge behavior, editor controls, and
-gateway conflict rules, see
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+gateway conflict rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Note>
 Observability plugin configuration uses the generic NeMo Relay plugin document
@@ -31,12 +31,14 @@ Node-native `camelCase` option names outside the plugin system.
 ## What It Installs
 
 Every exporter section is optional and defaults to disabled. A section is active
-only when it includes `enabled: true`.
+only when it includes `enabled = true`.
+
+The following table lists the runtime behavior that each section installs:
 
 | Section | Runtime behavior |
 |---|---|
 | `atof` | Registers a global Agent Trajectory Observability Format (ATOF) JSONL exporter for raw lifecycle events. |
-| `atif` | Registers one Agent Trajectory Interchange Format (ATIF) dispatcher that writes one trajectory file for each top-level agent scope. |
+| `atif` | Registers one Agent Trajectory Interchange Format (ATIF) dispatcher that writes one trajectory file for each top-level Agent scope or supported coding-agent turn scope. |
 | `opentelemetry` | Registers a global OpenTelemetry OTLP subscriber. |
 | `openinference` | Registers a global OpenInference OTLP subscriber. |
 
@@ -46,11 +48,13 @@ plugin namespace:
 
 - Agent Trajectory Observability Format (ATOF): `__nemo_relay_plugin__observability__atof`
 - Agent Trajectory Interchange Format (ATIF) dispatcher: `__nemo_relay_plugin__observability__atif`
-- Per-agent ATIF scope subscriber: `__nemo_relay_plugin__observability__atif-{agent_scope_uuid}`
+- Per-trajectory-root ATIF scope subscriber: `__nemo_relay_plugin__observability__atif-{root_scope_uuid}`
 - OpenTelemetry: `__nemo_relay_plugin__observability__opentelemetry`
 - OpenInference: `__nemo_relay_plugin__observability__openinference`
 
 ## `plugins.toml` Example
+
+Add the following observability component configuration to `plugins.toml`:
 
 ```toml
 version = 1
@@ -134,21 +138,23 @@ new plugin configuration becomes active. Runtime delivery failures are
 fail-open for application work: the tool, LLM, or agent run continues while the
 affected exporter records, logs, or reports the delivery problem.
 
+The following table describes how each failure affects application work:
+
 | Failure | Behavior |
 |---|---|
 | Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF endpoint config, unavailable ATOF streaming support, or ATOF endpoint worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
 | ATOF event serialization or file write/flush failure after activation | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
 | ATOF streaming endpoint connection or send failure after activation | File output and other already-started endpoints continue. Endpoint failures are logged with the endpoint index; endpoint flush and close timeouts are logged instead of blocking shutdown indefinitely. |
-| ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The failed sink is recorded as unhealthy and skipped for later trajectories. Other configured sinks continue to receive writes. |
+| ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The ATIF exporter records the failed sink as unhealthy and skips it for later trajectories. Other configured sinks continue to receive writes. |
 | ATIF dispatcher serialization or subscriber-management failure | The ATIF dispatcher records a fatal exporter error and stops observing later ATIF events. Other observability sections continue to run. |
 | OpenTelemetry or OpenInference construction failure | Plugin initialization fails before the subscriber is registered. |
 | OpenTelemetry or OpenInference export failure after registration | Application work continues. The OTLP exporter reports failures through its runtime logging and flush or shutdown path. |
 
 Missing or delayed telemetry is represented as absence of exporter output, not
 as synthetic success or failure events. NeMo Relay does not backfill events for
-subscribers that register late. If the plugin is cleared while an agent scope
-is still open, the ATIF dispatcher writes the partial trajectory it has already
-observed.
+subscribers that register late. If the plugin is cleared while an Agent scope
+or supported coding-agent turn scope is still open, the ATIF dispatcher writes
+the partial trajectory it has already observed.
 
 Use `nemo-relay doctor` to validate local ATOF and ATIF output directories,
 OTLP HTTP endpoints, and ATOF streaming endpoints. Validate ATIF remote storage
@@ -159,6 +165,14 @@ create the output directory and that teardown calls `plugin.clear()` or
 `clear_plugin_configuration()` before the process exits.
 
 ## Per-Language Plugin Configuration
+
+The following examples configure and activate the Observability component
+through each supported language binding:
+
+`validate()` checks only the supplied in-memory object. `initialize()` also
+layers discovered `plugins.toml` configuration. For effective file-backed
+validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+and run the gateway with the same configuration path that production uses.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -231,7 +245,8 @@ asyncio.run(arun())
 const plugin = require("nemo-relay-node/plugin");
 const observability = require("nemo-relay-node/observability");
 
-await plugin.initialize({
+void (async () => {
+  await plugin.initialize({
   version: 1,
   components: [
     observability.ComponentSpec({
@@ -271,24 +286,32 @@ await plugin.initialize({
       }),
     }),
   ],
-});
+  });
 
-try {
-  // Run instrumented application work here.
-} finally {
-  plugin.clear();
-}
+  try {
+    // Run instrumented application work here.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, AtofEndpointSectionConfig, AtofSectionConfig, ComponentSpec,
     ObservabilityConfig, OtlpSectionConfig,
 };
-use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
 
 let component = ComponentSpec::new(ObservabilityConfig {
     atof: Some(AtofSectionConfig {
@@ -301,6 +324,7 @@ let component = ComponentSpec::new(ObservabilityConfig {
             transport: "http_post".into(),
             headers: [("authorization".into(), "Bearer <token>".into())].into(),
             timeout_millis: 3000,
+            field_name_policy: "preserve".into(),
         }],
     }),
     atif: Some(AtifSectionConfig {
@@ -341,14 +365,20 @@ let config = PluginConfig {
 let report = validate_plugin_config(&config);
 assert!(!report.has_errors());
 
-let active = initialize_plugins(config).await?;
+let _active = initialize_plugins(config).await?;
+
+// Run instrumented application work here.
+
+clear_plugin_configuration()?;
+Ok(())
+}
 ```
 
 </Tab>
 
 </Tabs>
 
-## Validation And Teardown
+## Validation and Teardown
 
 Validate plugin configuration before activating it. The plugin reports
 unsupported transports, unsupported ATOF modes, invalid ATOF streaming endpoint

@@ -1,7 +1,7 @@
 ---
 title: "PII Redaction Configuration"
 sidebar-title: "Configuration"
-description: ""
+description: "Configure PII redaction actions, detectors, targets, and backend modes."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -10,9 +10,14 @@ SPDX-License-Identifier: Apache-2.0 */}
 Use this page when you want to configure the built-in PII redaction plugin
 component. The component kind is `pii_redaction`.
 
+The CLI and primary language bindings register this component. Direct Rust
+applications must call
+`nemo_relay_pii_redaction::component::register_pii_redaction_component()`
+before they validate or initialize a `pii_redaction` component.
+
 For plugin file discovery, precedence, merge behavior, editor controls, and
 gateway conflict rules, refer to
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 <Note>
 NeMo Relay plugin configuration uses the generic plugin document shape, so
@@ -28,9 +33,9 @@ This plugin uses the same sanitize-guardrail middleware family documented in
 The difference between raw middleware and `pii_redaction` is the layer of
 abstraction:
 
-- Raw middleware asks you to register sanitize callbacks directly in code
+- Raw middleware asks you to register sanitize callbacks directly in code.
 - `pii_redaction` gives you a first-party, config-driven privacy contract on
-  top of those same runtime hooks
+  top of those same runtime hooks.
 
 Choose `pii_redaction` when you want a reusable built-in policy surface.
 Choose raw middleware when you need bespoke callback logic that does not fit
@@ -75,6 +80,8 @@ At least one managed redaction surface must be enabled.
 
 ## Backend Support
 
+The following table compares the available PII redaction backends:
+
 | Area | `builtin` | `local_model` |
 |---|---|---|
 | Built-in component kind and config validation | Supported | Supported |
@@ -86,7 +93,7 @@ At least one managed redaction surface must be enabled.
 | Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
 
-## Built-In Mode
+## Built-in Mode
 
 Use `builtin` mode when NeMo Relay should sanitize emitted observability
 payloads with a deterministic first-party backend.
@@ -109,7 +116,7 @@ To use `mode = "builtin"`:
 You can write this config directly in `plugins.toml`, or create and edit it
 through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
 precedence, merge behavior, and editor controls, refer to
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 ```toml
 version = 1
@@ -170,10 +177,10 @@ The editor preserves unknown fields when it rewrites an existing
 `pii_redaction` component, so future or runtime-specific settings are not
 discarded by the interactive edit flow.
 
-If you find yourself needing callback code instead of editor/config fields, it
-is a sign that raw middleware may be the better fit for that specific policy.
+If your policy needs callback code instead of editor or configuration fields,
+use raw middleware.
 
-## Built-In Settings
+## Built-in Settings
 
 The `builtin` section contains:
 
@@ -196,9 +203,9 @@ The `builtin` section contains:
 
 When a target matches:
 
-- object fields are removed
-- array elements become `null`
-- targeted scalar or root values become `null`
+- Object fields are removed.
+- Array elements become `null`.
+- Targeted scalar or root values become `null`.
 
 ### `regex_replace`
 
@@ -275,47 +282,39 @@ The current implementation also preserves provider-shaped response-path
 compatibility for the supported codecs, but normalized LLM paths are the
 recommended contract for new configuration.
 
-## Choosing Between This Plugin and Middleware
+## Decision Rule
 
-Use this plugin when:
-
-- The privacy behavior should be reusable across applications
-- Config-driven enablement matters more than hand-written callbacks
-- You want built-in detectors and action semantics
-- You want a documented first-party NeMo Relay privacy surface
-
-Use raw middleware when:
-
-- The policy depends on application-specific runtime state
-- The sanitization logic is too custom for the plugin contract
-- You need to prototype or experiment before standardizing behavior
-
-The runtime effect is still sanitize-guardrail middleware in both cases. The
-plugin simply gives you a standardized policy layer on top.
+Use `pii_redaction` for reusable, config-driven privacy behavior. Use raw
+middleware when the policy depends on application-specific runtime state or
+custom callback logic. Refer to [Plugin Versus Middleware](#plugin-versus-middleware)
+for the full comparison.
 
 ## Detector Presets
 
-The built-in detector presets are grouped into three deterministic families.
+The built-in detector presets are grouped into three deterministic families:
 
-Common PII:
+**Common PII**
+
 - `email`
 - `phone`
 - `ip_address`
 - `ipv6`
 - `url`
 
-Structured secrets:
+**Structured Secrets**
+
 - `api_key`
 - `uuid`
 - `bearer_token`
 - `jwt`
 - `credit_card`
 
-  `bearer_token` is heuristic rather than vendor-specific. It can still match
-  benign bearer-style values, so prefer a narrower detector when you know the
-  credential family.
+`bearer_token` is heuristic rather than vendor-specific. It can still match
+benign bearer-style values, so prefer a narrower detector when you know the
+credential family.
 
-Cloud credentials:
+**Cloud Credentials**
+
 - `aws_access_key_id`
 - `aws_secret_access_key`
 - `gcp_api_key`
@@ -332,10 +331,10 @@ The built-in plugin uses sanitize guardrails.
 
 That means:
 
-- the real provider response value is unchanged
-- the emitted NeMo Relay start or end event payload is sanitized
-- `annotated_response` is populated from the sanitized end-event payload when a
-  response codec is provided
+- The real provider response value remains unchanged.
+- The plugin sanitizes emitted NeMo Relay start and end event payloads.
+- The plugin populates `annotated_response` from the sanitized end-event payload
+  when a response codec is available.
 
 ## Local Model Mode
 
@@ -343,16 +342,16 @@ That means:
 
 ### Current Status
 
-Currently:
+The current local-model status is:
 
-- the plugin contract accepts `mode = "local_model"`
-- the `local` section currently supports:
+- The plugin contract accepts `mode = "local_model"`.
+- The `local` section supports:
   - `backend`
   - `model_id`
   - `detector_profile`
   - `allow_network`
   - `max_latency_ms`
-- actual behavior depends on a runtime-installed local backend provider
+- Actual behavior depends on a runtime-installed local backend provider.
 
 Without a provider, runtimes report the local backend as unavailable during
 plugin initialization.

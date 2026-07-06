@@ -1,6 +1,6 @@
 ---
 title: "Validate Plugin Configuration"
-description: ""
+description: "Validate NeMo Relay plugin configuration and return stable diagnostics before activation."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,7 +11,9 @@ Use this guide when you have a plugin kind and need predictable diagnostics befo
 
 ## What You Build
 
-You will define a JSON-compatible component config, validate required fields and supported values, return structured diagnostics, and confirm that disabled components still report config problems before rollout.
+Define a JSON-compatible component configuration, validate required fields and
+supported values, return structured diagnostics, and confirm that disabled
+components still report configuration problems before rollout.
 
 ## Configuration Shape
 
@@ -23,7 +25,15 @@ Each component has:
 - `enabled`: whether the component should initialize.
 - `config`: the component-local JSON object passed to validation and registration.
 
-Disabled components are still validated. This lets operators detect config problems before enabling a component in a later rollout.
+Relay validates disabled components. This lets operators detect configuration
+problems before enabling a component in a later rollout.
+
+The top-level `policy` controls validation that Relay handles, including unknown
+plugin kinds and unsupported document versions. A custom plugin's `validate()`
+method controls how its own `config` fields handle unknown fields and
+unsupported values.
+
+The following examples create the same configuration in each supported binding:
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -49,10 +59,9 @@ config = PluginConfig(
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import type { PluginConfig } from 'nemo-relay-node/plugin';
+```js
 
-const config: PluginConfig = {
+const config = {
   version: 1,
   components: [
     {
@@ -91,14 +100,18 @@ let config = PluginConfig {
 
 ## Validation Rules
 
-Validation should be deterministic and side-effect free. It should inspect config and return diagnostics; it should not register middleware, open network connections, create clients, or mutate process state.
+Keep validation deterministic and side-effect free. Inspect configuration and
+return diagnostics. Do not register middleware, open network connections,
+create clients, or change process state.
 
 Validate these areas first:
 
 - Required fields are present.
 - Field types match the supported shape.
-- Unknown fields follow the configured policy.
-- Known fields have supported values.
+- Your plugin reports unknown component-local fields with the diagnostic level
+  its contract defines.
+- Your plugin reports unsupported component-local values with the diagnostic
+  level its contract defines.
 - Cross-field combinations make sense.
 - Sensitive values are references or secret names, not raw credentials.
 
@@ -127,12 +140,23 @@ Prefer stable diagnostic codes over prose-only messages. The message can improve
 Use the validation API before initialization and fail deployment if the report contains errors.
 
 <Warning>
-This error check does not catch an unknown or unregistered component kind. Under
-the default `unknown_component="warn"` policy that case is reported as a warning,
-not an error, so the check below passes while `initialize()` still raises for a
-kind that is not registered. Register every kind before initialization, or set
+This error check does not catch an enabled unknown or unregistered component
+kind. Under the default `unknown_component="warn"` policy that case is reported
+as a warning, not an error, so the check below passes while `initialize()` still
+raises for an enabled kind that is not registered. Register every enabled kind
+before initialization, or set
 `unknown_component="error"` to make validation fail on unknown kinds.
 </Warning>
+
+`validate()` checks only the configuration you pass to it. `initialize()` also
+layers discovered `plugins.toml` configuration. A preflight report can pass
+while the effective startup configuration activates or rejects other
+components. Refer to [Plugin Configuration
+Files](/configure-plugins/plugin-configuration-files) when file discovery
+participates in deployment.
+
+Append the following validation step to the matching configuration example
+above. Each example stops deployment when validation reports an error:
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -147,8 +171,8 @@ if has_errors:
 </Tab>
 
 <Tab title="Node.js" language="node">
-```ts
-import * as plugin from 'nemo-relay-node/plugin';
+```js
+const plugin = require('nemo-relay-node/plugin');
 
 const report = plugin.validate(config);
 const hasErrors = report.diagnostics.some((diagnostic) => diagnostic.level === 'error');
@@ -164,7 +188,7 @@ use nemo_relay::plugin::validate_plugin_config;
 
 let report = validate_plugin_config(&config);
 if report.has_errors() {
-    anyhow::bail!("{:?}", report.diagnostics);
+    panic!("{:?}", report.diagnostics);
 }
 ```
 </Tab>
@@ -178,7 +202,7 @@ Before sharing a plugin config contract:
 1. Validate the smallest correct config.
 2. Validate a config with each required field missing.
 3. Validate unsupported enum or mode values.
-4. Validate unknown fields under each supported policy.
+4. Validate unknown component-local fields and their diagnostic levels.
 5. Validate disabled components with invalid config.
 6. Confirm diagnostics identify the component and field that needs action.
 
@@ -195,6 +219,6 @@ Check these symptoms first when the workflow does not behave as expected.
 
 Use these links to continue from this workflow into the next related task.
 
-- Register runtime behavior with [Register Plugin Behavior](/build-plugins/register-behavior).
-- Add rollout controls with [Design Plugin Configuration](/build-plugins/advanced-configuration).
-- Review concrete validation patterns in [Code Examples](/build-plugins/code-examples).
+- Register runtime behavior with [Register Plugin Behavior](/build-plugins/language-binding/register-behavior).
+- Add rollout controls with [Design Plugin Configuration](/build-plugins/language-binding/advanced-configuration).
+- Review concrete validation patterns in [Code Examples](/build-plugins/language-binding/code-examples).

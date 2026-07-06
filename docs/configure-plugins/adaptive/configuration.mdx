@@ -1,7 +1,7 @@
 ---
 title: "Adaptive Configuration"
 sidebar-title: "Configuration"
-description: ""
+description: "Configure the built-in Adaptive component, including state, telemetry, hints, and ACG."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -16,8 +16,8 @@ Field names stay `snake_case` in every binding and in `plugins.toml`, even when
 language helper functions use language-native naming conventions.
 
 For plugin file discovery, precedence, merge behavior, editor controls, and
-gateway conflict rules, see
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+gateway conflict rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
 ## Component Shape
 
@@ -34,8 +34,8 @@ The top-level adaptive object contains:
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
-The requested area pages cover [Adaptive Cache Governor (ACG)](/adaptive-plugin/acg) and
-[Adaptive Hints](/adaptive-plugin/adaptive-hints). State, telemetry, tool parallelism, and
+The requested area pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg) and
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints). State, telemetry, tool parallelism, and
 policy remain whole-plugin settings:
 
 - Use `state.backend.kind = "in_memory"` for local experiments.
@@ -47,6 +47,8 @@ policy remain whole-plugin settings:
 - Keep `policy.unsupported_value = "error"` for rollout safety.
 
 ## `plugins.toml` Example
+
+Add the following whole-plugin Adaptive configuration to `plugins.toml`:
 
 ```toml
 version = 1
@@ -98,9 +100,19 @@ requests can be observed without provider-specific cache translation.
 
 ## Per-Language Plugin Configuration
 
+The following examples configure and activate the Adaptive component through a
+language binding:
+
+`validate()` checks only the supplied in-memory object. `initialize()` also
+layers discovered `plugins.toml` configuration. For effective file-backed
+validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+and run the gateway with the same configuration path that production uses.
+
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 import nemo_relay
 
 adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
@@ -127,7 +139,7 @@ report = nemo_relay.plugin.validate(plugin_config)
 if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
-active = await nemo_relay.plugin.initialize(plugin_config)
+active = asyncio.run(nemo_relay.plugin.initialize(plugin_config))
 ```
 </Tab>
 
@@ -157,14 +169,21 @@ if (report.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
   throw new Error(JSON.stringify(report.diagnostics));
 }
 
-const active = await plugin.initialize(pluginConfig);
+plugin.initialize(pluginConfig).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::plugin::{initialize_plugins, validate_plugin_config, PluginConfig};
-use nemo_relay_adaptive::plugin_component::ComponentSpec;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
+use nemo_relay_adaptive::plugin_component::{register_adaptive_component, ComponentSpec};
 use nemo_relay_adaptive::{
     AdaptiveConfig,
     BackendSpec,
@@ -197,10 +216,17 @@ adaptive.acg = Some(AcgComponentConfig {
 let mut plugin_config = PluginConfig::default();
 plugin_config.components.push(ComponentSpec::new(adaptive).into());
 
+register_adaptive_component()?;
 let report = validate_plugin_config(&plugin_config);
 assert!(!report.has_errors());
 
-let active = initialize_plugins(plugin_config).await?;
+let _active = initialize_plugins(plugin_config).await?;
+
+// Run instrumented application work here.
+
+clear_plugin_configuration()?;
+Ok(())
+}
 ```
 </Tab>
 
@@ -214,6 +240,8 @@ directly instead of activating the top-level plugin component.
 <Tabs>
 <Tab title="Python" language="python">
 ```python
+import asyncio
+
 import nemo_relay
 
 adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
@@ -233,12 +261,12 @@ adaptive_config = nemo_relay.adaptive.AdaptiveConfig(
 )
 
 runtime = nemo_relay.adaptive.AdaptiveRuntime(adaptive_config.to_dict())
-await runtime.register()
+asyncio.run(runtime.register())
 try:
     # Run instrumented application work here.
     runtime.wait_for_idle()
 finally:
-    await runtime.shutdown()
+    asyncio.run(runtime.shutdown())
 ```
 </Tab>
 
@@ -250,6 +278,8 @@ activating adaptive behavior from Node.js.
 
 <Tab title="Rust" language="rust">
 ```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, AdaptiveHintsComponentConfig, AdaptiveRuntime,
     BackendSpec, StateConfig, TelemetryComponentConfig, ToolParallelismComponentConfig,
@@ -281,12 +311,14 @@ runtime.register().await?;
 
 runtime.wait_for_idle();
 runtime.shutdown().await?;
+Ok(())
+}
 ```
 </Tab>
 
 </Tabs>
 
-## Validation And Teardown
+## Validation and Teardown
 
 Validate plugin configuration before initialization. Disabled adaptive
 components are still validated, which lets operators prepare a rollout before

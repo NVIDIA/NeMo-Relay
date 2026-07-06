@@ -1,6 +1,6 @@
 ---
 title: "Provider Response Codecs and Model Pricing"
-description: ""
+description: "Normalize LLM response data with provider codecs and configure model pricing estimates."
 position: 8
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -18,7 +18,7 @@ Response codecs are observability-only:
 - They do not rewrite the value returned to the application.
 - They do not run response middleware.
 - They attach normalized response data to lifecycle events for subscribers and exporters.
-- Decode failures are non-fatal; the LLM call still returns the provider response and the end event is emitted without an annotation.
+- Decode failures are non-fatal. The LLM call still returns the provider response, and Relay emits the end event without an annotation.
 
 ## Before You Start
 
@@ -40,7 +40,7 @@ Response codecs normalize provider output into fields that subscribers can inspe
 | `message` | Primary assistant message content. |
 | `tool_calls` | Tool calls requested by the model. |
 | `finish_reason` | Normalized completion reason, such as `complete`, `length`, `tool_use`, or `content_filter`. |
-| `usage` | Token accounting, including cache-read and cache-write counts when available. May also include normalized `cost` when the provider reports cost or Relay can estimate it from known model pricing. |
+| `usage` | Token accounting, including cache-read and cache-write counts when available. It can also include normalized `cost` when the provider reports cost or Relay can estimate it from known model pricing. |
 | `api_specific` | Provider-specific fields that do not fit the common model. |
 | `extra` | Additional unmodeled response fields. |
 
@@ -69,8 +69,8 @@ Unknown model pricing and missing token data are non-fatal: Relay omits the cost
 field and still exports token metrics and response annotations.
 
 Relay resolves model pricing through an active `PricingResolver` source chain.
-Provider- or framework-reported cost remains authoritative; the resolver is
-used only when `Usage.cost` is missing. Relay does not ship provider price data
+Provider- or framework-reported cost remains authoritative. The resolver runs
+only when `Usage.cost` is missing. Relay does not ship provider price data
 by default: estimates require a configured inline, file, or embedding-provided
 model pricing source. With no configured source, every model is treated as
 unknown for model pricing.
@@ -78,8 +78,8 @@ unknown for model pricing.
 Model pricing is runtime state, not a CLI-only feature. Any host that initializes
 Relay plugins can activate the built-in `pricing` component before it runs
 managed LLM calls. This includes application code, eval harnesses, custom
-agents, and framework integrations. The CLI commands below
-are a file-management convenience for the local gateway; embedded hosts can pass
+agents, and framework integrations. The CLI commands below are a
+file-management convenience for the local gateway. Embedded hosts can pass
 the same component config directly through the plugin APIs.
 
 Source precedence is deployment controlled:
@@ -117,7 +117,7 @@ Each catalog entry declares:
 - `provider` and canonical `model_id`.
 - `aliases` for dated or provider-specific model IDs.
 - `currency`, defaulting to `USD`.
-- `unit`, defaulting to `per_token`. Relay estimates only `per_token` entries in this version; `per_request`, `per_second`, and `gpu_hour` are representable for future source integrations but are not estimated.
+- `unit`, defaulting to `per_token`. Relay estimates only `per_token` entries in this version. `per_request`, `per_second`, and `gpu_hour` are representable for future source integrations but are not estimated.
 - `rates` per one million input, output, cache-read, and cache-write tokens for flat `per_token` entries.
 - `rate_schedule` for data-driven threshold-based model pricing, such as models whose full-request input/output rates change after a prompt-token threshold.
 - `prompt_cache.read_accounting`, which tells Relay whether cache-read tokens are already included in prompt tokens.
@@ -127,7 +127,7 @@ Relay validates catalogs at startup and rejects duplicate canonical IDs or
 aliases within the same normalized provider/model key. The same model ID can
 appear under distinct providers, such as `openai/gpt-4o-mini` and
 `azure/openai/gpt-4o-mini`. Adding a model should be a catalog/source update
-plus tests; it should not require adding another Rust `match` arm.
+plus tests. It should not require adding another Rust `match` arm.
 
 Use the CLI to validate catalog files and manage file-backed model pricing sources:
 
@@ -139,14 +139,14 @@ nemo-relay model-pricing resolve gpt-4o-mini --provider openai --prompt-tokens 1
 ```
 
 `model-pricing init` creates or enables the `pricing` plugin component in the
-selected `plugins.toml`. The initialized component has an empty `sources` list;
-use `model-pricing add-source` or an inline config edit to provide model pricing data.
+selected `plugins.toml`. The initialized component has an empty `sources` list.
+Use `model-pricing add-source` or an inline config edit to provide model pricing data.
 
 `model-pricing add-source` validates the referenced JSON catalog before updating
 `plugins.toml`. It creates the `pricing` component if needed and prepends the new
 file source by default, making it the highest-priority source in that scope. Use
 `--append` when the file should be a lower-priority fallback. Both commands
-default to user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`; pass
+default to user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Pass
 `--project` for `.nemo-relay/plugins.toml` or `--global` for
 `/etc/nemo-relay/plugins.toml`.
 
@@ -154,7 +154,7 @@ default to user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`; pass
 reports the winning catalog source, matched provider/model, and, when token
 counts are supplied, the estimated total cost. The source line is one of
 `file:<path>` or `inline:<index>`, which makes overlapping project/user/fleet
-entries debuggable. This is a dry diagnostic command; it does not mutate
+entries debuggable. This is a dry diagnostic command. It does not mutate
 configuration.
 
 `nemo-relay doctor` also validates enabled model pricing sources and reports missing,
@@ -172,7 +172,7 @@ configured while still allowing generic model pricing to apply to routed names.
 
 For threshold-based model pricing, use `rate_schedule.type = "prompt_token_threshold"`.
 Relay selects exactly one tier from `prompt_tokens` and applies that tier to the
-full request; it does not price only the overflow tokens at the higher rate.
+full request. It does not price only the overflow tokens at the higher rate.
 This matches providers that publish "short context" and "long context" prices
 for the entire request/session. If `prompt_tokens` is missing for a thresholded
 entry, Relay omits the estimate instead of guessing.
@@ -338,7 +338,7 @@ No exporter emits a running cross-call total other than ATIF `final_metrics`.
 
 ### Usage Fields
 
-All normalized fields are optional. A provider may omit a field, while a codec can
+All normalized fields are optional. A provider can omit a field, while a codec can
 compute one (such as Anthropic's `total_tokens`) and configured pricing can
 synthesize `cost`. `Usage` has no catch-all field, so provider usage fields that
 Relay does not model are dropped.
@@ -386,7 +386,7 @@ currencies.
 
 ### Exporter Field Mapping
 
-Each exporter projects `usage`/`cost` differently; projections do not change the
+Each exporter projects `usage`/`cost` differently. Projections do not change the
 canonical fields above.
 
 | | ATOF | ATIF step / `final_metrics` | OpenInference | OpenTelemetry |
@@ -402,15 +402,15 @@ only when it is USD-denominated and otherwise omit it. ATIF derives metrics from
 codec-normalized usage where available and fills missing supported fields from the
 raw payload. `metrics.extra` holds only unmapped keys from the raw
 `usage`/`token_usage` object (for example reasoning token counts, or a raw
-`total_tokens`), and only when the step already has a recognized metric;
-normalized-only or total-only values are not projected.
+`total_tokens`), and only when the step already has a recognized metric.
+Normalized-only or total-only values are not projected.
 
 ### Stability
 
 The `Usage` and `CostEstimate` field names and meanings, and the exporter
 mappings above, are stable as of ATOF `0.1` (ATIF schema `ATIF-v1.7`, pricing
-catalog `version: 1`). Future NeMo Relay releases may add new optional fields to
-the serialized JSON/ATOF shapes; renames or removals are breaking changes and are
+catalog `version: 1`). Future NeMo Relay releases can add new optional fields to
+the serialized JSON/ATOF shapes. Renames or removals are breaking changes and are
 called out in release notes.
 
 <Note>
@@ -419,7 +419,7 @@ exhaustive, so adding a field or variant is a source-breaking change for Rust
 consumers.
 </Note>
 
-The following behaviors are intentional in this release but may change later:
+The following behaviors are intentional in this release but can change later:
 
 - OpenTelemetry emits cost only, not token counts.
 - ATIF and OpenInference report cost only in USD.
@@ -730,4 +730,4 @@ Use these links to continue from this workflow into the next related task.
 
 - Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for request-side provider codecs and full request/response examples.
 - Use [Wrap LLM Calls](/integrate-into-frameworks/wrap-llm-calls) to add the managed LLM boundary first.
-- Use [Observability](/observability-plugin/about) after annotations are visible in local subscribers.
+- Use [Observability](/configure-plugins/observability/about) after annotations are visible in local subscribers.

@@ -1,0 +1,150 @@
+---
+title: "gRPC Worker Plugins (Rust)"
+description: "Build, package, and register out-of-process Rust gRPC worker plugins for NeMo Relay."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `nemo-relay-worker` crate to build an out-of-process Rust plugin. The
+SDK implements the `grpc-v1` service, exchanges JSON envelopes with Relay,
+handles cancellation, and provides typed registration and host-runtime helpers.
+Refer to [gRPC Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about)
+to compare the Rust, Python, and command worker runtimes.
+
+## Create the Project
+
+Create a binary Rust project with the following `Cargo.toml` file:
+
+```toml
+[package]
+name = "examples-rust-worker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nemo-relay-worker = "0.5.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+## Implement the Worker
+
+Add the following implementation to `src/main.rs`:
+
+```rust
+use nemo_relay_worker::{Json, PluginContext, Result, WorkerPlugin, serve_plugin};
+
+struct ExampleWorker;
+
+impl WorkerPlugin for ExampleWorker {
+    fn plugin_id(&self) -> &str {
+        "examples.rust_worker"
+    }
+
+    fn validate(&self, config: &Json) -> Vec<nemo_relay_worker::ConfigDiagnostic> {
+        let _ = config;
+        Vec::new()
+    }
+
+    fn register(&self, context: &mut PluginContext, _config: &Json) -> Result<()> {
+        context.register_subscriber("example", |event| {
+            let _ = event.name();
+        });
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    serve_plugin(ExampleWorker).await
+}
+```
+
+Relay provides the worker and host endpoints, activation ID, plugin ID, and
+activation token through environment variables. The Rust SDK derives plugin
+identity from `WorkerPlugin::plugin_id()`; custom launchers can use
+`NEMO_RELAY_PLUGIN_ID`. `serve_plugin` consumes the endpoints and activation
+credentials and runs until Relay requests shutdown. Do not start the worker
+directly for normal operation.
+
+## Package the Worker
+
+Create `relay-plugin.toml` with the following content. The artifact digest must
+match the executable that operators receive:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+artifact = "target/release/examples-rust-worker"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+runtime = "rust"
+entrypoint = "target/release/examples-rust-worker"
+```
+
+Build the executable with the following command:
+
+```bash
+cargo build --release
+```
+
+Calculate the SHA-256 digest of the executable with the following command:
+This command requires Python 3.
+
+```bash
+python - <<'PY'
+from hashlib import sha256
+from pathlib import Path
+
+artifact = Path("target/release/examples-rust-worker")
+print(f"sha256:{sha256(artifact.read_bytes()).hexdigest()}")
+PY
+```
+
+Use the following PowerShell command on Windows:
+
+```powershell
+$artifact = ".\\target\\release\\examples-rust-worker.exe"
+$hash = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLower()
+"sha256:$hash"
+```
+
+Replace `sha256:<artifact-sha256>` with the output before you register the
+plugin. On Windows, use the `.exe` artifact name in `source.artifact`,
+`load.entrypoint`, and the digest command.
+
+## Register the Worker
+
+Register, enable, and validate the worker with the following commands:
+
+```bash
+nemo-relay plugins add ./relay-plugin.toml
+nemo-relay plugins enable examples.rust_worker
+nemo-relay plugins validate examples.rust_worker
+```
+
+## Related Topics
+
+- Refer to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+  for lifecycle and trust-policy configuration.
+- Refer to [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
+  for the lower-level protocol contract.

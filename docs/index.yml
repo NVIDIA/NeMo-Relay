@@ -22,21 +22,9 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - folder: ./observability-plugin
-    title: "Observability Plugin"
-    slug: observability-plugin
-    title-source: frontmatter
-  - folder: ./adaptive-plugin
-    title: "Adaptive Plugin"
-    slug: adaptive-plugin
-    title-source: frontmatter
-  - folder: ./nemo-guardrails-plugin
-    title: "NeMo Guardrails Plugin"
-    slug: nemo-guardrails-plugin
-    title-source: frontmatter
-  - folder: ./pii-redaction-plugin
-    title: "PII Redaction Plugin"
-    slug: pii-redaction-plugin
+  - folder: ./configure-plugins
+    title: "Configure Plugins"
+    slug: configure-plugins
     title-source: frontmatter
   - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"

@@ -1,16 +1,20 @@
 ---
 title: "Design Plugin Configuration"
-description: ""
+description: "Design stable configuration, validation, rollout, and lifecycle behavior for NeMo Relay plugins."
 position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this guide when a plugin needs more than a single flag or string to configure it safely.
+Use this guide to safely configure a plugin that needs more than a single flag
+or string.
 
 ## What You Design
 
-You will define the plugin's configuration contract, validation rules, advanced configuration patterns, and runtime registration plan. The goal is to make plugin activation predictable for operators while keeping runtime objects and business logic inside the plugin implementation.
+Define the plugin's configuration contract, validation rules, advanced
+configuration patterns, and runtime registration plan. Keep activation
+predictable for operators while keeping runtime objects and business logic in
+the plugin implementation.
 
 ## Plugin Shape and Requirements
 
@@ -52,18 +56,25 @@ Keep the component config portable:
 - Put clients, callbacks, file handles, and provider SDK objects in plugin code, not config.
 - Include a component-local config version when the plugin's own schema needs to evolve independently.
 - Prefer references to secrets or endpoints over embedding sensitive values directly.
-- Treat `enabled: false` as disabled for activation, not as a reason to skip validation.
+- Treat a component whose `enabled` field has the value `false` as disabled for
+  activation, not as a reason to skip validation.
+
+The top-level `policy` controls validation that Relay handles. For a custom
+plugin's component-local `config`, define unknown-field and unsupported-value
+behavior in the plugin's `validate()` method.
 
 ## Configuration Validation
 
-Validation should be deterministic and side-effect free. It should inspect config and return diagnostics; it should not register middleware, open network connections, create clients, or mutate process state.
+Keep validation deterministic and side-effect free. Inspect configuration and
+return diagnostics. Do not register middleware, open network connections,
+create clients, or change process state.
 
 Check these areas:
 
 - Required fields are present.
 - Field types match the supported shape.
-- Unknown fields are reported according to policy.
-- Known fields have supported values.
+- The plugin reports unknown component-local fields with stable diagnostics.
+- The plugin reports unsupported component-local values with stable diagnostics.
 - Cross-field combinations make sense.
 - Environment-specific limitations are warnings unless they would make activation fail.
 
@@ -93,7 +104,8 @@ Use a field such as `config.version` when the plugin's config schema needs indep
 
 ### Multiple Component Instances
 
-When a plugin can be instantiated more than once, require explicit instance identity in config:
+If your plugin supports multiple instances, require an explicit instance
+identity in configuration:
 
 ```json
 {
@@ -106,7 +118,9 @@ When a plugin can be instantiated more than once, require explicit instance iden
 }
 ```
 
-Use the instance identity in logs, diagnostics, and downstream resource names. Let the NeMo Relay plugin system qualify runtime registration names; do not hand-build global names to avoid collisions.
+Use the instance identity in logs, diagnostics, and downstream resource names.
+Let the NeMo Relay plugin system qualify runtime registration names. Do not
+hand-build global names to avoid collisions.
 
 ### Presets and Overrides
 
@@ -149,7 +163,9 @@ Use `PluginContext` to register:
 - LLM guardrails
 - LLM request, execution, and stream execution intercepts
 
-The context gives the plugin system enough information to qualify runtime names and roll back partial setup if registration fails. Put all runtime registration work inside the registration hook so rollback can clean up correctly.
+The context gives the plugin system enough information to qualify runtime names
+and roll back partial setup if registration fails. Put all runtime registration
+work in the registration hook so rollback can clean up correctly.
 
 Avoid these patterns:
 
@@ -165,7 +181,7 @@ Before publishing a plugin config contract:
 1. Validate the smallest correct config.
 2. Validate a config with each required field missing.
 3. Validate each unsupported enum or mode.
-4. Validate unknown fields under each supported policy.
+4. Validate unknown component-local fields and their diagnostic levels.
 5. Initialize a valid config and confirm expected middleware or subscribers are active.
 6. Force a registration failure and confirm partial setup is rolled back.
 
@@ -173,7 +189,7 @@ Before publishing a plugin config contract:
 
 Use these links to continue from this workflow into the next related task.
 
-- Build the first plugin with [Define a Plugin](/build-plugins/basic-guide).
-- Validate plugin config with [Validate Plugin Configuration](/build-plugins/validate-configuration).
-- Register runtime behavior with [Register Plugin Behavior](/build-plugins/register-behavior).
-- Review reusable patterns in [Code Examples](/build-plugins/code-examples).
+- Build the first plugin with [Language Binding Plugins](/build-plugins/language-binding/about).
+- Validate plugin config with [Validate Plugin Configuration](/build-plugins/language-binding/validate-configuration).
+- Register runtime behavior with [Register Plugin Behavior](/build-plugins/language-binding/register-behavior).
+- Review reusable patterns in [Code Examples](/build-plugins/language-binding/code-examples).
