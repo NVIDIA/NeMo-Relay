@@ -79,6 +79,19 @@ function initialize(config) {
 }
 
 /**
+ * Load and activate explicitly resolved dynamic plugins.
+ *
+ * @param {object} config - Base plugin configuration document.
+ * @param {Array<object>} specs - Native-library or worker plugin load specifications.
+ * @returns {Promise<object>} An owned activation with `report`, `active`, and `close()`.
+ * @remarks Keep the returned activation alive while its callbacks may run and
+ * call `close()` for deterministic teardown.
+ */
+function activateDynamicPlugins(config, specs) {
+  return lib.activateDynamicPlugins(config, specs);
+}
+
+/**
  * Clear the active plugin configuration.
  *
  * Removes the currently active component registrations while leaving plugin
@@ -161,6 +174,7 @@ module.exports = {
   ComponentSpec,
   validate,
   initialize,
+  activateDynamicPlugins,
   clear,
   report,
   listKinds,
