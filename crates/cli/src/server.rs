@@ -12,13 +12,8 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
-};
-use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-};
+use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::dynamic::{DynamicPluginActivationSpec, PluginHostActivation};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 #[cfg(feature = "switchyard")]
@@ -156,7 +151,7 @@ async fn serve_listener_with_dynamic_inner(
     shutdown_mode: Option<ShutdownMode>,
 ) -> Result<(), CliError> {
     let plugin_activation =
-        PluginActivation::initialize(config.plugin_config.clone(), dynamic_plugins).await?;
+        initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
     let state = AppState::new(config);
     let sessions = state.sessions.clone();
     let last_activity = state.last_activity.clone();
@@ -191,7 +186,13 @@ async fn serve_listener_with_dynamic_inner(
     };
     let close_result = sessions.close_all("gateway_shutdown").await;
     let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
-    let clear_result = plugin_activation.clear();
+    let clear_result = plugin_activation
+        .map(|activation| {
+            activation
+                .clear()
+                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))
+        })
+        .unwrap_or(Ok(()));
     if let Err(serve_error) = serve_result {
         if let Err(close_error) = close_result {
             eprintln!("session teardown failed after server error: {close_error}");
@@ -321,137 +322,54 @@ async fn idle_shutdown_future(
     }
 }
 
-struct PluginActivation {
-    active: bool,
-    native: Option<NativePluginActivation>,
-    worker: Option<WorkerPluginActivation>,
-}
-
-impl PluginActivation {
-    async fn initialize(
-        config: Option<Value>,
-        dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
-    ) -> Result<Self, CliError> {
-        if config.is_none() && dynamic_plugins.is_empty() {
-            return Ok(Self {
-                active: false,
-                native: None,
-                worker: None,
-            });
-        };
-        register_adaptive_component().map_err(|error| {
-            CliError::Config(format!("adaptive plugin registration failed: {error}"))
-        })?;
-        register_pii_redaction_component().map_err(|error| {
-            CliError::Config(format!("PII redaction plugin registration failed: {error}"))
-        })?;
-        #[cfg(feature = "switchyard")]
-        register_switchyard_component().map_err(|error| {
-            CliError::Config(format!("Switchyard plugin registration failed: {error}"))
-        })?;
-        let native_specs = dynamic_plugins
-            .iter()
-            .filter(|plugin| plugin.kind == DynamicPluginKind::RustDynamic)
-            .map(|plugin| {
-                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
-                    CliError::Config(format!(
-                        "native dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                        plugin.plugin_id
-                    ))
-                })?;
-                Ok(NativePluginLoadSpec {
-                    plugin_id: plugin.plugin_id.clone(),
-                    manifest_ref,
-                })
+async fn initialize_plugin_host(
+    config: Option<Value>,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+) -> Result<Option<PluginHostActivation>, CliError> {
+    if config.is_none() && dynamic_plugins.is_empty() {
+        return Ok(None);
+    }
+    register_adaptive_component().map_err(|error| {
+        CliError::Config(format!("adaptive plugin registration failed: {error}"))
+    })?;
+    register_pii_redaction_component().map_err(|error| {
+        CliError::Config(format!("PII redaction plugin registration failed: {error}"))
+    })?;
+    #[cfg(feature = "switchyard")]
+    register_switchyard_component().map_err(|error| {
+        CliError::Config(format!("Switchyard plugin registration failed: {error}"))
+    })?;
+    let plugin_config: PluginConfig = match config {
+        Some(config) => serde_json::from_value(config)
+            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
+        None => PluginConfig::default(),
+    };
+    #[cfg(feature = "switchyard")]
+    validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
+        CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
+    })?;
+    let specs = dynamic_plugins
+        .into_iter()
+        .map(|plugin| {
+            let manifest_ref = plugin.manifest_ref.ok_or_else(|| {
+                CliError::Config(format!(
+                    "dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                    plugin.plugin_id
+                ))
+            })?;
+            Ok(DynamicPluginActivationSpec {
+                plugin_id: plugin.plugin_id,
+                kind: plugin.kind,
+                manifest_ref,
+                environment_ref: plugin.environment_ref,
+                config: plugin.config,
             })
-            .collect::<Result<Vec<_>, CliError>>()?;
-        let worker_specs = dynamic_plugins
-            .iter()
-            .filter(|plugin| plugin.kind == DynamicPluginKind::Worker)
-            .map(|plugin| {
-                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
-                    CliError::Config(format!(
-                        "worker dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                        plugin.plugin_id
-                    ))
-                })?;
-                Ok(WorkerPluginLoadSpec {
-                    plugin_id: plugin.plugin_id.clone(),
-                    manifest_ref,
-                    environment_ref: plugin.environment_ref.clone(),
-                    config: plugin.config.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-        let native =
-            if native_specs.is_empty() {
-                None
-            } else {
-                Some(load_native_plugins(native_specs).map_err(|error| {
-                    CliError::Config(format!("native plugin load failed: {error}"))
-                })?)
-            };
-        let worker =
-            if worker_specs.is_empty() {
-                None
-            } else {
-                Some(load_worker_plugins(worker_specs).map_err(|error| {
-                    CliError::Config(format!("worker plugin load failed: {error}"))
-                })?)
-            };
-        // Gateway already resolved its config; activate exactly (no re-discovery).
-        let mut plugin_config: PluginConfig = match config {
-            Some(config) => serde_json::from_value(config)
-                .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
-            None => PluginConfig::default(),
-        };
-        plugin_config
-            .components
-            .extend(
-                dynamic_plugins
-                    .into_iter()
-                    .map(|plugin| PluginComponentSpec {
-                        kind: plugin.plugin_id,
-                        enabled: true,
-                        config: plugin.config,
-                    }),
-            );
-        #[cfg(feature = "switchyard")]
-        validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
-            CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
-        })?;
-        initialize_plugins_exact(plugin_config)
-            .await
-            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-        Ok(Self {
-            active: true,
-            native,
-            worker,
         })
-    }
-
-    fn clear(mut self) -> Result<(), CliError> {
-        let result = if self.active {
-            self.active = false;
-            clear_plugin_configuration()
-                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))?;
-            Ok(())
-        } else {
-            Ok(())
-        };
-        self.native.take();
-        self.worker.take();
-        result
-    }
-}
-
-impl Drop for PluginActivation {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = clear_plugin_configuration();
-            self.active = false;
-        }
-    }
+        .collect::<Result<Vec<_>, CliError>>()?;
+    let (activation, _) = PluginHostActivation::activate(plugin_config, specs)
+        .await
+        .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+    Ok(Some(activation))
 }
 
 // Normalizes a Codex hook payload, applies all resulting events before responding, and returns the
