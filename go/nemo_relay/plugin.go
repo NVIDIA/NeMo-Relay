@@ -8,6 +8,7 @@ package nemo_relay
 #include <stdlib.h>
 
 typedef struct FfiPluginContext FfiPluginContext;
+typedef struct FfiPluginActivation FfiPluginActivation;
 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);
@@ -27,6 +28,9 @@ typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_
 
 extern int32_t nemo_relay_validate_plugin_config(const char* config_json, char** out_json);
 extern int32_t nemo_relay_initialize_plugins(const char* config_json, char** out_json);
+extern int32_t nemo_relay_activate_dynamic_plugins(const char* config_json, const char* dynamic_plugins_json, FfiPluginActivation** out_activation, char** out_report_json);
+extern int32_t nemo_relay_plugin_activation_clear(FfiPluginActivation* activation);
+extern void nemo_relay_plugin_activation_free(FfiPluginActivation** activation);
 extern int32_t nemo_relay_clear_plugin_configuration(void);
 extern int32_t nemo_relay_active_plugin_report_json(char** out_json);
 extern int32_t nemo_relay_list_plugin_kinds_json(char** out_json);
@@ -68,6 +72,8 @@ import "C"
 
 import (
 	"errors"
+	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -107,6 +113,55 @@ var (
 		return checkedJSONString(int32(status), func() string { return C.GoString(out) }, func() {
 			C.nemo_relay_string_free(out)
 		})
+	}
+	activateDynamicPluginsJSON = func(configJSON, dynamicPluginsJSON string) (unsafe.Pointer, string, error) {
+		cConfig := C.CString(configJSON)
+		cDynamicPlugins := C.CString(dynamicPluginsJSON)
+		defer C.free(unsafe.Pointer(cConfig))
+		defer C.free(unsafe.Pointer(cDynamicPlugins))
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		var activation *C.FfiPluginActivation
+		var report *C.char
+		status := C.nemo_relay_activate_dynamic_plugins(
+			cConfig,
+			cDynamicPlugins,
+			&activation,
+			&report,
+		)
+		if err := checkStatus(status); err != nil {
+			if report != nil {
+				C.nemo_relay_string_free(report)
+			}
+			if activation != nil {
+				C.nemo_relay_plugin_activation_clear(activation)
+				C.nemo_relay_plugin_activation_free(&activation)
+			}
+			return nil, "", err
+		}
+		if activation == nil || report == nil {
+			if report != nil {
+				C.nemo_relay_string_free(report)
+			}
+			if activation != nil {
+				C.nemo_relay_plugin_activation_clear(activation)
+				C.nemo_relay_plugin_activation_free(&activation)
+			}
+			return nil, "", errors.New("dynamic plugin activation returned incomplete outputs")
+		}
+		defer C.nemo_relay_string_free(report)
+		return unsafe.Pointer(activation), C.GoString(report), nil
+	}
+	clearPluginActivation = func(ptr unsafe.Pointer) error {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		status := C.nemo_relay_plugin_activation_clear((*C.FfiPluginActivation)(ptr))
+		return checkStatus(status)
+	}
+	freePluginActivation = func(ptr unsafe.Pointer) {
+		activation := (*C.FfiPluginActivation)(ptr)
+		C.nemo_relay_plugin_activation_free(&activation)
 	}
 	activePluginReportJSON = func() (string, error) {
 		var out *C.char
@@ -174,6 +229,35 @@ type PluginConfig struct {
 	Version    uint32                `json:"version,omitempty"`
 	Components []PluginComponentSpec `json:"components,omitempty"`
 	Policy     *ConfigPolicy         `json:"policy,omitempty"`
+}
+
+// DynamicPluginKind identifies the runtime lane used by a dynamic plugin.
+type DynamicPluginKind string
+
+const (
+	// DynamicPluginKindRustDynamic loads an ABI-compatible native shared library.
+	DynamicPluginKindRustDynamic DynamicPluginKind = "rust_dynamic"
+	// DynamicPluginKindWorker starts an isolated worker plugin runtime.
+	DynamicPluginKindWorker DynamicPluginKind = "worker"
+)
+
+// DynamicPluginActivationSpec describes one explicitly resolved plugin to load.
+// ManifestRef and EnvironmentRef are resolved by the embedding application;
+// Relay does not perform installation-state discovery through this API.
+type DynamicPluginActivationSpec struct {
+	PluginID       string            `json:"plugin_id"`
+	Kind           DynamicPluginKind `json:"kind"`
+	ManifestRef    string            `json:"manifest_ref"`
+	EnvironmentRef *string           `json:"environment_ref,omitempty"`
+	Config         map[string]any    `json:"config,omitempty"`
+}
+
+// PluginActivation owns the runtime registrations, native libraries, and
+// workers created by ActivateDynamicPlugins. A PluginActivation must not be
+// copied after first use.
+type PluginActivation struct {
+	mu  sync.Mutex
+	ptr unsafe.Pointer
 }
 
 // PluginContext is the component-scoped registration context passed to plugins.
@@ -260,6 +344,66 @@ func InitializePlugins(config PluginConfig) (ConfigReport, error) {
 		return ConfigReport{}, err
 	}
 	return report, nil
+}
+
+// ActivateDynamicPlugins loads explicit dynamic plugins and activates them
+// together with the supplied base plugin configuration as one transaction.
+//
+// The caller must retain the returned activation for as long as plugin
+// callbacks may run and call Close during orderly shutdown.
+func ActivateDynamicPlugins(
+	config PluginConfig,
+	dynamicPlugins []DynamicPluginActivationSpec,
+) (*PluginActivation, ConfigReport, error) {
+	configPayload, err := jsonMarshal(config)
+	if err != nil {
+		return nil, ConfigReport{}, err
+	}
+	if dynamicPlugins == nil {
+		dynamicPlugins = []DynamicPluginActivationSpec{}
+	}
+	dynamicPluginsPayload, err := jsonMarshal(dynamicPlugins)
+	if err != nil {
+		return nil, ConfigReport{}, err
+	}
+
+	ptr, rawReport, err := activateDynamicPluginsJSON(
+		string(configPayload),
+		string(dynamicPluginsPayload),
+	)
+	if err != nil {
+		return nil, ConfigReport{}, err
+	}
+	activation := &PluginActivation{ptr: ptr}
+	var report ConfigReport
+	if err := jsonUnmarshal([]byte(rawReport), &report); err != nil {
+		_ = activation.Close()
+		return nil, ConfigReport{}, err
+	}
+	runtime.SetFinalizer(activation, func(activation *PluginActivation) {
+		_ = activation.Close()
+	})
+	return activation, report, nil
+}
+
+// Close removes callbacks and subscribers before unloading plugin libraries
+// and workers. It is safe to call Close repeatedly or on a nil activation.
+func (activation *PluginActivation) Close() error {
+	if activation == nil {
+		return nil
+	}
+	activation.mu.Lock()
+	defer activation.mu.Unlock()
+	if activation.ptr == nil {
+		return nil
+	}
+
+	runtime.SetFinalizer(activation, nil)
+	ptr := activation.ptr
+	activation.ptr = nil
+	err := clearPluginActivation(ptr)
+	freePluginActivation(ptr)
+	return err
 }
 
 // ClearPluginConfiguration removes all active plugin component registrations.

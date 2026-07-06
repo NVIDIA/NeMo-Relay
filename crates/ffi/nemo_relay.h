@@ -160,6 +160,14 @@ typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
 
 /**
+ * Opaque owned dynamic plugin host activation.
+ *
+ * The inner option allows explicit activation cleanup to be idempotent while
+ * retaining a stable allocation until the foreign caller frees the handle.
+ */
+typedef struct FfiPluginActivation FfiPluginActivation;
+
+/**
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
@@ -1409,6 +1417,38 @@ NemoRelayStatus nemo_relay_openinference_subscriber_force_flush(const struct Ffi
 NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
 
 /**
+ * Load and activate dynamic plugins as one owned transaction.
+ *
+ * `config_json` is the base [`PluginConfig`] document and
+ * `dynamic_plugins_json` is an array of explicit dynamic-plugin activation
+ * specifications. On success, the caller owns `out_activation` and must clear
+ * and free it with `nemo_relay_plugin_activation_clear` and
+ * `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
+ * string and must be released with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * Both input pointers must reference valid, null-terminated C strings.
+ * `out_activation` and `out_report_json` must be valid, non-null output pointers.
+ */
+NemoRelayStatus nemo_relay_activate_dynamic_plugins(const char *config_json,
+                                                    const char *dynamic_plugins_json,
+                                                    struct FfiPluginActivation **out_activation,
+                                                    char **out_report_json);
+
+/**
+ * Clear one owned dynamic plugin activation.
+ *
+ * This operation is idempotent. A null handle is treated as already cleared.
+ * The handle allocation remains owned by the caller and must still be passed
+ * to `nemo_relay_plugin_activation_free`.
+ *
+ * # Safety
+ * `activation` must be a valid activation handle returned by
+ * `nemo_relay_activate_dynamic_plugins`, or null.
+ */
+NemoRelayStatus nemo_relay_plugin_activation_clear(struct FfiPluginActivation *activation);
+
+/**
  * Validate a generic plugin config document and return the diagnostics report as JSON.
  *
  * # Safety
@@ -2450,6 +2490,21 @@ void nemo_relay_openinference_subscriber_free(struct FfiOpenInferenceSubscriber 
  * `ptr` must be a valid pointer returned by `nemo_relay_adaptive_runtime_create`, or null.
  */
 void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
+
+/**
+ * Free a dynamic plugin activation handle previously returned by
+ * `nemo_relay_activate_dynamic_plugins`.
+ *
+ * Any activation that has not already been explicitly cleared is cleaned up
+ * best-effort by its Rust destructor before the allocation is released. The
+ * caller's handle is set to null before cleanup, making repeated calls through
+ * the same handle variable safe.
+ *
+ * # Safety
+ * `ptr` must be null or point to a writable activation-handle variable whose
+ * value is null or was returned by `nemo_relay_activate_dynamic_plugins`.
+ */
+void nemo_relay_plugin_activation_free(struct FfiPluginActivation **ptr);
 
 /**
  * Free a codec handle previously returned by one of the codec constructor
