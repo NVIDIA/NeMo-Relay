@@ -142,9 +142,12 @@ if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
     raise RuntimeError(report["diagnostics"])
 
 async def main():
-    async with plugin.plugin(config):
+    await plugin.initialize(config)
+    try:
         # Run instrumented application work here.
         pass
+    finally:
+        plugin.clear()
 
 asyncio.run(main())
 ```

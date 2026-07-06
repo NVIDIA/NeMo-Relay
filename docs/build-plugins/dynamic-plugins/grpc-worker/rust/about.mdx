@@ -110,15 +110,6 @@ cargo build --release
 Calculate the SHA-256 digest of the executable with the following command:
 This command requires Python 3.
 
-```bash
-python - <<'PY'
-from hashlib import sha256
-from pathlib import Path
-
-artifact = Path("target/release/examples-rust-worker")
-print(f"sha256:{sha256(artifact.read_bytes()).hexdigest()}")
-PY
-```
 
 Use the following PowerShell command on Windows:
 
