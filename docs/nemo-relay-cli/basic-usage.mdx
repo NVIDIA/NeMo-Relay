@@ -121,66 +121,26 @@ Shared TOML config is optional. The gateway loads defaults, then system config,
 then project config, then user config. User config takes priority over system
 and project config. CLI flags and environment variables override file config.
 
-Config file locations are:
+### Interactive Setup
 
-- `/etc/nemo-relay/config.toml`
-- `.nemo-relay/config.toml`
-- `$XDG_CONFIG_HOME/nemo-relay/config.toml`
-- `~/.config/nemo-relay/config.toml`
+Run `nemo-relay config` to set up Relay interactively:
 
-Example:
+1. Choose whether the base configuration should apply to the current project,
+   your user account, or both.
+2. Select the coding agents that Relay should observe.
+3. Review and save the base `config.toml`.
+4. Choose whether to continue to the plugin editor.
 
-```toml
-[gateway]
-max_hook_payload_bytes = 20971520
-max_passthrough_body_bytes = 104857600
+The base `config.toml` stores the agent settings. Select **Yes** at the plugin
+prompt to configure optional Relay components and save them separately in
+`plugins.toml`. Project setup uses the project plugin configuration, global
+setup uses the user plugin configuration, and `both` continues with the project
+plugin configuration.
 
-[upstream]
-openai_base_url = "https://api.openai.com/v1"
-anthropic_base_url = "https://api.anthropic.com"
-
-[agents.claude]
-command = "claude"
-
-[agents.codex]
-command = "codex"
-
-[agents.hermes]
-command = "hermes"
-```
-
-### Continue to Plugin Configuration
-
-`nemo-relay config` saves the base Relay configuration before it asks whether
-to configure plugins. Accept the default to open the plugin editor. Project and
-`both` setup target `.nemo-relay/plugins.toml`; global setup targets the user
-plugin file.
-
-Answer `n` or interrupt the prompt to stop after base setup. The saved base
-configuration is not rolled back. To configure plugins later, run
-`nemo-relay plugins edit` for the user file or
-`nemo-relay plugins edit --project` for the project file. If the plugin editor
-is canceled or does not complete, the base configuration remains saved.
-
-Observability exporters are configured in `plugins.toml`. Use
-`nemo-relay plugins edit` for the user file, `nemo-relay plugins edit --project`
-for `.nemo-relay/plugins.toml`, or write the plugin config directly:
-
-```toml
-version = 1
-
-[[components]]
-kind = "observability"
-enabled = true
-
-[components.config.atif]
-enabled = true
-output_directory = ".nemo-relay/atif"
-
-[components.config.openinference]
-enabled = true
-endpoint = "http://127.0.0.1:4318/v1/traces"
-```
+Select **No** to finish after saving `config.toml`. Canceling the prompt or
+leaving the plugin editor does not remove the saved base configuration. You can
+open the plugin editor again later with `nemo-relay plugins edit`, or use
+`nemo-relay plugins edit --project` for project configuration.
 
 ## Add Model Pricing for Cost Estimates
 
