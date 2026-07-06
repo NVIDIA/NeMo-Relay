@@ -9,20 +9,16 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page lists current limitations and support notes for the release
 documentation set.
 
-## NeMo Relay 0.4
+## NVIDIA NeMo Relay 0.5
 
-These notes apply to the NeMo Relay 0.4 release. The following known issues
-and limitations apply to NeMo Relay 0.4:
+These notes apply to the NVIDIA NeMo Relay 0.5 release.
 
-- Go and the raw C FFI surface are experimental and source-first.
-- Generated API pages cover Rust, Python, and Node.js. Experimental bindings do
-  not yet have the same generated documentation depth.
-- The NeMo Relay CLI is experimental. Coding agent observability support varies
-  due to capabilities of hooks. Any encountered problems should be filed as
-  bugs.
-- Host plugin mode depends on each coding-agent host's plugin, hook, and
-  provider-routing behavior. Hooks alone cannot produce complete LLM request
-  and response spans.
+- Go and the raw C FFI surface are experimental and source-first. Generated
+  API pages cover Rust, Python, and Node.js; experimental bindings do not have
+  the same generated documentation depth.
+- The NeMo Relay CLI is experimental. Coding-agent observability support varies
+  with host plugin, hook, and provider-routing capabilities. Hooks alone cannot
+  produce complete LLM request and response spans.
 - Complete first-request capture in Codex plugin mode depends on Codex firing
   an installed hook before the first provider request.
 - Node.js 24 or newer is required for Node.js binding and package workflows.
@@ -30,33 +26,53 @@ and limitations apply to NeMo Relay 0.4:
   optimization support. Security is limited to pre-tool conditional guardrails,
   and optimization is limited to adaptive telemetry unless the integration owns
   a managed execution path.
-- The NeMo Guardrails plugin remote backend depends on the availability,
-  latency, and policy behavior of the configured remote service.
-- The NeMo Guardrails plugin local backend starts a Python worker subprocess.
-  That worker environment must provide Python 3.11 or newer and
-  `nemoguardrails==0.22.0`; `SUPPORTED_NEMOGUARDRAILS_VERSION` in
-  `crates/core/src/plugins/nemo_guardrails/local_worker.py` is the
-  authoritative pin.
+- The NeMo Guardrails remote backend depends on the availability, latency, and
+  policy behavior of the configured remote service. Its local backend requires
+  Python 3.11 or newer and `nemoguardrails==0.22.0`.
 - The PII redaction plugin currently provides deterministic local backend
   support. Local-model backend configuration is reserved for future expansion.
-- Pricing estimates depend on configured pricing sources and the freshness of
-  the source catalog. Unknown model pricing and missing token data leave cost
-  absent instead of defaulting to zero.
-- ATOF streaming endpoints depend on collector availability. Failed endpoints
-  are skipped or retried without blocking file output or other configured
-  endpoints.
-- S3-compatible ATIF export requires valid storage credentials and endpoint
-  configuration in the runtime environment.
-- Remote ATIF storage requires valid destination credentials and endpoint
-  configuration in the runtime environment.
+- Pricing estimates depend on configured model-pricing sources and their
+  freshness. Unknown model pricing and missing token data leave cost absent
+  instead of defaulting to zero.
+- ATOF streaming endpoints and remote ATIF storage depend on reachable,
+  correctly configured destinations. Endpoint failures do not block local file
+  output or other configured endpoints.
+- Native dynamic plugins run in-process and are not sandboxed. `grpc-v1` worker
+  plugins isolate a process but do not provide a security sandbox.
 - `LLMRequest` objects in the Python binding should be treated as immutable.
   Request middleware that changes content should return a new request object.
 - Native subscriber callbacks are delivered asynchronously. Flush subscribers
   before relying on callback side effects, captured event lists, files, or
   exporter output. Deregistering a subscriber affects future emissions, but
-  callbacks from already-queued event snapshots may still run.
+  callbacks from already-queued event snapshots can still run.
 
-### Fixed in NeMo Relay 0.4
+### Compatibility and Migration Notes
+
+- Move plugin configuration from `config.toml` to `plugins.toml`. The
+  `--plugin-config` option is unavailable in 0.5.
+- Registered LLM request and tool execution intercepts must return their
+  canonical outcome types. Rebuild development native plugins and `grpc-v1`
+  workers against 0.5.
+- The experimental `nemo-relay-wasm` package is no longer built, published, or
+  supported by this repository.
+- The `nemo-relay cursor` and `hook-forward cursor` entry points are no longer
+  available. Patch-based integrations are also no longer maintained.
+
+### Fixed in NVIDIA NeMo Relay 0.5
+
+- Gateway shutdown flushes queued events before it exits.
+- Dynamic worker invocations support cancellation, and the CLI manages Python
+  dynamic-plugin environments.
+- ATOF file export creates a missing output directory before opening JSONL
+  output.
+- CLI status output reports daemon binding, exporter status, and remote ATIF
+  storage destinations more reliably.
+- Codex host-plugin discovery uses the supported text output from the Codex
+  plugin command.
+
+### Fixed in Prior Releases
+
+#### NVIDIA NeMo Relay 0.4
 
 - ATIF shutdown no longer deadlocks queued subscribers.
 - Sanitized LLM requests are resolved from annotations for observability output.
@@ -72,11 +88,15 @@ and limitations apply to NeMo Relay 0.4:
 - Node.js `withScope` callbacks receive a real `ScopeHandle`.
 - Deep Agents model responses are annotated for downstream observability.
 
-### Fixed in Earlier Releases
+#### NVIDIA NeMo Relay 0.3
 
 - Managed LLM start events are emitted before execution intercepts.
 - Coding-agent trace scopes are aligned with NeMo Relay agent scope semantics.
 - ATIF tool observations are correlated with their matching tool calls.
 - OpenClaw tool call replay visibility is preserved.
+- LangChain serialization handles wrapped integration payloads more reliably.
+
+#### Earlier Releases
+
 - Enabled TLS support for OTLP HTTP export.
 - Preserved Go scope stacks across OS threads.
