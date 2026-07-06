@@ -22,18 +22,58 @@ navigation:
     title: "Instrument Applications"
     slug: instrument-applications
     title-source: frontmatter
-  - folder: ./configure-plugins
-    title: "Configure Plugins"
+  - section: "Configure Plugins"
     slug: configure-plugins
-    title-source: frontmatter
+    contents:
+      - page: "About"
+        path: ./configure-plugins/about.mdx
+        slug: about
+      - folder: ./configure-plugins/observability
+        title: "Observability"
+        title-source: frontmatter
+      - folder: ./configure-plugins/adaptive
+        title: "Adaptive"
+        title-source: frontmatter
+      - folder: ./configure-plugins/nemo-guardrails
+        title: "NeMo Guardrails"
+        title-source: frontmatter
+      - folder: ./configure-plugins/pii-redaction
+        title: "PII Redaction"
+        title-source: frontmatter
+      - page: "Model Pricing"
+        path: ./configure-plugins/model-pricing.mdx
+        slug: model-pricing
+      - page: "Configure Discoverable Plugins"
+        path: ./configure-plugins/discoverable-plugins.mdx
+        slug: discoverable-plugins
+      - page: "Plugin Configuration Files"
+        path: ./configure-plugins/plugin-configuration-files.mdx
+        slug: plugin-configuration-files
   - folder: ./integrate-into-frameworks
     title: "Integrate into Frameworks"
     slug: integrate-into-frameworks
     title-source: frontmatter
-  - folder: ./build-plugins
-    title: "Build Plugins"
+  - section: "Build Plugins"
     slug: build-plugins
-    title-source: frontmatter
+    contents:
+      - page: "About"
+        path: ./build-plugins/about.mdx
+        slug: about
+      - folder: ./build-plugins/language-binding
+        title: "Language Binding"
+        title-source: frontmatter
+      - section: "Dynamic Plugins"
+        slug: dynamic-plugins
+        contents:
+          - page: "Discoverable Plugins"
+            path: ./build-plugins/dynamic-plugins/about.mdx
+            slug: about
+          - folder: ./build-plugins/dynamic-plugins/native-dynamic
+            title: "Native Dynamic"
+            title-source: frontmatter
+          - folder: ./build-plugins/dynamic-plugins/grpc-worker
+            title: "gRPC Worker"
+            title-source: frontmatter
   - folder: ./contribute
     title: "Contribute"
     slug: contribute
