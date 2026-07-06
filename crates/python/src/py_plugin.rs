@@ -31,10 +31,10 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
-    PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins, list_plugin_kinds, register_plugin, rollback_registrations,
-    validate_plugin_config,
+    ConfigDiagnostic, DiagnosticLevel, DynamicPluginActivationSpec, Plugin, PluginConfig,
+    PluginError, PluginHostActivation, PluginRegistration, PluginRegistrationContext,
+    active_plugin_report, clear_plugin_configuration, deregister_plugin, initialize_plugins,
+    list_plugin_kinds, register_plugin, rollback_registrations, validate_plugin_config,
 };
 
 use crate::convert::{json_to_py, py_to_json};
@@ -699,6 +699,112 @@ fn initialize_plugins_py<'py>(
     })
 }
 
+/// Owned dynamic plugin host activation.
+///
+/// The public Python wrapper retains this object until ``close()`` or context
+/// manager exit. Dropping it without an explicit close still clears callbacks
+/// before unloading plugin code.
+#[pyclass(name = "_PluginHostActivation")]
+struct PyPluginHostActivation {
+    activation: Mutex<Option<PluginHostActivation>>,
+    report: nemo_relay::plugin::ConfigReport,
+}
+
+#[pymethods]
+impl PyPluginHostActivation {
+    /// Return the activation report captured during initialization.
+    #[getter]
+    fn report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let report = serde_json::to_value(&self.report)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        json_to_py(py, &report)
+    }
+
+    /// Return whether this object still owns an active dynamic plugin host.
+    #[getter]
+    fn is_active(&self) -> PyResult<bool> {
+        let activation = self.activation.lock().map_err(|error| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "dynamic plugin activation lock poisoned: {error}"
+            ))
+        })?;
+        Ok(activation
+            .as_ref()
+            .is_some_and(PluginHostActivation::is_active))
+    }
+
+    /// Clear callbacks and unload the dynamic plugin host.
+    #[pyo3(signature = () -> "None", text_signature = "($self) -> None")]
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let activation = self
+            .activation
+            .lock()
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "dynamic plugin activation lock poisoned: {error}"
+                ))
+            })?
+            .take();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let Some(activation) = activation else {
+                return Ok(());
+            };
+            tokio::task::spawn_blocking(move || activation.clear())
+                .await
+                .map_err(|error| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "dynamic plugin teardown task failed: {error}"
+                    ))
+                })?
+                .map_err(plugin_error_to_py_err)
+        })
+    }
+}
+
+impl Drop for PyPluginHostActivation {
+    fn drop(&mut self) {
+        let activation = self
+            .activation
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+        if let Some(activation) = activation {
+            let _ = activation.clear();
+        }
+    }
+}
+
+/// Load and initialize an owned dynamic plugin host.
+#[pyfunction(name = "activate_dynamic_plugins")]
+#[pyo3(signature = (config: "object", dynamic_plugins: "object") -> "object", text_signature = "(config: object, dynamic_plugins: object) -> object")]
+fn activate_dynamic_plugins_py<'py>(
+    py: Python<'py>,
+    config: &Bound<'_, PyAny>,
+    dynamic_plugins: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let config_json = py_to_json(config)?;
+    let config: PluginConfig = serde_json::from_value(config_json)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    let dynamic_plugins_json = py_to_json(dynamic_plugins)?;
+    let dynamic_plugins: Vec<DynamicPluginActivationSpec> =
+        serde_json::from_value(dynamic_plugins_json)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let (activation, report) = PluginHostActivation::activate(config, dynamic_plugins)
+            .await
+            .map_err(plugin_error_to_py_err)?;
+        Python::attach(|py| {
+            Py::new(
+                py,
+                PyPluginHostActivation {
+                    activation: Mutex::new(Some(activation)),
+                    report,
+                },
+            )
+        })
+    })
+}
+
 #[pyfunction(name = "clear_plugin_configuration")]
 #[pyo3(signature = () -> "None", text_signature = "() -> None")]
 fn clear_plugin_configuration_py() -> PyResult<()> {
@@ -744,8 +850,10 @@ fn deregister_plugin_py(plugin_kind: &str) -> bool {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginContext>()?;
+    m.add_class::<PyPluginHostActivation>()?;
     m.add_function(wrap_pyfunction!(validate_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
+    m.add_function(wrap_pyfunction!(activate_dynamic_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
     m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;
@@ -766,6 +874,19 @@ fn plugin_callback_diag(plugin_kind: &str, code: &str, message: String) -> Confi
 
 fn to_py_err(err: impl std::fmt::Display) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(err.to_string())
+}
+
+fn plugin_error_to_py_err(error: PluginError) -> PyErr {
+    let message = error.to_string();
+    match error {
+        PluginError::InvalidConfig(_) | PluginError::Serialization(_) => {
+            pyo3::exceptions::PyValueError::new_err(message)
+        }
+        PluginError::NotFound(_) => pyo3::exceptions::PyFileNotFoundError::new_err(message),
+        PluginError::Conflict(_)
+        | PluginError::Internal(_)
+        | PluginError::RegistrationFailed(_) => pyo3::exceptions::PyRuntimeError::new_err(message),
+    }
 }
 
 #[cfg(test)]
