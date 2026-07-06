@@ -1339,7 +1339,7 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     format_human_agents(&mut out, report);
     format_human_host_plugins(&mut out, report);
     format_human_checks(&mut out, "Observability", &report.observability);
-    format_human_checks(&mut out, "Completions", &report.completions);
+    format_human_completion_checks(&mut out, &report.completions);
     format_human_conclusion(&mut out, report);
     out
 }
@@ -1496,6 +1496,14 @@ fn format_human_checks(out: &mut String, title: &str, checks: &[Check]) {
     out.push_str(&format!("  {title}\n"));
     for check in checks {
         out.push_str(&format!("    {:<22}  {}\n", check.name, check.details));
+    }
+    out.push('\n');
+}
+
+fn format_human_completion_checks(out: &mut String, checks: &[Check]) {
+    out.push_str("  Completions\n");
+    for check in checks {
+        out.push_str(&format!("    {}\n", check.details));
     }
     out.push('\n');
 }

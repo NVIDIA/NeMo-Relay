@@ -260,6 +260,21 @@ fn format_human_emits_fixed_section_order() {
 }
 
 #[test]
+fn format_human_renders_completion_details_without_check_name() {
+    let mut report = empty_report();
+    report.completions.push(Check {
+        name: "Completions",
+        status: Status::Pass,
+        details: "zsh: /tmp/_nemo-relay".into(),
+    });
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("  Completions\n    zsh: /tmp/_nemo-relay\n"));
+    assert!(!rendered.contains("    Completions"));
+}
+
+#[test]
 fn format_human_distinguishes_plugin_files_from_plugin_resolution() {
     let mut report = empty_report();
     report.configuration.plugin_configs.push(ConfigLayer {

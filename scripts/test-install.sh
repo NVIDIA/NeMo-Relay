@@ -19,7 +19,6 @@ trap cleanup EXIT HUP INT TERM
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
     exit 1
-    return 1
 }
 
 run_command() {

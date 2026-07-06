@@ -433,7 +433,10 @@ fn handle_dynamic_root_menu_response(
                 Ok(false)
             }
             Some(DynamicMenuAction::Back) | None => Ok(true),
-            Some(DynamicMenuAction::EditField(_)) => unreachable!(),
+            Some(DynamicMenuAction::EditField(_)) => {
+                println!("  Select Edit raw configuration to modify settings.");
+                Ok(false)
+            }
         },
         MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
             if matches!(actions.get(selected), Some(DynamicMenuAction::ResetPlugin)) {
