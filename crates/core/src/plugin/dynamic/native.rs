@@ -52,10 +52,13 @@ use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin, register_plugin,
+    deregister_plugin, deregister_plugin_checked, register_plugin,
 };
 
-use super::{DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad};
+use super::{
+    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
+    DynamicPluginTeardownOutcome,
+};
 
 /// Native plugin load request derived from host dynamic-plugin state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +87,35 @@ impl NativePluginActivation {
 
     /// Consumes the activation and deregisters loaded plugin kinds.
     pub fn clear(self) {}
+
+    pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        let plugin_kinds = std::mem::take(&mut self.plugin_kinds);
+        for plugin_kind in plugin_kinds.into_iter().rev() {
+            match deregister_plugin_checked(&plugin_kind) {
+                Ok(true) => {}
+                Ok(false) => outcome.record_error(
+                    format!(
+                        "native plugin kind '{plugin_kind}' was not registered during teardown"
+                    ),
+                    true,
+                ),
+                Err(error) => outcome.record_error(
+                    format!("failed to deregister native plugin kind '{plugin_kind}': {error}"),
+                    false,
+                ),
+            }
+        }
+        outcome
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_plugin_kind_for_test(plugin_kind: impl Into<String>) -> Self {
+        Self {
+            plugins: Vec::new(),
+            plugin_kinds: vec![plugin_kind.into()],
+        }
+    }
 }
 
 impl Drop for NativePluginActivation {

@@ -32,6 +32,31 @@ pub use registry::*;
 #[cfg(feature = "worker-grpc")]
 pub use worker::*;
 
+#[derive(Debug)]
+pub(crate) struct DynamicPluginTeardownOutcome {
+    pub(crate) errors: Vec<String>,
+    pub(crate) safe_to_unload: bool,
+}
+
+impl DynamicPluginTeardownOutcome {
+    pub(crate) fn success() -> Self {
+        Self {
+            errors: Vec::new(),
+            safe_to_unload: true,
+        }
+    }
+
+    pub(crate) fn record_error(&mut self, error: impl Into<String>, safe_to_unload: bool) {
+        self.errors.push(error.into());
+        self.safe_to_unload &= safe_to_unload;
+    }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.errors.extend(other.errors);
+        self.safe_to_unload &= other.safe_to_unload;
+    }
+}
+
 /// Plugin execution lane.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
