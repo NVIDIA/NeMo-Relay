@@ -149,6 +149,19 @@ command = "codex"
 command = "hermes"
 ```
 
+### Continue to Plugin Configuration
+
+`nemo-relay config` saves the base Relay configuration before it asks whether
+to configure plugins. Accept the default to open the plugin editor. Project and
+`both` setup target `.nemo-relay/plugins.toml`; global setup targets the user
+plugin file.
+
+Answer `n` or interrupt the prompt to stop after base setup. The saved base
+configuration is not rolled back. To configure plugins later, run
+`nemo-relay plugins edit` for the user file or
+`nemo-relay plugins edit --project` for the project file. If the plugin editor
+is canceled or does not complete, the base configuration remains saved.
+
 Observability exporters are configured in `plugins.toml`. Use
 `nemo-relay plugins edit` for the user file, `nemo-relay plugins edit --project`
 for `.nemo-relay/plugins.toml`, or write the plugin config directly:
@@ -168,15 +181,6 @@ output_directory = ".nemo-relay/atif"
 enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
-
-After `nemo-relay config` saves the base configuration, the setup wizard asks
-whether to configure plugins. Accept the default to open the plugin editor.
-Answer `n` or interrupt the prompt to skip plugin setup; the base configuration
-remains saved.
-
-To configure plugins later, run `nemo-relay plugins edit` for the user file or
-`nemo-relay plugins edit --project` for `.nemo-relay/plugins.toml`. If the plugin
-editor is canceled or does not complete, the base configuration remains saved.
 
 ## Add Model Pricing for Cost Estimates
 
