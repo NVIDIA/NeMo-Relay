@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-relay-cumulative}"
+work_dir="$(mktemp -d)"
+upstream_log="$work_dir/upstream.jsonl"
+token="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
+pids=()
+
+cleanup() {
+  local status=$?
+  for pid in "${pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+  if [[ $status -eq 0 ]]; then
+    rm -rf "$work_dir"
+  else
+    echo "E2E logs preserved in $work_dir" >&2
+    for log in "$work_dir"/*.log; do
+      [[ -f "$log" ]] || continue
+      echo "--- $log" >&2
+      tail -100 "$log" >&2
+    done
+  fi
+}
+trap cleanup EXIT
+
+wait_for() {
+  local url="$1"
+  for _ in $(seq 1 120); do
+    if curl --fail --silent "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "timed out waiting for $url" >&2
+  return 1
+}
+
+python3 "$relay_root/examples/switchyard/fake_upstream.py" \
+  --port 4101 --log "$upstream_log" >"$work_dir/upstream.log" 2>&1 &
+pids+=("$!")
+
+(
+  cd "$switchyard_root"
+  SWITCHYARD_ATOF_BEARER_TOKEN="$token" cargo run -p switchyard-server -- \
+    --config "$relay_root/examples/switchyard/real-e2e-profiles.yaml" --port 4000
+) >"$work_dir/switchyard.log" 2>&1 &
+pids+=("$!")
+
+(
+  cd "$work_dir"
+  SWITCHYARD_AUTHORIZATION="Bearer $token" cargo run \
+    --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli -- \
+    --plugin-config-path "$relay_root/examples/switchyard/real-e2e-plugins.toml" \
+    --bind 127.0.0.1:4041
+) >"$work_dir/relay.log" 2>&1 &
+pids+=("$!")
+
+wait_for http://127.0.0.1:4000/health
+wait_for http://127.0.0.1:4041/healthz
+
+request() {
+  local request_id="$1"
+  local stream="$2"
+  curl --fail --silent --no-buffer http://127.0.0.1:4041/v1/chat/completions \
+    -H 'content-type: application/json' \
+    -H 'x-nemo-relay-session-id: e2e-session' \
+    -H "x-nemo-relay-request-id: $request_id" \
+    --data-binary "{\"model\":\"client-model\",\"stream\":$stream,\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"
+}
+
+request cold-request false >"$work_dir/cold.json"
+
+for payload in \
+  '{"hook_event_name":"on_session_start","session_id":"e2e-session"}' \
+  '{"hook_event_name":"pre_tool_call","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"extra":{"task_id":"task-1","tool_call_id":"call-1"}}' \
+  '{"hook_event_name":"post_tool_call","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"tool_response":{"output":"CUDA out of memory"},"extra":{"task_id":"task-1","tool_call_id":"call-1"}}'
+do
+  curl --fail --silent http://127.0.0.1:4041/hooks/hermes \
+    -H 'content-type: application/json' --data-binary "$payload" >/dev/null
+done
+
+sleep 1
+request warm-request false >"$work_dir/warm.json"
+request stream-request true >"$work_dir/stream.sse"
+
+python3 - "$upstream_log" "$work_dir/stream.sse" <<'PY'
+import json
+import pathlib
+import sys
+
+records = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+models = [record["body"]["model"] for record in records]
+if models != ["provider/weak", "provider/strong", "provider/strong"]:
+    raise SystemExit(f"unexpected cold/warm/stream route sequence: {models}")
+stream = pathlib.Path(sys.argv[2]).read_text()
+if "fake" not in stream or "[DONE]" not in stream:
+    raise SystemExit(f"unexpected SSE output: {stream}")
+print(f"real Switchyard E2E passed: {models}")
+PY

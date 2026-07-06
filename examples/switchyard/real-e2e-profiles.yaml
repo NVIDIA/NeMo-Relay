@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+targets:
+  strong:
+    model: provider/strong
+    format: openai
+    base_url: http://127.0.0.1:4101/v1
+  weak:
+    model: provider/weak
+    format: openai
+    base_url: http://127.0.0.1:4101/v1
+
+profiles:
+  remote-cascade:
+    type: cascade
+    strong: strong
+    weak: weak
+    fallback_target_on_evict: strong
+    picker: cascade_weak_default
+    confidence_threshold: 0.7

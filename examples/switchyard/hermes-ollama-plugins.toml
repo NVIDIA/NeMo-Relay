@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "switchyard"
+enabled = true
+
+[components.config]
+mode = "enforce"
+decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
+decision_profile_id = "hermes-ollama"
+request_materialization = "full_body"
+context_mode = "atof_required"
+decision_timeout_millis = 1000
+max_retries = 3
+recent_message_count = 8
+
+[components.config.decision_header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"
+
+[components.config.default_targets]
+openai_chat = "ollama-chat"
+openai_responses = "ollama-responses"
+anthropic_messages = "ollama-anthropic"
+
+[components.config.targets.ollama-chat]
+model = "qwen3.6:35b"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "http://127.0.0.1:11434"
+
+[components.config.targets.ollama-responses]
+model = "qwen3.6:35b"
+protocol = "openai_responses"
+endpoint = "/v1/responses"
+base_url = "http://127.0.0.1:11434"
+
+[components.config.targets.ollama-anthropic]
+model = "qwen3.6:35b"
+protocol = "anthropic_messages"
+endpoint = "/v1/messages"
+base_url = "http://127.0.0.1:11434"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atof]
+enabled = true
+mode = "append"
+
+[[components.config.atof.endpoints]]
+url = "http://127.0.0.1:4000/v1/atof/events"
+transport = "http_post"
+field_name_policy = "preserve"
+timeout_millis = 1000
+
+[components.config.atof.endpoints.header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"
