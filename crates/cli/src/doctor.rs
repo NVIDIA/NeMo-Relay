@@ -20,6 +20,9 @@ use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+use nemo_relay_switchyard::{
+    register_switchyard_component, validate_switchyard_atof_configuration,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -642,6 +645,22 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         });
         return checks;
     }
+    if let Err(error) = register_switchyard_component() {
+        checks.push(Check {
+            name: "Switchyard plugin",
+            status: Status::Fail,
+            details: format!("registration failed: {error}"),
+        });
+        return checks;
+    }
+    if let Err(error) = validate_switchyard_atof_configuration(&plugin_config) {
+        checks.push(Check {
+            name: "Switchyard ATOF",
+            status: Status::Fail,
+            details: error,
+        });
+        return checks;
+    }
     let report = validate_plugin_config(&plugin_config);
     if report.diagnostics.is_empty() {
         checks.push(Check {
@@ -946,18 +965,38 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
 }
 
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
-    let Some(headers) = endpoint.get("headers") else {
-        return Ok(Vec::new());
-    };
-    let Some(object) = headers.as_object() else {
-        return Err("headers must be an object of string values".into());
-    };
-    let mut out = Vec::with_capacity(object.len());
-    for (key, value) in object {
-        let Some(value) = value.as_str() else {
-            return Err(format!("headers.{key} must be a string"));
+    let mut out = Vec::new();
+    if let Some(headers) = endpoint.get("headers") {
+        let Some(object) = headers.as_object() else {
+            return Err("headers must be an object of string values".into());
         };
-        out.push((key.clone(), value.to_string()));
+        for (key, value) in object {
+            let Some(value) = value.as_str() else {
+                return Err(format!("headers.{key} must be a string"));
+            };
+            out.push((key.clone(), value.to_string()));
+        }
+    }
+    if let Some(header_env) = endpoint.get("header_env") {
+        let Some(object) = header_env.as_object() else {
+            return Err("header_env must be an object of string values".into());
+        };
+        for (key, variable) in object {
+            if out.iter().any(|(existing, _)| existing == key) {
+                return Err(format!(
+                    "header {key:?} cannot appear in both headers and header_env"
+                ));
+            }
+            let Some(variable) = variable.as_str() else {
+                return Err(format!("header_env.{key} must be a string"));
+            };
+            let value = std::env::var(variable)
+                .map_err(|_| format!("environment variable {variable:?} is not set"))?;
+            if value.trim().is_empty() {
+                return Err(format!("environment variable {variable:?} is blank"));
+            }
+            out.push((key.clone(), value));
+        }
     }
     Ok(out)
 }

@@ -28,6 +28,7 @@ atof-streaming = ["nemo-relay/atof-streaming"]
 nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "otel", "openinference", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
+nemo-relay-switchyard = { workspace = true, features = ["schema"] }
 async-stream = "0.3"
 axum = "0.8"
 base64 = "0.22"

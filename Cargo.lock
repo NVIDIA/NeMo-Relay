@@ -1545,6 +1545,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
+ "nemo-relay-switchyard",
  "opentelemetry",
  "opentelemetry_sdk",
  "percent-encoding",
@@ -1641,6 +1642,22 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "uuid",
+]
+
+[[package]]
+name = "nemo-relay-switchyard"
+version = "0.6.0"
+dependencies = [
+ "async-stream",
+ "axum",
+ "futures-util",
+ "nemo-relay",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 
