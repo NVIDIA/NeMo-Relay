@@ -21,10 +21,12 @@ use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{
-    WorkerPluginActivation, WorkerPluginLoadSpec, load_worker_plugins,
+    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
+    WorkerPluginLoadSpec, load_worker_plugins,
 };
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -39,6 +41,46 @@ fn worker_activation_with_no_specs_is_empty() {
         .expect("empty worker activation should succeed");
     assert!(activation.is_empty());
     activation.clear();
+}
+
+#[tokio::test]
+async fn plugin_host_activation_owns_worker_lifecycle() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    assert!(activation.is_active());
+    assert!(!report.has_errors());
+    assert!(
+        list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_worker")
+    );
+    let rewritten = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .expect("worker host intercept should run");
+    assert_eq!(rewritten["worker_plugin"], true);
+
+    activation.clear().expect("worker plugin host should clear");
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_worker")
+    );
+    let unchanged = tool_request_intercepts("worker-host-tool", json!({ "input": true }))
+        .expect("cleared worker intercept chain should be empty");
+    assert_eq!(unchanged, json!({ "input": true }));
 }
 
 #[tokio::test]

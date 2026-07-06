@@ -9,10 +9,13 @@
 //! - plugin registration contexts for middleware/subscriber installation
 //! - rollback bookkeeping for registrations created during plugin setup
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
@@ -48,7 +51,25 @@ type PluginMap = HashMap<String, Arc<dyn Plugin>>;
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
+static PLUGIN_MUTATION_OWNER: LazyLock<Mutex<PluginMutationOwner>> =
+    LazyLock::new(|| Mutex::new(PluginMutationOwner::Idle));
+static NEXT_PLUGIN_HOST_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 static BUILTIN_PLUGIN_REGISTRATION: OnceLock<Result<()>> = OnceLock::new();
+static PLUGIN_MUTATION_EXECUTOR: OnceLock<PluginMutationSender> = OnceLock::new();
+
+type PluginMutationJob = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+type PluginMutationSender = tokio::sync::mpsc::UnboundedSender<PluginMutationJob>;
+
+thread_local! {
+    static IN_PLUGIN_MUTATION_EXECUTOR: Cell<bool> = const { Cell::new(false) };
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PluginMutationOwner {
+    Idle,
+    Legacy,
+    Host(u64),
+}
 
 /// Error type for generic plugin operations.
 #[derive(Debug, Error)]
@@ -1020,6 +1041,137 @@ pub fn plugin_config_schema() -> Json {
 /// is removed before the new configuration is activated.
 #[doc(hidden)]
 pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
+    run_owned_plugin_mutation("plugin initialization", move || async move {
+        let lease = LegacyPluginMutationLease::acquire()?;
+        let rollback_failures = Arc::new(Mutex::new(Vec::new()));
+        let initialization = tokio::spawn(initialize_plugins_exact_inner(
+            config,
+            Some(Arc::clone(&rollback_failures)),
+        ))
+        .await
+        .map_err(|error| {
+            PluginError::Internal(format!("plugin initialization task failed: {error}"))
+        });
+        let result = initialization.and_then(|result| result);
+        let failures = rollback_failures
+            .lock()
+            .map(|failures| failures.clone())
+            .unwrap_or_else(|lock_error| {
+                vec![format!("rollback failure lock poisoned: {lock_error}")]
+            });
+        match result {
+            Err(error) if !failures.is_empty() => {
+                std::mem::forget(lease);
+                Err(PluginError::RegistrationFailed(format!(
+                    concat!(
+                        "{}; initialization rollback was incomplete: {}; plugin ",
+                        "configuration mutations are disabled for this process because callbacks ",
+                        "may remain registered"
+                    ),
+                    error,
+                    failures.join("; ")
+                )))
+            }
+            result => result,
+        }
+    })
+    .await
+}
+
+pub(crate) async fn run_owned_plugin_mutation<T, F, Fut>(
+    operation_name: &'static str,
+    operation: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T>> + Send + 'static,
+{
+    if IN_PLUGIN_MUTATION_EXECUTOR.get() {
+        return operation().await;
+    }
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    plugin_mutation_executor()?
+        .send(Box::pin(async move {
+            let result = tokio::spawn(operation())
+                .await
+                .map_err(|error| {
+                    PluginError::Internal(format!("{operation_name} task failed: {error}"))
+                })
+                .and_then(|result| result);
+            let _ = result_tx.send(result);
+        }))
+        .map_err(|_| {
+            PluginError::Internal(format!(
+                "failed to queue {operation_name}: executor stopped"
+            ))
+        })?;
+    result_rx.await.map_err(|_| {
+        PluginError::Internal(format!(
+            "{operation_name} task stopped before returning a result"
+        ))
+    })?
+}
+
+fn plugin_mutation_executor() -> Result<&'static PluginMutationSender> {
+    if let Some(sender) = PLUGIN_MUTATION_EXECUTOR.get() {
+        return Ok(sender);
+    }
+
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<PluginMutationJob>();
+    let (startup_tx, startup_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::Builder::new()
+        .name("nemo-relay-plugin-host".into())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _ = startup_tx.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let _ = startup_tx.send(Ok(()));
+            IN_PLUGIN_MUTATION_EXECUTOR.set(true);
+            runtime.block_on(async move {
+                while let Some(job) = receiver.recv().await {
+                    job.await;
+                }
+            });
+        })
+        .map_err(|error| {
+            PluginError::Internal(format!("failed to start plugin host executor: {error}"))
+        })?;
+    startup_rx
+        .recv()
+        .map_err(|error| {
+            PluginError::Internal(format!(
+                "plugin host executor stopped during startup: {error}"
+            ))
+        })?
+        .map_err(|error| {
+            PluginError::Internal(format!("failed to start plugin host runtime: {error}"))
+        })?;
+
+    Ok(PLUGIN_MUTATION_EXECUTOR.get_or_init(|| sender))
+}
+
+pub(crate) async fn initialize_plugins_exact_for_host(
+    config: PluginConfig,
+    owner_id: u64,
+    rollback_failures: Arc<Mutex<Vec<String>>>,
+) -> Result<ConfigReport> {
+    verify_plugin_host_owner(owner_id)?;
+    initialize_plugins_exact_inner(config, Some(rollback_failures)).await
+}
+
+async fn initialize_plugins_exact_inner(
+    config: PluginConfig,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+) -> Result<ConfigReport> {
     let report = validate_plugin_config(&config);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
@@ -1033,13 +1185,30 @@ pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigRepo
     };
 
     if let Some(mut previous_state) = previous {
-        rollback_registrations(&mut previous_state.registrations);
-        match initialize_plugin_components(&config).await {
+        let teardown_errors = rollback_registrations_checked(&mut previous_state.registrations);
+        if !teardown_errors.is_empty() {
+            record_rollback_failures(rollback_failures.as_ref(), teardown_errors.clone());
+            return Err(PluginError::RegistrationFailed(format!(
+                "previous plugin configuration could not be cleared: {}",
+                teardown_errors.join("; ")
+            )));
+        }
+        match initialize_plugin_components_catching_panics(
+            config.clone(),
+            rollback_failures.clone(),
+        )
+        .await
+        {
             Ok(registrations) => {
                 store_active_plugin_configuration(config, report.clone(), registrations)?;
                 Ok(report)
             }
-            Err(err) => match initialize_plugin_components(&previous_state.config).await {
+            Err(err) => match initialize_plugin_components_catching_panics(
+                previous_state.config.clone(),
+                rollback_failures.clone(),
+            )
+            .await
+            {
                 Ok(registrations) => {
                     let previous_report = validate_plugin_config(&previous_state.config);
                     store_active_plugin_configuration(
@@ -1055,10 +1224,24 @@ pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigRepo
             },
         }
     } else {
-        let registrations = initialize_plugin_components(&config).await?;
+        let registrations =
+            initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
         store_active_plugin_configuration(config, report.clone(), registrations)?;
         Ok(report)
     }
+}
+
+async fn initialize_plugin_components_catching_panics(
+    config: PluginConfig,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+) -> Result<Vec<PluginRegistration>> {
+    tokio::spawn(async move { initialize_plugin_components(&config, rollback_failures).await })
+        .await
+        .map_err(|error| {
+            PluginError::Internal(format!(
+                "plugin component initialization task failed: {error}"
+            ))
+        })?
 }
 
 /// Validates and activates `config` layered on top of the discovered
@@ -1208,22 +1391,178 @@ pub fn user_config_dir() -> Option<PathBuf> {
 /// Clearing active configuration does not remove plugin kinds from the global
 /// registry.
 pub fn clear_plugin_configuration() -> Result<()> {
+    let lease = LegacyPluginMutationLease::acquire()?;
+    let outcome = clear_plugin_configuration_inner();
+    if !outcome.callbacks_cleared {
+        // Deregistration callbacks are single-use. If one failed, the process
+        // can no longer prove that replacing configuration is safe.
+        std::mem::forget(lease);
+        return Err(PluginError::RegistrationFailed(format!(
+            concat!(
+                "{}; plugin configuration mutations are disabled for this process because ",
+                "callbacks may remain registered"
+            ),
+            outcome
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "plugin teardown was incomplete".into())
+        )));
+    }
+    outcome.result
+}
+
+pub(crate) fn clear_plugin_configuration_for_host(owner_id: u64) -> PluginHostClearOutcome {
+    if let Err(error) = verify_plugin_host_owner(owner_id) {
+        return PluginHostClearOutcome {
+            result: Err(error),
+            callbacks_cleared: false,
+        };
+    }
+    clear_plugin_configuration_inner()
+}
+
+pub(crate) struct PluginHostClearOutcome {
+    pub(crate) result: Result<()>,
+    pub(crate) callbacks_cleared: bool,
+}
+
+fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     let flush_error = crate::api::runtime::flush_subscribers()
         .err()
         .map(|error| error.to_string());
     let previous = {
-        let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
-            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
-        })?;
+        let mut guard = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+            Ok(guard) => guard,
+            Err(err) => {
+                return PluginHostClearOutcome {
+                    result: Err(PluginError::Internal(format!(
+                        "active plugin configuration lock poisoned: {err}"
+                    ))),
+                    callbacks_cleared: false,
+                };
+            }
+        };
         guard.take()
     };
-    if let Some(mut previous_state) = previous {
-        rollback_registrations(&mut previous_state.registrations);
+    let deregistration_errors = previous
+        .map(|mut previous_state| rollback_registrations_checked(&mut previous_state.registrations))
+        .unwrap_or_default();
+    let callbacks_cleared = deregistration_errors.is_empty();
+    let deregistration_error = (!callbacks_cleared).then(|| {
+        PluginError::RegistrationFailed(format!(
+            "plugin teardown failed: {}",
+            deregistration_errors.join("; ")
+        ))
+    });
+    let result = match (flush_error, deregistration_error) {
+        (None, None) => Ok(()),
+        (Some(flush), None) => Err(PluginError::Internal(flush)),
+        (None, Some(deregister)) => Err(deregister),
+        (Some(flush), Some(deregister)) => Err(PluginError::RegistrationFailed(format!(
+            "{deregister}; subscriber flush also failed: {flush}"
+        ))),
+    };
+    PluginHostClearOutcome {
+        result,
+        callbacks_cleared,
     }
-    if let Some(message) = flush_error {
-        return Err(PluginError::Internal(message));
+}
+
+pub(crate) fn plugin_configuration_is_active() -> Result<bool> {
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .map(|guard| guard.is_some())
+        .map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })
+}
+
+pub(crate) struct PluginHostLease {
+    owner_id: u64,
+}
+
+impl PluginHostLease {
+    pub(crate) fn owner_id(&self) -> u64 {
+        self.owner_id
     }
-    Ok(())
+}
+
+impl Drop for PluginHostLease {
+    fn drop(&mut self) {
+        if let Ok(mut owner) = PLUGIN_MUTATION_OWNER.lock()
+            && *owner == PluginMutationOwner::Host(self.owner_id)
+        {
+            *owner = PluginMutationOwner::Idle;
+        }
+    }
+}
+
+pub(crate) fn acquire_plugin_host_lease() -> Result<PluginHostLease> {
+    let mut owner = PLUGIN_MUTATION_OWNER.lock().map_err(|err| {
+        PluginError::Internal(format!("plugin mutation owner lock poisoned: {err}"))
+    })?;
+    if *owner != PluginMutationOwner::Idle {
+        return Err(plugin_mutation_conflict(*owner));
+    }
+    if plugin_configuration_is_active()? {
+        return Err(PluginError::Conflict(
+            "plugin configuration is already active; clear it before activating dynamic plugins"
+                .into(),
+        ));
+    }
+    let owner_id = NEXT_PLUGIN_HOST_OWNER_ID.fetch_add(1, Ordering::Relaxed);
+    *owner = PluginMutationOwner::Host(owner_id);
+    Ok(PluginHostLease { owner_id })
+}
+
+fn verify_plugin_host_owner(owner_id: u64) -> Result<()> {
+    let owner = PLUGIN_MUTATION_OWNER.lock().map_err(|err| {
+        PluginError::Internal(format!("plugin mutation owner lock poisoned: {err}"))
+    })?;
+    if *owner == PluginMutationOwner::Host(owner_id) {
+        Ok(())
+    } else {
+        Err(PluginError::Conflict(
+            "dynamic plugin host no longer owns plugin configuration".into(),
+        ))
+    }
+}
+
+struct LegacyPluginMutationLease;
+
+impl LegacyPluginMutationLease {
+    fn acquire() -> Result<Self> {
+        let mut owner = PLUGIN_MUTATION_OWNER.lock().map_err(|err| {
+            PluginError::Internal(format!("plugin mutation owner lock poisoned: {err}"))
+        })?;
+        if *owner != PluginMutationOwner::Idle {
+            return Err(plugin_mutation_conflict(*owner));
+        }
+        *owner = PluginMutationOwner::Legacy;
+        Ok(Self)
+    }
+}
+
+impl Drop for LegacyPluginMutationLease {
+    fn drop(&mut self) {
+        if let Ok(mut owner) = PLUGIN_MUTATION_OWNER.lock()
+            && *owner == PluginMutationOwner::Legacy
+        {
+            *owner = PluginMutationOwner::Idle;
+        }
+    }
+}
+
+fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
+    let message = match owner {
+        PluginMutationOwner::Idle => "plugin configuration is available",
+        PluginMutationOwner::Legacy => "another plugin configuration mutation is in progress",
+        PluginMutationOwner::Host(_) => {
+            "plugin configuration is owned by an active dynamic plugin host"
+        }
+    };
+    PluginError::Conflict(message.into())
 }
 
 /// Returns the last successfully configured plugin report.
@@ -1249,10 +1588,37 @@ pub fn active_plugin_report() -> Option<ConfigReport> {
 /// This is used internally during failed initialization and by
 /// [`clear_plugin_configuration`].
 pub fn rollback_registrations(registrations: &mut Vec<PluginRegistration>) {
+    let _ = rollback_registrations_checked(registrations);
+}
+
+fn rollback_registrations_checked(registrations: &mut Vec<PluginRegistration>) -> Vec<String> {
+    let mut errors = Vec::new();
     for registration in registrations.iter_mut().rev() {
-        let _ = (registration.deregister)();
+        let failure = match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error.to_string()),
+            Err(payload) => Some(format!(
+                "deregistration panicked: {}",
+                panic_payload_message(payload)
+            )),
+        };
+        if let Some(error) = failure {
+            errors.push(format!(
+                "{} registration '{}' could not be removed: {error}",
+                registration.kind, registration.name
+            ));
+        }
     }
     registrations.clear();
+    errors
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic payload".into())
 }
 
 struct ActivePluginConfiguration {
@@ -1261,11 +1627,14 @@ struct ActivePluginConfiguration {
     registrations: Vec<PluginRegistration>,
 }
 
-async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<PluginRegistration>> {
+async fn initialize_plugin_components(
+    config: &PluginConfig,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+) -> Result<Vec<PluginRegistration>> {
     ensure_builtin_plugins_registered()?;
     let totals = plugin_component_totals(config);
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
-    let mut registrations = vec![];
+    let mut registrations = PendingPluginRegistrations::new(rollback_failures.clone());
 
     for component in config
         .components
@@ -1273,7 +1642,6 @@ async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<Plugi
         .filter(|component| component.enabled)
     {
         let Some(plugin) = lookup_plugin(&component.kind) else {
-            rollback_registrations(&mut registrations);
             return Err(PluginError::NotFound(format!(
                 "plugin component '{}' is not registered",
                 component.kind
@@ -1290,17 +1658,83 @@ async fn initialize_plugin_components(config: &PluginConfig) -> Result<Vec<Plugi
             totals.get(component.kind.as_str()).copied().unwrap_or(1),
         );
 
-        let mut ctx = PluginRegistrationContext::with_namespace(namespace);
-        if let Err(err) = plugin.register(&component.config, &mut ctx).await {
-            let mut just_registered = ctx.into_registrations();
-            rollback_registrations(&mut just_registered);
-            rollback_registrations(&mut registrations);
-            return Err(err);
-        }
-        registrations.extend(ctx.into_registrations());
+        let mut pending =
+            PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
+        plugin
+            .register(&component.config, &mut pending.context)
+            .await?;
+        registrations.extend(pending.take());
     }
 
-    Ok(registrations)
+    Ok(registrations.take())
+}
+
+struct PendingPluginRegistrations {
+    registrations: Vec<PluginRegistration>,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+}
+
+impl PendingPluginRegistrations {
+    fn new(rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
+        Self {
+            registrations: Vec::new(),
+            rollback_failures,
+        }
+    }
+
+    fn extend(&mut self, registrations: Vec<PluginRegistration>) {
+        self.registrations.extend(registrations);
+    }
+
+    fn take(&mut self) -> Vec<PluginRegistration> {
+        std::mem::take(&mut self.registrations)
+    }
+}
+
+impl Drop for PendingPluginRegistrations {
+    fn drop(&mut self) {
+        let errors = rollback_registrations_checked(&mut self.registrations);
+        record_rollback_failures(self.rollback_failures.as_ref(), errors);
+    }
+}
+
+struct PendingPluginRegistrationContext {
+    context: PluginRegistrationContext,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+}
+
+impl PendingPluginRegistrationContext {
+    fn new(namespace: String, rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
+        Self {
+            context: PluginRegistrationContext::with_namespace(namespace),
+            rollback_failures,
+        }
+    }
+
+    fn take(&mut self) -> Vec<PluginRegistration> {
+        std::mem::take(&mut self.context.registrations)
+    }
+}
+
+impl Drop for PendingPluginRegistrationContext {
+    fn drop(&mut self) {
+        let errors = rollback_registrations_checked(&mut self.context.registrations);
+        record_rollback_failures(self.rollback_failures.as_ref(), errors);
+    }
+}
+
+fn record_rollback_failures(
+    rollback_failures: Option<&Arc<Mutex<Vec<String>>>>,
+    errors: Vec<String>,
+) {
+    if errors.is_empty() {
+        return;
+    }
+    if let Some(rollback_failures) = rollback_failures
+        && let Ok(mut recorded) = rollback_failures.lock()
+    {
+        recorded.extend(errors);
+    }
 }
 
 fn store_active_plugin_configuration(

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::json;
+use tokio::sync::Notify;
 
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
@@ -26,6 +27,17 @@ struct RestoreFailPlugin;
 struct RestoreBreakPlugin;
 struct PartialFailPlugin;
 struct VanishingPlugin;
+struct BlockingPlugin {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+    registered: Arc<Notify>,
+}
+struct BackgroundTaskPlugin {
+    release: Arc<Notify>,
+    completed: Arc<Notify>,
+}
+struct PanickingPlugin;
+struct FailingDeregisterPlugin;
 
 static RECORDED_NAMES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
@@ -289,6 +301,116 @@ impl Plugin for VanishingPlugin {
     }
 }
 
+impl Plugin for BlockingPlugin {
+    fn plugin_kind(&self) -> &str {
+        "blocking.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "blocking.warning".into(),
+            component: Some("blocking.plugin".into()),
+            field: None,
+            message: "blocking plugin validated".into(),
+        }]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        let registered = Arc::clone(&self.registered);
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+            ctx.add_registration(PluginRegistration::new(
+                "plugin",
+                ctx.qualify_name("blocking"),
+                Box::new(|| Ok(())),
+            ));
+            registered.notify_one();
+            Ok(())
+        })
+    }
+}
+
+impl Plugin for BackgroundTaskPlugin {
+    fn plugin_kind(&self) -> &str {
+        "background.task.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let release = Arc::clone(&self.release);
+        let completed = Arc::clone(&self.completed);
+        Box::pin(async move {
+            tokio::spawn(async move {
+                release.notified().await;
+                completed.notify_one();
+            });
+            Ok(())
+        })
+    }
+}
+
+impl Plugin for PanickingPlugin {
+    fn plugin_kind(&self) -> &str {
+        "panicking.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async { panic!("fixture plugin panicked during registration") })
+    }
+}
+
+impl Plugin for FailingDeregisterPlugin {
+    fn plugin_kind(&self) -> &str {
+        "failing.deregister.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        vec![]
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            ctx.add_registration(PluginRegistration::new(
+                "fixture",
+                ctx.qualify_name("refuses-deregistration"),
+                Box::new(|| {
+                    Err(PluginError::RegistrationFailed(
+                        "fixture deregistration refused".into(),
+                    ))
+                }),
+            ));
+            Ok(())
+        })
+    }
+}
+
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let ctx = global_context();
@@ -308,6 +430,10 @@ fn reset_global() {
     let _ = deregister_plugin("restore.break.plugin");
     let _ = deregister_plugin("partial.fail.plugin");
     let _ = deregister_plugin("vanishing.plugin");
+    let _ = deregister_plugin("blocking.plugin");
+    let _ = deregister_plugin("background.task.plugin");
+    let _ = deregister_plugin("panicking.plugin");
+    let _ = deregister_plugin("failing.deregister.plugin");
 }
 
 #[test]
@@ -821,6 +947,16 @@ fn test_rollback_registrations_runs_in_reverse_and_ignores_failures() {
         }),
     ));
 
+    let panic_order = Arc::clone(&call_order);
+    registrations.push(PluginRegistration::new(
+        "plugin",
+        "panicking",
+        Box::new(move || {
+            panic_order.lock().unwrap().push("panicking");
+            panic!("expected rollback panic")
+        }),
+    ));
+
     let second_order = Arc::clone(&call_order);
     registrations.push(PluginRegistration::new(
         "plugin",
@@ -836,7 +972,10 @@ fn test_rollback_registrations_runs_in_reverse_and_ignores_failures() {
     rollback_registrations(&mut registrations);
 
     assert!(registrations.is_empty());
-    assert_eq!(*call_order.lock().unwrap(), vec!["second", "first"]);
+    assert_eq!(
+        *call_order.lock().unwrap(),
+        vec!["second", "panicking", "first"]
+    );
 }
 
 #[test]
@@ -886,6 +1025,46 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
 }
 
 #[test]
+fn test_initialize_plugins_restores_previous_configuration_after_replacement_panic() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+    register_plugin(Arc::new(PanickingPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("recording.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let error = runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("panicking.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("fixture plugin panicked"),
+        "{error}"
+    );
+    assert!(active_plugin_report().is_some());
+    assert_eq!(
+        recorded_names().lock().unwrap().as_slice(),
+        [
+            "__nemo_relay_plugin__recording.plugin__subscriber",
+            "__nemo_relay_plugin__recording.plugin__subscriber",
+        ]
+    );
+
+    reset_global();
+}
+
+#[test]
 fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -911,6 +1090,271 @@ fn test_initialize_plugins_rolls_back_partial_component_registration_on_failure(
 
     assert_eq!(PARTIAL_FAIL_ROLLBACKS.load(Ordering::SeqCst), 1);
     assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_transaction_finishes_after_caller_cancellation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let registered = Arc::new(Notify::new());
+    register_plugin(Arc::new(BlockingPlugin {
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+        registered: Arc::clone(&registered),
+    }))
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("recording.plugin")],
+            ..PluginConfig::default()
+        })
+        .await
+        .unwrap();
+
+        let caller = tokio::spawn(initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("blocking.plugin")],
+            ..PluginConfig::default()
+        }));
+        started.notified().await;
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        release.notify_one();
+        registered.notified().await;
+
+        for _ in 0..100 {
+            if active_plugin_report().is_some_and(|report| {
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "blocking.warning")
+            }) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("owned initialization transaction did not finish after caller cancellation");
+    });
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_runtime_continues_driving_background_tasks_after_initialization() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let release = Arc::new(Notify::new());
+    let completed = Arc::new(Notify::new());
+    register_plugin(Arc::new(BackgroundTaskPlugin {
+        release: Arc::clone(&release),
+        completed: Arc::clone(&completed),
+    }))
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("background.task.plugin")],
+            ..PluginConfig::default()
+        })
+        .await
+        .unwrap();
+
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), completed.notified())
+            .await
+            .expect("plugin runtime should keep driving spawned background tasks");
+    });
+
+    reset_global();
+}
+
+#[test]
+fn test_plugin_host_activation_cleans_up_after_caller_cancellation() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let registered = Arc::new(Notify::new());
+    register_plugin(Arc::new(BlockingPlugin {
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+        registered: Arc::clone(&registered),
+    }))
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let caller = tokio::spawn(dynamic::PluginHostActivation::activate(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("blocking.plugin")],
+                ..PluginConfig::default()
+            },
+            Vec::<dynamic::DynamicPluginActivationSpec>::new(),
+        ));
+        started.notified().await;
+        caller.abort();
+        match caller.await {
+            Err(error) => assert!(error.is_cancelled()),
+            Ok(_) => panic!("plugin host caller should have been canceled"),
+        }
+        release.notify_one();
+        registered.notified().await;
+        for _ in 0..100 {
+            let owner_idle = PLUGIN_MUTATION_OWNER
+                .lock()
+                .is_ok_and(|owner| *owner == PluginMutationOwner::Idle);
+            if owner_idle && active_plugin_report().is_none() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        // The dropped result must clear its activation and release the lease.
+        initialize_plugins_exact(PluginConfig::default())
+            .await
+            .expect("canceled host caller should not strand ownership");
+    });
+
+    reset_global();
+}
+
+#[test]
+fn test_pending_registration_records_rollback_failures() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    {
+        let mut pending = PendingPluginRegistrations::new(Some(Arc::clone(&failures)));
+        pending.extend(vec![PluginRegistration::new(
+            "fixture",
+            "failed-rollback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(
+                    "rollback remained registered".into(),
+                ))
+            }),
+        )]);
+    }
+
+    let failures = failures.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("failed-rollback"));
+    assert!(failures[0].contains("rollback remained registered"));
+}
+
+#[test]
+fn test_checked_teardown_reports_unremoved_registrations() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "stale-callback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(
+                    "deregistration refused".into(),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-callback"), "{error}");
+    assert!(error.contains("deregistration refused"), "{error}");
+    assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "stale-callback",
+            Box::new(|| panic!("fixture deregistration panicked")),
+        )],
+    )
+    .unwrap();
+
+    let error = clear_plugin_configuration().unwrap_err();
+    assert!(error.to_string().contains("stale-callback"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("fixture deregistration panicked"),
+        "{error}"
+    );
+    assert_eq!(
+        *PLUGIN_MUTATION_OWNER.lock().unwrap(),
+        PluginMutationOwner::Legacy
+    );
+    assert!(matches!(
+        clear_plugin_configuration(),
+        Err(PluginError::Conflict(_))
+    ));
+
+    *PLUGIN_MUTATION_OWNER.lock().unwrap() = PluginMutationOwner::Idle;
+    reset_global();
+}
+
+#[test]
+fn test_legacy_replace_retains_mutation_owner_after_incomplete_teardown() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(FailingDeregisterPlugin)).unwrap();
+    register_plugin(Arc::new(ReplacementPlugin)).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("failing.deregister.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let error = runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![PluginComponentSpec::new("replacement.plugin")],
+            ..PluginConfig::default()
+        }))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("fixture deregistration refused"),
+        "{error}"
+    );
+    assert_eq!(REPLACEMENT_REGISTRATIONS.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *PLUGIN_MUTATION_OWNER.lock().unwrap(),
+        PluginMutationOwner::Legacy
+    );
+    assert!(active_plugin_report().is_none());
+
+    *PLUGIN_MUTATION_OWNER.lock().unwrap() = PluginMutationOwner::Idle;
     reset_global();
 }
 

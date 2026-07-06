@@ -23,9 +23,13 @@ use nemo_relay::api::scope::{
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
 use nemo_relay::codec::response::AnnotatedLlmResponse;
-use nemo_relay::plugin::dynamic::{NativePluginLoadSpec, load_native_plugins};
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginActivationSpec, DynamicPluginKind, NativePluginLoadSpec, PluginHostActivation,
+    load_native_plugins,
+};
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -964,6 +968,182 @@ async fn native_validate_and_register_callback_errors_are_reported() {
     }
 }
 
+#[tokio::test]
+async fn plugin_host_activation_owns_configuration_until_clear() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let (activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("plugin host should activate");
+
+    assert!(activation.is_active());
+    assert!(!report.has_errors());
+    assert!(
+        list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_native")
+    );
+    let rewritten = tool_request_intercepts("host-owned-tool", json!({ "input": true }))
+        .expect("host-owned intercept should run");
+    assert_eq!(rewritten["native_plugin"], true);
+
+    let initialize_error = initialize_plugins_exact(PluginConfig::default())
+        .await
+        .expect_err("legacy initialize must not replace a host activation")
+        .to_string();
+    assert!(initialize_error.contains("active dynamic plugin host"));
+    let clear_error = clear_plugin_configuration()
+        .expect_err("legacy clear must not clear a host activation")
+        .to_string();
+    assert!(clear_error.contains("active dynamic plugin host"));
+
+    activation.clear().expect("plugin host should clear");
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_native")
+    );
+    let unchanged = tool_request_intercepts("host-owned-tool", json!({ "input": true }))
+        .expect("cleared intercept chain should be empty");
+    assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+
+    {
+        let (activation, _) = PluginHostActivation::activate(
+            PluginConfig::default(),
+            [host_spec("fixture_native", &manifest_ref)],
+        )
+        .await
+        .expect("first plugin host should activate");
+        assert!(activation.is_active());
+    }
+
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_native")
+    );
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("owner should be reusable after drop");
+    activation.clear().expect("second plugin host should clear");
+}
+
+#[tokio::test]
+async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let missing_manifest = manifest_ref.with_file_name("missing-relay-plugin.toml");
+
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        [
+            host_spec("fixture_native", &manifest_ref),
+            host_spec("missing_native", &missing_manifest),
+        ],
+    )
+    .await
+    {
+        Ok((activation, _)) => {
+            activation
+                .clear()
+                .expect("unexpected activation should clear");
+            panic!("partial load should fail");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("missing-relay-plugin.toml"), "{error}");
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_native")
+    );
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("failed activation must release the owner");
+    activation
+        .clear()
+        .expect("recovered activation should clear");
+}
+
+#[tokio::test]
+async fn plugin_host_rejects_an_existing_legacy_configuration() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    initialize_plugins_exact(PluginConfig::default())
+        .await
+        .expect("legacy configuration should initialize");
+
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        Vec::<DynamicPluginActivationSpec>::new(),
+    )
+    .await
+    {
+        Ok((activation, _)) => {
+            activation
+                .clear()
+                .expect("unexpected activation should clear");
+            panic!("host activation should reject an existing configuration");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("already active"), "{error}");
+    clear_plugin_configuration().expect("legacy configuration should clear");
+}
+
+#[cfg(not(feature = "worker-grpc"))]
+#[tokio::test]
+async fn plugin_host_rejects_workers_when_worker_support_is_disabled() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: "unused-worker-manifest.toml".into(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
+    )
+    .await
+    {
+        Ok((activation, _)) => {
+            activation
+                .clear()
+                .expect("unexpected activation should clear");
+            panic!("worker activation should require worker support");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("worker-grpc"), "{error}");
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        Vec::<DynamicPluginActivationSpec>::new(),
+    )
+    .await
+    .expect("failed worker activation must release the owner");
+    activation.clear().expect("empty host should clear");
+}
+
 async fn initialize_fixture_native(config: Map<String, Json>) -> nemo_relay::plugin::Result<()> {
     let mut plugin_config = PluginConfig::default();
     plugin_config.components.push(PluginComponentSpec {
@@ -995,6 +1175,16 @@ fn load_spec(plugin_id: &str, manifest_ref: &Path) -> NativePluginLoadSpec {
     NativePluginLoadSpec {
         plugin_id: plugin_id.into(),
         manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+    }
+}
+
+fn host_spec(plugin_id: &str, manifest_ref: &Path) -> DynamicPluginActivationSpec {
+    DynamicPluginActivationSpec {
+        plugin_id: plugin_id.into(),
+        kind: DynamicPluginKind::RustDynamic,
+        manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+        environment_ref: None,
+        config: Map::new(),
     }
 }
 
