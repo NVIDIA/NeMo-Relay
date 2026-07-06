@@ -270,6 +270,7 @@ fn ask_agents(
         CodingAgent::ClaudeCode,
         CodingAgent::Codex,
         CodingAgent::Hermes,
+        CodingAgent::Openclaw,
     ];
     let labels: Vec<String> = all_supported
         .iter()

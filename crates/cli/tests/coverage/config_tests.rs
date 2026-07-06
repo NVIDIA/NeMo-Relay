@@ -295,6 +295,7 @@ fn agent_and_gateway_mode_arguments_are_stable() {
     assert_eq!(CodingAgent::ClaudeCode.hook_path(), "/hooks/claude-code");
     assert_eq!(CodingAgent::Codex.hook_path(), "/hooks/codex");
     assert_eq!(CodingAgent::Hermes.hook_path(), "/hooks/hermes");
+    assert_eq!(CodingAgent::Openclaw.as_arg(), "openclaw");
     assert_eq!(GatewayMode::HookOnly.as_arg(), "hook-only");
     assert_eq!(GatewayMode::Passthrough.as_arg(), "passthrough");
     assert_eq!(GatewayMode::Required.as_arg(), "required");
@@ -309,6 +310,10 @@ fn agent_inference_uses_executable_basename() {
     assert_eq!(CodingAgent::infer("codex"), Some(CodingAgent::Codex));
     assert_eq!(CodingAgent::infer("cursor-agent"), None);
     assert_eq!(CodingAgent::infer("hermes"), Some(CodingAgent::Hermes));
+    assert_eq!(
+        CodingAgent::infer("/opt/bin/openclaw"),
+        Some(CodingAgent::Openclaw)
+    );
     assert_eq!(CodingAgent::infer("wrapper"), None);
 }
 
@@ -335,6 +340,9 @@ command = "codex --approval-mode never"
 
 [agents.hermes]
 command = "hermes --yolo chat"
+
+[agents.openclaw]
+command = "openclaw tui"
 "#,
     )
     .unwrap();
@@ -366,6 +374,10 @@ command = "hermes --yolo chat"
     assert_eq!(
         resolved.agents.hermes.command.as_deref(),
         Some("hermes --yolo chat")
+    );
+    assert_eq!(
+        resolved.agents.openclaw.command.as_deref(),
+        Some("openclaw tui")
     );
 }
 

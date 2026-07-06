@@ -69,6 +69,18 @@ pub(crate) enum Command {
                       nemo-relay hermes -- chat --provider custom"
     )]
     Hermes(EasyPathCommand),
+    /// Run OpenClaw with observability (setup on first use)
+    #[command(
+        long_about = "Run OpenClaw under an ephemeral NeMo Relay gateway. Relay creates a \
+                      temporary JSON5 overlay and routes API-key-backed canonical Anthropic and \
+                      OpenAI providers through the gateway without modifying OpenClaw's source \
+                      configuration, state, credentials, or plugin installation.",
+        after_help = "Examples:\n  \
+                      nemo-relay openclaw\n  \
+                      nemo-relay openclaw -- agent --agent main --message \"summarize this project\"\n  \
+                      nemo-relay openclaw -- gateway run"
+    )]
+    Openclaw(EasyPathCommand),
     /// Run the interactive setup (writes `.nemo-relay/config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -526,6 +538,7 @@ pub(crate) enum CodingAgent {
     ClaudeCode,
     Codex,
     Hermes,
+    Openclaw,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -613,6 +626,7 @@ pub(crate) struct AgentConfigs {
     pub(crate) claude: AgentCommandConfig,
     pub(crate) codex: AgentCommandConfig,
     pub(crate) hermes: AgentCommandConfig,
+    pub(crate) openclaw: AgentCommandConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -646,12 +660,13 @@ struct FileUpstreamConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentsConfig {
-    // Keys match the agent's CLI invocation name (`claude`, `codex`, `hermes`) — the
+    // Keys match the agent's CLI invocation name (`claude`, `codex`, `hermes`, `openclaw`) — the
     // word the user types at the shell — not the product name ("Claude Code") or the internal
     // `CodingAgent` enum kebab spelling. Same convention as the bare-agent shortcut in Phase 2.
     claude: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
     hermes: Option<FileAgentCommandConfig>,
+    openclaw: Option<FileAgentCommandConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1243,6 +1258,9 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
         agents.hermes.command = value.command;
         agents.hermes.hooks_path = value.hooks_path;
     }
+    if let Some(value) = file_agents.openclaw {
+        agents.openclaw.command = value.command;
+    }
 }
 
 // Applies environment variables after file configuration. Invalid bind values are ignored here to
@@ -1351,6 +1369,9 @@ impl CodingAgent {
             Self::ClaudeCode => "/hooks/claude-code",
             Self::Codex => "/hooks/codex",
             Self::Hermes => "/hooks/hermes",
+            // OpenClaw hook/tool telemetry stays in the separately installed npm plugin. The
+            // hidden hook-forward command rejects this path before issuing an HTTP request.
+            Self::Openclaw => "/hooks/openclaw",
         }
     }
 
@@ -1362,6 +1383,7 @@ impl CodingAgent {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
             Self::Hermes => "hermes",
+            Self::Openclaw => "openclaw",
         }
     }
 
@@ -1376,6 +1398,7 @@ impl CodingAgent {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
             "hermes" | "hermes-agent" => Some(Self::Hermes),
+            "openclaw" | "openclaw.exe" => Some(Self::Openclaw),
             _ => None,
         }
     }

@@ -227,6 +227,7 @@ fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
     assert_eq!(default_command_for(CodingAgent::ClaudeCode), "claude");
     assert_eq!(default_command_for(CodingAgent::Codex), "codex");
     assert_eq!(default_command_for(CodingAgent::Hermes), "hermes");
+    assert_eq!(default_command_for(CodingAgent::Openclaw), "openclaw");
 
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
@@ -236,6 +237,33 @@ fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
         ..AgentConfigs::default()
     };
     assert!(configured_command(CodingAgent::Codex, &agents).is_none());
+}
+
+#[test]
+fn resolves_configured_openclaw_command_and_inference() {
+    let agents = AgentConfigs {
+        openclaw: AgentCommandConfig {
+            command: Some("openclaw tui".into()),
+            hooks_path: None,
+        },
+        ..AgentConfigs::default()
+    };
+    let command = RunCommand {
+        agent: Some(CodingAgent::Openclaw),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: true,
+        print: false,
+        command: vec![],
+    };
+
+    let (agent, argv) = resolve_agent_and_argv(&command, &agents).unwrap();
+
+    assert_eq!(agent, CodingAgent::Openclaw);
+    assert_eq!(argv, ["openclaw", "tui"]);
 }
 
 #[test]
@@ -771,6 +799,7 @@ fn hermes_restore_reports_restore_and_temporary_removal_failures() {
         argv: vec![],
         env: vec![],
         temp_dirs: vec![],
+        temp_files: vec![],
         hermes_restore: Some(HermesRestore {
             path: temp.path().join("config.yaml"),
             backup_path: Some(temp.path().join("missing-backup.yaml")),
@@ -788,6 +817,7 @@ fn hermes_restore_reports_restore_and_temporary_removal_failures() {
         argv: vec![],
         env: vec![],
         temp_dirs: vec![],
+        temp_files: vec![],
         hermes_restore: Some(HermesRestore {
             path: hooks_path,
             backup_path: None,
@@ -798,6 +828,44 @@ fn hermes_restore_reports_restore_and_temporary_removal_failures() {
 
     let error = remove_temporary_dir.restore().unwrap_err().to_string();
     assert!(error.contains("failed to remove temporary Hermes hooks"));
+}
+
+#[test]
+fn restore_removes_temporary_launcher_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("overlay.json5");
+    std::fs::write(&overlay, "{}").unwrap();
+    let prepared = PreparedRun {
+        argv: vec![],
+        env: vec![],
+        temp_dirs: vec![],
+        temp_files: vec![overlay.clone()],
+        hermes_restore: None,
+        notes: vec![],
+    };
+
+    prepared.restore().unwrap();
+
+    assert!(!overlay.exists());
+}
+
+#[test]
+fn prepared_run_drop_defensively_removes_temporary_launcher_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("overlay.json5");
+    std::fs::write(&overlay, "{}").unwrap();
+    let prepared = PreparedRun {
+        argv: vec![],
+        env: vec![],
+        temp_dirs: vec![],
+        temp_files: vec![overlay.clone()],
+        hermes_restore: None,
+        notes: vec![],
+    };
+
+    drop(prepared);
+
+    assert!(!overlay.exists());
 }
 
 #[test]
@@ -1091,6 +1159,117 @@ async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
 
     assert!(error.contains("gateway did not become ready"));
     assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
+}
+
+#[tokio::test]
+async fn execute_live_run_removes_overlay_when_child_spawn_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("openclaw-overlay.json5");
+    std::fs::write(&overlay, "{}").unwrap();
+    let prepared = PreparedRun {
+        argv: vec![temp.path().join("missing-openclaw").display().to_string()],
+        env: vec![],
+        temp_dirs: vec![],
+        temp_files: vec![overlay.clone()],
+        hermes_restore: None,
+        notes: vec![],
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", listener.local_addr().unwrap());
+
+    execute_live_run(listener, GatewayConfig::default(), &gateway_url, prepared)
+        .await
+        .unwrap_err();
+
+    assert!(!overlay.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_live_run_removes_overlay_after_launcher_shutdown_signal() {
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("openclaw-overlay.json5");
+    std::fs::write(&overlay, "{}").unwrap();
+    let child = temp.path().join("openclaw");
+    let started = temp.path().join("child-started");
+    let stopped = temp.path().join("child-stopped");
+    std::fs::write(
+        &child,
+        format!(
+            "#!/bin/sh\ntrap \"touch '{}'; exit 0\" TERM INT\ntouch '{}'\nwhile :; do sleep 1; done\n",
+            stopped.display(),
+            started.display(),
+        ),
+    )
+    .unwrap();
+    make_executable(&child);
+    let prepared = PreparedRun {
+        argv: vec![child.display().to_string()],
+        env: vec![],
+        temp_dirs: vec![],
+        temp_files: vec![overlay.clone()],
+        hermes_restore: None,
+        notes: vec![],
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", listener.local_addr().unwrap());
+    let started_for_signal = started.clone();
+
+    let code = tokio::time::timeout(
+        Duration::from_secs(10),
+        execute_live_run_with_shutdown(
+            listener,
+            GatewayConfig::default(),
+            &gateway_url,
+            prepared,
+            async move {
+                loop {
+                    if started_for_signal.exists() {
+                        return Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            },
+        ),
+    )
+    .await
+    .expect("test child did not start and stop before timeout")
+    .unwrap();
+
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(started.exists());
+    assert!(stopped.exists());
+    assert!(!overlay.exists());
+}
+
+#[tokio::test]
+async fn execute_live_run_removes_overlay_when_shutdown_precedes_health() {
+    let temp = tempfile::tempdir().unwrap();
+    let overlay = temp.path().join("openclaw-overlay.json5");
+    std::fs::write(&overlay, "{}").unwrap();
+    let prepared = PreparedRun {
+        argv: vec![temp.path().join("unused-openclaw").display().to_string()],
+        env: vec![],
+        temp_dirs: vec![],
+        temp_files: vec![overlay.clone()],
+        hermes_restore: None,
+        notes: vec![],
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_url = format!("http://{}", listener.local_addr().unwrap());
+
+    let code = execute_live_run_with_shutdown(
+        listener,
+        GatewayConfig::default(),
+        &gateway_url,
+        prepared,
+        std::future::ready(Ok(())),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(!overlay.exists());
 }
 
 #[cfg(unix)]

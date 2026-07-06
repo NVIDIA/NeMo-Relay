@@ -26,7 +26,7 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Why Use It?
 
-- **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
+- **Observe existing coding agents**: Run Claude Code, Codex, Hermes, or OpenClaw
   Agent through a local NeMo Relay gateway without changing the agent
   itself.
 - **Configure hooks interactively**: Use the setup wizard to write project or
@@ -43,8 +43,8 @@ with the installed `nemo-relay` command rather than link against the crate.
   Cargo package.
 - **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
   then runs doctor once config is present.
-- **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
-  `nemo-relay hermes` start observed agent runs.
+- **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`,
+  `nemo-relay hermes`, and `nemo-relay openclaw` start observed agent runs.
 - **Config-driven launch**: `nemo-relay run` resolves config, environment, and
   CLI overrides for deterministic non-interactive use.
 - **Hook forwarding server**: A local gateway accepts agent hook events and
@@ -99,7 +99,15 @@ Run a supported agent through the gateway:
 ```bash
 nemo-relay codex
 nemo-relay claude -- "summarize this repository"
+nemo-relay openclaw -- agent --message "summarize this repository"
 ```
+
+OpenClaw launches in an embedded local or foreground-gateway mode so the
+temporary provider overlay reaches the model-serving process. Relay routes
+deterministically API-key-backed Anthropic Messages, OpenAI Chat Completions,
+and OpenAI Responses providers while leaving custom, remote, or ambiguous
+provider paths unchanged. Relay detects the optional `nemo-relay-openclaw`
+plugin but never installs or enables it automatically.
 
 Use `run --dry-run` to inspect resolved config without spawning the agent:
 

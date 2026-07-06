@@ -82,6 +82,13 @@ fn read_hook_payload() -> Result<String, CliError> {
 // Builds the target gateway hook URL and applies fail-open/fail-closed behavior for missing
 // gateway discovery. Returning `Ok(None)` is the fail-open path used by default hook commands.
 fn hook_forward_url(command: &HookForwardCommand) -> Result<Option<String>, CliError> {
+    if command.agent == CodingAgent::Openclaw {
+        return Err(CliError::Install(
+            "OpenClaw hook and tool telemetry is provided by the optional \
+             nemo-relay-openclaw npm plugin, not the Relay hook-forward endpoint"
+                .into(),
+        ));
+    }
     let Some(gateway_url) = resolve_hook_gateway_url(
         command.agent,
         command.gateway_url.clone(),
@@ -201,6 +208,7 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
         CodingAgent::ClaudeCode => claude_hooks(command),
         CodingAgent::Codex => codex_hooks(command),
         CodingAgent::Hermes => hermes_hooks(command),
+        CodingAgent::Openclaw => json!({"hooks": {}}),
     }
 }
 

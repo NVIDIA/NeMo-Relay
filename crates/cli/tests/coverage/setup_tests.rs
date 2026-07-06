@@ -91,9 +91,9 @@ impl Drop for EnvScope {
 fn detect_installed_agents_finds_binaries_on_path() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
-    // Drop stub binaries for two of the three supported agents — confirming detection picks up
+    // Drop stub binaries for three supported agents — confirming detection picks up
     // only the ones present and ignores the others.
-    for exec in ["claude", "hermes"] {
+    for exec in ["claude", "hermes", "openclaw"] {
         let path = temp.path().join(exec);
         std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -105,6 +105,7 @@ fn detect_installed_agents_finds_binaries_on_path() {
     let detected = detect_installed_agents_in(Some(temp.path().as_os_str()));
     assert!(detected.contains(&CodingAgent::ClaudeCode));
     assert!(detected.contains(&CodingAgent::Hermes));
+    assert!(detected.contains(&CodingAgent::Openclaw));
     assert!(!detected.contains(&CodingAgent::Codex));
 }
 
@@ -151,7 +152,11 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
 fn build_config_emits_agents_block_with_user_facing_keys() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
-        agents: vec![CodingAgent::ClaudeCode, CodingAgent::Codex],
+        agents: vec![
+            CodingAgent::ClaudeCode,
+            CodingAgent::Codex,
+            CodingAgent::Openclaw,
+        ],
         hermes_hooks_path: None,
     };
 
@@ -163,6 +168,8 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
     assert!(rendered.contains(r#"command = "claude""#));
     assert!(rendered.contains("[agents.codex]"));
     assert!(rendered.contains(r#"command = "codex""#));
+    assert!(rendered.contains("[agents.openclaw]"));
+    assert!(rendered.contains(r#"command = "openclaw""#));
 }
 
 #[test]

@@ -40,6 +40,8 @@ http = "1"
 http-body-util = "0.1"
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
 jsonschema = { version = "0.46.6", default-features = false }
+json5 = "0.4"
+libc = "0.2"
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls-native-roots", "stream"] }
 regex = "1"

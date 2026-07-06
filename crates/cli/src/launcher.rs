@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -101,6 +102,12 @@ impl TransparentRun {
     async fn new(command: RunCommand, inherited: Option<&ServerArgs>) -> Result<Self, CliError> {
         let dry_run = command.dry_run;
         let print = command.print;
+        let explicit_openclaw_upstreams = crate::openclaw::ExplicitUpstreams {
+            openai: command.openai_base_url.is_some()
+                || inherited.is_some_and(|args| args.openai_base_url.is_some()),
+            anthropic: command.anthropic_base_url.is_some()
+                || inherited.is_some_and(|args| args.anthropic_base_url.is_some()),
+        };
         let explicit_config = command
             .config
             .as_ref()
@@ -111,13 +118,30 @@ impl TransparentRun {
         } else {
             crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
         };
-        let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
+        let (agent, mut argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let gateway_url = format!("http://{address}");
         resolved.gateway.bind = address;
 
-        let prepared = PreparedRun::new(agent, argv, &gateway_url, &resolved, dry_run)?;
+        let openclaw = if agent == CodingAgent::Openclaw {
+            Some(crate::openclaw::prepare(
+                &mut argv,
+                &gateway_url,
+                &mut resolved.gateway,
+                explicit_openclaw_upstreams,
+                dry_run,
+            )?)
+        } else {
+            None
+        };
+        let mut prepared = PreparedRun::new(agent, argv, &gateway_url, &resolved, dry_run)?;
+        if let Some(openclaw) = openclaw {
+            prepared.env.extend(openclaw.env);
+            prepared.temp_dirs.extend(openclaw.temp_dirs);
+            prepared.temp_files.extend(openclaw.temp_files);
+            prepared.notes.extend(openclaw.notes);
+        }
         Ok(Self {
             agent,
             prepared,
@@ -176,21 +200,77 @@ async fn execute_live_run_with_dynamic(
     gateway_url: &str,
     prepared: PreparedRun,
 ) -> Result<ExitCode, CliError> {
+    execute_live_run_with_dynamic_and_shutdown(
+        listener,
+        gateway_config,
+        dynamic_plugins,
+        gateway_url,
+        prepared,
+        launcher_shutdown_signal(),
+    )
+    .await
+}
+
+async fn execute_live_run_with_dynamic_and_shutdown<F>(
+    listener: TcpListener,
+    gateway_config: GatewayConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    gateway_url: &str,
+    prepared: PreparedRun,
+    shutdown: F,
+) -> Result<ExitCode, CliError>
+where
+    F: Future<Output = Result<(), CliError>>,
+{
     let running_server = RunningGateway::start(listener, gateway_config, dynamic_plugins);
-    if let Err(error) = wait_for_health(gateway_url).await {
+    tokio::pin!(shutdown);
+    let health = tokio::select! {
+        result = wait_for_health(gateway_url) => result,
+        signal = &mut shutdown => {
+            let restore = prepared.restore();
+            let server_result = running_server.stop().await;
+            signal?;
+            restore?;
+            server_result?;
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    if let Err(error) = health {
         let restore = prepared.restore();
         let server_result = running_server.stop().await;
         restore?;
         server_result?;
         return Err(error);
     }
-    let status = prepared.spawn_and_wait().await;
+    let status = prepared.spawn_and_wait_with_shutdown(&mut shutdown).await;
     let restore = prepared.restore();
     let server_result = running_server.stop().await;
     restore?;
     server_result?;
 
     Ok(exit_code(status?))
+}
+
+#[cfg(test)]
+async fn execute_live_run_with_shutdown<F>(
+    listener: TcpListener,
+    gateway_config: GatewayConfig,
+    gateway_url: &str,
+    prepared: PreparedRun,
+    shutdown: F,
+) -> Result<ExitCode, CliError>
+where
+    F: Future<Output = Result<(), CliError>>,
+{
+    execute_live_run_with_dynamic_and_shutdown(
+        listener,
+        gateway_config,
+        Vec::new(),
+        gateway_url,
+        prepared,
+        shutdown,
+    )
+    .await
 }
 
 // Resolves the launched agent and argv from either an explicit command or a configured per-agent
@@ -232,6 +312,7 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
         CodingAgent::ClaudeCode => "claude",
         CodingAgent::Codex => "codex",
         CodingAgent::Hermes => "hermes",
+        CodingAgent::Openclaw => "openclaw",
     }
 }
 
@@ -243,7 +324,7 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
     }
     CodingAgent::infer(&argv[0]).ok_or_else(|| {
         CliError::Launch(format!(
-            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, or --agent hermes",
+            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, --agent hermes, or --agent openclaw",
             argv[0]
         ))
     })
@@ -257,6 +338,7 @@ fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<S
         CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
+        CodingAgent::Openclaw => agents.openclaw.command.as_ref(),
     }?;
     let argv: Vec<_> = command.split_whitespace().map(ToOwned::to_owned).collect();
     (!argv.is_empty()).then_some(argv)
@@ -266,6 +348,7 @@ struct PreparedRun {
     argv: Vec<String>,
     env: Vec<(String, String)>,
     temp_dirs: Vec<PathBuf>,
+    temp_files: Vec<PathBuf>,
     hermes_restore: Option<HermesRestore>,
     notes: Vec<String>,
 }
@@ -279,6 +362,17 @@ struct HermesRestore {
 struct RunningGateway {
     shutdown_tx: oneshot::Sender<()>,
     task: JoinHandle<Result<(), CliError>>,
+}
+
+impl Drop for PreparedRun {
+    fn drop(&mut self) {
+        for file in &self.temp_files {
+            let _ = std::fs::remove_file(file);
+        }
+        for dir in &self.temp_dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
 
 impl RunningGateway {
@@ -312,6 +406,37 @@ impl RunningGateway {
     }
 }
 
+async fn launcher_shutdown_signal() -> Result<(), CliError> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(CliError::from)?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result.map_err(CliError::from),
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.map_err(CliError::from)
+    }
+}
+
+fn request_child_shutdown(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // The child may already have received the terminal's SIGINT/SIGTERM through the
+        // foreground process group. A second graceful SIGTERM is harmless and also covers
+        // service managers that signal only the Relay parent.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = child;
+}
+
 impl PreparedRun {
     // Builds the launch plan and applies only the preparation needed by the selected agent.
     // Dry-run preparation records equivalent notes and argv/env changes without writing temporary
@@ -327,6 +452,7 @@ impl PreparedRun {
             argv,
             env: vec![("NEMO_RELAY_GATEWAY_URL".into(), gateway_url.into())],
             temp_dirs: Vec::new(),
+            temp_files: Vec::new(),
             hermes_restore: None,
             notes: Vec::new(),
         };
@@ -349,6 +475,9 @@ impl PreparedRun {
                     run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref())?;
                 }
             }
+            // OpenClaw preparation happens before this generic constructor because it also
+            // selects provider-specific upstreams on the gateway configuration.
+            CodingAgent::Openclaw => {}
         }
         Ok(run)
     }
@@ -489,14 +618,34 @@ impl PreparedRun {
 
     // Spawns the prepared child process with injected environment and waits for its exit status.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
-    async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, CliError> {
+    async fn spawn_and_wait_with_shutdown<F>(
+        &self,
+        shutdown: F,
+    ) -> Result<std::process::ExitStatus, CliError>
+    where
+        F: Future<Output = Result<(), CliError>>,
+    {
         let mut command = Command::new(&self.argv[0]);
         command.args(&self.argv[1..]);
         for (name, value) in &self.env {
             command.env(name, value);
         }
         let mut child = command.spawn()?;
-        child.wait().await.map_err(CliError::from)
+        tokio::pin!(shutdown);
+        tokio::select! {
+            status = child.wait() => status.map_err(CliError::from),
+            signal = &mut shutdown => {
+                signal?;
+                request_child_shutdown(&mut child);
+                match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                    Ok(status) => status.map_err(CliError::from),
+                    Err(_) => {
+                        let _ = child.start_kill();
+                        child.wait().await.map_err(CliError::from)
+                    }
+                }
+            }
+        }
     }
 
     // Removes temporary directories and restores patched hook files after the child exits. Restore
@@ -504,6 +653,16 @@ impl PreparedRun {
     fn restore(&self) -> Result<(), CliError> {
         for dir in &self.temp_dirs {
             let _ = std::fs::remove_dir_all(dir);
+        }
+        for file in &self.temp_files {
+            if let Err(error) = std::fs::remove_file(file)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(CliError::Launch(format!(
+                    "failed to remove temporary launcher file {}: {error}",
+                    file.display()
+                )));
+            }
         }
 
         if let Some(hermes) = &self.hermes_restore {
@@ -520,14 +679,21 @@ impl PreparedRun {
     // Prints a compact pre-launch status banner so users see at a glance which plugin
     // configuration is active, including plugin names and enabled/disabled state, before the
     // agent's own UI takes over the terminal. Always emitted on stderr so it never contaminates
-    // piped/redirected agent output, and suppressed entirely when stdout is not a TTY — scripts
-    // capturing the agent stream get a clean pipe, interactive users still get the bordered frame.
+    // piped/redirected agent output. The decorative frame is suppressed when stdout is not a TTY,
+    // but OpenClaw routing decisions still go to stderr so passthrough is never silent.
     // Distinct from `print()`, which is the verbose `--print` / `--dry-run` dump intended for
     // inspection.
     fn print_live_status(&self, agent: CodingAgent, gateway_url: &str, resolved: &ResolvedConfig) {
         // Suppress entirely on non-TTY stdout: when the user redirects the agent's stream to a
-        // file or pipes it into another tool, no banner should appear ahead of that output.
+        // file or pipes it into another tool, no banner should appear ahead of that output. Keep
+        // OpenClaw routing notes visible on stderr because they are part of the interception
+        // contract rather than decoration.
         if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+            if agent == CodingAgent::Openclaw {
+                for note in &self.notes {
+                    eprintln!("nemo-relay openclaw: {note}");
+                }
+            }
             return;
         }
 
