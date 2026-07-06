@@ -1613,3 +1613,227 @@ entrypoint = "acme_guardrails.plugin:register"
         other => panic!("unexpected empty optional string error: {other}"),
     }
 }
+
+#[test]
+fn manifest_load_contract_serializes_both_execution_lanes() {
+    let worker = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    let worker_toml = toml::to_string(&worker).expect("serialize worker manifest");
+    assert!(worker_toml.contains("runtime = \"python\""));
+    assert!(worker_toml.contains("entrypoint = \"acme_guardrails.plugin:register\""));
+    assert!(!worker_toml.contains("library ="));
+
+    let native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
+    let native_toml = toml::to_string(&native).expect("serialize native manifest");
+    assert!(native_toml.contains("library = \"target/release/libswitchyard.dylib\""));
+    assert!(native_toml.contains("symbol = \"nemo_relay_register_plugin\""));
+    assert!(!native_toml.contains("runtime ="));
+
+    assert_eq!(
+        DynamicPluginManifest::parse_toml(&worker_toml).unwrap(),
+        worker
+    );
+    assert_eq!(
+        DynamicPluginManifest::parse_toml(&native_toml).unwrap(),
+        native
+    );
+}
+
+#[test]
+fn manifest_load_contract_rejects_mixed_and_empty_shapes() {
+    let mixed = valid_worker_manifest_toml().replace(
+        "entrypoint = \"acme_guardrails.plugin:register\"",
+        "entrypoint = \"acme_guardrails.plugin:register\"\nlibrary = \"plugin.so\"",
+    );
+    let error = DynamicPluginManifest::parse_toml(&mixed).unwrap_err();
+    assert!(error.to_string().contains("not both"));
+
+    let empty = valid_worker_manifest_toml()
+        .replace("runtime = \"python\"\n", "")
+        .replace("entrypoint = \"acme_guardrails.plugin:register\"\n", "");
+    let error = DynamicPluginManifest::parse_toml(&empty).unwrap_err();
+    assert!(error.to_string().contains("load must declare either"));
+}
+
+#[test]
+fn manifest_validation_covers_forbidden_cross_lane_fields() {
+    let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
+    native
+        .capabilities
+        .items
+        .push(DynamicPluginCapability::PluginWorker);
+    assert!(
+        native
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not declare plugin_worker")
+    );
+
+    let mut worker = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    worker.capabilities.items = vec![DynamicPluginCapability::ConfigSchema];
+    assert!(
+        worker
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must declare capabilities.items containing plugin_worker")
+    );
+
+    let mut worker = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    worker
+        .capabilities
+        .items
+        .push(DynamicPluginCapability::PluginNative);
+    assert!(
+        worker
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not declare plugin_native")
+    );
+
+    let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
+    native.load = DynamicPluginManifestLoad::Worker(DynamicPluginManifestWorkerLoad {
+        runtime: Some(WorkerRuntime::Rust),
+        entrypoint: Some("worker".into()),
+    });
+    assert!(
+        native
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not declare load.runtime")
+    );
+
+    let mut worker = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    worker.load = DynamicPluginManifestLoad::RustDynamic(DynamicPluginManifestRustDynamicLoad {
+        library: Some("plugin.so".into()),
+        symbol: Some("register".into()),
+    });
+    assert!(
+        worker
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not declare load.library")
+    );
+
+    let mut worker = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    let DynamicPluginManifestLoad::Worker(load) = &mut worker.load else {
+        panic!("expected worker load contract");
+    };
+    load.runtime = None;
+    assert!(
+        worker
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must declare load.runtime")
+    );
+
+    let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
+    native.compat.worker_protocol = Some("grpc-v1".into());
+    assert!(
+        native
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not declare compat.worker_protocol")
+    );
+
+    let mut worker = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    worker.compat.native_api = Some("1".into());
+    assert!(
+        worker
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("must not declare compat.native_api")
+    );
+}
+
+#[test]
+fn manifest_validation_checks_each_optional_source_and_integrity_field() {
+    for field in ["source.artifact", "integrity.sha256", "integrity.signature"] {
+        let mut manifest = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+        match field {
+            "source.artifact" => manifest.source.as_mut().unwrap().artifact = Some(" ".into()),
+            "integrity.sha256" => manifest.integrity.as_mut().unwrap().sha256 = Some(" ".into()),
+            "integrity.signature" => {
+                manifest.integrity.as_mut().unwrap().signature = Some(" ".into())
+            }
+            _ => unreachable!(),
+        }
+        assert!(manifest.validate().unwrap_err().to_string().contains(field));
+    }
+
+    let manifest = DynamicPluginManifest::parse_toml(valid_worker_manifest_toml()).unwrap();
+    assert!(
+        manifest
+            .resolve_config_schema_path("")
+            .unwrap_err()
+            .to_string()
+            .contains("has no parent directory")
+    );
+}
+
+#[test]
+fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
+    let record = sample_record();
+    let error = DynamicPluginRegistry::from_records(vec![record.clone(), record]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicated in persisted registry state")
+    );
+
+    let mut empty_id = sample_record();
+    empty_id.metadata.id = " ".into();
+    assert!(
+        DynamicPluginRegistry::from_records(vec![empty_id])
+            .unwrap_err()
+            .to_string()
+            .contains("id must not be empty")
+    );
+
+    let mut native = sample_record();
+    native.metadata.kind = DynamicPluginKind::RustDynamic;
+    native.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+        relay: ">=0.5,<1.0".into(),
+        worker_protocol: "grpc-v1".into(),
+    });
+    native.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
+        library: "plugin.so".into(),
+        symbol: "register".into(),
+    });
+    assert!(
+        DynamicPluginRegistry::from_records(vec![native])
+            .unwrap_err()
+            .to_string()
+            .contains("compatibility shape")
+    );
+
+    let mut native = sample_record();
+    native.metadata.kind = DynamicPluginKind::RustDynamic;
+    native.compatibility =
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.5,<1.0".into(),
+            native_api: "1".into(),
+        });
+    native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Rust,
+        entrypoint: "worker".into(),
+    });
+    assert!(
+        DynamicPluginRegistry::from_records(vec![native])
+            .unwrap_err()
+            .to_string()
+            .contains("load shape")
+    );
+
+    let mut registry = DynamicPluginRegistry::new();
+    let mut disabled = sample_record();
+    disabled.spec.enabled = false;
+    registry.add(disabled).unwrap();
+    assert!(!registry.disable("acme.guardrails.pii").unwrap());
+}

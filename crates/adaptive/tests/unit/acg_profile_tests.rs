@@ -157,3 +157,117 @@ fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
         learning_seed_fingerprint(&with_image_b)
     );
 }
+
+#[test]
+fn acg_profile_fingerprints_cover_alternate_role_sequences() {
+    let late_user = request(
+        vec![
+            Message::System {
+                content: MessageContent::Text("system".into()),
+                name: None,
+            },
+            Message::Assistant {
+                content: Some(MessageContent::Text("assistant".into())),
+                tool_calls: None,
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("user".into()),
+                name: None,
+            },
+            Message::System {
+                content: MessageContent::Text("tail".into()),
+                name: None,
+            },
+        ],
+        None,
+    );
+    assert!(layered_anchor_fingerprint(&late_user).is_none());
+
+    let wrong_assistant = request(
+        vec![
+            Message::User {
+                content: MessageContent::Text("first".into()),
+                name: None,
+            },
+            Message::System {
+                content: MessageContent::Text("not assistant".into()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text("second".into()),
+                name: None,
+            },
+            Message::Tool {
+                content: MessageContent::Text("tool".into()),
+                tool_call_id: "call".into(),
+            },
+        ],
+        None,
+    );
+    assert!(layered_anchor_fingerprint(&wrong_assistant).is_none());
+
+    let wrong_followup = request(
+        vec![
+            Message::User {
+                content: MessageContent::Text("first".into()),
+                name: None,
+            },
+            Message::Assistant {
+                content: Some(MessageContent::Text("answer".into())),
+                tool_calls: None,
+                name: None,
+            },
+            Message::Tool {
+                content: MessageContent::Text("tool".into()),
+                tool_call_id: "call".into(),
+            },
+            Message::System {
+                content: MessageContent::Text("tail".into()),
+                name: None,
+            },
+        ],
+        None,
+    );
+    assert!(layered_anchor_fingerprint(&wrong_followup).is_none());
+
+    for (message, prefix) in [
+        (
+            Message::Assistant {
+                content: Some(MessageContent::Text("answer".into())),
+                tool_calls: None,
+                name: None,
+            },
+            "assistant:",
+        ),
+        (
+            Message::Assistant {
+                content: None,
+                tool_calls: None,
+                name: None,
+            },
+            "assistant:no-content",
+        ),
+        (
+            Message::Tool {
+                content: MessageContent::Text("result".into()),
+                tool_call_id: "call".into(),
+            },
+            "tool:",
+        ),
+    ] {
+        assert!(
+            learning_seed_fingerprint(&request(vec![message], None)).starts_with(prefix),
+            "expected seed prefix {prefix}"
+        );
+    }
+
+    let system_only = request(
+        vec![Message::System {
+            content: MessageContent::Text("system".into()),
+            name: None,
+        }],
+        None,
+    );
+    assert_eq!(learning_seed_fingerprint(&system_only), "no-seed");
+}
