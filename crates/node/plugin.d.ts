@@ -45,6 +45,28 @@ export interface PluginConfig {
   policy?: ConfigPolicy;
 }
 
+/** Execution lane for a dynamically loaded Relay plugin. */
+export type DynamicPluginKind = 'rust_dynamic' | 'worker';
+
+/** Explicitly resolved dynamic plugin load and component configuration. */
+export interface DynamicPluginActivationSpec {
+  pluginId: string;
+  kind: DynamicPluginKind;
+  manifestRef: string;
+  environmentRef?: string | null;
+  config?: Record<string, Json>;
+}
+
+/** Owns one process-wide dynamic plugin host activation. */
+export interface DynamicPluginActivation {
+  /** Validation report produced by the successful activation. */
+  readonly report: ConfigReport;
+  /** Whether this object still owns the dynamic plugin host. */
+  readonly active: boolean;
+  /** Clear callbacks before unloading libraries and workers. Idempotent. */
+  close(): Promise<void>;
+}
+
 /** A mark Relay materializes under a managed lifecycle. */
 export interface PendingMarkSpec {
   name: string;
@@ -297,6 +319,21 @@ export declare function validate(config: PluginConfig): ConfigReport;
  * the promise rejects with the underlying validation or setup error.
  */
 export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
+/**
+ * Load and activate explicitly resolved dynamic plugins.
+ *
+ * The returned object owns loaded libraries and worker processes. Keep it
+ * alive while plugin callbacks may run and call `close()` for deterministic
+ * teardown. Garbage collection is a defensive fallback only.
+ *
+ * @param config - Base plugin configuration activated alongside dynamic components.
+ * @param specs - Explicit manifest and component configuration for each plugin.
+ * @returns The owned activation and its validation report.
+ */
+export declare function activateDynamicPlugins(
+  config: PluginConfig,
+  specs: DynamicPluginActivationSpec[],
+): Promise<DynamicPluginActivation>;
 /**
  * Clear the active plugin configuration.
  *
