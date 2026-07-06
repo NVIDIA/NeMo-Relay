@@ -169,6 +169,15 @@ enabled = true
 endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
+After `nemo-relay config` saves the base configuration, the setup wizard asks
+whether to configure plugins. Accept the default to open the plugin editor.
+Answer `n` or interrupt the prompt to skip plugin setup; the base configuration
+remains saved.
+
+To configure plugins later, run `nemo-relay plugins edit` for the user file or
+`nemo-relay plugins edit --project` for `.nemo-relay/plugins.toml`. If the plugin
+editor is canceled or does not complete, the base configuration remains saved.
+
 ## Add Model Pricing for Cost Estimates
 
 Model pricing is configured with the same `plugins.toml` discovery path as
