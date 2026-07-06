@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import hashlib
 import os
@@ -245,6 +246,9 @@ async def test_native_activation_finalizer_releases_callbacks(native_dynamic_plu
     assert "fixture_native" in plugin.list_kinds()
 
     del activation
+    # The asyncio Future returned by the native binding retains its completed
+    # result until the event loop processes the completion callback.
+    await asyncio.sleep(0)
     gc.collect()
 
     assert "fixture_native" not in plugin.list_kinds()
