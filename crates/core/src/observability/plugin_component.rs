@@ -199,6 +199,9 @@ pub struct AtofEndpointSectionConfig {
     /// Headers applied to endpoint requests or handshakes.
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// Header names mapped to environment variables containing their values.
+    #[serde(default)]
+    pub header_env: HashMap<String, String>,
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
@@ -695,6 +698,9 @@ fn build_atof_endpoint_config(
         .with_field_name_policy(field_name_policy);
     for (key, value) in endpoint.headers {
         config = config.with_header(key, value);
+    }
+    for (key, variable) in endpoint.header_env {
+        config = config.with_header_env(key, variable);
     }
     Ok(config)
 }

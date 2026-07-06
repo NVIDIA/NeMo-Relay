@@ -143,6 +143,10 @@ pub struct DynamicPluginManifestRustDynamicLoad {
 
 #[cfg(feature = "schema")]
 #[derive(schemars::JsonSchema)]
+#[allow(
+    dead_code,
+    reason = "variants are consumed by schemars derive metadata"
+)]
 #[serde(untagged)]
 enum DynamicPluginManifestLoadSchema {
     Worker(DynamicPluginManifestWorkerLoad),

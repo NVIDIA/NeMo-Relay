@@ -1388,16 +1388,37 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         url: "http://127.0.0.1:9/events".into(),
         transport: AtofEndpointTransport::HttpPost,
         headers: headers.clone(),
+        header_env: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     })
     .unwrap();
-    assert_eq!(build_header_map(&headers).unwrap().len(), 1);
+    assert_eq!(
+        resolved_header_map(&headers, &Default::default())
+            .unwrap()
+            .len(),
+        1
+    );
+    let env_headers = std::collections::HashMap::from([("x-path".into(), "PATH".into())]);
+    assert_eq!(
+        resolved_header_map(&Default::default(), &env_headers)
+            .unwrap()
+            .len(),
+        1
+    );
+    let missing_env = std::collections::HashMap::from([(
+        "authorization".into(),
+        "NEMO_RELAY_TEST_MISSING_ATOF_SECRET".into(),
+    )]);
+    assert!(resolved_header_map(&Default::default(), &missing_env).is_err());
+    let conflict = std::collections::HashMap::from([("x-test".into(), "PATH".into())]);
+    assert!(resolved_header_map(&headers, &conflict).is_err());
 
     let empty_url = AtofEndpointConfig {
         url: "  ".into(),
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
+        header_env: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
@@ -1412,6 +1433,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         url: "http://127.0.0.1:9/events".into(),
         transport: AtofEndpointTransport::HttpPost,
         headers: std::collections::HashMap::new(),
+        header_env: std::collections::HashMap::new(),
         timeout_millis: 0,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
@@ -1424,16 +1446,17 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 
     let mut bad_header_name = std::collections::HashMap::new();
     bad_header_name.insert("bad header".to_string(), "ok".to_string());
-    assert!(build_header_map(&bad_header_name).is_err());
+    assert!(resolved_header_map(&bad_header_name, &Default::default()).is_err());
 
     let mut bad_header_value = std::collections::HashMap::new();
     bad_header_value.insert("x-test".to_string(), "bad\nvalue".to_string());
-    assert!(build_header_map(&bad_header_value).is_err());
+    assert!(resolved_header_map(&bad_header_value, &Default::default()).is_err());
     assert!(
         build_ndjson_client(&AtofEndpointConfig {
             url: "http://127.0.0.1:9/events".into(),
             transport: AtofEndpointTransport::Ndjson,
             headers: bad_header_value,
+            header_env: std::collections::HashMap::new(),
             timeout_millis: 1,
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         })
@@ -1534,6 +1557,7 @@ fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
                     url: "http://127.0.0.1:9/events".into(),
                     transport: AtofEndpointTransport::HttpPost,
                     headers,
+                    header_env: std::collections::HashMap::new(),
                     timeout_millis: 1,
                     field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
                 },
@@ -1567,6 +1591,7 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
         url: "ws://127.0.0.1:9/events".into(),
         transport: AtofEndpointTransport::Websocket,
         headers,
+        header_env: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
