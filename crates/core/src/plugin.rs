@@ -802,11 +802,14 @@ fn clone_cached_plugin_error(err: &PluginError) -> PluginError {
 /// Active component registrations created by previous initialization calls are
 /// not removed by this function.
 pub fn deregister_plugin(plugin_kind: &str) -> bool {
+    deregister_plugin_checked(plugin_kind).unwrap_or(false)
+}
+
+pub(crate) fn deregister_plugin_checked(plugin_kind: &str) -> Result<bool> {
     PLUGIN_HANDLERS
         .write()
-        .ok()
-        .and_then(|mut guard| guard.remove(plugin_kind))
-        .is_some()
+        .map(|mut guard| guard.remove(plugin_kind).is_some())
+        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))
 }
 
 /// Lists registered plugin kinds in sorted order.

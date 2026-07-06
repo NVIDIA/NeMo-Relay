@@ -3,6 +3,7 @@
 
 //! Owned activation lifecycle for dynamically loaded plugin components.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -11,10 +12,14 @@ use serde_json::{Map, Value as Json};
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
     acquire_plugin_host_lease, clear_plugin_configuration_for_host,
-    initialize_plugins_exact_for_host, run_owned_plugin_mutation,
+    ensure_builtin_plugins_registered, initialize_plugins_exact_for_host,
+    run_owned_plugin_mutation,
 };
 
-use super::{DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, load_native_plugins};
+use super::{
+    DynamicPluginKind, DynamicPluginTeardownOutcome, NativePluginActivation, NativePluginLoadSpec,
+    load_native_plugins,
+};
 
 #[cfg(feature = "worker-grpc")]
 use super::{WorkerPluginActivation, WorkerPluginLoadSpec, load_worker_plugins};
@@ -76,6 +81,7 @@ impl PluginHostActivation {
         dynamic_plugins: Vec<DynamicPluginActivationSpec>,
     ) -> Result<(Self, ConfigReport)> {
         let claim = acquire_plugin_host_lease()?;
+        validate_unique_plugin_ids(&dynamic_plugins)?;
 
         #[cfg(not(feature = "worker-grpc"))]
         if let Some(plugin) = dynamic_plugins
@@ -87,6 +93,11 @@ impl PluginHostActivation {
                 plugin.plugin_id
             )));
         }
+
+        // Builtin registration is cached process-wide. It must complete before
+        // a dynamic plugin can claim a reserved builtin kind and permanently
+        // cache a failed builtin registration attempt.
+        ensure_builtin_plugins_registered()?;
 
         let native_specs = dynamic_plugins
             .iter()
@@ -211,39 +222,101 @@ impl PluginHostActivation {
                 result: Ok(()),
                 callbacks_cleared: true,
             });
-        if outcome.callbacks_cleared {
-            self.native.take();
-            #[cfg(feature = "worker-grpc")]
-            self.worker.take();
-            self.claim.take();
-        } else {
+        let mut errors = outcome
+            .result
+            .err()
+            .map(|error| vec![error.to_string()])
+            .unwrap_or_default();
+        if !outcome.callbacks_cleared {
             // If core could not prove callbacks were removed, intentionally
             // retain their code and owner for process lifetime rather than
             // unload a library or worker that may still be referenced.
-            if let Some(native) = self.native.take() {
-                std::mem::forget(native);
-            }
-            #[cfg(feature = "worker-grpc")]
-            if let Some(worker) = self.worker.take() {
-                std::mem::forget(worker);
-            }
-            if let Some(claim) = self.claim.take() {
-                std::mem::forget(claim);
-            }
+            self.retain_loaded_runtimes();
+            return Err(retained_runtime_error(errors));
         }
-        if outcome.callbacks_cleared {
-            outcome.result
+
+        let mut runtime_outcome = DynamicPluginTeardownOutcome::success();
+        if let Some(native) = &mut self.native {
+            runtime_outcome.merge(native.deregister_plugin_kinds_checked());
+        }
+        #[cfg(feature = "worker-grpc")]
+        if let Some(worker) = &mut self.worker {
+            runtime_outcome.merge(worker.deregister_plugin_kinds_checked());
+        }
+
+        // A worker cannot be stopped while its registry adapter might still be
+        // callable. Only begin process shutdown once every kind is known to be
+        // absent from the registry.
+        #[cfg(feature = "worker-grpc")]
+        if runtime_outcome.safe_to_unload
+            && let Some(worker) = &self.worker
+        {
+            runtime_outcome.merge(worker.shutdown_plugins_checked());
+        }
+        errors.extend(runtime_outcome.errors);
+
+        if !runtime_outcome.safe_to_unload {
+            self.retain_loaded_runtimes();
+            return Err(retained_runtime_error(errors));
+        }
+
+        // Callback removal and kind deregistration are now complete. Dropping
+        // the activations unloads libraries and runtimes before releasing the
+        // process-wide host claim.
+        self.native.take();
+        #[cfg(feature = "worker-grpc")]
+        self.worker.take();
+        self.claim.take();
+
+        if errors.is_empty() {
+            Ok(())
         } else {
             Err(crate::plugin::PluginError::RegistrationFailed(format!(
-                "{}; the loaded runtimes were retained because callbacks may remain registered",
-                outcome
-                    .result
-                    .err()
-                    .map(|error| error.to_string())
-                    .unwrap_or_else(|| "plugin teardown was incomplete".into())
+                "dynamic plugin teardown failed: {}",
+                errors.join("; ")
             )))
         }
     }
+
+    fn retain_loaded_runtimes(&mut self) {
+        if let Some(native) = self.native.take() {
+            std::mem::forget(native);
+        }
+        #[cfg(feature = "worker-grpc")]
+        if let Some(worker) = self.worker.take() {
+            std::mem::forget(worker);
+        }
+        if let Some(claim) = self.claim.take() {
+            std::mem::forget(claim);
+        }
+    }
+}
+
+fn validate_unique_plugin_ids(dynamic_plugins: &[DynamicPluginActivationSpec]) -> Result<()> {
+    let mut plugin_ids = HashSet::with_capacity(dynamic_plugins.len());
+    for plugin in dynamic_plugins {
+        if !plugin_ids.insert(plugin.plugin_id.as_str()) {
+            return Err(crate::plugin::PluginError::InvalidConfig(format!(
+                "duplicate dynamic plugin id '{}'",
+                plugin.plugin_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn retained_runtime_error(errors: Vec<String>) -> crate::plugin::PluginError {
+    crate::plugin::PluginError::RegistrationFailed(format!(
+        concat!(
+            "{}; the loaded runtimes and activation owner were retained because safe ",
+            "unloading could not be proven"
+        ),
+        if errors.is_empty() {
+            "dynamic plugin teardown was incomplete".into()
+        } else {
+            errors.join("; ")
+        }
+    ))
 }
 
 fn plugin_error_context(
@@ -271,5 +344,63 @@ fn plugin_error_context(
 impl Drop for PluginHostActivation {
     fn drop(&mut self) {
         let _ = self.clear_inner();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugin::{PLUGIN_HANDLERS, PLUGIN_MUTATION_OWNER, PluginMutationOwner};
+
+    struct PoisonedRegistryCleanup;
+
+    impl Drop for PoisonedRegistryCleanup {
+        fn drop(&mut self) {
+            PLUGIN_HANDLERS.clear_poison();
+            if let Ok(mut owner) = PLUGIN_MUTATION_OWNER.lock() {
+                *owner = PluginMutationOwner::Idle;
+            }
+        }
+    }
+
+    #[test]
+    fn unsafe_kind_deregistration_retains_runtime_and_owner() {
+        let _guard = crate::shared_runtime::runtime_owner_test_mutex()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _cleanup = PoisonedRegistryCleanup;
+        let claim = acquire_plugin_host_lease().expect("fixture host should acquire the owner");
+        let owner_id = claim.owner_id();
+        let activation = PluginHostActivation {
+            active: true,
+            native: Some(NativePluginActivation::with_plugin_kind_for_test(
+                "fixture.poisoned",
+            )),
+            #[cfg(feature = "worker-grpc")]
+            worker: None,
+            claim: Some(claim),
+        };
+
+        std::thread::spawn(|| {
+            let _registry = PLUGIN_HANDLERS.write().unwrap();
+            panic!("poison plugin registry for teardown test");
+        })
+        .join()
+        .expect_err("fixture registry writer should panic");
+
+        let error = activation
+            .clear()
+            .expect_err("an uncertain kind deregistration must retain the activation")
+            .to_string();
+        assert!(error.contains("plugin registry lock poisoned"), "{error}");
+        assert!(error.contains("activation owner were retained"), "{error}");
+        assert_eq!(
+            *PLUGIN_MUTATION_OWNER.lock().unwrap(),
+            PluginMutationOwner::Host(owner_id)
+        );
+        assert!(matches!(
+            acquire_plugin_host_lease(),
+            Err(crate::plugin::PluginError::Conflict(_))
+        ));
     }
 }

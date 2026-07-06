@@ -1465,6 +1465,7 @@ async fn fake_worker_instance(
             shutdown: Mutex::new(None),
             process: Mutex::new(None),
             activation_dir,
+            teardown_started: AtomicBool::new(false),
         },
         shutdown_tx,
     )

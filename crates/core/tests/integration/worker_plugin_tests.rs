@@ -84,6 +84,42 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
 }
 
 #[tokio::test]
+async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_owner() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("exit_in_tool_request".into(), json!(true))]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    tool_request_intercepts("terminate-worker", json!({ "input": true }))
+        .expect_err("fixture worker should terminate during callback");
+    let error = activation
+        .clear()
+        .expect_err("worker shutdown failure should be surfaced")
+        .to_string();
+    assert!(error.contains("fixture_worker"), "{error}");
+    assert!(error.contains("shutdown"), "{error}");
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        Vec::<DynamicPluginActivationSpec>::new(),
+    )
+    .await
+    .expect("a stopped worker process should permit owner release");
+    activation.clear().expect("recovered host should clear");
+}
+
+#[tokio::test]
 async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let loaded = load_and_initialize_fixture(Map::new()).await;

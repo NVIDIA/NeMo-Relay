@@ -28,8 +28,8 @@ use nemo_relay::plugin::dynamic::{
     load_native_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    list_plugin_kinds,
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, deregister_plugin,
+    initialize_plugins_exact, list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -1043,6 +1043,108 @@ async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
 }
 
 #[tokio::test]
+async fn plugin_host_reserved_id_failure_does_not_poison_future_activation() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let collision_manifest = write_manifest_with_plugin_id_and_symbol(
+        &fixture,
+        "observability",
+        "nemo_relay_fixture_observability_collision",
+    );
+
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("observability", &collision_manifest)],
+    )
+    .await
+    {
+        Ok((activation, _)) => {
+            activation
+                .clear()
+                .expect("unexpected collision activation should clear");
+            panic!("a dynamic plugin must not replace a builtin kind");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("observability"), "{error}");
+    assert!(error.contains("already registered"), "{error}");
+
+    let manifest_ref = write_manifest(&fixture);
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("a reserved-id failure must not poison later activation");
+    activation
+        .clear()
+        .expect("recovered plugin host should clear");
+}
+
+#[tokio::test]
+async fn plugin_host_rejects_duplicate_ids_before_loading() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let spec = host_spec("fixture_native", &manifest_ref);
+
+    let error =
+        match PluginHostActivation::activate(PluginConfig::default(), [spec.clone(), spec]).await {
+            Ok((activation, _)) => {
+                activation
+                    .clear()
+                    .expect("unexpected duplicate activation should clear");
+                panic!("duplicate dynamic plugin ids should fail");
+            }
+            Err(error) => error.to_string(),
+        };
+    assert!(error.contains("duplicate dynamic plugin id"), "{error}");
+    assert!(error.contains("fixture_native"), "{error}");
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_native")
+    );
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("duplicate-id rejection must release the owner");
+    activation.clear().expect("recovered host should clear");
+}
+
+#[tokio::test]
+async fn plugin_host_clear_surfaces_missing_kind_and_releases_safe_owner() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("plugin host should activate");
+
+    assert!(deregister_plugin("fixture_native"));
+    let error = activation
+        .clear()
+        .expect_err("missing plugin-kind deregistration should be surfaced")
+        .to_string();
+    assert!(error.contains("fixture_native"), "{error}");
+    assert!(error.contains("was not registered"), "{error}");
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("a safely absent plugin kind should release the owner");
+    activation.clear().expect("recovered host should clear");
+}
+
+#[tokio::test]
 async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
@@ -1298,6 +1400,21 @@ fn write_manifest_with_symbol(fixture: &BuiltFixture, symbol: &str) -> PathBuf {
     write_manifest_text(ManifestOptions {
         manifest_dir: fixture.manifest_dir.path(),
         plugin_id: "fixture_native",
+        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        library: &fixture.library_path.to_string_lossy(),
+        symbol,
+        integrity: None,
+    })
+}
+
+fn write_manifest_with_plugin_id_and_symbol(
+    fixture: &BuiltFixture,
+    plugin_id: &str,
+    symbol: &str,
+) -> PathBuf {
+    write_manifest_text(ManifestOptions {
+        manifest_dir: fixture.manifest_dir.path(),
+        plugin_id,
         relay: &format!("={}", env!("CARGO_PKG_VERSION")),
         library: &fixture.library_path.to_string_lossy(),
         symbol,

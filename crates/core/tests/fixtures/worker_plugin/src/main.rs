@@ -79,6 +79,10 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             .get("tool_request_error")
             .and_then(Json::as_bool)
             .unwrap_or(false);
+        let exit_in_tool_request = config
+            .get("exit_in_tool_request")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
         let llm_request_error = config
             .get("llm_request_error")
             .and_then(Json::as_bool)
@@ -136,6 +140,9 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         ctx.register_tool_request_intercept("fixture_rewrite_args", 0, false, {
             let runtime = runtime.clone();
             move |_name, args| {
+                if exit_in_tool_request {
+                    std::process::exit(44);
+                }
                 if tool_request_error {
                     return Err(WorkerSdkError::Callback(
                         "fixture tool request error requested".into(),

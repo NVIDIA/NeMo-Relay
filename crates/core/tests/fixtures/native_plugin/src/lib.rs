@@ -261,6 +261,23 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_observability_collision(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "observability",
+            None,
+            None,
+            Some(raw_noop_register),
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_entry_error(
     host: *const NemoRelayNativeHostApiV1,
     _out: *mut NemoRelayNativePluginV1,
