@@ -4,7 +4,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use nemo_relay::error::FlowError;
+use nemo_relay::error::{FlowError, UpstreamFailure};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use strum::Display;
@@ -36,6 +36,8 @@ pub(crate) enum CliError {
     PayloadTooLarge(String),
     #[error("gateway upstream error: {0}")]
     Upstream(#[from] reqwest::Error),
+    #[error("{0}")]
+    ProviderFailure(UpstreamFailure),
     #[error("http error: {0}")]
     Http(#[from] http::Error),
     #[error("io error: {0}")]
@@ -93,11 +95,15 @@ impl IntoResponse for CliError {
     fn into_response(self) -> Response {
         let message = self.to_string();
         let guardrail_reason = self.guardrail_rejection_reason().map(ToOwned::to_owned);
-        let status = match (guardrail_reason.is_some(), self) {
+        let status = match (guardrail_reason.is_some(), &self) {
             (true, _) => StatusCode::FORBIDDEN,
             (false, Self::PayloadTooLarge(_)) => StatusCode::PAYLOAD_TOO_LARGE,
             (false, Self::InvalidPayload(_)) => StatusCode::BAD_REQUEST,
             (false, Self::Upstream(_)) => StatusCode::BAD_GATEWAY,
+            (false, Self::ProviderFailure(failure)) => failure
+                .status
+                .and_then(|status| StatusCode::from_u16(status).ok())
+                .unwrap_or(StatusCode::BAD_GATEWAY),
             (
                 false,
                 Self::Http(_)

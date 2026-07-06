@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
@@ -22,7 +23,7 @@ use nemo_relay::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
 use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::LlmResponseCodec;
-use nemo_relay::error::FlowError;
+use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Map, Value, json};
 
 use crate::alignment::{self, GatewayRouteKind};
@@ -30,6 +31,11 @@ use crate::config::header_string;
 use crate::error::CliError;
 use crate::server::AppState;
 use crate::session::{GatewayCallPrep, LlmGatewayStart, SessionManager};
+
+const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
+const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
+const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
+const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
@@ -94,9 +100,11 @@ async fn prepare_gateway_request(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let mut headers = parts.headers;
+    strip_internal_dispatch_headers(&mut headers);
     Ok(PreparedGatewayRequest {
         method: parts.method,
-        headers: parts.headers,
+        headers,
         path: parts.uri.path().to_string(),
         provider,
         upstream_url,
@@ -366,6 +374,7 @@ fn build_buffered_func(
         let upstream_error = upstream_error.clone();
         let response_bytes = response_bytes.clone();
         Box::pin(async move {
+            let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
                 &method,
@@ -380,6 +389,9 @@ fn build_buffered_func(
                 Ok(response) => response,
                 Err(error) => {
                     let message = error.to_string();
+                    if retry_aware {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
                     *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
                     return Err(FlowError::Internal(message));
                 }
@@ -397,6 +409,13 @@ fn build_buffered_func(
                     return Err(FlowError::Internal(message));
                 }
             };
+            if retry_aware && !status.is_success() {
+                return Err(FlowError::Upstream(http_failure(
+                    status,
+                    &response_headers,
+                    &bytes,
+                )));
+            }
             let json = serde_json::from_slice::<Value>(&bytes)
                 .unwrap_or_else(|_| json!({ "body_bytes": bytes.len() }));
             *upstream_info.lock().expect("upstream info lock poisoned") =
@@ -531,6 +550,7 @@ fn build_streaming_func(
         let upstream_info = upstream_info.clone();
         let upstream_error = upstream_error.clone();
         Box::pin(async move {
+            let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
                 &method,
@@ -545,12 +565,26 @@ fn build_streaming_func(
                 Ok(response) => response,
                 Err(error) => {
                     let message = error.to_string();
+                    if retry_aware {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
                     *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
                     return Err(FlowError::Internal(message));
                 }
             };
             let status = response.status();
             let response_headers = response_headers(response.headers());
+            if retry_aware && !status.is_success() {
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
+                return Err(FlowError::Upstream(http_failure(
+                    status,
+                    &response_headers,
+                    &bytes,
+                )));
+            }
             *upstream_info.lock().expect("upstream info lock poisoned") =
                 Some((status, response_headers));
             let json_stream = sse_json_stream(response);
@@ -735,25 +769,60 @@ async fn forward_upstream_request(
     effective_request: Option<&LlmRequest>,
     route: ProviderRoute,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let (body_bytes, headers) = effective_upstream_request(body_bytes, headers, effective_request);
-    let sanitized = strip_replaceable_agent_auth_headers(&headers, route);
-    let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
+    let effective = effective_dispatch_request(body_bytes, headers, effective_request, url, route);
+    let sanitized = strip_replaceable_agent_auth_headers(&effective.headers, effective.route);
+    let mut upstream = http
+        .request(method.clone(), &effective.url)
+        .body(effective.body_bytes.clone());
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(upstream, route, &sanitized);
+    upstream = inject_provider_auth(upstream, effective.route, &sanitized);
     upstream.send().await
 }
 
+#[derive(Clone)]
+struct EffectiveUpstreamRequest {
+    body_bytes: Bytes,
+    headers: HeaderMap,
+    url: String,
+    route: ProviderRoute,
+}
+
+#[cfg(test)]
 fn effective_upstream_request(
     body_bytes: &Bytes,
     headers: &HeaderMap,
     effective_request: Option<&LlmRequest>,
 ) -> (Bytes, HeaderMap) {
+    let effective = effective_dispatch_request(
+        body_bytes,
+        headers,
+        effective_request,
+        "",
+        ProviderRoute::OpenAiChatCompletions,
+    );
+    (effective.body_bytes, effective.headers)
+}
+
+fn effective_dispatch_request(
+    body_bytes: &Bytes,
+    headers: &HeaderMap,
+    effective_request: Option<&LlmRequest>,
+    url: &str,
+    route: ProviderRoute,
+) -> EffectiveUpstreamRequest {
+    let mut headers = headers.clone();
+    strip_internal_dispatch_headers(&mut headers);
     let Some(request) = effective_request else {
-        return (body_bytes.clone(), headers.clone());
+        return EffectiveUpstreamRequest {
+            body_bytes: body_bytes.clone(),
+            headers,
+            url: url.to_string(),
+            route,
+        };
     };
 
     let body_bytes = if request.content.is_null() {
@@ -765,21 +834,65 @@ fn effective_upstream_request(
                 eprintln!(
                     "nemo-relay CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
                 );
-                return (body_bytes.clone(), headers.clone());
+                return EffectiveUpstreamRequest {
+                    body_bytes: body_bytes.clone(),
+                    headers,
+                    url: url.to_string(),
+                    route,
+                };
             }
         }
     };
-    let mut headers = headers.clone();
+    let mut override_url = None;
+    let mut override_route = None;
     for (name, value) in &request.headers {
+        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_URL_HEADER) {
+            override_url = json_header_string(value);
+            continue;
+        }
+        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_ROUTE_HEADER) {
+            override_route = json_header_string(value)
+                .and_then(|value| ProviderRoute::from_dispatch_override(&value));
+            continue;
+        }
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
+        if is_internal_dispatch_header(&name) {
+            continue;
+        }
         let Some(value) = json_header_value(value) else {
             continue;
         };
         headers.insert(name, value);
     }
-    (body_bytes, headers)
+    EffectiveUpstreamRequest {
+        body_bytes,
+        headers,
+        url: override_url.unwrap_or_else(|| url.to_string()),
+        route: override_route.unwrap_or(route),
+    }
+}
+
+fn json_header_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn strip_internal_dispatch_headers(headers: &mut HeaderMap) {
+    headers.remove(INTERNAL_DISPATCH_URL_HEADER);
+    headers.remove(INTERNAL_DISPATCH_ROUTE_HEADER);
+    headers.remove(INTERNAL_RETRY_AWARE_HEADER);
+}
+
+fn is_internal_dispatch_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        INTERNAL_DISPATCH_URL_HEADER | INTERNAL_DISPATCH_ROUTE_HEADER | INTERNAL_RETRY_AWARE_HEADER
+    )
 }
 
 fn json_header_value(value: &Value) -> Option<HeaderValue> {
@@ -888,8 +1001,72 @@ fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot)
     }
     match error {
         FlowError::GuardrailRejected(reason) => CliError::GuardrailRejected(reason),
+        FlowError::Upstream(failure) => CliError::ProviderFailure(failure),
         other => CliError::InvalidPayload(other.to_string()),
     }
+}
+
+fn retry_aware_dispatch(request: &LlmRequest) -> bool {
+    request
+        .headers
+        .get(INTERNAL_RETRY_AWARE_HEADER)
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn transport_failure(error: &reqwest::Error) -> UpstreamFailure {
+    UpstreamFailure {
+        status: error.status().map(|status| status.as_u16()),
+        body: bounded_error_body(error.to_string().as_bytes()),
+        headers: BTreeMap::new(),
+        class: if error.is_timeout() {
+            UpstreamFailureClass::Timeout
+        } else {
+            UpstreamFailureClass::Connection
+        },
+    }
+}
+
+fn http_failure(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> UpstreamFailure {
+    let body = bounded_error_body(body);
+    let normalized = body.to_ascii_lowercase();
+    let class = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        UpstreamFailureClass::Authentication
+    } else if normalized.contains("context_length_exceeded")
+        || normalized.contains("context window")
+        || normalized.contains("too many tokens")
+    {
+        UpstreamFailureClass::ContextWindow
+    } else if normalized.contains("model_not_found")
+        || normalized.contains("model unavailable")
+        || normalized.contains("model_overloaded")
+    {
+        UpstreamFailureClass::ModelUnavailable
+    } else if matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504) {
+        UpstreamFailureClass::RetryableStatus
+    } else if status.is_client_error() {
+        UpstreamFailureClass::InvalidRequest
+    } else {
+        UpstreamFailureClass::Other
+    };
+    UpstreamFailure {
+        status: Some(status.as_u16()),
+        body,
+        headers: headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_string(), value.to_string()))
+            })
+            .collect(),
+        class,
+    }
+}
+
+fn bounded_error_body(body: &[u8]) -> String {
+    String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_ERROR_BODY_BYTES)]).into_owned()
 }
 
 /// Proxies OpenAI model-list requests without creating LLM runtime events.
@@ -954,6 +1131,22 @@ impl ProviderRoute {
             "/v1/models" => Some(Self::OpenAiModels),
             "/v1/messages" => Some(Self::AnthropicMessages),
             "/v1/messages/count_tokens" => Some(Self::AnthropicCountTokens),
+            _ => None,
+        }
+    }
+
+    fn from_dispatch_override(value: &str) -> Option<Self> {
+        match value {
+            "openai_chat"
+            | "openai_chat_completions"
+            | "openai.chat_completions"
+            | "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "openai_responses" | "openai.responses" | "/v1/responses" => {
+                Some(Self::OpenAiResponses)
+            }
+            "anthropic_messages" | "anthropic.messages" | "/v1/messages" => {
+                Some(Self::AnthropicMessages)
+            }
             _ => None,
         }
     }
