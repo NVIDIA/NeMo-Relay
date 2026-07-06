@@ -1336,7 +1336,7 @@ fn acg_component_request_intercept_rewrites_annotation_without_mutating_provider
         plugin,
     );
 
-    let outcome = intercept("anthropic", request, Some(original_annotation)).unwrap();
+    let outcome = intercept("anthropic", request, Some(original_annotation.clone())).unwrap();
 
     assert_eq!(outcome.request.content, original_content);
     let annotation = outcome
@@ -1345,5 +1345,9 @@ fn acg_component_request_intercept_rewrites_annotation_without_mutating_provider
     assert_eq!(
         annotation.model.as_deref(),
         Some("claude-sonnet-4-20250514")
+    );
+    assert_ne!(
+        annotation, original_annotation,
+        "translated branch should rebuild the annotation from the rewritten request"
     );
 }
