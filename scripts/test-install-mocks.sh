@@ -12,40 +12,53 @@ tests_run=0
 
 cleanup() {
     rm -rf "$test_root"
+    return 0
 }
 trap cleanup EXIT HUP INT TERM
 
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
     exit 1
+    return 1
 }
 
 assert_success() {
     [ "$run_status" -eq 0 ] || fail "expected success, got ${run_status}: ${run_output}"
+    return 0
 }
 
 assert_failure() {
     [ "$run_status" -ne 0 ] || fail "expected failure: ${run_output}"
+    return 0
 }
 
 assert_contains() {
-    printf '%s\n' "$1" | grep -F "$2" >/dev/null || fail "expected '$2' in: $1"
+    assert_actual=$1
+    assert_expected=$2
+    printf '%s\n' "$assert_actual" | grep -F "$assert_expected" >/dev/null || fail "expected '$assert_expected' in: $assert_actual"
+    return 0
 }
 
 assert_file_contains() {
-    grep -F "$2" "$1" >/dev/null || fail "expected '$2' in $1"
+    assert_file=$1
+    assert_expected=$2
+    grep -F "$assert_expected" "$assert_file" >/dev/null || fail "expected '$assert_expected' in $assert_file"
+    return 0
 }
 
 assert_no_temporary_files() {
-    set -- "$1"/.nemo-relay.*
-    [ ! -e "$1" ] || fail "temporary installer file was not cleaned up: $1"
+    assert_directory=$1
+    set -- "$assert_directory"/.nemo-relay.*
+    assert_temporary_file=$1
+    [ ! -e "$assert_temporary_file" ] || fail "temporary installer file was not cleaned up: $assert_temporary_file"
+    return 0
 }
 
 make_mock_commands() {
-    mock_bin=$1
-    mkdir -p "$mock_bin"
+    mock_commands_dir=$1
+    mkdir -p "$mock_commands_dir"
 
-    cat >"${mock_bin}/uname" <<'EOF'
+    cat >"${mock_commands_dir}/uname" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
     -s) printf '%s\n' "$MOCK_UNAME_S" ;;
@@ -54,7 +67,7 @@ case "${1:-}" in
 esac
 EOF
 
-    cat >"${mock_bin}/curl" <<'EOF'
+    cat >"${mock_commands_dir}/curl" <<'EOF'
 #!/bin/sh
 output=""
 url=""
@@ -93,12 +106,12 @@ case "$url" in
 esac
 EOF
 
-    cat >"${mock_bin}/sha256sum" <<'EOF'
+    cat >"${mock_commands_dir}/sha256sum" <<'EOF'
 #!/bin/sh
 printf '%s  %s\n' "$MOCK_ACTUAL_CHECKSUM" "$1"
 EOF
 
-    cat >"${mock_bin}/cygpath" <<'EOF'
+    cat >"${mock_commands_dir}/cygpath" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
     -u) printf '%s\n' "$2" ;;
@@ -107,14 +120,15 @@ case "${1:-}" in
 esac
 EOF
 
-    cat >"${mock_bin}/powershell.exe" <<'EOF'
+    cat >"${mock_commands_dir}/powershell.exe" <<'EOF'
 #!/bin/sh
 [ -n "${NEMO_RELAY_INSTALL_DIR:-}" ] || exit 99
 printf '%s\n' "$NEMO_RELAY_INSTALL_DIR" >>"$MOCK_POWERSHELL_LOG"
 EOF
 
-    chmod +x "${mock_bin}/uname" "${mock_bin}/curl" "${mock_bin}/sha256sum" \
-        "${mock_bin}/cygpath" "${mock_bin}/powershell.exe"
+    chmod +x "${mock_commands_dir}/uname" "${mock_commands_dir}/curl" "${mock_commands_dir}/sha256sum" \
+        "${mock_commands_dir}/cygpath" "${mock_commands_dir}/powershell.exe"
+    return 0
 }
 
 new_case() {
@@ -145,6 +159,7 @@ new_case() {
     export MOCK_UNAME_S MOCK_UNAME_M MOCK_API_RESPONSE
     export MOCK_EXPECTED_CHECKSUM MOCK_ACTUAL_CHECKSUM MOCK_CHECKSUM_MISSING MOCK_GH_TOKEN
     export GH_TOKEN NEMO_RELAY_VERSION HOME PATH MOCK_CURL_LOG MOCK_POWERSHELL_LOG
+    return 0
 }
 
 run_installer() {
@@ -153,6 +168,7 @@ run_installer() {
     else
         run_status=$?
     fi
+    return 0
 }
 
 test_linux_arm64_mapping() {
@@ -162,6 +178,7 @@ test_linux_arm64_mapping() {
     run_installer
     assert_success
     assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-unknown-linux-musl-0.5.0"
+    return 0
 }
 
 test_macos_arm64_mapping() {
@@ -172,6 +189,7 @@ test_macos_arm64_mapping() {
     run_installer
     assert_success
     assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-apple-darwin-0.5.0"
+    return 0
 }
 
 test_git_bash_windows_x86_64_mapping_and_path_update() {
@@ -185,6 +203,7 @@ test_git_bash_windows_x86_64_mapping_and_path_update() {
     assert_file_contains "$curl_log" "nemo-relay-cli-x86_64-pc-windows-msvc-0.5.0.exe"
     [ -f "${LOCALAPPDATA}/nemo-relay/bin/nemo-relay.exe" ] || fail "Windows install did not create nemo-relay.exe"
     assert_file_contains "$powershell_log" "C:${LOCALAPPDATA#/}/nemo-relay/bin"
+    return 0
 }
 
 test_git_bash_windows_arm64_mapping() {
@@ -198,6 +217,7 @@ test_git_bash_windows_arm64_mapping() {
     assert_file_contains "$curl_log" "nemo-relay-cli-aarch64-pc-windows-msvc-0.5.0.exe"
     [ -f "${HOME}/custom-bin/nemo-relay.exe" ] || fail "Windows ARM64 install did not create nemo-relay.exe"
     assert_file_contains "$powershell_log" "C:${HOME#/}/custom-bin"
+    return 0
 }
 
 test_unsupported_platform() {
@@ -209,6 +229,7 @@ test_unsupported_platform() {
     assert_failure
     assert_contains "$run_output" "unsupported platform Darwin/x86_64"
     [ ! -s "$curl_log" ] || fail "unsupported platform attempted a download"
+    return 0
 }
 
 test_malformed_release_response() {
@@ -219,6 +240,7 @@ test_malformed_release_response() {
     run_installer
     assert_failure
     assert_contains "$run_output" "latest release response did not contain a tag name"
+    return 0
 }
 
 test_missing_checksum_fails_closed() {
@@ -230,6 +252,7 @@ test_missing_checksum_fails_closed() {
     assert_contains "$run_output" "could not download"
     [ ! -e "${HOME}/.local/bin/nemo-relay" ] || fail "binary installed without a checksum"
     assert_no_temporary_files "${HOME}/.local/bin"
+    return 0
 }
 
 test_checksum_mismatch_preserves_existing_binary() {
@@ -244,6 +267,7 @@ test_checksum_mismatch_preserves_existing_binary() {
     assert_contains "$run_output" "checksum verification failed"
     assert_file_contains "${install_dir}/nemo-relay" "existing binary"
     assert_no_temporary_files "$install_dir"
+    return 0
 }
 
 test_linux_arm64_mapping

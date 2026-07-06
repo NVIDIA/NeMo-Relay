@@ -1648,6 +1648,15 @@ struct StoredScopeHandle {
     scope_stack_id: String,
 }
 
+fn has_active_scope_stack_alias(
+    stacks: &HashMap<String, StoredScopeStack>,
+    handle: &crate::api::runtime::ScopeStackHandle,
+) -> bool {
+    stacks.values().any(|candidate| {
+        candidate.invocation_base_depth.is_some() && Arc::ptr_eq(&candidate.handle, handle)
+    })
+}
+
 struct ScopeStackCleanupGuard<'a> {
     state: &'a WorkerHostRuntimeState,
     handle: crate::api::runtime::ScopeStackHandle,
@@ -1724,47 +1733,7 @@ impl WorkerHostRuntimeState {
     }
 
     fn cleanup_invocation_scope_stack(&self, id: &str) {
-        let unwind = {
-            let Ok(mut stacks) = self.scope_stacks.lock() else {
-                return;
-            };
-            let Some(stored) = stacks.remove(id) else {
-                return;
-            };
-            let Some(mut base_depth) = stored.invocation_base_depth else {
-                return;
-            };
-            let has_active_alias = stacks.values().any(|candidate| {
-                candidate.invocation_base_depth.is_some()
-                    && Arc::ptr_eq(&candidate.handle, &stored.handle)
-            });
-            if let Ok(mut pending) = self.pending_scope_cleanups.lock() {
-                if has_active_alias {
-                    pending.push(PendingScopeCleanup {
-                        handle: stored.handle,
-                        base_depth,
-                    });
-                    None
-                } else {
-                    pending.retain(|cleanup| {
-                        if Arc::ptr_eq(&cleanup.handle, &stored.handle) {
-                            base_depth = base_depth.min(cleanup.base_depth);
-                            false
-                        } else {
-                            true
-                        }
-                    });
-                    if let Ok(mut cleanups) = self.scope_stack_cleanups.lock() {
-                        cleanups.push(stored.handle.clone());
-                        Some((stored.handle, base_depth))
-                    } else {
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        };
+        let unwind = self.take_invocation_scope_cleanup(id);
         if let Some((handle, base_depth)) = unwind {
             let _cleanup = ScopeStackCleanupGuard {
                 state: self,
@@ -1775,6 +1744,40 @@ impl WorkerHostRuntimeState {
         if let Ok(mut handles) = self.scope_handles.lock() {
             handles.retain(|_, handle| handle.scope_stack_id != id);
         }
+    }
+
+    fn take_invocation_scope_cleanup(
+        &self,
+        id: &str,
+    ) -> Option<(crate::api::runtime::ScopeStackHandle, usize)> {
+        let Ok(mut stacks) = self.scope_stacks.lock() else {
+            return None;
+        };
+        let stored = stacks.remove(id)?;
+        let mut base_depth = stored.invocation_base_depth?;
+        let Ok(mut pending) = self.pending_scope_cleanups.lock() else {
+            return None;
+        };
+        if has_active_scope_stack_alias(&stacks, &stored.handle) {
+            pending.push(PendingScopeCleanup {
+                handle: stored.handle,
+                base_depth,
+            });
+            return None;
+        }
+        pending.retain(|cleanup| {
+            if Arc::ptr_eq(&cleanup.handle, &stored.handle) {
+                base_depth = base_depth.min(cleanup.base_depth);
+                false
+            } else {
+                true
+            }
+        });
+        let Ok(mut cleanups) = self.scope_stack_cleanups.lock() else {
+            return None;
+        };
+        cleanups.push(stored.handle.clone());
+        Some((stored.handle, base_depth))
     }
 
     fn unwind_scope_stack(stack: &crate::api::runtime::ScopeStackHandle, base_depth: usize) {

@@ -787,19 +787,18 @@ func TestToolExecutionInterceptEmitsPendingMarks(t *testing.T) {
 	mu.Lock()
 	captured := append([]Event(nil), events...)
 	mu.Unlock()
+	assertToolExecutionPendingMarkEvents(t, captured, toolName, markName, category)
+}
 
-	startIndex, endIndex, markIndex := -1, -1, -1
-	var start, mark Event
-	for index, event := range captured {
-		switch {
-		case event.Name() == toolName && event.Kind() == "scope" && event.ScopeCategory() == "start":
-			startIndex, start = index, event
-		case event.Name() == toolName && event.Kind() == "scope" && event.ScopeCategory() == "end":
-			endIndex = index
-		case event.Name() == markName && event.Kind() == "mark":
-			markIndex, mark = index, event
-		}
-	}
+func assertToolExecutionPendingMarkEvents(
+	t *testing.T,
+	events []Event,
+	toolName string,
+	markName string,
+	category string,
+) {
+	t.Helper()
+	startIndex, endIndex, markIndex, start, mark := toolExecutionLifecycleEvents(events, toolName, markName)
 	if startIndex < 0 || endIndex < 0 || markIndex < 0 {
 		t.Fatalf("missing lifecycle events: start=%d end=%d mark=%d", startIndex, endIndex, markIndex)
 	}
@@ -821,6 +820,22 @@ func TestToolExecutionInterceptEmitsPendingMarks(t *testing.T) {
 	if metadata["fixture"] != true {
 		t.Fatalf("unexpected mark metadata: %s", mark.Metadata())
 	}
+}
+
+func toolExecutionLifecycleEvents(events []Event, toolName, markName string) (int, int, int, Event, Event) {
+	startIndex, endIndex, markIndex := -1, -1, -1
+	var start, mark Event
+	for index, event := range events {
+		switch {
+		case event.Name() == toolName && event.Kind() == "scope" && event.ScopeCategory() == "start":
+			startIndex, start = index, event
+		case event.Name() == toolName && event.Kind() == "scope" && event.ScopeCategory() == "end":
+			endIndex = index
+		case event.Name() == markName && event.Kind() == "mark":
+			markIndex, mark = index, event
+		}
+	}
+	return startIndex, endIndex, markIndex, start, mark
 }
 
 func TestToolExecutionInterceptSeesNextError(t *testing.T) {

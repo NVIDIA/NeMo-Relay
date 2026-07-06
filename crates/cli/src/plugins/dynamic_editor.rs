@@ -381,55 +381,86 @@ fn edit_dynamic_root_menu(
 ) -> Result<(), CliError> {
     let mut selected_index = 0;
     loop {
-        let mut items = Vec::new();
-        let mut actions = Vec::new();
-        if fields.is_empty() {
-            items.push(MenuItem::new(configured_label(
-                state.config.is_some(),
-                "Edit configuration as JSON object",
-            )));
-            actions.push(DynamicMenuAction::EditRawConfig);
-        }
-        items.push(MenuItem::new(shortcut_label(
-            "Reset plugin configuration",
-            "r",
-        )));
-        actions.push(DynamicMenuAction::ResetPlugin);
-        items.push(MenuItem::new(shortcut_label("Back", "q")));
-        actions.push(DynamicMenuAction::Back);
+        let (items, actions) = dynamic_root_menu_items(state, fields);
 
         let selection = prompt_menu(theme, state.label(), &items, selected_index)?;
         if let Some(selected) = menu_response_index(&selection) {
             selected_index = selected;
         }
-        match selection {
-            MenuResponse::Selected(selected) => match actions.get(selected).copied() {
-                Some(DynamicMenuAction::EditRawConfig) => prompt_raw_config(theme, state)?,
-                Some(DynamicMenuAction::ResetPlugin) => state.reset(),
-                Some(DynamicMenuAction::Back) | None => return Ok(()),
-                Some(DynamicMenuAction::EditField(_)) => unreachable!(),
-            },
-            MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
-                if matches!(actions.get(selected), Some(DynamicMenuAction::ResetPlugin)) {
-                    state.reset();
-                } else {
-                    println!("  Select Reset plugin configuration to remove config.");
-                }
-            }
-            MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {
-                if matches!(
-                    actions.get(selected),
-                    Some(DynamicMenuAction::EditRawConfig)
-                ) {
-                    state.set_raw_config(Map::new());
-                }
-            }
-            MenuResponse::Shortcut(MenuShortcut::Help, _) => super::print_editor_help(),
-            MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
-                println!("  Preview and save are available from the main plugins.toml menu.");
-            }
-            MenuResponse::Cancel => return Ok(()),
+        if handle_dynamic_root_menu_response(theme, state, &actions, selection)? {
+            return Ok(());
         }
+    }
+}
+
+fn dynamic_root_menu_items(
+    state: &DynamicPluginEditorState,
+    fields: &[DynamicConfigField],
+) -> (Vec<MenuItem>, Vec<DynamicMenuAction>) {
+    let mut items = Vec::new();
+    let mut actions = Vec::new();
+    if fields.is_empty() {
+        items.push(MenuItem::new(configured_label(
+            state.config.is_some(),
+            "Edit configuration as JSON object",
+        )));
+        actions.push(DynamicMenuAction::EditRawConfig);
+    }
+    items.push(MenuItem::new(shortcut_label(
+        "Reset plugin configuration",
+        "r",
+    )));
+    actions.push(DynamicMenuAction::ResetPlugin);
+    items.push(MenuItem::new(shortcut_label("Back", "q")));
+    actions.push(DynamicMenuAction::Back);
+    (items, actions)
+}
+
+fn handle_dynamic_root_menu_response(
+    theme: &ColorfulTheme,
+    state: &mut DynamicPluginEditorState,
+    actions: &[DynamicMenuAction],
+    selection: MenuResponse,
+) -> Result<bool, CliError> {
+    match selection {
+        MenuResponse::Selected(selected) => match actions.get(selected).copied() {
+            Some(DynamicMenuAction::EditRawConfig) => {
+                prompt_raw_config(theme, state)?;
+                Ok(false)
+            }
+            Some(DynamicMenuAction::ResetPlugin) => {
+                state.reset();
+                Ok(false)
+            }
+            Some(DynamicMenuAction::Back) | None => Ok(true),
+            Some(DynamicMenuAction::EditField(_)) => unreachable!(),
+        },
+        MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
+            if matches!(actions.get(selected), Some(DynamicMenuAction::ResetPlugin)) {
+                state.reset();
+            } else {
+                println!("  Select Reset plugin configuration to remove config.");
+            }
+            Ok(false)
+        }
+        MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {
+            if matches!(
+                actions.get(selected),
+                Some(DynamicMenuAction::EditRawConfig)
+            ) {
+                state.set_raw_config(Map::new());
+            }
+            Ok(false)
+        }
+        MenuResponse::Shortcut(MenuShortcut::Help, _) => {
+            super::print_editor_help();
+            Ok(false)
+        }
+        MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+            println!("  Preview and save are available from the main plugins.toml menu.");
+            Ok(false)
+        }
+        MenuResponse::Cancel => Ok(true),
     }
 }
 

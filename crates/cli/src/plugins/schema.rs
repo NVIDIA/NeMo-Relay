@@ -342,321 +342,538 @@ fn normalize_local_references(
     path: &Path,
     schema: &mut Value,
 ) -> Result<(), CliError> {
-    fn visit_schema(
-        plugin_id: &str,
-        file_path: &Path,
-        schema: &mut Value,
-        pointer: &str,
-    ) -> Result<(), CliError> {
-        let Some(object) = schema.as_object_mut() else {
-            return Ok(());
-        };
-        if let Some(Value::String(reference)) = object.get_mut("$ref")
-            && reference.starts_with('#')
-        {
-            *reference = canonicalize_local_reference(reference).map_err(|error| {
-                schema_error(
-                    plugin_id,
-                    file_path,
-                    format!(
-                        "invalid local $ref at JSON pointer '{}': {error}",
-                        push_pointer(pointer, "$ref")
-                    ),
-                )
-            })?;
-        }
+    normalize_schema_references(plugin_id, path, schema, "")
+}
 
-        for key in [
-            "additionalItems",
-            "additionalProperties",
-            "contains",
-            "contentSchema",
-            "else",
-            "if",
-            "not",
-            "propertyNames",
-            "then",
-            "unevaluatedItems",
-            "unevaluatedProperties",
-        ] {
-            if let Some(child) = object.get_mut(key) {
-                visit_schema(plugin_id, file_path, child, &push_pointer(pointer, key))?;
-            }
-        }
+fn normalize_schema_references(
+    plugin_id: &str,
+    file_path: &Path,
+    schema: &mut Value,
+    pointer: &str,
+) -> Result<(), CliError> {
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    normalize_schema_reference(plugin_id, file_path, object, pointer)?;
+    normalize_schema_value_children(plugin_id, file_path, object, pointer)?;
+    normalize_schema_items(plugin_id, file_path, object, pointer)?;
+    normalize_schema_array_children(plugin_id, file_path, object, pointer)?;
+    normalize_schema_object_children(plugin_id, file_path, object, pointer)?;
+    normalize_schema_dependencies(plugin_id, file_path, object, pointer)
+}
 
-        if let Some(items) = object.get_mut("items") {
-            let items_pointer = push_pointer(pointer, "items");
-            if let Some(items) = items.as_array_mut() {
-                for (index, child) in items.iter_mut().enumerate() {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        child,
-                        &push_pointer(&items_pointer, &index.to_string()),
-                    )?;
-                }
-            } else {
-                visit_schema(plugin_id, file_path, items, &items_pointer)?;
-            }
-        }
-
-        for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
-            if let Some(children) = object.get_mut(key).and_then(Value::as_array_mut) {
-                let children_pointer = push_pointer(pointer, key);
-                for (index, child) in children.iter_mut().enumerate() {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        child,
-                        &push_pointer(&children_pointer, &index.to_string()),
-                    )?;
-                }
-            }
-        }
-
-        for key in [
-            "$defs",
-            "definitions",
-            "dependentSchemas",
-            "patternProperties",
-            "properties",
-        ] {
-            if let Some(children) = object.get_mut(key).and_then(Value::as_object_mut) {
-                let children_pointer = push_pointer(pointer, key);
-                for (name, child) in children {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        child,
-                        &push_pointer(&children_pointer, name),
-                    )?;
-                }
-            }
-        }
-
-        if let Some(dependencies) = object
-            .get_mut("dependencies")
-            .and_then(Value::as_object_mut)
-        {
-            let dependencies_pointer = push_pointer(pointer, "dependencies");
-            for (name, dependency) in dependencies {
-                if dependency.is_object() || dependency.is_boolean() {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        dependency,
-                        &push_pointer(&dependencies_pointer, name),
-                    )?;
-                }
-            }
-        }
-        Ok(())
+fn normalize_schema_reference(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &mut Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    if let Some(Value::String(reference)) = object.get_mut("$ref")
+        && reference.starts_with('#')
+    {
+        *reference = canonicalize_local_reference(reference).map_err(|error| {
+            schema_error(
+                plugin_id,
+                file_path,
+                format!(
+                    "invalid local $ref at JSON pointer '{}': {error}",
+                    push_pointer(pointer, "$ref")
+                ),
+            )
+        })?;
     }
+    Ok(())
+}
 
-    visit_schema(plugin_id, path, schema, "")
+fn normalize_schema_value_children(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &mut Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    for key in [
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "contentSchema",
+        "else",
+        "if",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    ] {
+        if let Some(child) = object.get_mut(key) {
+            normalize_schema_references(plugin_id, file_path, child, &push_pointer(pointer, key))?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_schema_items(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &mut Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    let Some(items) = object.get_mut("items") else {
+        return Ok(());
+    };
+    let items_pointer = push_pointer(pointer, "items");
+    if let Some(items) = items.as_array_mut() {
+        for (index, child) in items.iter_mut().enumerate() {
+            normalize_schema_references(
+                plugin_id,
+                file_path,
+                child,
+                &push_pointer(&items_pointer, &index.to_string()),
+            )?;
+        }
+    } else {
+        normalize_schema_references(plugin_id, file_path, items, &items_pointer)?;
+    }
+    Ok(())
+}
+
+fn normalize_schema_array_children(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &mut Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        let Some(children) = object.get_mut(key).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let children_pointer = push_pointer(pointer, key);
+        for (index, child) in children.iter_mut().enumerate() {
+            normalize_schema_references(
+                plugin_id,
+                file_path,
+                child,
+                &push_pointer(&children_pointer, &index.to_string()),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_schema_object_children(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &mut Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    for key in [
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "patternProperties",
+        "properties",
+    ] {
+        let Some(children) = object.get_mut(key).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let children_pointer = push_pointer(pointer, key);
+        for (name, child) in children {
+            normalize_schema_references(
+                plugin_id,
+                file_path,
+                child,
+                &push_pointer(&children_pointer, name),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_schema_dependencies(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &mut Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    let Some(dependencies) = object
+        .get_mut("dependencies")
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+    let dependencies_pointer = push_pointer(pointer, "dependencies");
+    for (name, dependency) in dependencies {
+        if dependency.is_object() || dependency.is_boolean() {
+            normalize_schema_references(
+                plugin_id,
+                file_path,
+                dependency,
+                &push_pointer(&dependencies_pointer, name),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_schema_security(plugin_id: &str, path: &Path, schema: &Value) -> Result<(), CliError> {
-    fn visit_schema(
-        plugin_id: &str,
-        file_path: &Path,
-        root: &Value,
-        schema: &Value,
-        pointer: &str,
-        unsupported_secret_context: Option<&str>,
-    ) -> Result<(), CliError> {
-        let Some(object) = schema.as_object() else {
-            return Ok(());
+    validate_schema_security_node(plugin_id, path, schema, schema, "", None)
+}
+
+fn validate_schema_security_node(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    schema: &Value,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    let Some(object) = schema.as_object() else {
+        return Ok(());
+    };
+    validate_schema_reference_security(plugin_id, file_path, object, pointer)?;
+    validate_schema_write_only_security(
+        plugin_id,
+        file_path,
+        root,
+        schema,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_value_children(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_context_children(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_items(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_array_children(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_object_children(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_dependent_schemas(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )?;
+    validate_schema_dependencies(
+        plugin_id,
+        file_path,
+        root,
+        object,
+        pointer,
+        unsupported_secret_context,
+    )
+}
+
+fn validate_schema_reference_security(
+    plugin_id: &str,
+    file_path: &Path,
+    object: &Map<String, Value>,
+    pointer: &str,
+) -> Result<(), CliError> {
+    if object.contains_key("$dynamicRef") || object.contains_key("$dynamicAnchor") {
+        let keyword = if object.contains_key("$dynamicRef") {
+            "$dynamicRef"
+        } else {
+            "$dynamicAnchor"
         };
-        if object.contains_key("$dynamicRef") || object.contains_key("$dynamicAnchor") {
-            return Err(schema_error(
-                plugin_id,
-                file_path,
-                format!(
-                    "Draft 2020-12 dynamic references are not supported at JSON pointer '{}'",
-                    if object.contains_key("$dynamicRef") {
-                        push_pointer(pointer, "$dynamicRef")
-                    } else {
-                        push_pointer(pointer, "$dynamicAnchor")
-                    }
-                ),
-            ));
-        }
-        if let Some(reference) = object.get("$ref").and_then(Value::as_str)
-            && !reference.starts_with('#')
-        {
-            return Err(schema_error(
-                plugin_id,
-                file_path,
-                format!(
-                    "$ref at JSON pointer '{}' must be a local fragment reference beginning with '#', got '{reference}'",
-                    push_pointer(pointer, "$ref")
-                ),
-            ));
-        }
-        if object.get("writeOnly").and_then(Value::as_bool) == Some(true) {
-            if let Some(keyword) = unsupported_secret_context {
-                return Err(schema_error(
-                    plugin_id,
-                    file_path,
-                    format!(
-                        "writeOnly at JSON pointer '{}' is not supported under '{keyword}'",
-                        push_pointer(pointer, "writeOnly")
-                    ),
-                ));
-            }
-            let mut references = HashSet::new();
-            let mut reference_chain = Vec::new();
-            resolve_schema_chain(root, schema, &mut references, &mut reference_chain).map_err(
-                |error| {
-                    schema_error(
-                        plugin_id,
-                        file_path,
-                        format!(
-                            "writeOnly schema at JSON pointer '{}' cannot be resolved: {error}",
-                            pointer
-                        ),
-                    )
-                },
-            )?;
-            classify_write_only_chain(&reference_chain).map_err(|error| {
-                schema_error(
-                    plugin_id,
-                    file_path,
-                    format!("unsupported writeOnly shape at JSON pointer '{pointer}': {error}"),
-                )
-            })?;
-        }
-
-        for key in ["additionalItems", "additionalProperties", "contains"] {
-            if let Some(child) = object.get(key) {
-                visit_schema(
-                    plugin_id,
-                    file_path,
-                    root,
-                    child,
-                    &push_pointer(pointer, key),
-                    unsupported_secret_context,
-                )?;
-            }
-        }
-
-        for key in [
-            "contentSchema",
-            "else",
-            "if",
-            "not",
-            "propertyNames",
-            "then",
-            "unevaluatedItems",
-            "unevaluatedProperties",
-        ] {
-            if let Some(child) = object.get(key) {
-                visit_schema(
-                    plugin_id,
-                    file_path,
-                    root,
-                    child,
-                    &push_pointer(pointer, key),
-                    unsupported_secret_context.or(Some(key)),
-                )?;
-            }
-        }
-
-        if let Some(items) = object.get("items") {
-            let items_pointer = push_pointer(pointer, "items");
-            if let Some(items) = items.as_array() {
-                for (index, child) in items.iter().enumerate() {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        root,
-                        child,
-                        &push_pointer(&items_pointer, &index.to_string()),
-                        unsupported_secret_context,
-                    )?;
-                }
-            } else {
-                visit_schema(
-                    plugin_id,
-                    file_path,
-                    root,
-                    items,
-                    &items_pointer,
-                    unsupported_secret_context,
-                )?;
-            }
-        }
-
-        for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
-            if let Some(children) = object.get(key).and_then(Value::as_array) {
-                let children_pointer = push_pointer(pointer, key);
-                let child_context = match key {
-                    "anyOf" | "oneOf" => unsupported_secret_context.or(Some(key)),
-                    _ => unsupported_secret_context,
-                };
-                for (index, child) in children.iter().enumerate() {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        root,
-                        child,
-                        &push_pointer(&children_pointer, &index.to_string()),
-                        child_context,
-                    )?;
-                }
-            }
-        }
-
-        for key in ["$defs", "definitions", "patternProperties", "properties"] {
-            if let Some(children) = object.get(key).and_then(Value::as_object) {
-                let children_pointer = push_pointer(pointer, key);
-                for (name, child) in children {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        root,
-                        child,
-                        &push_pointer(&children_pointer, name),
-                        unsupported_secret_context,
-                    )?;
-                }
-            }
-        }
-
-        if let Some(children) = object.get("dependentSchemas").and_then(Value::as_object) {
-            let children_pointer = push_pointer(pointer, "dependentSchemas");
-            for (name, child) in children {
-                visit_schema(
-                    plugin_id,
-                    file_path,
-                    root,
-                    child,
-                    &push_pointer(&children_pointer, name),
-                    unsupported_secret_context.or(Some("dependentSchemas")),
-                )?;
-            }
-        }
-
-        if let Some(dependencies) = object.get("dependencies").and_then(Value::as_object) {
-            let dependencies_pointer = push_pointer(pointer, "dependencies");
-            for (name, dependency) in dependencies {
-                if dependency.is_object() || dependency.is_boolean() {
-                    visit_schema(
-                        plugin_id,
-                        file_path,
-                        root,
-                        dependency,
-                        &push_pointer(&dependencies_pointer, name),
-                        unsupported_secret_context.or(Some("dependencies")),
-                    )?;
-                }
-            }
-        }
-        Ok(())
+        return Err(schema_error(
+            plugin_id,
+            file_path,
+            format!(
+                "Draft 2020-12 dynamic references are not supported at JSON pointer '{}'",
+                push_pointer(pointer, keyword)
+            ),
+        ));
     }
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+        && !reference.starts_with('#')
+    {
+        return Err(schema_error(
+            plugin_id,
+            file_path,
+            format!(
+                "$ref at JSON pointer '{}' must be a local fragment reference beginning with '#', got '{reference}'",
+                push_pointer(pointer, "$ref")
+            ),
+        ));
+    }
+    Ok(())
+}
 
-    visit_schema(plugin_id, path, schema, schema, "", None)
+fn validate_schema_write_only_security(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    schema: &Value,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    if schema.get("writeOnly").and_then(Value::as_bool) != Some(true) {
+        return Ok(());
+    }
+    if let Some(keyword) = unsupported_secret_context {
+        return Err(schema_error(
+            plugin_id,
+            file_path,
+            format!(
+                "writeOnly at JSON pointer '{}' is not supported under '{keyword}'",
+                push_pointer(pointer, "writeOnly")
+            ),
+        ));
+    }
+    let mut references = HashSet::new();
+    let mut reference_chain = Vec::new();
+    resolve_schema_chain(root, schema, &mut references, &mut reference_chain).map_err(|error| {
+        schema_error(
+            plugin_id,
+            file_path,
+            format!(
+                "writeOnly schema at JSON pointer '{}' cannot be resolved: {error}",
+                pointer
+            ),
+        )
+    })?;
+    classify_write_only_chain(&reference_chain).map_err(|error| {
+        schema_error(
+            plugin_id,
+            file_path,
+            format!("unsupported writeOnly shape at JSON pointer '{pointer}': {error}"),
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_schema_value_children(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    for key in ["additionalItems", "additionalProperties", "contains"] {
+        if let Some(child) = object.get(key) {
+            validate_schema_security_node(
+                plugin_id,
+                file_path,
+                root,
+                child,
+                &push_pointer(pointer, key),
+                unsupported_secret_context,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_schema_context_children(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    for key in [
+        "contentSchema",
+        "else",
+        "if",
+        "not",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    ] {
+        if let Some(child) = object.get(key) {
+            validate_schema_security_node(
+                plugin_id,
+                file_path,
+                root,
+                child,
+                &push_pointer(pointer, key),
+                unsupported_secret_context.or(Some(key)),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_schema_items(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    let Some(items) = object.get("items") else {
+        return Ok(());
+    };
+    let items_pointer = push_pointer(pointer, "items");
+    if let Some(items) = items.as_array() {
+        for (index, child) in items.iter().enumerate() {
+            validate_schema_security_node(
+                plugin_id,
+                file_path,
+                root,
+                child,
+                &push_pointer(&items_pointer, &index.to_string()),
+                unsupported_secret_context,
+            )?;
+        }
+    } else {
+        validate_schema_security_node(
+            plugin_id,
+            file_path,
+            root,
+            items,
+            &items_pointer,
+            unsupported_secret_context,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_schema_array_children(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        let Some(children) = object.get(key).and_then(Value::as_array) else {
+            continue;
+        };
+        let child_context = match key {
+            "anyOf" | "oneOf" => unsupported_secret_context.or(Some(key)),
+            _ => unsupported_secret_context,
+        };
+        let children_pointer = push_pointer(pointer, key);
+        for (index, child) in children.iter().enumerate() {
+            validate_schema_security_node(
+                plugin_id,
+                file_path,
+                root,
+                child,
+                &push_pointer(&children_pointer, &index.to_string()),
+                child_context,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_schema_object_children(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    for key in ["$defs", "definitions", "patternProperties", "properties"] {
+        let Some(children) = object.get(key).and_then(Value::as_object) else {
+            continue;
+        };
+        let children_pointer = push_pointer(pointer, key);
+        for (name, child) in children {
+            validate_schema_security_node(
+                plugin_id,
+                file_path,
+                root,
+                child,
+                &push_pointer(&children_pointer, name),
+                unsupported_secret_context,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_schema_dependent_schemas(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    let Some(children) = object.get("dependentSchemas").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let children_pointer = push_pointer(pointer, "dependentSchemas");
+    for (name, child) in children {
+        validate_schema_security_node(
+            plugin_id,
+            file_path,
+            root,
+            child,
+            &push_pointer(&children_pointer, name),
+            unsupported_secret_context.or(Some("dependentSchemas")),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_schema_dependencies(
+    plugin_id: &str,
+    file_path: &Path,
+    root: &Value,
+    object: &Map<String, Value>,
+    pointer: &str,
+    unsupported_secret_context: Option<&str>,
+) -> Result<(), CliError> {
+    let Some(dependencies) = object.get("dependencies").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let dependencies_pointer = push_pointer(pointer, "dependencies");
+    for (name, dependency) in dependencies {
+        if dependency.is_object() || dependency.is_boolean() {
+            validate_schema_security_node(
+                plugin_id,
+                file_path,
+                root,
+                dependency,
+                &push_pointer(&dependencies_pointer, name),
+                unsupported_secret_context.or(Some("dependencies")),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_schema_document(
@@ -1147,7 +1364,7 @@ struct SecretPattern(Vec<SecretSegment>);
 
 impl SecretPattern {
     fn redact(&self, value: &mut Value, offset: usize) {
-        if offset == self.0.len() {
+        self.visit_matching_values(value, offset, &mut |value| {
             // A configuration can contain a schema-invalid value before validation. Once the
             // schema marks this path as secret, its runtime type must not determine whether it
             // is safe to display. Null remains visible because it represents an unset nullable
@@ -1155,58 +1372,7 @@ impl SecretPattern {
             if !value.is_null() {
                 *value = Value::String(REDACTED.to_owned());
             }
-            return;
-        }
-        match &self.0[offset] {
-            SecretSegment::Property(property) => {
-                if let Some(child) = value.get_mut(property) {
-                    self.redact(child, offset + 1);
-                }
-            }
-            SecretSegment::Any => match value {
-                Value::Object(object) => {
-                    for child in object.values_mut() {
-                        self.redact(child, offset + 1);
-                    }
-                }
-                Value::Array(values) => {
-                    for child in values {
-                        self.redact(child, offset + 1);
-                    }
-                }
-                _ => {}
-            },
-            SecretSegment::Pattern(pattern) => {
-                if let Value::Object(object) = value {
-                    for (key, child) in object {
-                        if pattern_matches(pattern, key) {
-                            self.redact(child, offset + 1);
-                        }
-                    }
-                }
-            }
-            SecretSegment::UnmatchedProperties(selector) => {
-                if let Value::Object(object) = value {
-                    for (key, child) in object {
-                        if selector.matches(key) {
-                            self.redact(child, offset + 1);
-                        }
-                    }
-                }
-            }
-            SecretSegment::Index(index) => {
-                if let Some(child) = value.get_mut(*index) {
-                    self.redact(child, offset + 1);
-                }
-            }
-            SecretSegment::Tail(start) => {
-                if let Value::Array(values) = value {
-                    for child in values.iter_mut().skip(*start) {
-                        self.redact(child, offset + 1);
-                    }
-                }
-            }
-        }
+        });
     }
 
     fn redact_for_edit(
@@ -1217,15 +1383,13 @@ impl SecretPattern {
         occupied: &HashSet<String>,
         next_token: &mut usize,
     ) {
-        if offset == self.0.len() {
+        self.visit_matching_values(value, offset, &mut |value| {
             // Tokenize invalid values too, both to keep raw editing safe and to preserve the
             // original value if the user leaves it unchanged.
-            if value.is_null() {
-                return;
-            }
-            if value
-                .as_str()
-                .is_some_and(|candidate| secrets.contains_key(candidate))
+            if value.is_null()
+                || value
+                    .as_str()
+                    .is_some_and(|candidate| secrets.contains_key(candidate))
             {
                 return;
             }
@@ -1238,23 +1402,34 @@ impl SecretPattern {
                 },
             );
             *value = Value::String(token);
+        });
+    }
+
+    fn visit_matching_values(
+        &self,
+        value: &mut Value,
+        offset: usize,
+        visit: &mut impl FnMut(&mut Value),
+    ) {
+        if offset == self.0.len() {
+            visit(value);
             return;
         }
         match &self.0[offset] {
             SecretSegment::Property(property) => {
                 if let Some(child) = value.get_mut(property) {
-                    self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                    self.visit_matching_values(child, offset + 1, visit);
                 }
             }
             SecretSegment::Any => match value {
                 Value::Object(object) => {
                     for child in object.values_mut() {
-                        self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                        self.visit_matching_values(child, offset + 1, visit);
                     }
                 }
                 Value::Array(values) => {
                     for child in values {
-                        self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                        self.visit_matching_values(child, offset + 1, visit);
                     }
                 }
                 _ => {}
@@ -1263,7 +1438,7 @@ impl SecretPattern {
                 if let Value::Object(object) = value {
                     for (key, child) in object {
                         if pattern_matches(pattern, key) {
-                            self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                            self.visit_matching_values(child, offset + 1, visit);
                         }
                     }
                 }
@@ -1272,20 +1447,20 @@ impl SecretPattern {
                 if let Value::Object(object) = value {
                     for (key, child) in object {
                         if selector.matches(key) {
-                            self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                            self.visit_matching_values(child, offset + 1, visit);
                         }
                     }
                 }
             }
             SecretSegment::Index(index) => {
                 if let Some(child) = value.get_mut(*index) {
-                    self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                    self.visit_matching_values(child, offset + 1, visit);
                 }
             }
             SecretSegment::Tail(start) => {
                 if let Value::Array(values) = value {
                     for child in values.iter_mut().skip(*start) {
-                        self.redact_for_edit(child, offset + 1, secrets, occupied, next_token);
+                        self.visit_matching_values(child, offset + 1, visit);
                     }
                 }
             }
@@ -1461,138 +1636,280 @@ fn discover_secret_patterns_in_object(
     output: &mut Vec<SecretPattern>,
 ) -> Result<(), String> {
     let properties = object.get("properties").and_then(Value::as_object);
-    if let Some(properties) = properties {
-        for (property, child_schema) in properties {
-            let mut child_path = instance_path.to_vec();
-            child_path.push(SecretSegment::Property(property.clone()));
-            discover_secret_patterns(root, child_schema, &child_path, references, output)?;
-        }
-    }
+    discover_named_secret_patterns(root, properties, instance_path, references, output)?;
+    let pattern_schemas = collect_secret_pattern_schemas(object)?;
+    discover_additional_secret_patterns(
+        root,
+        object,
+        properties,
+        &pattern_schemas,
+        instance_path,
+        references,
+        output,
+    )?;
+    discover_pattern_property_secret_patterns(
+        root,
+        pattern_schemas,
+        instance_path,
+        references,
+        output,
+    )?;
+    discover_item_secret_patterns(root, object, instance_path, references, output)?;
+    discover_prefix_item_secret_patterns(root, object, instance_path, references, output)?;
+    discover_all_of_secret_patterns(root, object, instance_path, references, output)?;
+    reject_array_applicator_secret_patterns(root, object, instance_path, references)?;
+    reject_value_applicator_secret_patterns(
+        root,
+        object,
+        &["if", "then", "else", "not"],
+        instance_path,
+        references,
+    )?;
+    discover_contains_secret_patterns(root, object, instance_path, references, output)?;
+    reject_value_applicator_secret_patterns(
+        root,
+        object,
+        &["unevaluatedProperties", "unevaluatedItems"],
+        instance_path,
+        references,
+    )?;
+    reject_object_applicator_secret_patterns(
+        root,
+        object,
+        &["dependentSchemas", "dependencies"],
+        instance_path,
+        references,
+    )?;
+    Ok(())
+}
 
+fn discover_named_secret_patterns(
+    root: &Value,
+    properties: Option<&Map<String, Value>>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
+    let Some(properties) = properties else {
+        return Ok(());
+    };
+    for (property, child_schema) in properties {
+        let mut child_path = instance_path.to_vec();
+        child_path.push(SecretSegment::Property(property.clone()));
+        discover_secret_patterns(root, child_schema, &child_path, references, output)?;
+    }
+    Ok(())
+}
+
+fn collect_secret_pattern_schemas(
+    object: &Map<String, Value>,
+) -> Result<Vec<(SecretPropertyPattern, &Value)>, String> {
+    let Some(patterns) = object.get("patternProperties").and_then(Value::as_object) else {
+        return Ok(Vec::new());
+    };
     let mut pattern_schemas = Vec::new();
-    if let Some(patterns) = object.get("patternProperties").and_then(Value::as_object) {
-        for (pattern, child_schema) in patterns {
-            let matcher = regex::Regex::new(pattern).map_err(|error| {
-                format!("unsupported patternProperties expression {pattern:?}: {error}")
-            })?;
-            pattern_schemas.push((
-                SecretPropertyPattern {
-                    source: pattern.clone(),
-                    matcher,
-                },
-                child_schema,
-            ));
-        }
+    for (pattern, child_schema) in patterns {
+        let matcher = regex::Regex::new(pattern).map_err(|error| {
+            format!("unsupported patternProperties expression {pattern:?}: {error}")
+        })?;
+        pattern_schemas.push((
+            SecretPropertyPattern {
+                source: pattern.clone(),
+                matcher,
+            },
+            child_schema,
+        ));
     }
     pattern_schemas.sort_by(|(left, _), (right, _)| left.cmp(right));
+    Ok(pattern_schemas)
+}
 
-    if let Some(additional) = object.get("additionalProperties")
-        && additional.is_object()
-    {
-        let mut excluded_properties = properties
-            .into_iter()
-            .flat_map(|properties| properties.keys().cloned())
-            .collect::<Vec<_>>();
-        excluded_properties.sort();
-        let mut child_path = instance_path.to_vec();
-        child_path.push(SecretSegment::UnmatchedProperties(
-            SecretUnmatchedProperties {
-                properties: excluded_properties,
-                patterns: pattern_schemas
-                    .iter()
-                    .map(|(pattern, _)| pattern.clone())
-                    .collect(),
-            },
-        ));
-        discover_secret_patterns(root, additional, &child_path, references, output)?;
+fn discover_additional_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    properties: Option<&Map<String, Value>>,
+    pattern_schemas: &[(SecretPropertyPattern, &Value)],
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
+    let Some(additional) = object.get("additionalProperties") else {
+        return Ok(());
+    };
+    if !additional.is_object() {
+        return Ok(());
     }
+    let mut excluded_properties = properties
+        .into_iter()
+        .flat_map(|properties| properties.keys().cloned())
+        .collect::<Vec<_>>();
+    excluded_properties.sort();
+    let mut child_path = instance_path.to_vec();
+    child_path.push(SecretSegment::UnmatchedProperties(
+        SecretUnmatchedProperties {
+            properties: excluded_properties,
+            patterns: pattern_schemas
+                .iter()
+                .map(|(pattern, _)| pattern.clone())
+                .collect(),
+        },
+    ));
+    discover_secret_patterns(root, additional, &child_path, references, output)
+}
+
+fn discover_pattern_property_secret_patterns(
+    root: &Value,
+    pattern_schemas: Vec<(SecretPropertyPattern, &Value)>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
     for (pattern, child_schema) in pattern_schemas {
         let mut child_path = instance_path.to_vec();
         child_path.push(SecretSegment::Pattern(pattern));
         discover_secret_patterns(root, child_schema, &child_path, references, output)?;
     }
-    if let Some(items) = object.get("items") {
-        if items.is_object() {
-            let mut child_path = instance_path.to_vec();
-            match object.get("prefixItems").and_then(Value::as_array) {
-                Some(prefix_items) => {
-                    child_path.push(SecretSegment::Tail(prefix_items.len()));
-                }
-                None => child_path.push(SecretSegment::Any),
-            }
-            discover_secret_patterns(root, items, &child_path, references, output)?;
-        } else if let Some(tuple_items) = items.as_array() {
-            for (index, child_schema) in tuple_items.iter().enumerate() {
-                let mut child_path = instance_path.to_vec();
-                child_path.push(SecretSegment::Index(index));
-                discover_secret_patterns(root, child_schema, &child_path, references, output)?;
-            }
-            if let Some(additional_items) = object.get("additionalItems")
-                && additional_items.is_object()
-            {
-                let mut child_path = instance_path.to_vec();
-                child_path.push(SecretSegment::Tail(tuple_items.len()));
-                discover_secret_patterns(root, additional_items, &child_path, references, output)?;
-            }
-        }
+    Ok(())
+}
+
+fn discover_item_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
+    let Some(items) = object.get("items") else {
+        return Ok(());
+    };
+    if items.is_object() {
+        let mut child_path = instance_path.to_vec();
+        let segment = object
+            .get("prefixItems")
+            .and_then(Value::as_array)
+            .map_or(SecretSegment::Any, |prefix_items| {
+                SecretSegment::Tail(prefix_items.len())
+            });
+        child_path.push(segment);
+        return discover_secret_patterns(root, items, &child_path, references, output);
     }
-    if let Some(prefix_items) = object.get("prefixItems").and_then(Value::as_array) {
-        for (index, child_schema) in prefix_items.iter().enumerate() {
-            let mut child_path = instance_path.to_vec();
-            child_path.push(SecretSegment::Index(index));
-            discover_secret_patterns(root, child_schema, &child_path, references, output)?;
-        }
+    let Some(tuple_items) = items.as_array() else {
+        return Ok(());
+    };
+    for (index, child_schema) in tuple_items.iter().enumerate() {
+        let mut child_path = instance_path.to_vec();
+        child_path.push(SecretSegment::Index(index));
+        discover_secret_patterns(root, child_schema, &child_path, references, output)?;
     }
-    if let Some(branches) = object.get("allOf").and_then(Value::as_array) {
-        for branch in branches {
-            discover_secret_patterns(root, branch, instance_path, references, output)?;
-        }
-    }
-    for keyword in ["anyOf", "oneOf"] {
-        if let Some(branches) = object.get(keyword).and_then(Value::as_array) {
-            for branch in branches {
-                reject_write_only_under_applicator(
-                    root,
-                    keyword,
-                    branch,
-                    instance_path,
-                    references,
-                )?;
-            }
-        }
-    }
-    for keyword in ["if", "then", "else", "not"] {
-        if let Some(branch) = object.get(keyword)
-            && branch.is_object()
-        {
-            reject_write_only_under_applicator(root, keyword, branch, instance_path, references)?;
-        }
-    }
-    if let Some(contains) = object.get("contains")
-        && contains.is_object()
+    if let Some(additional_items) = object.get("additionalItems")
+        && additional_items.is_object()
     {
         let mut child_path = instance_path.to_vec();
-        child_path.push(SecretSegment::Any);
-        discover_secret_patterns(root, contains, &child_path, references, output)?;
+        child_path.push(SecretSegment::Tail(tuple_items.len()));
+        discover_secret_patterns(root, additional_items, &child_path, references, output)?;
     }
-    for keyword in ["unevaluatedProperties", "unevaluatedItems"] {
-        if let Some(branch) = object.get(keyword)
+    Ok(())
+}
+
+fn discover_prefix_item_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
+    let Some(prefix_items) = object.get("prefixItems").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for (index, child_schema) in prefix_items.iter().enumerate() {
+        let mut child_path = instance_path.to_vec();
+        child_path.push(SecretSegment::Index(index));
+        discover_secret_patterns(root, child_schema, &child_path, references, output)?;
+    }
+    Ok(())
+}
+
+fn discover_all_of_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
+    let Some(branches) = object.get("allOf").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for branch in branches {
+        discover_secret_patterns(root, branch, instance_path, references, output)?;
+    }
+    Ok(())
+}
+
+fn reject_array_applicator_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+) -> Result<(), String> {
+    for keyword in ["anyOf", "oneOf"] {
+        let Some(branches) = object.get(keyword).and_then(Value::as_array) else {
+            continue;
+        };
+        for branch in branches {
+            reject_write_only_under_applicator(root, keyword, branch, instance_path, references)?;
+        }
+    }
+    Ok(())
+}
+
+fn reject_value_applicator_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    keywords: &[&str],
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+) -> Result<(), String> {
+    for keyword in keywords {
+        if let Some(branch) = object.get(*keyword)
             && branch.is_object()
         {
             reject_write_only_under_applicator(root, keyword, branch, instance_path, references)?;
         }
     }
-    for keyword in ["dependentSchemas", "dependencies"] {
-        if let Some(branches) = object.get(keyword).and_then(Value::as_object) {
-            for branch in branches.values().filter(|branch| branch.is_object()) {
-                reject_write_only_under_applicator(
-                    root,
-                    keyword,
-                    branch,
-                    instance_path,
-                    references,
-                )?;
-            }
+    Ok(())
+}
+
+fn discover_contains_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+    output: &mut Vec<SecretPattern>,
+) -> Result<(), String> {
+    let Some(contains) = object.get("contains") else {
+        return Ok(());
+    };
+    if !contains.is_object() {
+        return Ok(());
+    }
+    let mut child_path = instance_path.to_vec();
+    child_path.push(SecretSegment::Any);
+    discover_secret_patterns(root, contains, &child_path, references, output)
+}
+
+fn reject_object_applicator_secret_patterns(
+    root: &Value,
+    object: &Map<String, Value>,
+    keywords: &[&str],
+    instance_path: &[SecretSegment],
+    references: &HashSet<String>,
+) -> Result<(), String> {
+    for keyword in keywords {
+        let Some(branches) = object.get(*keyword).and_then(Value::as_object) else {
+            continue;
+        };
+        for branch in branches.values().filter(|branch| branch.is_object()) {
+            reject_write_only_under_applicator(root, keyword, branch, instance_path, references)?;
         }
     }
     Ok(())

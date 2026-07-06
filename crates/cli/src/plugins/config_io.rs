@@ -211,39 +211,55 @@ fn patch_json_value(
     }
     match (raw, original, updated) {
         (toml::Value::Table(raw), Value::Object(original), Value::Object(updated)) => {
-            for key in original.keys() {
-                if !updated.contains_key(key) {
-                    raw.remove(key);
-                }
-            }
-            for (key, updated) in updated {
-                match (raw.get_mut(key), original.get(key)) {
-                    (Some(raw), Some(original)) => patch_json_value(raw, original, updated)?,
-                    _ => {
-                        raw.insert(key.clone(), json_to_toml(updated.clone())?);
-                    }
-                }
-            }
-            Ok(())
+            patch_json_object(raw, original, updated)
         }
         (toml::Value::Array(raw), Value::Array(original), Value::Array(updated))
             if raw.len() == original.len() =>
         {
-            let shared_len = original.len().min(updated.len());
-            for index in 0..shared_len {
-                patch_json_value(&mut raw[index], &original[index], &updated[index])?;
-            }
-            raw.truncate(updated.len());
-            for value in &updated[shared_len..] {
-                raw.push(json_to_toml(value.clone())?);
-            }
-            Ok(())
+            patch_json_array(raw, original, updated)
         }
         (raw, _, updated) => {
             *raw = json_to_toml(updated.clone())?;
             Ok(())
         }
     }
+}
+
+fn patch_json_object(
+    raw: &mut toml::map::Map<String, toml::Value>,
+    original: &Map<String, Value>,
+    updated: &Map<String, Value>,
+) -> Result<(), CliError> {
+    for key in original.keys() {
+        if !updated.contains_key(key) {
+            raw.remove(key);
+        }
+    }
+    for (key, updated) in updated {
+        match (raw.get_mut(key), original.get(key)) {
+            (Some(raw), Some(original)) => patch_json_value(raw, original, updated)?,
+            _ => {
+                raw.insert(key.clone(), json_to_toml(updated.clone())?);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn patch_json_array(
+    raw: &mut Vec<toml::Value>,
+    original: &[Value],
+    updated: &[Value],
+) -> Result<(), CliError> {
+    let shared_len = original.len().min(updated.len());
+    for index in 0..shared_len {
+        patch_json_value(&mut raw[index], &original[index], &updated[index])?;
+    }
+    raw.truncate(updated.len());
+    for value in &updated[shared_len..] {
+        raw.push(json_to_toml(value.clone())?);
+    }
+    Ok(())
 }
 
 fn json_to_toml(value: Value) -> Result<toml::Value, CliError> {

@@ -12,12 +12,14 @@ tests_run=0
 
 cleanup() {
     rm -rf "$test_root"
+    return 0
 }
 trap cleanup EXIT HUP INT TERM
 
 fail() {
     printf 'FAIL: %s\n' "$*" >&2
     exit 1
+    return 1
 }
 
 run_command() {
@@ -26,23 +28,32 @@ run_command() {
     else
         run_status=$?
     fi
+    return 0
 }
 
 assert_success() {
     [ "$run_status" -eq 0 ] || fail "expected success, got ${run_status}: ${run_output}"
+    return 0
 }
 
 assert_failure() {
     [ "$run_status" -ne 0 ] || fail "expected failure: ${run_output}"
+    return 0
 }
 
 assert_contains() {
-    printf '%s\n' "$1" | grep -F "$2" >/dev/null || fail "expected '$2' in: $1"
+    assert_actual=$1
+    assert_expected=$2
+    printf '%s\n' "$assert_actual" | grep -F "$assert_expected" >/dev/null || fail "expected '$assert_expected' in: $assert_actual"
+    return 0
 }
 
 assert_no_temporary_files() {
-    set -- "$1"/.nemo-relay.*
-    [ ! -e "$1" ] || fail "temporary installer file was not cleaned up: $1"
+    assert_directory=$1
+    set -- "$assert_directory"/.nemo-relay.*
+    assert_temporary_file=$1
+    [ ! -e "$assert_temporary_file" ] || fail "temporary installer file was not cleaned up: $assert_temporary_file"
+    return 0
 }
 
 test_interface_validation() {
@@ -67,6 +78,7 @@ test_interface_validation() {
     run_command env -u HOME NEMO_RELAY_VERSION=0.3.0 sh "$installer"
     assert_failure
     assert_contains "$run_output" "install directory must not be empty"
+    return 0
 }
 
 test_live_latest_and_pinned_replacement() {
@@ -84,6 +96,7 @@ test_live_latest_and_pinned_replacement() {
     pinned_version=$("${live_install_dir}/nemo-relay" --version)
     assert_contains "$pinned_version" "nemo-relay 0.3.0"
     assert_no_temporary_files "$live_install_dir"
+    return 0
 }
 
 test_live_asset_404_preserves_existing_binary() {
@@ -96,6 +109,7 @@ test_live_asset_404_preserves_existing_binary() {
     preserved_version=$("${live_install_dir}/nemo-relay" --version)
     assert_contains "$preserved_version" "nemo-relay 0.3.0"
     assert_no_temporary_files "$live_install_dir"
+    return 0
 }
 
 test_live_network_failure() {
@@ -113,6 +127,7 @@ test_live_network_failure() {
     assert_failure
     assert_contains "$run_output" "could not resolve the latest stable release"
     [ ! -e "${network_failure_dir}/nemo-relay" ] || fail "binary installed after network failure"
+    return 0
 }
 
 test_interface_validation

@@ -1332,11 +1332,27 @@ fn report_has_warn(report: &DoctorReport) -> bool {
 /// pure formatter stays banner-free for tests.
 pub(crate) fn format_human(report: &DoctorReport) -> String {
     let mut out = String::new();
+    format_human_header(&mut out, report);
+    format_human_environment(&mut out, report);
+    format_human_configuration(&mut out, report);
+    format_human_plugin_configuration(&mut out, report);
+    format_human_agents(&mut out, report);
+    format_human_host_plugins(&mut out, report);
+    format_human_checks(&mut out, "Observability", &report.observability);
+    format_human_checks(&mut out, "Completions", &report.completions);
+    format_human_conclusion(&mut out, report);
+    out
+}
+
+fn format_human_header(out: &mut String, report: &DoctorReport) {
     out.push_str(&format!("\n  NeMo Relay {}\n", report.binary_version));
     out.push_str("  ─────────────────────────────────────────────\n");
     if let Some(agent) = &report.target_agent {
         out.push_str(&format!("  Target agent  {agent}\n\n"));
     }
+}
+
+fn format_human_environment(out: &mut String, report: &DoctorReport) {
     out.push_str("  Environment\n");
     out.push_str(&format!(
         "    OS         {}\n",
@@ -1347,7 +1363,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         out.push_str(&format!("    Shell      {shell}\n"));
     }
     out.push('\n');
+}
 
+fn format_human_configuration(out: &mut String, report: &DoctorReport) {
     out.push_str("  Configuration\n");
     out.push_str(&format!(
         "    Workspace  {}\n",
@@ -1375,7 +1393,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         ));
     }
     out.push('\n');
+}
 
+fn format_human_plugin_configuration(out: &mut String, report: &DoctorReport) {
     out.push_str("  Plugin configuration\n");
     for plugin in &report.configuration.dynamic_plugins {
         let config_suffix = if matches!(
@@ -1415,7 +1435,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         }
     }
     out.push('\n');
+}
 
+fn format_human_agents(out: &mut String, report: &DoctorReport) {
     out.push_str("  Agents detected\n");
     for agent in &report.agents {
         let status = format_status(agent.status);
@@ -1441,7 +1463,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         }
     }
     out.push('\n');
+}
 
+fn format_human_host_plugins(out: &mut String, report: &DoctorReport) {
     out.push_str("  Host plugins\n");
     if report.host_plugins.is_empty() {
         out.push_str("    ·  none installed; run `nemo-relay install <host>` to enable persistent host plugins\n");
@@ -1466,19 +1490,17 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         }
     }
     out.push('\n');
+}
 
-    out.push_str("  Observability\n");
-    for check in &report.observability {
+fn format_human_checks(out: &mut String, title: &str, checks: &[Check]) {
+    out.push_str(&format!("  {title}\n"));
+    for check in checks {
         out.push_str(&format!("    {:<22}  {}\n", check.name, check.details));
     }
     out.push('\n');
+}
 
-    out.push_str("  Completions\n");
-    for check in &report.completions {
-        out.push_str(&format!("    {}\n", check.details));
-    }
-    out.push('\n');
-
+fn format_human_conclusion(out: &mut String, report: &DoctorReport) {
     if exit_code(report) == 0 {
         if report_has_warn(report) {
             out.push_str("  All checks passed, but some issued warnings; see details above.\n");
@@ -1488,7 +1510,6 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     } else {
         out.push_str("  Some checks FAILED; see details above.\n");
     }
-    out
 }
 
 fn format_layer(layer: &ConfigLayer) -> String {
