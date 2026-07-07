@@ -2265,17 +2265,29 @@ fn tool_projection_keeps_llm_chunks_as_parent_span_events() {
     let parent_uuid = Uuid::now_v7();
     let start = make_start_event(parent_uuid, None, "llm", ScopeType::Llm, None);
     let chunk = make_mark_event(Some(parent_uuid), "llm.chunk", Some(json!({"delta": "x"})));
+    let aliased_chunk = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(parent_uuid)
+            .name("hook_mark")
+            .metadata(json!({"hook_event_name": "llm.chunk"}))
+            .data(json!({"delta": "y"}))
+            .build(),
+        None,
+        None,
+    ));
     let end = make_end_event(parent_uuid, None, "llm", ScopeType::Llm, None);
 
     processor.process(&start);
     processor.process(&chunk);
+    processor.process(&aliased_chunk);
     processor.process(&end);
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
-    assert_eq!(spans[0].events.events.len(), 1);
+    assert_eq!(spans[0].events.events.len(), 2);
     assert_eq!(spans[0].events.events[0].name.as_ref(), "llm.chunk");
+    assert_eq!(spans[0].events.events[1].name.as_ref(), "hook_mark");
 }
 
 #[test]
