@@ -1936,6 +1936,38 @@ fn test_exporter_tool_projection_renders_generic_mark_as_deterministic_tool_step
 }
 
 #[test]
+fn test_exporter_tool_projection_exclusion_keeps_mark_as_system_step() {
+    let root_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info())
+        .with_mark_projection(MarkProjection::Tool)
+        .with_mark_exclude_names(["plugin.output_compacted"]);
+    let mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("plugin.output_compacted")
+            .data(json!({"count": 3}))
+            .build(),
+        Some(EventCategory::custom()),
+        Some(
+            CategoryProfile::builder()
+                .subtype("example.compaction")
+                .build(),
+        ),
+    ));
+
+    exporter.state.lock().unwrap().events.push(mark);
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps.len(), 1);
+    assert_eq!(trajectory.steps[0].source, "system");
+    assert!(trajectory.steps[0].tool_calls.is_none());
+    assert_eq!(
+        trajectory.steps[0].message,
+        json!("plugin.output_compacted")
+    );
+}
+
+#[test]
 fn test_exporter_tool_projection_keeps_data_less_and_empty_marks_visible() {
     let root_uuid = Uuid::now_v7();
     let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info())

@@ -168,6 +168,7 @@ class AtifConfig:
     agent_version: str | None = None
     model_name: str = "unknown"
     mark_projection: MarkProjection = "event"
+    mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
     tool_definitions: list[JsonObject] | None = None
     extra: JsonObject | None = None
     output_directory: str | None = None
@@ -182,6 +183,7 @@ class AtifConfig:
             "agent_version": self.agent_version,
             "model_name": self.model_name,
             "mark_projection": self.mark_projection,
+            "mark_exclude_names": self.mark_exclude_names,
             "tool_definitions": self.tool_definitions,
             "extra": self.extra,
             "output_directory": self.output_directory,
@@ -199,6 +201,7 @@ class OtlpConfig:
 
     enabled: bool = False
     mark_projection: MarkProjection = "event"
+    mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
     transport: Literal["http_binary", "grpc"] = "http_binary"
     endpoint: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
@@ -215,6 +218,7 @@ class OtlpConfig:
             {
                 "enabled": self.enabled,
                 "mark_projection": self.mark_projection,
+                "mark_exclude_names": self.mark_exclude_names,
                 "transport": self.transport,
                 "endpoint": self.endpoint,
                 "headers": self.headers,

@@ -35,10 +35,35 @@ pub enum MarkProjection {
     /// Preserve marks as ATIF system steps or OTEL span events.
     #[default]
     Event,
-    /// Render non-streaming marks as deterministic ATIF tool steps or
+    /// Render non-excluded marks as deterministic ATIF tool steps or
     /// zero-duration OTEL child spans so trace-tree consumers can display them
-    /// directly. High-volume `llm.chunk` marks remain events.
+    /// directly. High-volume `llm.chunk` marks remain exporter-native events.
     Tool,
+}
+
+/// Default mark names excluded from tool projection because they are emitted
+/// at high volume and are better represented as exporter-native events.
+pub(crate) fn default_mark_exclude_names() -> Vec<String> {
+    vec!["llm.chunk".to_string()]
+}
+
+/// Returns whether a mark matches a configured projection exclusion.
+///
+/// Agent hook adapters may preserve the canonical event name in metadata while
+/// using a generic mark name, so both representations are matched.
+pub(crate) fn mark_name_is_excluded(
+    event: &crate::api::event::Event,
+    excluded_names: &[String],
+) -> bool {
+    excluded_names.iter().any(|name| {
+        event.name() == name
+            || event
+                .metadata()
+                .and_then(crate::json::Json::as_object)
+                .and_then(|metadata| metadata.get("hook_event_name"))
+                .and_then(crate::json::Json::as_str)
+                == Some(name.as_str())
+    })
 }
 
 pub(crate) fn is_llm_chunk_mark(event: &crate::api::event::Event) -> bool {

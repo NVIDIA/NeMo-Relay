@@ -375,6 +375,7 @@ fn config_defaults_and_builder_overrides_are_applied() {
         .with_service_version("1.2.3")
         .with_instrumentation_scope("demo-scope")
         .with_mark_projection(MarkProjection::Tool)
+        .with_mark_exclude_names(["notification", "hook_mark"])
         .with_timeout(Duration::from_millis(1250));
 
     assert_eq!(config.transport, OtlpTransport::HttpBinary);
@@ -395,6 +396,7 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(config.service_version.as_deref(), Some("1.2.3"));
     assert_eq!(config.instrumentation_scope, "demo-scope");
     assert_eq!(config.mark_projection, MarkProjection::Tool);
+    assert_eq!(config.mark_exclude_names, vec!["notification", "hook_mark"]);
     assert_eq!(config.timeout, Duration::from_millis(1250));
 
     let defaults = OpenTelemetryConfig::default();
@@ -402,6 +404,7 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(defaults.service_name, "nemo-relay");
     assert_eq!(defaults.instrumentation_scope, "nemo-relay-otel");
     assert_eq!(defaults.mark_projection, MarkProjection::Event);
+    assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(defaults.timeout, Duration::from_secs(3));
     assert!(defaults.headers.is_empty());
     assert!(defaults.resource_attributes.is_empty());
@@ -847,6 +850,32 @@ fn tool_projection_emits_generic_mark_as_parented_zero_duration_span() {
         Some(&"{\"subtype\":\"example.compaction\"}".to_string())
     );
     assert!(!attributes.contains_key("nemo_relay.mark.orphan"));
+}
+
+#[test]
+fn tool_projection_exclusion_keeps_custom_mark_as_native_event() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+        vec!["plugin.excluded".to_string()],
+    );
+    processor.process(&make_mark_event(
+        None,
+        "plugin.excluded",
+        Some(json!({"count": 3})),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("nemo_relay.mark.projection"));
+    assert_eq!(
+        attributes.get("nemo_relay.mark.orphan"),
+        Some(&"true".to_string())
+    );
 }
 
 #[test]

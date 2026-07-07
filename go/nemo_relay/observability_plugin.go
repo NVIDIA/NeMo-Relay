@@ -53,6 +53,7 @@ type ObservabilityAtifConfig struct {
 	AgentVersion     string                               `json:"agent_version,omitempty"`
 	ModelName        string                               `json:"model_name,omitempty"`
 	MarkProjection   ObservabilityMarkProjection          `json:"mark_projection,omitempty"`
+	MarkExcludeNames []string                             `json:"mark_exclude_names,omitempty"`
 	ToolDefinitions  []map[string]any                     `json:"tool_definitions,omitempty"`
 	Extra            map[string]any                       `json:"extra,omitempty"`
 	OutputDirectory  string                               `json:"output_directory,omitempty"`
@@ -141,6 +142,7 @@ func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 type ObservabilityOtlpConfig struct {
 	Enabled              bool                        `json:"enabled,omitempty"`
 	MarkProjection       ObservabilityMarkProjection `json:"mark_projection,omitempty"`
+	MarkExcludeNames     []string                    `json:"mark_exclude_names,omitempty"`
 	Transport            string                      `json:"transport,omitempty"`
 	Endpoint             string                      `json:"endpoint,omitempty"`
 	Headers              map[string]string           `json:"headers,omitempty"`
@@ -176,6 +178,7 @@ func NewObservabilityAtifConfig() ObservabilityAtifConfig {
 		AgentName:        "NeMo Relay",
 		ModelName:        "unknown",
 		MarkProjection:   ObservabilityMarkProjectionEvent,
+		MarkExcludeNames: []string{"llm.chunk"},
 		FilenameTemplate: "nemo-relay-atif-{session_id}.json",
 	}
 }
@@ -195,6 +198,7 @@ func NewObservabilityOtlpConfig() ObservabilityOtlpConfig {
 	return ObservabilityOtlpConfig{
 		Transport:          "http_binary",
 		MarkProjection:     ObservabilityMarkProjectionEvent,
+		MarkExcludeNames:   []string{"llm.chunk"},
 		Headers:            map[string]string{},
 		ResourceAttributes: map[string]string{},
 		ServiceName:        "nemo-relay",

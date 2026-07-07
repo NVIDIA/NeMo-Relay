@@ -36,7 +36,6 @@ use crate::api::subscriber::{
     scope_deregister_subscriber, try_scope_deregister_subscriber, try_scope_register_subscriber,
 };
 use crate::error::FlowError;
-use crate::observability::MarkProjection;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointFieldNamePolicy,
@@ -52,6 +51,7 @@ use crate::observability::openinference::{
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber,
 };
+use crate::observability::{MarkProjection, default_mark_exclude_names};
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -232,6 +232,9 @@ pub struct AtifSectionConfig {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
     pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection. Defaults to `llm.chunk`.
+    #[serde(default = "default_mark_exclude_names")]
+    pub mark_exclude_names: Vec<String>,
     /// Tool definitions available to the agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_definitions: Option<Vec<Json>>,
@@ -269,6 +272,7 @@ impl Default for AtifSectionConfig {
             agent_version: default_agent_version(),
             model_name: default_model_name(),
             mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
             tool_definitions: None,
             extra: None,
             output_directory: None,
@@ -384,6 +388,9 @@ pub struct OtlpSectionConfig {
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
     pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection. Defaults to `llm.chunk`.
+    #[serde(default = "default_mark_exclude_names")]
+    pub mark_exclude_names: Vec<String>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -419,6 +426,7 @@ impl Default for OtlpSectionConfig {
         Self {
             enabled: false,
             mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
             transport: default_otlp_transport(),
             endpoint: None,
             headers: HashMap::new(),
@@ -488,6 +496,7 @@ crate::editor_config! {
         agent_version => { label: "agent_version", kind: String },
         model_name => { label: "model_name", kind: String },
         mark_projection => { label: "mark_projection", kind: Enum, values: ["event", "tool"] },
+        mark_exclude_names => { label: "mark_exclude_names", kind: Json },
         tool_definitions => { label: "tool_definitions", kind: Json, optional: true },
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
@@ -500,6 +509,7 @@ crate::editor_config! {
     impl OtlpSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
         mark_projection => { label: "mark_projection", kind: Enum, values: ["event", "tool"] },
+        mark_exclude_names => { label: "mark_exclude_names", kind: Json },
         transport => { label: "transport", kind: Enum, values: ["http_binary", "grpc"] },
         endpoint => { label: "endpoint", kind: String, optional: true },
         headers => { label: "headers", kind: StringMap },
@@ -950,7 +960,8 @@ impl AtifDispatcher {
         // emitted.
         let session_id = event.uuid().to_string();
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info())
-            .with_mark_projection(self.config.mark_projection);
+            .with_mark_projection(self.config.mark_projection)
+            .with_mark_exclude_names(self.config.mark_exclude_names.clone());
         (exporter.subscriber())(event);
         let (filename, local_path) = self.prepare_destination(&session_id);
         self.scope_owners.insert(event.uuid(), event.uuid());
@@ -1368,7 +1379,9 @@ fn build_otel_config(section: OtlpSectionConfig) -> PluginResult<CoreOpenTelemet
         }
     }
     .with_timeout(Duration::from_millis(section.timeout_millis));
-    config = config.with_mark_projection(section.mark_projection);
+    config = config
+        .with_mark_projection(section.mark_projection)
+        .with_mark_exclude_names(section.mark_exclude_names);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1406,7 +1419,8 @@ fn build_openinference_config(section: OtlpSectionConfig) -> PluginResult<CoreOp
         .with_transport(transport)
         .with_service_name(section.service_name)
         .with_timeout(Duration::from_millis(section.timeout_millis))
-        .with_mark_projection(section.mark_projection);
+        .with_mark_projection(section.mark_projection)
+        .with_mark_exclude_names(section.mark_exclude_names);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1513,6 +1527,7 @@ fn validate_observability_section_fields(
             "agent_version",
             "model_name",
             "mark_projection",
+            "mark_exclude_names",
             "tool_definitions",
             "extra",
             "output_directory",
@@ -1528,6 +1543,7 @@ fn validate_observability_section_fields(
         &[
             "enabled",
             "mark_projection",
+            "mark_exclude_names",
             "transport",
             "endpoint",
             "headers",
@@ -1547,6 +1563,7 @@ fn validate_observability_section_fields(
         &[
             "enabled",
             "mark_projection",
+            "mark_exclude_names",
             "transport",
             "endpoint",
             "headers",

@@ -48,6 +48,7 @@ export interface AtifConfig {
   agent_version?: string;
   model_name?: string;
   mark_projection?: 'event' | 'tool';
+  mark_exclude_names?: string[];
   tool_definitions?: Record<string, Json>[];
   extra?: Record<string, Json>;
   output_directory?: string;
@@ -58,6 +59,7 @@ export interface AtifConfig {
 export interface OtlpConfig {
   enabled?: boolean;
   mark_projection?: 'event' | 'tool';
+  mark_exclude_names?: string[];
   transport?: 'http_binary' | 'grpc' | string;
   endpoint?: string;
   headers?: Record<string, string>;

@@ -54,6 +54,7 @@ The following table describes the top-level ATIF settings:
 | `agent_version` | NeMo Relay crate version | Agent version metadata. |
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
 | `mark_projection` | `event` | `event` preserves marks as system steps. `tool` emits deterministic agent/tool steps for trajectory viewers that render tool calls but not system events. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain native event handling. Metadata `hook_event_name` aliases are also matched. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
@@ -200,6 +201,12 @@ category, category profile, timestamp, and ancestry preserved in `extra`. Set
 `mark_projection = "tool"` when the target viewer requires a visible tool-call
 projection. The projected step uses `llm_call_count = 0`, retains the original
 mark data in `extra`, and does not change the canonical ATOF event.
+
+Add other event names to `mark_exclude_names` when a trajectory should keep
+those marks in their native system-step representation rather than projecting
+them as tool steps. The exclusion list affects only tool projection; it does
+not remove mark payload or metadata. ATIF continues to suppress the built-in
+high-volume `llm.chunk` stream receipts as it does in event mode.
 
 The exporter translates NeMo Relay lifecycle events into ATIF v1.7 trajectory
 data. LLM start and end events become model steps, tool events become tool

@@ -62,6 +62,7 @@ OpenInference uses the same OTLP section shape as
 |---|---|---|
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
 | `mark_projection` | `event` | `event` attaches marks to active parent spans. `tool` emits zero-duration OpenInference `TOOL` child spans. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain native event handling. Metadata `hook_event_name` aliases are also matched. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -89,6 +90,10 @@ The default `event` projection preserves marks as span events. With
 `openinference.span.kind = "TOOL"` and the original mark payload, category,
 profile, timestamp, and parent identifiers retained as attributes. High-volume
 `llm.chunk` marks remain span events.
+
+Add other event names to `mark_exclude_names` when a backend should keep those
+marks as native span events rather than visible tool children. The exclusion
+list affects only tool projection; it does not remove mark payload or metadata.
 
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and

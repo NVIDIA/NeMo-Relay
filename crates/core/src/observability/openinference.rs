@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
-    MarkProjection, estimate_cost_for_response_or_model,
-    estimate_cost_for_response_or_requested_model, is_llm_chunk_mark, manual, merge_usage,
+    MarkProjection, default_mark_exclude_names, estimate_cost_for_response_or_model,
+    estimate_cost_for_response_or_requested_model, manual, mark_name_is_excluded, merge_usage,
     model_name_for_llm_event,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
@@ -103,6 +103,7 @@ pub struct OpenInferenceConfig {
     service_version: Option<String>,
     instrumentation_scope: String,
     mark_projection: MarkProjection,
+    mark_exclude_names: Vec<String>,
     timeout: Duration,
     transport: OtlpTransport,
 }
@@ -118,6 +119,7 @@ impl Default for OpenInferenceConfig {
             service_version: None,
             instrumentation_scope: "nemo-relay-openinference".to_string(),
             mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
         }
@@ -193,6 +195,18 @@ impl OpenInferenceConfig {
         self.mark_projection = mark_projection;
         self
     }
+
+    /// Excludes named marks from tool projection while preserving their native
+    /// event representation. The default excludes high-volume `llm.chunk`
+    /// marks.
+    pub fn with_mark_exclude_names<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.mark_exclude_names = names.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 /// OpenInference-backed NeMo Relay subscriber.
@@ -219,6 +233,7 @@ impl OpenInferenceSubscriber {
             provider,
             config.instrumentation_scope,
             config.mark_projection,
+            config.mark_exclude_names,
         ))
     }
 
@@ -231,6 +246,7 @@ impl OpenInferenceSubscriber {
             provider,
             instrumentation_scope.into(),
             MarkProjection::default(),
+            default_mark_exclude_names(),
         )
     }
 
@@ -244,6 +260,26 @@ impl OpenInferenceSubscriber {
             provider,
             instrumentation_scope.into(),
             mark_projection,
+            default_mark_exclude_names(),
+        )
+    }
+
+    /// Builds a subscriber with explicit mark projection and exclusion names.
+    pub fn from_tracer_provider_with_mark_projection_and_exclusions<I, S>(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        mark_projection: MarkProjection,
+        mark_exclude_names: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::from_tracer_provider_with_scope(
+            provider,
+            instrumentation_scope.into(),
+            mark_projection,
+            mark_exclude_names.into_iter().map(Into::into).collect(),
         )
     }
 
@@ -251,12 +287,14 @@ impl OpenInferenceSubscriber {
         provider: SdkTracerProvider,
         instrumentation_scope: String,
         mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
     ) -> Self {
         let processor = Arc::new(Mutex::new(
-            OpenInferenceEventProcessor::new_with_mark_projection(
+            OpenInferenceEventProcessor::new_with_mark_projection_and_exclusions(
                 provider,
                 instrumentation_scope,
                 mark_projection,
+                mark_exclude_names,
             ),
         ));
         let processor_for_callback = Arc::clone(&processor);
@@ -413,6 +451,7 @@ struct OpenInferenceEventProcessor {
     provider: SdkTracerProvider,
     tracer: SdkTracer,
     mark_projection: MarkProjection,
+    mark_exclude_names: Vec<String>,
 }
 
 impl OpenInferenceEventProcessor {
@@ -421,10 +460,25 @@ impl OpenInferenceEventProcessor {
         Self::new_with_mark_projection(provider, instrumentation_scope, MarkProjection::default())
     }
 
+    #[cfg(test)]
     fn new_with_mark_projection(
         provider: SdkTracerProvider,
         instrumentation_scope: String,
         mark_projection: MarkProjection,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions(
+            provider,
+            instrumentation_scope,
+            mark_projection,
+            default_mark_exclude_names(),
+        )
+    }
+
+    fn new_with_mark_projection_and_exclusions(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope);
         Self {
@@ -434,6 +488,7 @@ impl OpenInferenceEventProcessor {
             provider,
             tracer,
             mark_projection,
+            mark_exclude_names,
         }
     }
 
@@ -484,7 +539,9 @@ impl OpenInferenceEventProcessor {
     }
 
     fn process_mark(&mut self, event: &Event) {
-        if self.mark_projection == MarkProjection::Tool && !is_llm_chunk_mark(event) {
+        if self.mark_projection == MarkProjection::Tool
+            && !mark_name_is_excluded(event, &self.mark_exclude_names)
+        {
             self.process_mark_as_tool(event);
             return;
         }

@@ -44,8 +44,8 @@ use crate::error::Result;
 use crate::json::Json;
 
 use super::{
-    MarkProjection, estimate_cost_for_response_or_model, is_llm_chunk_mark, manual, merge_usage,
-    model_name_for_llm_event,
+    MarkProjection, default_mark_exclude_names, estimate_cost_for_response_or_model,
+    is_llm_chunk_mark, manual, mark_name_is_excluded, merge_usage, model_name_for_llm_event,
 };
 
 /// The ATIF schema version string embedded in all exported trajectories.
@@ -332,6 +332,7 @@ struct AtifExporterState {
     session_id: String,
     agent_info: AtifAgentInfo,
     mark_projection: MarkProjection,
+    mark_exclude_names: Vec<String>,
     events: Vec<Event>,
 }
 
@@ -359,6 +360,7 @@ impl AtifExporter {
                 session_id,
                 agent_info,
                 mark_projection: MarkProjection::default(),
+                mark_exclude_names: default_mark_exclude_names(),
                 events: Vec::new(),
             })),
         }
@@ -371,6 +373,18 @@ impl AtifExporter {
     /// consumers that visualize tool calls but do not render system events.
     pub fn with_mark_projection(self, mark_projection: MarkProjection) -> Self {
         self.state.lock().unwrap().mark_projection = mark_projection;
+        self
+    }
+
+    /// Excludes named marks from tool projection while preserving their native
+    /// event representation. The default excludes high-volume `llm.chunk`
+    /// marks.
+    pub fn with_mark_exclude_names<I, S>(self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.state.lock().unwrap().mark_exclude_names = names.into_iter().map(Into::into).collect();
         self
     }
 
@@ -413,12 +427,13 @@ impl AtifExporter {
     /// callers that prefer an explicitly fallible method name.
     pub fn try_export(&self) -> Result<AtifTrajectory> {
         flush_subscribers()?;
-        let (session_id, agent_info, mark_projection, events) = {
+        let (session_id, agent_info, mark_projection, mark_exclude_names, events) = {
             let state = self.state.lock().unwrap();
             (
                 state.session_id.clone(),
                 state.agent_info.clone(),
                 state.mark_projection,
+                state.mark_exclude_names.clone(),
                 state.events.clone(),
             )
         };
@@ -427,6 +442,7 @@ impl AtifExporter {
             &session_id,
             agent_info,
             mark_projection,
+            &mark_exclude_names,
             &collected_events,
         ))
     }
@@ -1991,6 +2007,7 @@ impl PendingAgentStep {
 #[derive(Default)]
 struct StepConversionState {
     mark_projection: MarkProjection,
+    mark_exclude_names: Vec<String>,
     steps: Vec<AtifStep>,
     last_tool_call_map: std::collections::HashMap<String, String>,
     tool_scope_call_ids: std::collections::HashMap<Uuid, String>,
@@ -2620,7 +2637,9 @@ impl StepConversionState {
             return;
         }
         self.flush_observations();
-        if self.mark_projection == MarkProjection::Tool {
+        if self.mark_projection == MarkProjection::Tool
+            && !mark_name_is_excluded(mark, &self.mark_exclude_names)
+        {
             self.handle_mark_as_tool(mark, lookups, mark.data());
             return;
         }
@@ -3280,6 +3299,7 @@ fn events_to_trajectory(
     session_id: &str,
     agent_info: AtifAgentInfo,
     mark_projection: MarkProjection,
+    mark_exclude_names: &[String],
     events: &[&Event],
 ) -> AtifTrajectory {
     let mut sorted: Vec<&Event> = events.to_vec();
@@ -3295,12 +3315,13 @@ fn events_to_trajectory(
             session_id,
             &agent_info,
             mark_projection,
+            mark_exclude_names,
             &sorted,
             true,
         );
     }
 
-    let steps = events_to_steps(&sorted, mark_projection);
+    let steps = events_to_steps(&sorted, mark_projection, mark_exclude_names);
     trajectory_from_parts(
         session_id.to_string(),
         Some(session_id.to_string()),
@@ -3339,16 +3360,24 @@ fn is_step_event(event: &Event) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn agent_scope_to_trajectory(
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
     session_id: &str,
     agent_info: &AtifAgentInfo,
     mark_projection: MarkProjection,
+    mark_exclude_names: &[String],
     sorted_events: &[&Event],
     is_root: bool,
 ) -> AtifTrajectory {
-    let mut steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid, mark_projection);
+    let mut steps = events_to_steps_for_agent(
+        sorted_events,
+        tree,
+        agent_uuid,
+        mark_projection,
+        mark_exclude_names,
+    );
     let subagent_trajectories = tree
         .nodes
         .get(&agent_uuid)
@@ -3362,6 +3391,7 @@ fn agent_scope_to_trajectory(
                         session_id,
                         agent_info,
                         mark_projection,
+                        mark_exclude_names,
                         sorted_events,
                         false,
                     )
@@ -3436,10 +3466,12 @@ fn events_to_steps_for_agent(
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
     mark_projection: MarkProjection,
+    mark_exclude_names: &[String],
 ) -> Vec<AtifStep> {
     let lookups = EventLookupMaps::from_events_for_agent(events, tree, agent_uuid);
     let mut state = StepConversionState {
         mark_projection,
+        mark_exclude_names: mark_exclude_names.to_vec(),
         ..StepConversionState::default()
     };
 
@@ -3477,12 +3509,17 @@ fn events_to_steps_for_agent(
 ///    promoted tool_calls by function name → `source_call_id`.
 /// 5. Mark events → system steps if they carry data.
 /// 6. Scope Start/End → skipped.
-fn events_to_steps(events: &[&Event], mark_projection: MarkProjection) -> Vec<AtifStep> {
+fn events_to_steps(
+    events: &[&Event],
+    mark_projection: MarkProjection,
+    mark_exclude_names: &[String],
+) -> Vec<AtifStep> {
     let mut sorted: Vec<&Event> = events.to_vec();
     sorted.sort_by_key(|e| *e.timestamp());
     let lookups = EventLookupMaps::from_events(&sorted);
     let mut state = StepConversionState {
         mark_projection,
+        mark_exclude_names: mark_exclude_names.to_vec(),
         ..StepConversionState::default()
     };
 

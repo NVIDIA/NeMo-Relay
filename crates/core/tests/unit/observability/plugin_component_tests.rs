@@ -217,11 +217,13 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(atif.agent_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(atif.model_name, "unknown");
     assert_eq!(atif.mark_projection, MarkProjection::Event);
+    assert_eq!(atif.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(atif.filename_template, "nemo-relay-atif-{session_id}.json");
 
     let otlp = OtlpSectionConfig::default();
     assert!(!otlp.enabled);
     assert_eq!(otlp.mark_projection, MarkProjection::Event);
+    assert_eq!(otlp.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(otlp.transport, "http_binary");
     assert_eq!(otlp.service_name, "nemo-relay");
     assert_eq!(otlp.timeout_millis, 3_000);
@@ -252,6 +254,16 @@ fn mark_projection_parses_per_exporter_and_rejects_unknown_values() {
     .unwrap();
     assert_eq!(atif.mark_projection, MarkProjection::Tool);
     assert_eq!(otlp.mark_projection, MarkProjection::Tool);
+
+    let custom_exclusions: OtlpSectionConfig = serde_json::from_value(json!({
+        "mark_projection": "tool",
+        "mark_exclude_names": ["notification", "hook_mark"]
+    }))
+    .unwrap();
+    assert_eq!(
+        custom_exclusions.mark_exclude_names,
+        vec!["notification", "hook_mark"]
+    );
 
     let error = serde_json::from_value::<OtlpSectionConfig>(json!({
         "mark_projection": "span"
@@ -288,6 +300,7 @@ fn schema_contains_every_supported_observability_option() {
         "agent_version",
         "model_name",
         "mark_projection",
+        "mark_exclude_names",
         "tool_definitions",
         "extra",
         "filename_template",
