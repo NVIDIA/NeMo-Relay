@@ -55,7 +55,7 @@ use crate::observability::{MarkProjection, default_mark_exclude_names};
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    deregister_plugin, register_plugin,
+    deregister_plugin, register_builtin_plugin,
 };
 
 /// The plugin kind registered by the core crate.
@@ -548,13 +548,7 @@ impl Plugin for ObservabilityPlugin {
 /// automatically before listing, looking up, validating, or initializing plugin
 /// components, so applications normally do not need to invoke it directly.
 pub fn register_observability_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(ObservabilityPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    register_builtin_plugin(Arc::new(ObservabilityPlugin))
 }
 
 /// Deregisters the observability component kind from the core plugin registry.

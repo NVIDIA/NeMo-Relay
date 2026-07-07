@@ -51,8 +51,8 @@ use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_sc
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin, deregister_plugin_checked, register_plugin,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginDeregistrationOutcome, PluginError,
+    PluginRegistrationContext, deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
 use super::{
@@ -76,7 +76,7 @@ pub struct NativePluginLoadSpec {
 /// runtime callbacks cannot outlive their code.
 pub struct NativePluginActivation {
     plugins: Vec<Arc<NativePluginInstance>>,
-    plugin_kinds: Vec<String>,
+    plugin_registrations: Vec<(String, u64)>,
 }
 
 impl NativePluginActivation {
@@ -90,13 +90,19 @@ impl NativePluginActivation {
 
     pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
         let mut outcome = DynamicPluginTeardownOutcome::success();
-        let plugin_kinds = std::mem::take(&mut self.plugin_kinds);
-        for plugin_kind in plugin_kinds.into_iter().rev() {
-            match deregister_plugin_checked(&plugin_kind) {
-                Ok(true) => {}
-                Ok(false) => outcome.record_error(
+        let plugin_registrations = std::mem::take(&mut self.plugin_registrations);
+        for (plugin_kind, registration_id) in plugin_registrations.into_iter().rev() {
+            match deregister_plugin_registration_checked(&plugin_kind, registration_id) {
+                Ok(PluginDeregistrationOutcome::Removed) => {}
+                Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
                     format!(
                         "native plugin kind '{plugin_kind}' was not registered during teardown"
+                    ),
+                    true,
+                ),
+                Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
+                    format!(
+                        "native plugin kind '{plugin_kind}' was replaced during teardown and was left registered"
                     ),
                     true,
                 ),
@@ -113,15 +119,15 @@ impl NativePluginActivation {
     pub(super) fn with_plugin_kind_for_test(plugin_kind: impl Into<String>) -> Self {
         Self {
             plugins: Vec::new(),
-            plugin_kinds: vec![plugin_kind.into()],
+            plugin_registrations: vec![(plugin_kind.into(), 0)],
         }
     }
 }
 
 impl Drop for NativePluginActivation {
     fn drop(&mut self) {
-        for plugin_kind in self.plugin_kinds.iter().rev() {
-            let _ = deregister_plugin(plugin_kind);
+        for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
+            let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
     }
 }
@@ -136,18 +142,20 @@ where
 {
     let mut activation = NativePluginActivation {
         plugins: Vec::new(),
-        plugin_kinds: Vec::new(),
+        plugin_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_native_plugin(&spec)?;
         let plugin_kind = instance.plugin_kind.clone();
-        register_plugin(Arc::new(NativePluginAdapter {
+        let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
             instance: instance.clone(),
         }))?;
         activation.plugins.push(instance);
-        activation.plugin_kinds.push(plugin_kind);
+        activation
+            .plugin_registrations
+            .push((plugin_kind, registration_id));
     }
     Ok(activation)
 }

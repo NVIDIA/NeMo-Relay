@@ -49,15 +49,34 @@ pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 pub mod dynamic;
 pub use dynamic::*;
 
-type PluginMap = HashMap<String, Arc<dyn Plugin>>;
+type PluginMap = HashMap<String, RegisteredPlugin>;
+
+struct RegisteredPlugin {
+    registration_id: u64,
+    owner: PluginRegistrationOwner,
+    plugin: Arc<dyn Plugin>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PluginRegistrationOwner {
+    Builtin,
+    External,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PluginDeregistrationOutcome {
+    Removed,
+    Missing,
+    Replaced,
+}
 
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
 static PLUGIN_MUTATION_OWNER: LazyLock<Mutex<PluginMutationOwner>> =
     LazyLock::new(|| Mutex::new(PluginMutationOwner::Idle));
+static NEXT_PLUGIN_REGISTRATION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_PLUGIN_HOST_OWNER_ID: AtomicU64 = AtomicU64::new(1);
-static BUILTIN_PLUGIN_REGISTRATION: OnceLock<Result<()>> = OnceLock::new();
 static PLUGIN_MUTATION_EXECUTOR: OnceLock<PluginMutationSender> = OnceLock::new();
 
 type PluginMutationJob = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -830,17 +849,50 @@ pub trait Plugin: Send + Sync + 'static {
 /// # Notes
 /// Registration affects future validation and initialization only.
 pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
+    register_plugin_with_owner(plugin, PluginRegistrationOwner::External).map(|_| ())
+}
+
+pub(crate) fn register_plugin_tracked(plugin: Arc<dyn Plugin>) -> Result<u64> {
+    register_plugin_with_owner(plugin, PluginRegistrationOwner::External)
+}
+
+pub(crate) fn register_builtin_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
+    register_plugin_with_owner(plugin, PluginRegistrationOwner::Builtin).map(|_| ())
+}
+
+fn register_plugin_with_owner(
+    plugin: Arc<dyn Plugin>,
+    owner: PluginRegistrationOwner,
+) -> Result<u64> {
     let mut guard = PLUGIN_HANDLERS
         .write()
         .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
     let plugin_kind = plugin.plugin_kind().to_string();
-    if guard.contains_key(&plugin_kind) {
+    if let Some(existing) = guard.get(&plugin_kind) {
+        if owner == PluginRegistrationOwner::Builtin
+            && existing.owner == PluginRegistrationOwner::Builtin
+        {
+            return Ok(existing.registration_id);
+        }
+        let ownership = if owner == PluginRegistrationOwner::Builtin {
+            "reserved builtin "
+        } else {
+            ""
+        };
         return Err(PluginError::RegistrationFailed(format!(
-            "plugin '{plugin_kind}' is already registered"
+            "{ownership}plugin '{plugin_kind}' is already registered"
         )));
     }
-    guard.insert(plugin_kind, plugin);
-    Ok(())
+    let registration_id = NEXT_PLUGIN_REGISTRATION_ID.fetch_add(1, Ordering::Relaxed);
+    guard.insert(
+        plugin_kind,
+        RegisteredPlugin {
+            registration_id,
+            owner,
+            plugin,
+        },
+    );
+    Ok(registration_id)
 }
 
 /// Registers core-provided plugin kinds.
@@ -848,28 +900,12 @@ pub fn register_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
-    let register_builtins = || {
-        crate::observability::plugin_component::register_observability_component()?;
-        crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
-        crate::plugins::model_pricing::register_pricing_component()
-    };
-    match BUILTIN_PLUGIN_REGISTRATION.get_or_init(register_builtins) {
-        Ok(()) => Ok(()),
-        Err(err) => Err(clone_cached_plugin_error(err)),
-    }
-}
-
-fn clone_cached_plugin_error(err: &PluginError) -> PluginError {
-    match err {
-        PluginError::InvalidConfig(message) => PluginError::InvalidConfig(message.clone()),
-        PluginError::Conflict(message) => PluginError::Conflict(message.clone()),
-        PluginError::NotFound(message) => PluginError::NotFound(message.clone()),
-        PluginError::Serialization(err) => PluginError::Internal(err.to_string()),
-        PluginError::Internal(message) => PluginError::Internal(message.clone()),
-        PluginError::RegistrationFailed(message) => {
-            PluginError::RegistrationFailed(message.clone())
-        }
-    }
+    // Registration is idempotent for genuine built-ins. Revalidate on every
+    // call so a removed built-in is restored, a replacement is rejected, and
+    // a corrected ownership conflict can be retried without restarting Relay.
+    crate::observability::plugin_component::register_observability_component()?;
+    crate::plugins::nemo_guardrails::component::register_nemo_guardrails_component()?;
+    crate::plugins::model_pricing::register_pricing_component()
 }
 
 /// Removes a previously registered plugin.
@@ -896,6 +932,23 @@ pub(crate) fn deregister_plugin_checked(plugin_kind: &str) -> Result<bool> {
         .write()
         .map(|mut guard| guard.remove(plugin_kind).is_some())
         .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))
+}
+
+pub(crate) fn deregister_plugin_registration_checked(
+    plugin_kind: &str,
+    expected_registration_id: u64,
+) -> Result<PluginDeregistrationOutcome> {
+    let mut guard = PLUGIN_HANDLERS
+        .write()
+        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
+    match guard.get(plugin_kind) {
+        Some(plugin) if plugin.registration_id == expected_registration_id => {
+            guard.remove(plugin_kind);
+            Ok(PluginDeregistrationOutcome::Removed)
+        }
+        Some(_) => Ok(PluginDeregistrationOutcome::Replaced),
+        None => Ok(PluginDeregistrationOutcome::Missing),
+    }
 }
 
 /// Lists registered plugin kinds in sorted order.
@@ -932,10 +985,11 @@ pub fn list_plugin_kinds() -> Vec<String> {
 /// The returned plugin is shared by [`Arc`], so callers receive a cheap clone.
 pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
     let _ = ensure_builtin_plugins_registered();
-    PLUGIN_HANDLERS
-        .read()
-        .ok()
-        .and_then(|guard| guard.get(plugin_kind).cloned())
+    PLUGIN_HANDLERS.read().ok().and_then(|guard| {
+        guard
+            .get(plugin_kind)
+            .map(|registered| Arc::clone(&registered.plugin))
+    })
 }
 
 /// Validates a plugin configuration document.
