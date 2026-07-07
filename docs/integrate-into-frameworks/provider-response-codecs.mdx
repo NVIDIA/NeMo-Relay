@@ -69,7 +69,7 @@ Unknown model pricing and missing token data are non-fatal: Relay omits the cost
 field and still exports token metrics and response annotations.
 
 Relay resolves model pricing through an active `PricingResolver` source chain.
-Provider- or framework-reported cost remains authoritative. The resolver runs
+Provider or framework-reported cost remains authoritative. The resolver runs
 only when `Usage.cost` is missing. Relay does not ship provider price data
 by default: estimates require a configured inline, file, or embedding-provided
 model pricing source. With no configured source, every model is treated as
