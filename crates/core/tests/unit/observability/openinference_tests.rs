@@ -2226,6 +2226,30 @@ fn tool_projection_reuses_completed_parent_context_for_late_marks() {
 }
 
 #[test]
+fn tool_projection_keeps_llm_chunks_as_parent_span_events() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OpenInferenceEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
+    let parent_uuid = Uuid::now_v7();
+    let start = make_start_event(parent_uuid, None, "llm", ScopeType::Llm, None);
+    let chunk = make_mark_event(Some(parent_uuid), "llm.chunk", Some(json!({"delta": "x"})));
+    let end = make_end_event(parent_uuid, None, "llm", ScopeType::Llm, None);
+
+    processor.process(&start);
+    processor.process(&chunk);
+    processor.process(&end);
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].events.events.len(), 1);
+    assert_eq!(spans[0].events.events[0].name.as_ref(), "llm.chunk");
+}
+
+#[test]
 fn late_parented_marks_reuse_completed_parent_trace_context() {
     let (provider, exporter) = make_provider();
     let mut processor =

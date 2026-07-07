@@ -55,7 +55,17 @@ use nemo_relay::api::tool::{
     tool_conditional_execution, tool_request_intercepts,
 };
 use nemo_relay::error::FlowError;
+#[cfg(all(feature = "otel", feature = "openinference"))]
+use nemo_relay::observability::MarkProjection;
+#[cfg(all(feature = "otel", feature = "openinference"))]
+use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
+#[cfg(all(feature = "otel", feature = "openinference"))]
+use nemo_relay::observability::openinference::OpenInferenceSubscriber;
+#[cfg(all(feature = "otel", feature = "openinference"))]
+use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use nemo_relay::plugin::{PluginRegistrationContext, rollback_registrations};
+#[cfg(all(feature = "otel", feature = "openinference"))]
+use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
 
 // All tests share the global context, so we serialize them.
@@ -787,6 +797,181 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
     let mut registrations = plugin_ctx.into_registrations();
     rollback_registrations(&mut registrations);
     deregister_subscriber("tool_outcome_mark_observer").unwrap();
+}
+
+#[cfg(all(feature = "otel", feature = "openinference"))]
+#[tokio::test]
+async fn test_managed_tool_pending_marks_project_through_all_exporters() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "managed_tool_projection_events",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let atif = AtifExporter::new(
+        "managed-tool-projection".to_string(),
+        AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    )
+    .with_mark_projection(MarkProjection::Tool);
+    register_subscriber("managed_tool_projection_atif", atif.subscriber()).unwrap();
+
+    let otel_exporter = InMemorySpanExporterBuilder::new().build();
+    let otel_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(otel_exporter.clone())
+        .build();
+    let otel = OpenTelemetrySubscriber::from_tracer_provider_with_mark_projection(
+        otel_provider,
+        "managed-tool-projection-otel",
+        MarkProjection::Tool,
+    );
+    register_subscriber("managed_tool_projection_otel", otel.subscriber()).unwrap();
+
+    let openinference_exporter = InMemorySpanExporterBuilder::new().build();
+    let openinference_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(openinference_exporter.clone())
+        .build();
+    let openinference = OpenInferenceSubscriber::from_tracer_provider_with_mark_projection(
+        openinference_provider,
+        "managed-tool-projection-openinference",
+        MarkProjection::Tool,
+    );
+    register_subscriber(
+        "managed_tool_projection_openinference",
+        openinference.subscriber(),
+    )
+    .unwrap();
+
+    register_tool_execution_intercept(
+        "managed_tool_projection_intercept",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let result = next(args).await?;
+                Ok(
+                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("plugin.output_compacted")
+                            .category(EventCategory::custom())
+                            .category_profile(
+                                CategoryProfile::builder()
+                                    .subtype("example.compaction")
+                                    .build(),
+                            )
+                            .data(json!({"saved_tokens": 12}))
+                            .metadata(json!({"source": "test"}))
+                            .build(),
+                    ),
+                )
+            })
+        }),
+    )
+    .unwrap();
+
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("managed-tool")
+            .args(json!({"value": 42}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"value": 42}));
+
+    flush_subscribers().unwrap();
+    let captured = events.lock().unwrap();
+    let tool_end_index = captured
+        .iter()
+        .position(|event| {
+            event.name() == "managed-tool" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    let mark_index = captured
+        .iter()
+        .position(|event| event.name() == "plugin.output_compacted")
+        .unwrap();
+    assert!(tool_end_index < mark_index);
+    let tool_end = &captured[tool_end_index];
+    let mark = &captured[mark_index];
+    assert_eq!(mark.parent_uuid(), Some(tool_end.uuid()));
+    assert!(mark.timestamp() > tool_end.timestamp());
+    drop(captured);
+
+    let trajectory = atif.export().unwrap();
+    let mark_step = trajectory
+        .steps
+        .iter()
+        .find(|step| {
+            step.tool_calls.as_deref().is_some_and(|calls| {
+                calls
+                    .iter()
+                    .any(|call| call.function_name == "plugin.output_compacted")
+            })
+        })
+        .unwrap();
+    assert_eq!(mark_step.llm_call_count, Some(0));
+    let projected_call = &mark_step.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(projected_call.arguments, json!({"saved_tokens": 12}));
+    assert_eq!(
+        mark_step.observation.as_ref().unwrap().results[0]
+            .source_call_id
+            .as_deref(),
+        Some(projected_call.tool_call_id.as_str())
+    );
+
+    otel.force_flush().unwrap();
+    let otel_spans = otel_exporter.get_finished_spans().unwrap();
+    let otel_tool = otel_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "managed-tool")
+        .unwrap();
+    let otel_mark = otel_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:plugin.output_compacted")
+        .unwrap();
+    assert_eq!(otel_mark.parent_span_id, otel_tool.span_context.span_id());
+    assert!(otel_mark.start_time > otel_tool.end_time);
+    assert!(otel_mark.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "nemo_relay.mark.projection"
+            && attribute.value.to_string() == "tool"
+    }));
+
+    openinference.force_flush().unwrap();
+    let openinference_spans = openinference_exporter.get_finished_spans().unwrap();
+    let openinference_tool = openinference_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "managed-tool")
+        .unwrap();
+    let openinference_mark = openinference_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:plugin.output_compacted")
+        .unwrap();
+    assert_eq!(
+        openinference_mark.parent_span_id,
+        openinference_tool.span_context.span_id()
+    );
+    assert!(openinference_mark.start_time > openinference_tool.end_time);
+    assert!(openinference_mark.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "openinference.span.kind" && attribute.value.to_string() == "TOOL"
+    }));
+
+    deregister_tool_execution_intercept("managed_tool_projection_intercept").unwrap();
+    deregister_subscriber("managed_tool_projection_events").unwrap();
+    deregister_subscriber("managed_tool_projection_atif").unwrap();
+    deregister_subscriber("managed_tool_projection_otel").unwrap();
+    deregister_subscriber("managed_tool_projection_openinference").unwrap();
 }
 
 #[tokio::test]

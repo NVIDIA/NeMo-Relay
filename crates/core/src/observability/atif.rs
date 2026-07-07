@@ -2620,14 +2620,14 @@ impl StepConversionState {
             return;
         }
         self.flush_observations();
+        if self.mark_projection == MarkProjection::Tool {
+            self.handle_mark_as_tool(mark, lookups, mark.data());
+            return;
+        }
         let Some(data) = mark.data() else {
             return;
         };
         if is_empty_mark_payload(data) {
-            return;
-        }
-        if self.mark_projection == MarkProjection::Tool {
-            self.handle_mark_as_tool(mark, lookups, data);
             return;
         }
         let extra = AtifStepExtra {
@@ -2668,7 +2668,12 @@ impl StepConversionState {
         });
     }
 
-    fn handle_mark_as_tool(&mut self, mark: &Event, lookups: &EventLookupMaps, data: &Json) {
+    fn handle_mark_as_tool(
+        &mut self,
+        mark: &Event,
+        lookups: &EventLookupMaps,
+        data: Option<&Json>,
+    ) {
         self.finalize_agent_extra();
 
         let ancestry = build_ancestry(mark, &lookups.name_map);
@@ -2681,7 +2686,7 @@ impl StepConversionState {
         };
         let source_call_id = format!("mark:{}", mark.uuid());
         let mut observation_extra = event_extra(mark);
-        if let Json::Object(extra) = &mut observation_extra {
+        if let (Some(data), Json::Object(extra)) = (data, &mut observation_extra) {
             extra.insert("event_payload".to_string(), data.clone());
         }
         let extra = AtifStepExtra {
@@ -2689,7 +2694,7 @@ impl StepConversionState {
             invocation: Some(invocation.clone()),
             llm_request: None,
             llm_response: None,
-            event_payload: Some(data.clone()),
+            event_payload: data.cloned(),
             event_category: mark
                 .category()
                 .map(|category| category.as_str().to_string()),
@@ -2711,13 +2716,18 @@ impl StepConversionState {
             tool_calls: Some(vec![AtifToolCall {
                 tool_call_id: source_call_id.clone(),
                 function_name: mark.name().to_string(),
-                arguments: data.clone(),
+                // ATIF requires tool-call arguments to be a JSON object. Keep
+                // the original payload absence in `extra.event_payload` while
+                // using an empty object for the schema-required arguments.
+                arguments: data
+                    .cloned()
+                    .unwrap_or_else(|| Json::Object(serde_json::Map::new())),
                 extra: Some(event_extra(mark)),
             }]),
             observation: Some(AtifObservation {
                 results: vec![AtifObservationResult {
                     source_call_id: Some(source_call_id),
-                    content: Some(mark_message(mark, data)),
+                    content: Some(mark_message(mark, data.unwrap_or(&Json::Null))),
                     subagent_trajectory_ref: None,
                     extra: Some(observation_extra),
                 }],

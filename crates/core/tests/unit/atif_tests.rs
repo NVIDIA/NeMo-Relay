@@ -1936,6 +1936,72 @@ fn test_exporter_tool_projection_renders_generic_mark_as_deterministic_tool_step
 }
 
 #[test]
+fn test_exporter_tool_projection_keeps_data_less_and_empty_marks_visible() {
+    let root_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info())
+        .with_mark_projection(MarkProjection::Tool);
+    let base = base_timestamp();
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("neutral-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut data_less_mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("plugin.checkpoint")
+            .build(),
+        None,
+        None,
+    ));
+    let mut empty_mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("plugin.empty_checkpoint")
+            .data(json!({}))
+            .build(),
+        None,
+        None,
+    ));
+    let mut root_end = event_builder(root_uuid, EventType::End)
+        .name("neutral-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    set_event_timestamp(&mut root_start, base);
+    set_event_timestamp(
+        &mut data_less_mark,
+        base + chrono::Duration::milliseconds(1),
+    );
+    set_event_timestamp(&mut empty_mark, base + chrono::Duration::milliseconds(2));
+    set_event_timestamp(&mut root_end, base + chrono::Duration::milliseconds(3));
+
+    exporter.state.lock().unwrap().events.extend([
+        root_start,
+        data_less_mark,
+        empty_mark,
+        root_end,
+    ]);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 2);
+
+    let data_less_tool = &trajectory.steps[0].tool_calls.as_ref().unwrap()[0];
+    assert_eq!(data_less_tool.function_name, "plugin.checkpoint");
+    assert_eq!(data_less_tool.arguments, json!({}));
+    let data_less_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[0].extra.clone().unwrap()).unwrap();
+    assert_eq!(data_less_extra.event_payload, None);
+
+    let empty_tool = &trajectory.steps[1].tool_calls.as_ref().unwrap()[0];
+    assert_eq!(empty_tool.function_name, "plugin.empty_checkpoint");
+    assert_eq!(empty_tool.arguments, json!({}));
+    let empty_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[1].extra.clone().unwrap()).unwrap();
+    assert_eq!(empty_extra.event_payload, Some(json!({})));
+}
+
+#[test]
 fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_metrics() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let stripped_uuid = Uuid::now_v7();
