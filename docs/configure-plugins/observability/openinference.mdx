@@ -62,7 +62,7 @@ OpenInference uses the same OTLP section shape as
 |---|---|---|
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
 | `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration OpenInference `TOOL` child spans. |
-| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain native event handling. Metadata `hook_event_name` aliases are also matched. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -85,14 +85,18 @@ and invocation parameters are emitted when typed codec annotations supply
 them. Exported LLM attributes exclude request headers and other non-observable
 transport metadata.
 
-The default `inherit` projection preserves exporter-native mark handling. With
-`mark_projection = "tool"`, each non-streaming mark becomes a zero-duration child span with
-`openinference.span.kind = "TOOL"` and the original mark payload, category,
-profile, timestamp, and parent identifiers retained as attributes. High-volume
-`llm.chunk` marks remain span events.
+The default `inherit` projection preserves exporter-native mark handling: a
+mark with an active parent span is a span event, while an orphan mark is a
+standalone zero-duration mark span. `mark_projection = "event"` explicitly
+selects that representation. With `mark_projection = "tool"`, each
+non-streaming mark becomes a zero-duration span (a child span when a parent is
+available) with `openinference.span.kind = "TOOL"` and the original mark
+payload, category, profile, timestamp, and parent identifiers retained as
+attributes. High-volume `llm.chunk` marks retain exporter-native handling by
+default and when excluded from tool projection.
 
 Add other event names to `mark_exclude_names` when a backend should keep those
-marks as native span events rather than visible tool children. The exclusion
+marks in exporter-native form rather than visible tool children. The exclusion
 list affects only tool projection; it does not remove mark payload or metadata.
 
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
