@@ -14,6 +14,7 @@ use crate::component::WireProtocol;
 pub(crate) struct StreamTranscoder {
     source: WireProtocol,
     target: WireProtocol,
+    effective_model: String,
     source_tools: BTreeMap<usize, String>,
     target_tools: BTreeMap<String, usize>,
     target_tool_names: BTreeMap<String, String>,
@@ -27,10 +28,15 @@ pub(crate) struct StreamTranscoder {
 }
 
 impl StreamTranscoder {
-    pub(crate) fn new(source: WireProtocol, target: WireProtocol) -> Self {
+    pub(crate) fn new(
+        source: WireProtocol,
+        target: WireProtocol,
+        effective_model: impl Into<String>,
+    ) -> Self {
         Self {
             source,
             target,
+            effective_model: effective_model.into(),
             source_tools: BTreeMap::new(),
             target_tools: BTreeMap::new(),
             target_tool_names: BTreeMap::new(),
@@ -263,6 +269,7 @@ impl StreamTranscoder {
                 self.started = true;
                 output.push(json!({
                     "id": "chatcmpl-relay", "object": "chat.completion.chunk",
+                    "model": self.effective_model,
                     "choices": [{"index": 0, "delta": {"role": role, "content": text}, "finish_reason": null}]
                 }));
             }
@@ -272,6 +279,7 @@ impl StreamTranscoder {
                 self.target_tools.insert(id.clone(), index);
                 output.push(json!({
                     "id": "chatcmpl-relay", "object": "chat.completion.chunk",
+                    "model": self.effective_model,
                     "choices": [{"index": 0, "delta": {"tool_calls": [{"index": index, "id": id, "type": "function", "function": {"name": name, "arguments": ""}}]}, "finish_reason": null}]
                 }));
             }
@@ -279,15 +287,18 @@ impl StreamTranscoder {
                 let index = self.target_tools.get(&id).copied().unwrap_or(0);
                 output.push(json!({
                     "id": "chatcmpl-relay", "object": "chat.completion.chunk",
+                    "model": self.effective_model,
                     "choices": [{"index": 0, "delta": {"tool_calls": [{"index": index, "function": {"arguments": delta}}]}, "finish_reason": null}]
                 }));
             }
             NormalizedStreamEvent::Finish { reason } => output.push(json!({
                 "id": "chatcmpl-relay", "object": "chat.completion.chunk",
+                "model": self.effective_model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": chat_finish(reason.as_deref())}]
             })),
             NormalizedStreamEvent::Usage { usage } => output.push(json!({
-                "id": "chatcmpl-relay", "object": "chat.completion.chunk", "choices": [], "usage": usage_for_target(WireProtocol::OpenaiChat, &usage)
+                "id": "chatcmpl-relay", "object": "chat.completion.chunk", "model": self.effective_model,
+                "choices": [], "usage": usage_for_target(WireProtocol::OpenaiChat, &usage)
             })),
             NormalizedStreamEvent::Error { error } => output.push(json!({"error": error})),
         }
@@ -298,7 +309,7 @@ impl StreamTranscoder {
             self.started = true;
             output.push(json!({
                 "type": "message_start",
-                "message": {"id": "msg_relay", "type": "message", "role": "assistant", "content": [], "stop_reason": null, "usage": {"input_tokens": 0, "output_tokens": 0}}
+                "message": {"id": "msg_relay", "type": "message", "role": "assistant", "model": self.effective_model, "content": [], "stop_reason": null, "usage": {"input_tokens": 0, "output_tokens": 0}}
             }));
         }
     }
@@ -362,7 +373,7 @@ impl StreamTranscoder {
             self.started = true;
             output.push(json!({
                 "type": "response.created",
-                "response": {"id": "resp_relay", "object": "response", "status": "in_progress", "output": []}
+                "response": {"id": "resp_relay", "object": "response", "model": self.effective_model, "status": "in_progress", "output": []}
             }));
         }
     }
@@ -428,7 +439,7 @@ impl StreamTranscoder {
                 }
                 output.push(json!({
                     "type": "response.completed",
-                    "response": {"id": "resp_relay", "object": "response", "status": "completed", "output": items, "usage": self.usage.as_ref().map(|usage| usage_for_target(WireProtocol::OpenaiResponses, usage))}
+                    "response": {"id": "resp_relay", "object": "response", "model": self.effective_model, "status": "completed", "output": items, "usage": self.usage.as_ref().map(|usage| usage_for_target(WireProtocol::OpenaiResponses, usage))}
                 }));
             }
             NormalizedStreamEvent::Error { error } => output.push(json!({
@@ -551,7 +562,8 @@ mod tests {
             WireProtocol::OpenaiResponses,
             WireProtocol::AnthropicMessages,
         ] {
-            let mut transcoder = StreamTranscoder::new(WireProtocol::OpenaiChat, target);
+            let mut transcoder =
+                StreamTranscoder::new(WireProtocol::OpenaiChat, target, "selected-model");
             let output = transcoder.transcode(&chunk).unwrap();
             assert!(!output.is_empty(), "target={target:?}");
             assert!(output.iter().any(|item| item.to_string().contains("hello")));
@@ -560,8 +572,11 @@ mod tests {
 
     #[test]
     fn tool_argument_deltas_keep_their_call_identity() {
-        let mut transcoder =
-            StreamTranscoder::new(WireProtocol::OpenaiChat, WireProtocol::AnthropicMessages);
+        let mut transcoder = StreamTranscoder::new(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected-model",
+        );
         let start = json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1", "function": {"name": "lookup", "arguments": ""}}]}, "finish_reason": null}]});
         let delta = json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"key\":"}}]}, "finish_reason": null}]});
         transcoder.transcode(&start).unwrap();
@@ -581,7 +596,7 @@ mod tests {
                 if source == target {
                     continue;
                 }
-                let mut transcoder = StreamTranscoder::new(source, target);
+                let mut transcoder = StreamTranscoder::new(source, target, "selected-model");
                 let mut output = Vec::new();
                 for source_chunk in source_chunks(source) {
                     let translated = transcoder.transcode(&source_chunk).unwrap();
@@ -609,6 +624,11 @@ mod tests {
                 }
                 let aggregate = finalizer();
                 let annotated = crate::translation::decode_response(target, &aggregate).unwrap();
+                assert_eq!(
+                    annotated.model.as_deref(),
+                    Some("selected-model"),
+                    "source={source:?} target={target:?} aggregate={aggregate}"
+                );
                 assert!(
                     annotated.message.is_some(),
                     "source={source:?} target={target:?}"

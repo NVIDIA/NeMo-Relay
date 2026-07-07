@@ -646,7 +646,12 @@ impl SwitchyardRuntime {
                         let output = if target_protocol == inbound {
                             committed
                         } else {
-                            translated_stream(target_protocol, inbound, committed)
+                            translated_stream(
+                                target_protocol,
+                                inbound,
+                                decision.route.target_model.clone(),
+                                committed,
+                            )
                         };
                         return Ok(mark_terminal_stream(
                             output,
@@ -1389,9 +1394,10 @@ fn mark_terminal_stream(
 fn translated_stream(
     source: WireProtocol,
     target: WireProtocol,
+    effective_model: String,
     mut upstream: LlmJsonStream,
 ) -> LlmJsonStream {
-    let mut transcoder = StreamTranscoder::new(source, target);
+    let mut transcoder = StreamTranscoder::new(source, target, effective_model);
     Box::pin(stream! {
         while let Some(item) = upstream.next().await {
             match item {
