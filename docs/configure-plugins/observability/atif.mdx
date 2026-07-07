@@ -53,6 +53,7 @@ The following table describes the top-level ATIF settings:
 | `agent_name` | `NeMo Relay` | Agent metadata written into the trajectory. |
 | `agent_version` | NeMo Relay crate version | Agent version metadata. |
 | `model_name` | `unknown` | Default model metadata when no call-level model is present. |
+| `mark_projection` | `event` | `event` preserves marks as system steps. `tool` emits deterministic agent/tool steps for trajectory viewers that render tool calls but not system events. |
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
@@ -193,6 +194,12 @@ trajectory serialization failures, during plugin teardown. It isolates
 per-destination sink failures to the failed sink.
 
 ## Expected Output
+
+By default, marks remain point-in-time `system` steps with their payload,
+category, category profile, timestamp, and ancestry preserved in `extra`. Set
+`mark_projection = "tool"` when the target viewer requires a visible tool-call
+projection. The projected step uses `llm_call_count = 0`, retains the original
+mark data in `extra`, and does not change the canonical ATOF event.
 
 The exporter translates NeMo Relay lifecycle events into ATIF v1.7 trajectory
 data. LLM start and end events become model steps, tool events become tool

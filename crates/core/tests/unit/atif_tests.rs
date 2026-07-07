@@ -1858,6 +1858,84 @@ fn test_exporter_openclaw_timing_marks_become_system_steps_with_payloads() {
 }
 
 #[test]
+fn test_exporter_tool_projection_renders_generic_mark_as_deterministic_tool_step() {
+    let root_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+    let exporter = AtifExporter::new(root_uuid.to_string(), make_agent_info())
+        .with_mark_projection(MarkProjection::Tool);
+    let base = base_timestamp();
+    let payload = json!({"count": 3, "status": "compacted"});
+
+    let mut root_start = event_builder(root_uuid, EventType::Start)
+        .name("neutral-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    let mut mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .uuid(mark_uuid)
+            .name("plugin.output_compacted")
+            .data(payload.clone())
+            .build(),
+        Some(EventCategory::custom()),
+        Some(
+            CategoryProfile::builder()
+                .subtype("example.compaction")
+                .build(),
+        ),
+    ));
+    let mut root_end = event_builder(root_uuid, EventType::End)
+        .name("neutral-agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    set_event_timestamp(&mut root_start, base);
+    set_event_timestamp(&mut mark, base + chrono::Duration::milliseconds(1));
+    set_event_timestamp(&mut root_end, base + chrono::Duration::milliseconds(2));
+
+    exporter
+        .state
+        .lock()
+        .unwrap()
+        .events
+        .extend([root_start, mark, root_end]);
+
+    let trajectory = exporter.export().unwrap();
+    assert_atif_v17_shape(&trajectory);
+    assert_eq!(trajectory.steps.len(), 1);
+
+    let step = &trajectory.steps[0];
+    assert_eq!(step.source, "agent");
+    assert_eq!(step.llm_call_count, Some(0));
+    assert_eq!(
+        step.timestamp.as_deref(),
+        Some("2026-01-01T00:00:00.001+00:00")
+    );
+    let tool_call = &step.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(tool_call.function_name, "plugin.output_compacted");
+    assert_eq!(tool_call.arguments, payload);
+
+    let result = &step.observation.as_ref().unwrap().results[0];
+    assert_eq!(
+        result.source_call_id.as_deref(),
+        Some(tool_call.tool_call_id.as_str())
+    );
+    assert_eq!(result.content, Some(json!("plugin.output_compacted")));
+
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.ancestry.function_id, mark_uuid.to_string());
+    assert_eq!(extra.ancestry.parent_id, Some(root_uuid.to_string()));
+    assert_eq!(
+        extra.event_payload,
+        Some(json!({"count": 3, "status": "compacted"}))
+    );
+    assert_eq!(extra.event_category.as_deref(), Some("custom"));
+    assert_eq!(
+        extra.event_category_profile.as_ref().unwrap()["subtype"],
+        json!("example.compaction")
+    );
+}
+
+#[test]
 fn test_exporter_openclaw_hook_only_fallbacks_preserve_stripped_content_and_explicit_metrics() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let stripped_uuid = Uuid::now_v7();

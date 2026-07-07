@@ -8,6 +8,16 @@ import "encoding/json"
 // ObservabilityPluginKind is the top-level plugin kind used by the core observability component.
 const ObservabilityPluginKind = "observability"
 
+// ObservabilityMarkProjection controls how point-in-time marks are exported.
+type ObservabilityMarkProjection string
+
+const (
+	// ObservabilityMarkProjectionEvent preserves marks as events.
+	ObservabilityMarkProjectionEvent ObservabilityMarkProjection = "event"
+	// ObservabilityMarkProjectionTool emits visible tool projections.
+	ObservabilityMarkProjectionTool ObservabilityMarkProjection = "tool"
+)
+
 // ObservabilityConfig is the canonical Go shape for the observability plugin config document.
 type ObservabilityConfig struct {
 	Version       uint32                   `json:"version,omitempty"`
@@ -42,6 +52,7 @@ type ObservabilityAtifConfig struct {
 	AgentName        string                               `json:"agent_name,omitempty"`
 	AgentVersion     string                               `json:"agent_version,omitempty"`
 	ModelName        string                               `json:"model_name,omitempty"`
+	MarkProjection   ObservabilityMarkProjection          `json:"mark_projection,omitempty"`
 	ToolDefinitions  []map[string]any                     `json:"tool_definitions,omitempty"`
 	Extra            map[string]any                       `json:"extra,omitempty"`
 	OutputDirectory  string                               `json:"output_directory,omitempty"`
@@ -128,16 +139,17 @@ func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 
 // ObservabilityOtlpConfig configures OpenTelemetry or OpenInference OTLP export.
 type ObservabilityOtlpConfig struct {
-	Enabled              bool              `json:"enabled,omitempty"`
-	Transport            string            `json:"transport,omitempty"`
-	Endpoint             string            `json:"endpoint,omitempty"`
-	Headers              map[string]string `json:"headers,omitempty"`
-	ResourceAttributes   map[string]string `json:"resource_attributes,omitempty"`
-	ServiceName          string            `json:"service_name,omitempty"`
-	ServiceNamespace     string            `json:"service_namespace,omitempty"`
-	ServiceVersion       string            `json:"service_version,omitempty"`
-	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+	Enabled              bool                        `json:"enabled,omitempty"`
+	MarkProjection       ObservabilityMarkProjection `json:"mark_projection,omitempty"`
+	Transport            string                      `json:"transport,omitempty"`
+	Endpoint             string                      `json:"endpoint,omitempty"`
+	Headers              map[string]string           `json:"headers,omitempty"`
+	ResourceAttributes   map[string]string           `json:"resource_attributes,omitempty"`
+	ServiceName          string                      `json:"service_name,omitempty"`
+	ServiceNamespace     string                      `json:"service_namespace,omitempty"`
+	ServiceVersion       string                      `json:"service_version,omitempty"`
+	InstrumentationScope string                      `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64                      `json:"timeout_millis,omitempty"`
 }
 
 // ObservabilityComponentSpec wraps one observability config as a top-level plugin component.
@@ -163,6 +175,7 @@ func NewObservabilityAtifConfig() ObservabilityAtifConfig {
 	return ObservabilityAtifConfig{
 		AgentName:        "NeMo Relay",
 		ModelName:        "unknown",
+		MarkProjection:   ObservabilityMarkProjectionEvent,
 		FilenameTemplate: "nemo-relay-atif-{session_id}.json",
 	}
 }
@@ -181,6 +194,7 @@ func NewObservabilityHttpStorageConfig(endpoint string) ObservabilityHttpStorage
 func NewObservabilityOtlpConfig() ObservabilityOtlpConfig {
 	return ObservabilityOtlpConfig{
 		Transport:          "http_binary",
+		MarkProjection:     ObservabilityMarkProjectionEvent,
 		Headers:            map[string]string{},
 		ResourceAttributes: map[string]string{},
 		ServiceName:        "nemo-relay",

@@ -4,6 +4,7 @@
 //! Optional observability integrations for NeMo Relay Core.
 
 use crate::api::event::EventNormalizationExt;
+use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -21,6 +22,34 @@ pub mod openinference;
 #[cfg(feature = "otel")]
 pub mod otel;
 pub mod plugin_component;
+
+/// Export representation for point-in-time mark events.
+///
+/// Marks remain canonical ATOF events regardless of this setting. Exporters
+/// apply the selected projection only when translating those events into a
+/// downstream trajectory or trace format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum MarkProjection {
+    /// Preserve marks as ATIF system steps or OTEL span events.
+    #[default]
+    Event,
+    /// Render non-streaming marks as deterministic ATIF tool steps or
+    /// zero-duration OTEL child spans so trace-tree consumers can display them
+    /// directly. High-volume `llm.chunk` marks remain events.
+    Tool,
+}
+
+pub(crate) fn is_llm_chunk_mark(event: &crate::api::event::Event) -> bool {
+    event.name() == "llm.chunk"
+        || event
+            .metadata()
+            .and_then(crate::json::Json::as_object)
+            .and_then(|metadata| metadata.get("hook_event_name"))
+            .and_then(crate::json::Json::as_str)
+            == Some("llm.chunk")
+}
 
 #[cfg(all(test, feature = "otel", feature = "openinference"))]
 #[path = "../../tests/unit/observability/exporter_parity_tests.rs"]

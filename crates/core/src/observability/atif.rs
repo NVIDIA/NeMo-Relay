@@ -22,7 +22,7 @@
 //! | LLM End         | `agent` step            | Response content, tool_calls promoted|
 //! | Tool Start      | *(skipped)*             | tool_calls come from LLM End instead |
 //! | Tool End        | agent observation         | Correlated by `source_call_id`       |
-//! | Mark (with data)| `system` step           | Custom event data preserved          |
+//! | Mark (with data)| `system` step           | Optional deterministic tool projection |
 //! | Scope Start/End | *(skipped)*             | Structural events, not trajectory    |
 //!
 //! The exporter serializes the full collected event stream into a single ATIF
@@ -43,7 +43,10 @@ use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
 
-use super::{estimate_cost_for_response_or_model, manual, merge_usage, model_name_for_llm_event};
+use super::{
+    MarkProjection, estimate_cost_for_response_or_model, is_llm_chunk_mark, manual, merge_usage,
+    model_name_for_llm_event,
+};
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
@@ -276,6 +279,12 @@ pub struct AtifStepExtra {
     /// Full raw point-in-time event payload for mark/system steps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_payload: Option<Json>,
+    /// Canonical ATOF category for mark/system steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_category: Option<String>,
+    /// Canonical ATOF category profile for mark/system steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_category_profile: Option<Json>,
     /// Per-tool callable lineage, aligned with `tool_calls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_ancestry: Vec<AtifAncestry>,
@@ -322,6 +331,7 @@ pub struct AtifTrajectory {
 struct AtifExporterState {
     session_id: String,
     agent_info: AtifAgentInfo,
+    mark_projection: MarkProjection,
     events: Vec<Event>,
 }
 
@@ -348,9 +358,20 @@ impl AtifExporter {
             state: Arc::new(Mutex::new(AtifExporterState {
                 session_id,
                 agent_info,
+                mark_projection: MarkProjection::default(),
                 events: Vec::new(),
             })),
         }
+    }
+
+    /// Selects how point-in-time marks are represented in ATIF output.
+    ///
+    /// The default [`MarkProjection::Event`] preserves marks as system steps.
+    /// [`MarkProjection::Tool`] creates deterministic agent/tool steps for
+    /// consumers that visualize tool calls but do not render system events.
+    pub fn with_mark_projection(self, mark_projection: MarkProjection) -> Self {
+        self.state.lock().unwrap().mark_projection = mark_projection;
+        self
     }
 
     /// Return an event subscriber function that records NeMo Relay events.
@@ -392,11 +413,12 @@ impl AtifExporter {
     /// callers that prefer an explicitly fallible method name.
     pub fn try_export(&self) -> Result<AtifTrajectory> {
         flush_subscribers()?;
-        let (session_id, agent_info, events) = {
+        let (session_id, agent_info, mark_projection, events) = {
             let state = self.state.lock().unwrap();
             (
                 state.session_id.clone(),
                 state.agent_info.clone(),
+                state.mark_projection,
                 state.events.clone(),
             )
         };
@@ -404,6 +426,7 @@ impl AtifExporter {
         Ok(events_to_trajectory(
             &session_id,
             agent_info,
+            mark_projection,
             &collected_events,
         ))
     }
@@ -1888,6 +1911,8 @@ impl PendingAgentStep {
             llm_request: None,
             llm_response: self.llm_response.take(),
             event_payload: None,
+            event_category: None,
+            event_category_profile: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
             tool_invocations: if self.tool_invocations.is_empty() {
                 None
@@ -1965,6 +1990,7 @@ impl PendingAgentStep {
 
 #[derive(Default)]
 struct StepConversionState {
+    mark_projection: MarkProjection,
     steps: Vec<AtifStep>,
     last_tool_call_map: std::collections::HashMap<String, String>,
     tool_scope_call_ids: std::collections::HashMap<Uuid, String>,
@@ -2244,6 +2270,8 @@ impl StepConversionState {
             llm_request: Some(content.clone()),
             llm_response: None,
             event_payload: None,
+            event_category: None,
+            event_category_profile: None,
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
@@ -2598,6 +2626,10 @@ impl StepConversionState {
         if is_empty_mark_payload(data) {
             return;
         }
+        if self.mark_projection == MarkProjection::Tool {
+            self.handle_mark_as_tool(mark, lookups, data);
+            return;
+        }
         let extra = AtifStepExtra {
             ancestry: build_ancestry(mark, &lookups.name_map),
             invocation: Some(AtifInvocationInfo {
@@ -2610,6 +2642,12 @@ impl StepConversionState {
             llm_request: None,
             llm_response: None,
             event_payload: Some(data.clone()),
+            event_category: mark
+                .category()
+                .map(|category| category.as_str().to_string()),
+            event_category_profile: mark
+                .category_profile()
+                .and_then(|profile| serde_json::to_value(profile).ok()),
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
@@ -2625,6 +2663,67 @@ impl StepConversionState {
             observation: None,
             metrics: None,
             llm_call_count: None,
+            is_copied_context: None,
+            extra: serde_json::to_value(&extra).ok(),
+        });
+    }
+
+    fn handle_mark_as_tool(&mut self, mark: &Event, lookups: &EventLookupMaps, data: &Json) {
+        self.finalize_agent_extra();
+
+        let ancestry = build_ancestry(mark, &lookups.name_map);
+        let invocation = AtifInvocationInfo {
+            start_timestamp: None,
+            end_timestamp: None,
+            invocation_id: Some(mark.uuid().to_string()),
+            status: Some("completed".to_string()),
+            framework: Some("nemo_relay".to_string()),
+        };
+        let source_call_id = format!("mark:{}", mark.uuid());
+        let mut observation_extra = event_extra(mark);
+        if let Json::Object(extra) = &mut observation_extra {
+            extra.insert("event_payload".to_string(), data.clone());
+        }
+        let extra = AtifStepExtra {
+            ancestry: ancestry.clone(),
+            invocation: Some(invocation.clone()),
+            llm_request: None,
+            llm_response: None,
+            event_payload: Some(data.clone()),
+            event_category: mark
+                .category()
+                .map(|category| category.as_str().to_string()),
+            event_category_profile: mark
+                .category_profile()
+                .and_then(|profile| serde_json::to_value(profile).ok()),
+            tool_ancestry: vec![ancestry],
+            tool_invocations: Some(vec![invocation]),
+        };
+
+        self.steps.push(AtifStep {
+            step_id: 0,
+            source: "agent".to_string(),
+            message: empty_message(),
+            timestamp: Some(mark.timestamp().to_rfc3339()),
+            model_name: None,
+            reasoning_effort: None,
+            reasoning_content: None,
+            tool_calls: Some(vec![AtifToolCall {
+                tool_call_id: source_call_id.clone(),
+                function_name: mark.name().to_string(),
+                arguments: data.clone(),
+                extra: Some(event_extra(mark)),
+            }]),
+            observation: Some(AtifObservation {
+                results: vec![AtifObservationResult {
+                    source_call_id: Some(source_call_id),
+                    content: Some(mark_message(mark, data)),
+                    subagent_trajectory_ref: None,
+                    extra: Some(observation_extra),
+                }],
+            }),
+            metrics: None,
+            llm_call_count: Some(0),
             is_copied_context: None,
             extra: serde_json::to_value(&extra).ok(),
         });
@@ -3171,6 +3270,7 @@ fn nearest_non_turn_agent_parent(
 fn events_to_trajectory(
     session_id: &str,
     agent_info: AtifAgentInfo,
+    mark_projection: MarkProjection,
     events: &[&Event],
 ) -> AtifTrajectory {
     let mut sorted: Vec<&Event> = events.to_vec();
@@ -3180,10 +3280,18 @@ fn events_to_trajectory(
     if let Some(root_uuid) = tree.choose_root(session_id)
         && can_use_agent_scope_tree(&tree, &sorted)
     {
-        return agent_scope_to_trajectory(&tree, root_uuid, session_id, &agent_info, &sorted, true);
+        return agent_scope_to_trajectory(
+            &tree,
+            root_uuid,
+            session_id,
+            &agent_info,
+            mark_projection,
+            &sorted,
+            true,
+        );
     }
 
-    let steps = events_to_steps(&sorted);
+    let steps = events_to_steps(&sorted, mark_projection);
     trajectory_from_parts(
         session_id.to_string(),
         Some(session_id.to_string()),
@@ -3227,10 +3335,11 @@ fn agent_scope_to_trajectory(
     agent_uuid: Uuid,
     session_id: &str,
     agent_info: &AtifAgentInfo,
+    mark_projection: MarkProjection,
     sorted_events: &[&Event],
     is_root: bool,
 ) -> AtifTrajectory {
-    let mut steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid);
+    let mut steps = events_to_steps_for_agent(sorted_events, tree, agent_uuid, mark_projection);
     let subagent_trajectories = tree
         .nodes
         .get(&agent_uuid)
@@ -3243,6 +3352,7 @@ fn agent_scope_to_trajectory(
                         *child_uuid,
                         session_id,
                         agent_info,
+                        mark_projection,
                         sorted_events,
                         false,
                     )
@@ -3316,9 +3426,13 @@ fn events_to_steps_for_agent(
     events: &[&Event],
     tree: &AgentScopeTree,
     agent_uuid: Uuid,
+    mark_projection: MarkProjection,
 ) -> Vec<AtifStep> {
     let lookups = EventLookupMaps::from_events_for_agent(events, tree, agent_uuid);
-    let mut state = StepConversionState::default();
+    let mut state = StepConversionState {
+        mark_projection,
+        ..StepConversionState::default()
+    };
 
     for event in events {
         if let Some(child) = tree.direct_child_for_start(agent_uuid, event) {
@@ -3354,11 +3468,14 @@ fn events_to_steps_for_agent(
 ///    promoted tool_calls by function name → `source_call_id`.
 /// 5. Mark events → system steps if they carry data.
 /// 6. Scope Start/End → skipped.
-fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
+fn events_to_steps(events: &[&Event], mark_projection: MarkProjection) -> Vec<AtifStep> {
     let mut sorted: Vec<&Event> = events.to_vec();
     sorted.sort_by_key(|e| *e.timestamp());
     let lookups = EventLookupMaps::from_events(&sorted);
-    let mut state = StepConversionState::default();
+    let mut state = StepConversionState {
+        mark_projection,
+        ..StepConversionState::default()
+    };
 
     for event in &sorted {
         state.handle_event(event, &lookups);
@@ -3369,16 +3486,6 @@ fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
 
 fn is_empty_mark_payload(data: &Json) -> bool {
     data.is_null() || data.as_object().is_some_and(|object| object.is_empty())
-}
-
-fn is_llm_chunk_mark(mark: &Event) -> bool {
-    mark.name() == "llm.chunk"
-        || mark
-            .metadata()
-            .and_then(Json::as_object)
-            .and_then(|metadata| metadata.get("hook_event_name"))
-            .and_then(Json::as_str)
-            == Some("llm.chunk")
 }
 
 // A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent

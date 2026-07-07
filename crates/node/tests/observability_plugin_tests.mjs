@@ -25,16 +25,20 @@ describe('observability plugin helpers', () => {
       enabled: false,
       agent_name: 'NeMo Relay',
       model_name: 'unknown',
+      mark_projection: 'event',
       filename_template: 'nemo-relay-atif-{session_id}.json',
     });
     assert.deepEqual(observability.otlpConfig(), {
       enabled: false,
+      mark_projection: 'event',
       transport: 'http_binary',
       headers: {},
       resource_attributes: {},
       service_name: 'nemo-relay',
       timeout_millis: 3000,
     });
+    assert.equal(observability.atifConfig({ mark_projection: 'tool' }).mark_projection, 'tool');
+    assert.equal(observability.otlpConfig({ mark_projection: 'tool' }).mark_projection, 'tool');
 
     const component = observability.ComponentSpec({ version: 1, atof: observability.atofConfig() });
     assert.equal(component.kind, observability.OBSERVABILITY_PLUGIN_KIND);

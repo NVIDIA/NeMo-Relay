@@ -122,21 +122,48 @@ fn schema_has_property(schema: &Json, name: &str) -> bool {
 
 #[cfg(feature = "schema")]
 fn schema_property_has_enum(schema: &Json, name: &str, expected: &[&str]) -> bool {
-    schema_property(schema, name)
-        .and_then(|property| property.get("enum"))
-        .and_then(Json::as_array)
-        .is_some_and(|values| {
-            expected
-                .iter()
-                .all(|expected| values.iter().any(|value| value == *expected))
-        })
+    schema_property_matches(schema, name, &|property| {
+        property
+            .get("enum")
+            .and_then(Json::as_array)
+            .is_some_and(|values| {
+                expected
+                    .iter()
+                    .all(|expected| values.iter().any(|value| value == *expected))
+            })
+    })
 }
 
 #[cfg(feature = "schema")]
 fn schema_property_has_default(schema: &Json, name: &str, expected: Json) -> bool {
-    schema_property(schema, name)
-        .and_then(|property| property.get("default"))
-        .is_some_and(|default| default == &expected)
+    schema_property_matches(schema, name, &|property| {
+        property
+            .get("default")
+            .is_some_and(|default| default == &expected)
+    })
+}
+
+#[cfg(feature = "schema")]
+fn schema_property_matches(schema: &Json, name: &str, predicate: &impl Fn(&Json) -> bool) -> bool {
+    match schema {
+        Json::Object(object) => {
+            if object
+                .get("properties")
+                .and_then(Json::as_object)
+                .and_then(|properties| properties.get(name))
+                .is_some_and(predicate)
+            {
+                return true;
+            }
+            object
+                .values()
+                .any(|value| schema_property_matches(value, name, predicate))
+        }
+        Json::Array(values) => values
+            .iter()
+            .any(|value| schema_property_matches(value, name, predicate)),
+        _ => false,
+    }
 }
 
 #[cfg(feature = "schema")]
@@ -189,10 +216,12 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(atif.agent_name, "NeMo Relay");
     assert_eq!(atif.agent_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(atif.model_name, "unknown");
+    assert_eq!(atif.mark_projection, MarkProjection::Event);
     assert_eq!(atif.filename_template, "nemo-relay-atif-{session_id}.json");
 
     let otlp = OtlpSectionConfig::default();
     assert!(!otlp.enabled);
+    assert_eq!(otlp.mark_projection, MarkProjection::Event);
     assert_eq!(otlp.transport, "http_binary");
     assert_eq!(otlp.service_name, "nemo-relay");
     assert_eq!(otlp.timeout_millis, 3_000);
@@ -209,6 +238,34 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(1));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
+}
+
+#[test]
+fn mark_projection_parses_per_exporter_and_rejects_unknown_values() {
+    let atif: AtifSectionConfig = serde_json::from_value(json!({
+        "mark_projection": "tool"
+    }))
+    .unwrap();
+    let otlp: OtlpSectionConfig = serde_json::from_value(json!({
+        "mark_projection": "tool"
+    }))
+    .unwrap();
+    assert_eq!(atif.mark_projection, MarkProjection::Tool);
+    assert_eq!(otlp.mark_projection, MarkProjection::Tool);
+
+    let error = serde_json::from_value::<OtlpSectionConfig>(json!({
+        "mark_projection": "span"
+    }))
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown variant `span`"));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "opentelemetry": {"mark_projection": "span"}
+    })));
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == "observability.invalid_plugin_config"
+        && diagnostic.message.contains("unknown variant `span`")));
 }
 
 #[cfg(feature = "schema")]
@@ -230,6 +287,7 @@ fn schema_contains_every_supported_observability_option() {
         "agent_name",
         "agent_version",
         "model_name",
+        "mark_projection",
         "tool_definitions",
         "extra",
         "filename_template",
@@ -261,6 +319,11 @@ fn schema_contains_every_supported_observability_option() {
         &schema,
         "transport",
         &["http_binary", "grpc"]
+    ));
+    assert!(schema_property_has_enum(
+        &schema,
+        "mark_projection",
+        &["event", "tool"]
     ));
     assert!(schema_property_has_default(
         &schema,

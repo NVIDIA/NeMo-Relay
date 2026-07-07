@@ -43,7 +43,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		FieldNamePolicy: "replace_dots",
 	}}
 	atif := NewObservabilityAtifConfig()
-	if atif.Enabled || atif.AgentName != "NeMo Relay" || atif.ModelName != "unknown" || atif.FilenameTemplate != "nemo-relay-atif-{session_id}.json" {
+	if atif.Enabled || atif.AgentName != "NeMo Relay" || atif.ModelName != "unknown" || atif.MarkProjection != ObservabilityMarkProjectionEvent || atif.FilenameTemplate != "nemo-relay-atif-{session_id}.json" {
 		t.Fatalf("unexpected ATIF defaults: %#v", atif)
 	}
 	allowHTTP := false
@@ -64,12 +64,15 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		httpStorage,
 	}
 	otlp := NewObservabilityOtlpConfig()
-	if otlp.Enabled || otlp.Transport != "http_binary" || otlp.ServiceName != "nemo-relay" || otlp.TimeoutMillis != 3000 {
+	if otlp.Enabled || otlp.MarkProjection != ObservabilityMarkProjectionEvent || otlp.Transport != "http_binary" || otlp.ServiceName != "nemo-relay" || otlp.TimeoutMillis != 3000 {
 		t.Fatalf("unexpected OTLP defaults: %#v", otlp)
 	}
+	atif.MarkProjection = ObservabilityMarkProjectionTool
+	otlp.MarkProjection = ObservabilityMarkProjectionTool
 
 	config.Atof = &atof
 	config.Atif = &atif
+	config.OpenTelemetry = &otlp
 	wrapped := ObservabilityComponent(config)
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
@@ -94,6 +97,9 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("expected field_name_policy in serialized component, got %s", serialized)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
+	if wrapped.Config["atif"].(map[string]any)["mark_projection"] != "tool" || wrapped.Config["opentelemetry"].(map[string]any)["mark_projection"] != "tool" {
+		t.Fatalf("expected tool mark projection in serialized config: %#v", wrapped.Config)
+	}
 }
 
 func assertS3StorageConfig(t *testing.T, storage ObservabilityS3StorageConfig) {

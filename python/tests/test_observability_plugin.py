@@ -34,16 +34,20 @@ class TestObservabilityConfigHelpers:
             "enabled": False,
             "agent_name": "NeMo Relay",
             "model_name": "unknown",
+            "mark_projection": "event",
             "filename_template": "nemo-relay-atif-{session_id}.json",
         }
         assert OtlpConfig().to_dict() == {
             "enabled": False,
+            "mark_projection": "event",
             "transport": "http_binary",
             "headers": {},
             "resource_attributes": {},
             "service_name": "nemo-relay",
             "timeout_millis": 3000,
         }
+        assert AtifConfig(mark_projection="tool").to_dict()["mark_projection"] == "tool"
+        assert OtlpConfig(mark_projection="tool").to_dict()["mark_projection"] == "tool"
 
         wrapped = ComponentSpec(ObservabilityConfig(atof=AtofConfig())).to_dict()
         assert wrapped["kind"] == OBSERVABILITY_PLUGIN_KIND

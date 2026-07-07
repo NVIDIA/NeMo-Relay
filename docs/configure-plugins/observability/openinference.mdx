@@ -61,6 +61,7 @@ OpenInference uses the same OTLP section shape as
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
+| `mark_projection` | `event` | `event` attaches marks to active parent spans. `tool` emits zero-duration OpenInference `TOOL` child spans. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -82,6 +83,12 @@ supported replay request/response payloads. Tool schemas, finish reasons,
 and invocation parameters are emitted when typed codec annotations supply
 them. Exported LLM attributes exclude request headers and other non-observable
 transport metadata.
+
+The default `event` projection preserves marks as span events. With
+`mark_projection = "tool"`, each non-streaming mark becomes a zero-duration child span with
+`openinference.span.kind = "TOOL"` and the original mark payload, category,
+profile, timestamp, and parent identifiers retained as attributes. High-volume
+`llm.chunk` marks remain span events.
 
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and

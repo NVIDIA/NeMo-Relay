@@ -36,6 +36,7 @@ use crate::api::subscriber::{
     scope_deregister_subscriber, try_scope_deregister_subscriber, try_scope_register_subscriber,
 };
 use crate::error::FlowError;
+use crate::observability::MarkProjection;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
     AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointFieldNamePolicy,
@@ -227,6 +228,10 @@ pub struct AtifSectionConfig {
     /// Default model name.
     #[serde(default = "default_model_name")]
     pub model_name: String,
+    /// Representation used for mark events: `event` or `tool`.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
+    pub mark_projection: MarkProjection,
     /// Tool definitions available to the agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_definitions: Option<Vec<Json>>,
@@ -263,6 +268,7 @@ impl Default for AtifSectionConfig {
             agent_name: default_agent_name(),
             agent_version: default_agent_version(),
             model_name: default_model_name(),
+            mark_projection: MarkProjection::default(),
             tool_definitions: None,
             extra: None,
             output_directory: None,
@@ -374,6 +380,10 @@ pub struct OtlpSectionConfig {
     /// Whether the subscriber is active.
     #[serde(default)]
     pub enabled: bool,
+    /// Representation used for mark events: `event` or `tool`.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
+    pub mark_projection: MarkProjection,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -408,6 +418,7 @@ impl Default for OtlpSectionConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mark_projection: MarkProjection::default(),
             transport: default_otlp_transport(),
             endpoint: None,
             headers: HashMap::new(),
@@ -476,6 +487,7 @@ crate::editor_config! {
         agent_name => { label: "agent_name", kind: String },
         agent_version => { label: "agent_version", kind: String },
         model_name => { label: "model_name", kind: String },
+        mark_projection => { label: "mark_projection", kind: Enum, values: ["event", "tool"] },
         tool_definitions => { label: "tool_definitions", kind: Json, optional: true },
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
@@ -487,6 +499,7 @@ crate::editor_config! {
 crate::editor_config! {
     impl OtlpSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
+        mark_projection => { label: "mark_projection", kind: Enum, values: ["event", "tool"] },
         transport => { label: "transport", kind: Enum, values: ["http_binary", "grpc"] },
         endpoint => { label: "endpoint", kind: String, optional: true },
         headers => { label: "headers", kind: StringMap },
@@ -579,6 +592,13 @@ fn otlp_transport_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["http_binary", "grpc"], Some("http_binary"))
+}
+
+#[cfg(feature = "schema")]
+fn mark_projection_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["event", "tool"], Some("event"))
 }
 
 #[cfg(feature = "schema")]
@@ -929,7 +949,8 @@ impl AtifDispatcher {
         // subscriber is attached after that start event has already been
         // emitted.
         let session_id = event.uuid().to_string();
-        let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
+        let exporter = AtifExporter::new(session_id.clone(), self.agent_info())
+            .with_mark_projection(self.config.mark_projection);
         (exporter.subscriber())(event);
         let (filename, local_path) = self.prepare_destination(&session_id);
         self.scope_owners.insert(event.uuid(), event.uuid());
@@ -1347,6 +1368,7 @@ fn build_otel_config(section: OtlpSectionConfig) -> PluginResult<CoreOpenTelemet
         }
     }
     .with_timeout(Duration::from_millis(section.timeout_millis));
+    config = config.with_mark_projection(section.mark_projection);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1383,7 +1405,8 @@ fn build_openinference_config(section: OtlpSectionConfig) -> PluginResult<CoreOp
     let mut config = CoreOpenInferenceConfig::new()
         .with_transport(transport)
         .with_service_name(section.service_name)
-        .with_timeout(Duration::from_millis(section.timeout_millis));
+        .with_timeout(Duration::from_millis(section.timeout_millis))
+        .with_mark_projection(section.mark_projection);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1489,6 +1512,7 @@ fn validate_observability_section_fields(
             "agent_name",
             "agent_version",
             "model_name",
+            "mark_projection",
             "tool_definitions",
             "extra",
             "output_directory",
@@ -1503,6 +1527,7 @@ fn validate_observability_section_fields(
         "opentelemetry",
         &[
             "enabled",
+            "mark_projection",
             "transport",
             "endpoint",
             "headers",
@@ -1521,6 +1546,7 @@ fn validate_observability_section_fields(
         "openinference",
         &[
             "enabled",
+            "mark_projection",
             "transport",
             "endpoint",
             "headers",

@@ -10,6 +10,8 @@ from typing import Literal, Protocol, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
 
+MarkProjection = Literal["event", "tool"]
+
 
 class _SupportsToDict(Protocol):
     def to_dict(self) -> JsonObject: ...
@@ -165,6 +167,7 @@ class AtifConfig:
     agent_name: str = "NeMo Relay"
     agent_version: str | None = None
     model_name: str = "unknown"
+    mark_projection: MarkProjection = "event"
     tool_definitions: list[JsonObject] | None = None
     extra: JsonObject | None = None
     output_directory: str | None = None
@@ -178,6 +181,7 @@ class AtifConfig:
             "agent_name": self.agent_name,
             "agent_version": self.agent_version,
             "model_name": self.model_name,
+            "mark_projection": self.mark_projection,
             "tool_definitions": self.tool_definitions,
             "extra": self.extra,
             "output_directory": self.output_directory,
@@ -194,6 +198,7 @@ class OtlpConfig:
     """Shared OpenTelemetry/OpenInference OTLP export settings."""
 
     enabled: bool = False
+    mark_projection: MarkProjection = "event"
     transport: Literal["http_binary", "grpc"] = "http_binary"
     endpoint: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
@@ -209,6 +214,7 @@ class OtlpConfig:
         return _normalize_object(
             {
                 "enabled": self.enabled,
+                "mark_projection": self.mark_projection,
                 "transport": self.transport,
                 "endpoint": self.endpoint,
                 "headers": self.headers,
@@ -272,6 +278,7 @@ __all__ = [
     "AtofConfig",
     "AtifConfig",
     "HttpStorageConfig",
+    "MarkProjection",
     "S3StorageConfig",
     "OtlpConfig",
     "ObservabilityConfig",
