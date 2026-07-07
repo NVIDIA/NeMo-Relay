@@ -58,12 +58,14 @@ Use the shared protocol identifier and JSON envelope helpers:
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use serde_json::{Value, json};
 
-let envelope = json_envelope("example.Payload@1", &json!({"ok": true}))?;
-let payload: Value = decode_json_envelope(&envelope)?;
+fn main() -> Result<(), serde_json::Error> {
+    let envelope = json_envelope("example.Payload@1", &json!({"ok": true}))?;
+    let payload: Value = decode_json_envelope(&envelope)?;
 
-assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
-assert_eq!(payload["ok"], true);
-# Ok::<(), serde_json::Error>(())
+    assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
+    assert_eq!(payload["ok"], true);
+    Ok(())
+}
 ```
 
 ## Documentation
