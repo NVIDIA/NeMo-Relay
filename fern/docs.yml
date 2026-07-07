@@ -20,6 +20,8 @@ announcement:
 redirects:
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes
+- source: /nemo/relay/reference/api/python-library-reference/pii-redaction
+  destination: /nemo/relay/reference/api/python-library-reference/nemo-relay/pii-redaction
 
 experimental:
   mdx-components:

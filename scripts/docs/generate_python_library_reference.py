@@ -16,6 +16,32 @@ PRIVATE_MODULE_ALLOWLIST = {"__init__"}
 BASE_URL = "/reference/api/python-library-reference"
 
 
+@dataclass(frozen=True, slots=True)
+class Package:
+    distribution_name: str
+    module_name: str
+    source_root: Path
+    description: str
+    public_api_source: Path | None = None
+
+
+PACKAGES = (
+    Package(
+        distribution_name="nemo-relay",
+        module_name="nemo_relay",
+        source_root=Path("python/nemo_relay"),
+        description="Python runtime SDK for NeMo Relay.",
+    ),
+    Package(
+        distribution_name="nemo-relay-plugin",
+        module_name="nemo_relay_plugin",
+        source_root=Path("python/plugin/src/nemo_relay_plugin"),
+        description="Python SDK for NeMo Relay dynamic worker plugins.",
+        public_api_source=Path("_api.py"),
+    ),
+)
+
+
 @dataclass(slots=True)
 class FunctionDoc:
     name: str
@@ -34,6 +60,7 @@ class ClassDoc:
 
 @dataclass(slots=True)
 class ModuleDoc:
+    package: Package
     name: str
     title: str
     source: Path
@@ -52,12 +79,12 @@ def _is_public(name: str) -> bool:
     return not name.startswith("_")
 
 
-def _module_name(package_root: Path, path: Path) -> str:
+def _module_name(package: Package, package_root: Path, path: Path) -> str:
     rel = path.relative_to(package_root)
     parts = list(rel.with_suffix("").parts)
     if parts[-1] == "__init__":
         parts.pop()
-    return ".".join([package_root.name, *parts])
+    return ".".join([package.module_name, *parts])
 
 
 def _is_public_module(package_root: Path, path: Path) -> bool:
@@ -211,12 +238,20 @@ def _function_doc(
     )
 
 
-def _collect_module(package_root: Path, path: Path, api_tree: ast.Module, impl_tree: ast.Module | None) -> ModuleDoc:
+def _collect_module(
+    package: Package,
+    package_root: Path,
+    module_path: Path,
+    source_path: Path,
+    api_tree: ast.Module,
+    impl_tree: ast.Module | None,
+) -> ModuleDoc:
     impl_nodes = _impl_lookup(impl_tree)
     module = ModuleDoc(
-        name=_module_name(package_root, path),
-        title=_module_name(package_root, path),
-        source=path,
+        package=package,
+        name=_module_name(package, package_root, module_path),
+        title=_module_name(package, package_root, module_path),
+        source=source_path,
         summary=_summary((ast.get_docstring(impl_tree) if impl_tree else None) or ast.get_docstring(api_tree)),
     )
 
@@ -234,7 +269,7 @@ def _collect_module(package_root: Path, path: Path, api_tree: ast.Module, impl_t
             )
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             module.aliases.extend(_assignment_names(node))
-        elif path.stem == "__init__" and isinstance(node, ast.ImportFrom):
+        elif module_path.stem == "__init__" and isinstance(node, ast.ImportFrom):
             module.reexports.extend(_reexport_names(node))
 
     module.aliases = sorted(set(module.aliases))
@@ -242,7 +277,7 @@ def _collect_module(package_root: Path, path: Path, api_tree: ast.Module, impl_t
     return module
 
 
-def _discover_modules(package_root: Path) -> list[ModuleDoc]:
+def _discover_modules(package: Package, package_root: Path) -> list[ModuleDoc]:
     py_files = {path.with_suffix("").relative_to(package_root): path for path in package_root.rglob("*.py")}
     pyi_files = {path.with_suffix("").relative_to(package_root): path for path in package_root.rglob("*.pyi")}
     keys = sorted(set(py_files) | set(pyi_files), key=lambda key: (len(key.parts), key.parts))
@@ -255,9 +290,14 @@ def _discover_modules(package_root: Path) -> list[ModuleDoc]:
             continue
         if api_path.name == "_native.pyi":
             continue
-        api_tree = _parse(api_path)
-        impl_tree = _parse(impl_path) if impl_path and impl_path != api_path else None
-        modules.append(_collect_module(package_root, api_path, api_tree, impl_tree))
+        source_path = (
+            package_root / package.public_api_source
+            if key == Path("__init__") and package.public_api_source is not None
+            else api_path
+        )
+        api_tree = _parse(source_path)
+        impl_tree = _parse(impl_path) if impl_path and impl_path != source_path else None
+        modules.append(_collect_module(package, package_root, api_path, source_path, api_tree, impl_tree))
 
     return modules
 
@@ -281,6 +321,10 @@ def _leaf_title(module: ModuleDoc) -> str:
     return _module_parts(module)[-1]
 
 
+def _package_slug(package: Package) -> str:
+    return package.distribution_name
+
+
 def _module_has_children(module: ModuleDoc, modules: list[ModuleDoc]) -> bool:
     parts = _module_parts(module)
     return any(
@@ -290,16 +334,16 @@ def _module_has_children(module: ModuleDoc, modules: list[ModuleDoc]) -> bool:
 
 
 def _module_url(module: ModuleDoc) -> str:
-    return f"{BASE_URL}/{'/'.join(_nav_parts(module))}"
+    return f"{BASE_URL}/{'/'.join((_package_slug(module.package), *_nav_parts(module)))}"
 
 
 def _module_output_path(output_dir: Path, module: ModuleDoc, modules: list[ModuleDoc]) -> Path:
     nav_parts = _nav_parts(module)
     if len(_module_parts(module)) == 1:
-        return output_dir / f"{nav_parts[0]}.mdx"
+        return output_dir / _package_slug(module.package) / "index.mdx"
     if _module_has_children(module, modules):
-        return output_dir.joinpath(*nav_parts, "index.mdx")
-    return output_dir.joinpath(*nav_parts[:-1], f"{nav_parts[-1]}.mdx")
+        return output_dir.joinpath(_package_slug(module.package), *nav_parts, "index.mdx")
+    return output_dir.joinpath(_package_slug(module.package), *nav_parts[:-1], f"{nav_parts[-1]}.mdx")
 
 
 def _sibling_sort_key(module: ModuleDoc) -> tuple[int, str]:
@@ -310,7 +354,11 @@ def _sibling_positions(modules: list[ModuleDoc]) -> dict[str, int]:
     by_parent: dict[tuple[str, ...], list[ModuleDoc]] = {}
     for module in modules:
         nav_parts = _nav_parts(module)
-        parent = tuple(nav_parts[:-1]) if len(_module_parts(module)) > 1 else ()
+        parent = (
+            (_package_slug(module.package), *nav_parts[:-1])
+            if len(_module_parts(module)) > 1
+            else (_package_slug(module.package),)
+        )
         by_parent.setdefault(parent, []).append(module)
 
     positions: dict[str, int] = {}
@@ -321,35 +369,20 @@ def _sibling_positions(modules: list[ModuleDoc]) -> dict[str, int]:
     return positions
 
 
-def _write_index(output_dir: Path, modules: list[ModuleDoc]) -> None:
+def _write_index(output_dir: Path) -> None:
     lines = [
-        frontmatter("Python Library Reference", "Generated Python API reference for the nemo_relay package.", 1),
-        "Generated from the local `python/nemo_relay` package source.\n\n",
-        "## Modules\n\n",
+        frontmatter("Python Library Reference", "Generated Python API reference for NeMo Relay packages.", 1),
+        "## Packages\n\n",
     ]
-
-    by_parent: dict[tuple[str, ...], list[ModuleDoc]] = {}
-    for module in modules:
-        nav_parts = _nav_parts(module)
-        parent = tuple(nav_parts[:-1]) if len(_module_parts(module)) > 1 else ()
-        by_parent.setdefault(parent, []).append(module)
-
-    def write_group(parent: tuple[str, ...], depth: int) -> None:
-        for module in sorted(by_parent.get(parent, []), key=_sibling_sort_key):
-            indent = "  " * depth
-            lines.append(f"{indent}- [`{_leaf_title(module)}`]({_module_url(module)})")
-            if module.summary:
-                lines.append(f": {module.summary}")
-            lines.append("\n")
-            write_group(tuple(_nav_parts(module)), depth + 1)
-
-    write_group((), 0)
+    for package in PACKAGES:
+        lines.append(f"- [`{package.distribution_name}`]({BASE_URL}/{_package_slug(package)}): {package.description}\n")
     (output_dir / "index.mdx").write_text("".join(lines), encoding="utf-8")
 
 
 def _write_module(output_dir: Path, module: ModuleDoc, position: int, modules: list[ModuleDoc]) -> None:
+    sidebar_title = module.package.distribution_name if len(_module_parts(module)) == 1 else _leaf_title(module)
     lines = [
-        frontmatter(module.title, module.summary, position, sidebar_title=_leaf_title(module)),
+        frontmatter(module.title, module.summary, position, sidebar_title=sidebar_title),
         f"Generated from `{display_path(module.source)}`.\n\n",
         f"Module `{module.name}`.\n\n",
     ]
@@ -396,11 +429,16 @@ def _write_module(output_dir: Path, module: ModuleDoc, position: int, modules: l
     output_path.write_text("".join(lines), encoding="utf-8")
 
 
-def generate(package_root: Path, output_dir: Path) -> int:
-    modules = _discover_modules(package_root)
+def generate(repo_root: Path, output_dir: Path) -> int:
+    modules: list[ModuleDoc] = []
+    for package in PACKAGES:
+        package_root = repo_root / package.source_root
+        if not package_root.is_dir():
+            raise SystemExit(f"package root not found: {package_root}")
+        modules.extend(_discover_modules(package, package_root))
     reset_output_dir(output_dir)
     positions = _sibling_positions(modules)
-    _write_index(output_dir, modules)
+    _write_index(output_dir)
     for module in modules:
         _write_module(output_dir, module, positions[module.name], modules)
     return len(modules)
@@ -408,7 +446,6 @@ def generate(package_root: Path, output_dir: Path) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--package-root", type=Path, default=Path("python/nemo_relay"))
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -416,12 +453,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    package_root = args.package_root.resolve()
     output_dir = args.output_dir.resolve()
-    if not package_root.is_dir():
-        raise SystemExit(f"package root not found: {package_root}")
-
-    count = generate(package_root, output_dir)
+    count = generate(Path.cwd(), output_dir)
     print(f"Generated Python library reference for {count} module(s) in {output_dir}")
 
 

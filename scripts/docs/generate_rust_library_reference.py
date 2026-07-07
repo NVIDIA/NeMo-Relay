@@ -25,12 +25,17 @@ CRATES = (
     ("nemo-relay-adaptive", "nemo_relay_adaptive", "Adaptive runtime primitives and plugin components."),
     ("nemo-relay-pii-redaction", "nemo_relay_pii_redaction", "PII redaction plugin components for NeMo Relay."),
     ("nemo-relay-ffi", "nemo_relay_ffi", "C-compatible FFI surface for NeMo Relay."),
+    ("nemo-relay-types", "nemo_relay_types", "Shared serializable data model types for NeMo Relay."),
+    ("nemo-relay-plugin", "nemo_relay_plugin", "Rust SDK and stable ABI for native NeMo Relay plugins."),
+    (
+        "nemo-relay-worker-proto",
+        "nemo_relay_worker_proto",
+        "Versioned gRPC protocol definitions for NeMo Relay worker plugins.",
+    ),
+    ("nemo-relay-worker", "nemo_relay_worker", "Rust SDK for NeMo Relay worker plugins."),
 )
 BASE_URL = "/reference/api/rust-library-reference"
-GENERATED_BY = (
-    "Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive "
-    "-p nemo-relay-pii-redaction -p nemo-relay-ffi`."
-)
+GENERATED_BY = "Generated from `cargo doc --no-deps " + " ".join(f"-p {crate}" for crate, *_ in CRATES) + "`."
 TRANSLATION_TABLE = str.maketrans(
     {
         "\xa0": " ",
@@ -156,14 +161,7 @@ def _run_cargo_doc(repo_root: Path) -> None:
             "cargo",
             "doc",
             "--no-deps",
-            "-p",
-            "nemo-relay",
-            "-p",
-            "nemo-relay-adaptive",
-            "-p",
-            "nemo-relay-pii-redaction",
-            "-p",
-            "nemo-relay-ffi",
+            *(argument for crate, *_ in CRATES for argument in ("-p", crate)),
         ],
         cwd=repo_root,
         env=env,
