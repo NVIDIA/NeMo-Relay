@@ -9,7 +9,7 @@
 
 use napi_derive::napi;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use nemo_relay::api::event::Event;
@@ -297,6 +297,18 @@ impl LlmRequest {
 
 // ---------------------------------------------------------------------------
 // Event (read-only, for subscribers)
+// ---------------------------------------------------------------------------
+
+/// Observability fields returned by mark and scope event sanitizers.
+#[napi(object)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventSanitizeFields {
+    pub data: Option<Json>,
+    pub category_profile: Option<Json>,
+    pub metadata: Option<Json>,
+}
+
 // ---------------------------------------------------------------------------
 
 /// A read-only ATOF lifecycle event delivered to subscribers.

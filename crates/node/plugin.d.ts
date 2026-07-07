@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Json } from './index';
+import type { EventSanitizeFields, Json } from './index';
 
 /** Policy behavior for unsupported configuration. */
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
@@ -70,6 +70,24 @@ export interface ToolExecutionInterceptOutcome {
 export interface PluginContext {
   /** Register an infallible event subscriber for this component. */
   registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /** Register a mark event sanitizer for this component. */
+  registerMarkSanitizeGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a scope-start event sanitizer for this component. */
+  registerScopeSanitizeStartGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a scope-end event sanitizer for this component. */
+  registerScopeSanitizeEndGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
   /** Register a tool sanitize-request guardrail for this component. */
   registerToolSanitizeRequestGuardrail(
     name: string,
