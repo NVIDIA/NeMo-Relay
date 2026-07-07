@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
-    MarkProjection, default_mark_exclude_names, estimate_cost_for_response_or_model,
-    estimate_cost_for_response_or_requested_model, manual, mark_name_is_excluded,
+    MarkProjection, default_mark_exclude_names, effective_mark_projection,
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
     model_name_for_llm_event,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
@@ -534,8 +534,8 @@ impl OtelEventProcessor {
     }
 
     fn process_mark(&mut self, event: &Event) {
-        if self.mark_projection == MarkProjection::Tool
-            && !mark_name_is_excluded(event, &self.mark_exclude_names)
+        if effective_mark_projection(event, self.mark_projection, &self.mark_exclude_names)
+            == MarkProjection::Tool
         {
             self.process_mark_as_tool(event);
             return;

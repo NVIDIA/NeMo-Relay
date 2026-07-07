@@ -44,8 +44,9 @@ use crate::error::Result;
 use crate::json::Json;
 
 use super::{
-    MarkProjection, default_mark_exclude_names, estimate_cost_for_response_or_model,
-    is_llm_chunk_mark, manual, mark_name_is_excluded, merge_usage, model_name_for_llm_event,
+    MarkProjection, default_mark_exclude_names, effective_mark_projection,
+    estimate_cost_for_response_or_model, is_llm_chunk_mark, manual, merge_usage,
+    model_name_for_llm_event,
 };
 
 /// The ATIF schema version string embedded in all exported trajectories.
@@ -2634,15 +2635,13 @@ impl StepConversionState {
     }
 
     fn handle_mark(&mut self, mark: &Event, lookups: &EventLookupMaps) {
-        let excluded = mark_name_is_excluded(mark, &self.mark_exclude_names);
-        if (self.mark_projection == MarkProjection::Inherit
-            || (self.mark_projection == MarkProjection::Tool && excluded))
-            && is_llm_chunk_mark(mark)
-        {
+        let projection =
+            effective_mark_projection(mark, self.mark_projection, &self.mark_exclude_names);
+        if projection == MarkProjection::Inherit && is_llm_chunk_mark(mark) {
             return;
         }
         self.flush_observations();
-        if self.mark_projection == MarkProjection::Tool && !excluded {
+        if projection == MarkProjection::Tool {
             self.handle_mark_as_tool(mark, lookups, mark.data());
             return;
         }

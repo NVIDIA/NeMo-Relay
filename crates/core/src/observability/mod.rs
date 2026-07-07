@@ -68,6 +68,22 @@ pub(crate) fn mark_name_is_excluded(
     })
 }
 
+/// Resolves a configured mark projection for one event.
+///
+/// Exclusions only affect tool projection; all other modes retain their
+/// configured exporter-native behavior.
+pub(crate) fn effective_mark_projection(
+    event: &crate::api::event::Event,
+    projection: MarkProjection,
+    excluded_names: &[String],
+) -> MarkProjection {
+    if projection == MarkProjection::Tool && mark_name_is_excluded(event, excluded_names) {
+        MarkProjection::Inherit
+    } else {
+        projection
+    }
+}
+
 pub(crate) fn is_llm_chunk_mark(event: &crate::api::event::Event) -> bool {
     event.name() == "llm.chunk"
         || event
