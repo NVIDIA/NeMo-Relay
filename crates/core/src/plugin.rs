@@ -1650,8 +1650,12 @@ pub(crate) fn acquire_plugin_host_lease() -> Result<PluginHostLease> {
     }
     if plugin_configuration_is_active()? {
         return Err(PluginError::Conflict(
-            "plugin configuration is already active; clear it before activating dynamic plugins"
-                .into(),
+            concat!(
+                "a static plugin configuration is already active; to combine static and ",
+                "dynamic plugins, provide the static components as the base configuration to ",
+                "dynamic plugin activation before calling plugin initialization"
+            )
+            .into(),
         ));
     }
     let owner_id = NEXT_PLUGIN_HOST_OWNER_ID.fetch_add(1, Ordering::Relaxed);

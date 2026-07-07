@@ -114,7 +114,13 @@ async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_ow
 
     let (activation, _) = PluginHostActivation::activate(
         PluginConfig::default(),
-        Vec::<DynamicPluginActivationSpec>::new(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::new(),
+        }],
     )
     .await
     .expect("a stopped worker process should permit owner release");

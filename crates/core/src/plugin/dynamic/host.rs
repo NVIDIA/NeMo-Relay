@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Owned activation lifecycle for dynamically loaded plugin components.
+//!
+//! Activation transactions run on Relay's process-wide plugin lifecycle
+//! executor. This keeps registration cancellation-resistant and gives native
+//! and worker plugins a stable Tokio runtime independent of the embedding
+//! caller. Plugin registration therefore must not depend on caller-thread
+//! affinity; the lifecycle executor remains available for the process lifetime.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -59,9 +65,11 @@ pub struct PluginHostActivation {
 impl PluginHostActivation {
     /// Load dynamic plugins and activate them with `config` as one transaction.
     ///
-    /// Dynamic components are appended to the supplied base configuration in
-    /// specification order. The returned activation must remain alive for as
-    /// long as code may invoke plugin-provided callbacks.
+    /// The supplied base configuration may contain statically registered
+    /// components. Dynamic components are appended after them in specification
+    /// order. At least one dynamic plugin is required; static-only callers
+    /// should use the regular plugin initialization API. The returned activation
+    /// must remain alive for as long as code may invoke plugin-provided callbacks.
     pub async fn activate<I>(
         config: PluginConfig,
         dynamic_plugins: I,
@@ -70,6 +78,7 @@ impl PluginHostActivation {
         I: IntoIterator<Item = DynamicPluginActivationSpec>,
     {
         let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
+        validate_dynamic_plugin_specs(&dynamic_plugins)?;
         run_owned_plugin_mutation("dynamic plugin activation", move || async move {
             Self::activate_inner(config, dynamic_plugins).await
         })
@@ -81,7 +90,6 @@ impl PluginHostActivation {
         dynamic_plugins: Vec<DynamicPluginActivationSpec>,
     ) -> Result<(Self, ConfigReport)> {
         let claim = acquire_plugin_host_lease()?;
-        validate_unique_plugin_ids(&dynamic_plugins)?;
 
         #[cfg(not(feature = "worker-grpc"))]
         if let Some(plugin) = dynamic_plugins
@@ -292,7 +300,16 @@ impl PluginHostActivation {
     }
 }
 
-fn validate_unique_plugin_ids(dynamic_plugins: &[DynamicPluginActivationSpec]) -> Result<()> {
+fn validate_dynamic_plugin_specs(dynamic_plugins: &[DynamicPluginActivationSpec]) -> Result<()> {
+    if dynamic_plugins.is_empty() {
+        return Err(crate::plugin::PluginError::InvalidConfig(
+            concat!(
+                "dynamic plugin activation requires at least one dynamic plugin; ",
+                "use plugin initialization for a static-only configuration"
+            )
+            .into(),
+        ));
+    }
     let mut plugin_ids = HashSet::with_capacity(dynamic_plugins.len());
     for plugin in dynamic_plugins {
         if !plugin_ids.insert(plugin.plugin_id.as_str()) {
@@ -343,7 +360,9 @@ fn plugin_error_context(
 
 impl Drop for PluginHostActivation {
     fn drop(&mut self) {
-        let _ = self.clear_inner();
+        if let Err(error) = self.clear_inner() {
+            eprintln!("nemo_relay: dynamic plugin activation cleanup failed during drop: {error}");
+        }
     }
 }
 

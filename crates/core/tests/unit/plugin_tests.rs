@@ -1184,59 +1184,6 @@ fn test_plugin_runtime_continues_driving_background_tasks_after_initialization()
 }
 
 #[test]
-fn test_plugin_host_activation_cleans_up_after_caller_cancellation() {
-    let _guard = lock_runtime_owner();
-    reset_global();
-    let started = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let registered = Arc::new(Notify::new());
-    register_plugin(Arc::new(BlockingPlugin {
-        started: Arc::clone(&started),
-        release: Arc::clone(&release),
-        registered: Arc::clone(&registered),
-    }))
-    .unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let caller = tokio::spawn(dynamic::PluginHostActivation::activate(
-            PluginConfig {
-                components: vec![PluginComponentSpec::new("blocking.plugin")],
-                ..PluginConfig::default()
-            },
-            Vec::<dynamic::DynamicPluginActivationSpec>::new(),
-        ));
-        started.notified().await;
-        caller.abort();
-        match caller.await {
-            Err(error) => assert!(error.is_cancelled()),
-            Ok(_) => panic!("plugin host caller should have been canceled"),
-        }
-        release.notify_one();
-        registered.notified().await;
-        for _ in 0..100 {
-            let owner_idle = PLUGIN_MUTATION_OWNER
-                .lock()
-                .is_ok_and(|owner| *owner == PluginMutationOwner::Idle);
-            if owner_idle && active_plugin_report().is_none() {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-
-        // The dropped result must clear its activation and release the lease.
-        initialize_plugins_exact(PluginConfig::default())
-            .await
-            .expect("canceled host caller should not strand ownership");
-    });
-
-    reset_global();
-}
-
-#[test]
 fn test_pending_registration_records_rollback_failures() {
     let failures = Arc::new(Mutex::new(Vec::new()));
     {

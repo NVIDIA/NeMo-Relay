@@ -7,7 +7,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::plugin::dynamic::{DynamicPluginActivationSpec, PluginHostActivation};
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
+};
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginConfig, PluginRegistrationContext, Result, deregister_plugin,
     register_plugin,
@@ -39,9 +41,16 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
     register_plugin(Arc::new(PreclaimedObservabilityPlugin))
         .expect("the fixture must preclaim the builtin kind before first ensure");
 
+    let missing_dynamic_plugin = DynamicPluginActivationSpec {
+        plugin_id: "fixture_missing".into(),
+        kind: DynamicPluginKind::RustDynamic,
+        manifest_ref: "missing-relay-plugin.toml".into(),
+        environment_ref: None,
+        config: Map::new(),
+    };
     let error = match PluginHostActivation::activate(
         PluginConfig::default(),
-        Vec::<DynamicPluginActivationSpec>::new(),
+        [missing_dynamic_plugin.clone()],
     )
     .await
     {
@@ -61,13 +70,11 @@ async fn host_rejects_a_builtin_kind_preclaimed_before_first_ensure() {
     assert!(error.contains("already registered"), "{error}");
     assert!(deregister_plugin("observability"));
 
-    let (activation, _) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        Vec::<DynamicPluginActivationSpec>::new(),
-    )
-    .await
-    .expect("host activation should recover after the conflicting registration is removed");
-    activation
-        .clear()
-        .expect("recovered host activation should clear");
+    let error = PluginHostActivation::activate(PluginConfig::default(), [missing_dynamic_plugin])
+        .await
+        .err()
+        .expect("the missing fixture manifest should fail after builtin registration recovers")
+        .to_string();
+    assert!(error.contains("missing-relay-plugin.toml"), "{error}");
+    assert!(!error.contains("active dynamic plugin host"), "{error}");
 }

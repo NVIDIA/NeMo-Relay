@@ -12,8 +12,8 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use nemo_relay::plugin::PluginConfig;
 use nemo_relay::plugin::dynamic::{DynamicPluginActivationSpec, PluginHostActivation};
+use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 #[cfg(feature = "switchyard")]
@@ -187,11 +187,7 @@ async fn serve_listener_with_dynamic_inner(
     let close_result = sessions.close_all("gateway_shutdown").await;
     let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
     let clear_result = plugin_activation
-        .map(|activation| {
-            activation
-                .clear()
-                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}")))
-        })
+        .map(ServerPluginActivation::clear)
         .unwrap_or(Ok(()));
     if let Err(serve_error) = serve_result {
         if let Err(close_error) = close_result {
@@ -322,10 +318,27 @@ async fn idle_shutdown_future(
     }
 }
 
+enum ServerPluginActivation {
+    Static,
+    Dynamic(PluginHostActivation),
+}
+
+impl ServerPluginActivation {
+    fn clear(self) -> Result<(), CliError> {
+        match self {
+            Self::Static => clear_plugin_configuration()
+                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}"))),
+            Self::Dynamic(activation) => activation
+                .clear()
+                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}"))),
+        }
+    }
+}
+
 async fn initialize_plugin_host(
     config: Option<Value>,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
-) -> Result<Option<PluginHostActivation>, CliError> {
+) -> Result<Option<ServerPluginActivation>, CliError> {
     if config.is_none() && dynamic_plugins.is_empty() {
         return Ok(None);
     }
@@ -348,6 +361,12 @@ async fn initialize_plugin_host(
     validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
         CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
     })?;
+    if dynamic_plugins.is_empty() {
+        initialize_plugins_exact(plugin_config)
+            .await
+            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        return Ok(Some(ServerPluginActivation::Static));
+    }
     let specs = dynamic_plugins
         .into_iter()
         .map(|plugin| {
@@ -369,7 +388,7 @@ async fn initialize_plugin_host(
     let (activation, _) = PluginHostActivation::activate(plugin_config, specs)
         .await
         .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
-    Ok(Some(activation))
+    Ok(Some(ServerPluginActivation::Dynamic(activation)))
 }
 
 // Normalizes a Codex hook payload, applies all resulting events before responding, and returns the

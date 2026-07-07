@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nemo_relay::api::event::{Event, ScopeCategory};
@@ -35,12 +36,85 @@ use nemo_relay::plugin::{
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct ReplacementRegistryPlugin;
+
+const STATIC_BASE_PLUGIN_KIND: &str = "fixture_static_base";
+static STATIC_BASE_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+static STATIC_BASE_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+
+struct StaticBasePlugin;
+
+struct BlockingHostBasePlugin {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+    registered: Arc<Notify>,
+}
+
+impl Plugin for StaticBasePlugin {
+    fn plugin_kind(&self) -> &str {
+        STATIC_BASE_PLUGIN_KIND
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
+        Box::pin(async move {
+            STATIC_BASE_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
+            ctx.add_registration(nemo_relay::plugin::PluginRegistration::new(
+                "plugin",
+                STATIC_BASE_PLUGIN_KIND,
+                Box::new(|| {
+                    STATIC_BASE_DEREGISTRATIONS.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }),
+            ));
+            Ok(())
+        })
+    }
+}
+
+impl Plugin for BlockingHostBasePlugin {
+    fn plugin_kind(&self) -> &str {
+        "fixture_blocking_host_base"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
+        let started = Arc::clone(&self.started);
+        let release = Arc::clone(&self.release);
+        let registered = Arc::clone(&self.registered);
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+            ctx.add_registration(nemo_relay::plugin::PluginRegistration::new(
+                "plugin",
+                ctx.qualify_name("blocking-host-base"),
+                Box::new(|| Ok(())),
+            ));
+            registered.notify_one();
+            Ok(())
+        })
+    }
+}
 
 impl Plugin for ReplacementRegistryPlugin {
     fn plugin_kind(&self) -> &str {
@@ -1078,6 +1152,187 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
 }
 
 #[tokio::test]
+async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let _ = deregister_plugin(STATIC_BASE_PLUGIN_KIND);
+    STATIC_BASE_REGISTRATIONS.store(0, Ordering::SeqCst);
+    STATIC_BASE_DEREGISTRATIONS.store(0, Ordering::SeqCst);
+    register_plugin(Arc::new(StaticBasePlugin)).expect("static base plugin should register");
+
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let mut base_config = PluginConfig::default();
+    base_config.components.push(PluginComponentSpec {
+        kind: STATIC_BASE_PLUGIN_KIND.into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    let (activation, report) =
+        PluginHostActivation::activate(base_config, [host_spec("fixture_native", &manifest_ref)])
+            .await
+            .expect("static and dynamic components should activate together");
+
+    assert!(!report.has_errors());
+    assert_eq!(STATIC_BASE_REGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
+    assert!(lookup_plugin("fixture_native").is_some());
+
+    activation.clear().expect("combined host should clear");
+    assert_eq!(STATIC_BASE_DEREGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
+    assert!(lookup_plugin("fixture_native").is_none());
+    assert!(deregister_plugin(STATIC_BASE_PLUGIN_KIND));
+}
+
+#[tokio::test]
+async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("plugin host should activate");
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let call_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("in-flight callback runtime should build");
+        runtime.block_on(tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("native-fixture-in-flight")
+                .args(json!({ "input": "in-flight" }))
+                .func(Arc::new(move |args| {
+                    let entered_tx = entered_tx.clone();
+                    let release_rx = Arc::clone(&release_rx);
+                    Box::pin(async move {
+                        entered_tx.send(()).map_err(|error| {
+                            nemo_relay::error::FlowError::Internal(error.to_string())
+                        })?;
+                        release_rx
+                            .lock()
+                            .map_err(|error| {
+                                nemo_relay::error::FlowError::Internal(error.to_string())
+                            })?
+                            .recv()
+                            .map_err(|error| {
+                                nemo_relay::error::FlowError::Internal(error.to_string())
+                            })?;
+                        Ok(json!({ "tool_callback": true, "args": args }))
+                    })
+                }))
+                .build(),
+        ))
+    });
+
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("native callback should enter its continuation");
+    activation
+        .clear()
+        .expect("host should clear while a callback snapshot remains in flight");
+    let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
+        .expect("new calls should observe the cleared registries");
+    assert_eq!(unchanged, json!({ "input": true }));
+
+    release_tx
+        .send(())
+        .expect("in-flight continuation should still be reachable");
+    let result = call_thread
+        .join()
+        .expect("in-flight callback thread should not panic")
+        .expect("in-flight callback should finish after host clear");
+    assert_eq!(result["tool_callback"], true);
+    assert_eq!(result["native_plugin_tool_execution"], true);
+}
+
+#[tokio::test]
+async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let registered = Arc::new(Notify::new());
+    register_plugin(Arc::new(BlockingHostBasePlugin {
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+        registered: Arc::clone(&registered),
+    }))
+    .expect("blocking base plugin should register");
+
+    let caller = tokio::spawn(PluginHostActivation::activate(
+        PluginConfig {
+            components: vec![PluginComponentSpec::new("fixture_blocking_host_base")],
+            ..PluginConfig::default()
+        },
+        [host_spec("fixture_native", &manifest_ref)],
+    ));
+    started.notified().await;
+    caller.abort();
+    match caller.await {
+        Err(error) => assert!(error.is_cancelled()),
+        Ok(_) => panic!("activation caller should be canceled"),
+    }
+    release.notify_one();
+    registered.notified().await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if nemo_relay::plugin::active_plugin_report().is_none()
+                && lookup_plugin("fixture_native").is_none()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("canceled activation should clear its completed host result");
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("canceled activation must release process ownership");
+    activation.clear().expect("recovered host should clear");
+    assert!(deregister_plugin("fixture_blocking_host_base"));
+}
+
+#[tokio::test]
+async fn plugin_host_rejects_empty_dynamic_specs_without_claiming_ownership() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        Vec::<DynamicPluginActivationSpec>::new(),
+    )
+    .await
+    {
+        Ok((activation, _)) => {
+            activation
+                .clear()
+                .expect("unexpected empty activation should clear");
+            panic!("an empty dynamic activation must fail");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("at least one dynamic plugin"), "{error}");
+    assert!(error.contains("static-only configuration"), "{error}");
+
+    initialize_plugins_exact(PluginConfig::default())
+        .await
+        .expect("empty dynamic rejection must leave static initialization available");
+    clear_plugin_configuration().expect("static configuration should clear");
+}
+
+#[tokio::test]
 async fn plugin_host_activation_drop_releases_owner_and_plugin_kind() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
@@ -1292,13 +1547,15 @@ async fn plugin_host_partial_load_failure_rolls_back_and_releases_owner() {
 #[tokio::test]
 async fn plugin_host_rejects_an_existing_legacy_configuration() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
     initialize_plugins_exact(PluginConfig::default())
         .await
         .expect("legacy configuration should initialize");
 
     let error = match PluginHostActivation::activate(
         PluginConfig::default(),
-        Vec::<DynamicPluginActivationSpec>::new(),
+        [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     {
@@ -1310,7 +1567,11 @@ async fn plugin_host_rejects_an_existing_legacy_configuration() {
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains("already active"), "{error}");
+    assert!(
+        error.contains("static plugin configuration is already active"),
+        "{error}"
+    );
+    assert!(error.contains("base configuration"), "{error}");
     clear_plugin_configuration().expect("legacy configuration should clear");
 }
 
@@ -1340,13 +1601,15 @@ async fn plugin_host_rejects_workers_when_worker_support_is_disabled() {
     };
     assert!(error.contains("worker-grpc"), "{error}");
 
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
     let (activation, _) = PluginHostActivation::activate(
         PluginConfig::default(),
-        Vec::<DynamicPluginActivationSpec>::new(),
+        [host_spec("fixture_native", &manifest_ref)],
     )
     .await
     .expect("failed worker activation must release the owner");
-    activation.clear().expect("empty host should clear");
+    activation.clear().expect("recovered host should clear");
 }
 
 async fn initialize_fixture_native(config: Map<String, Json>) -> nemo_relay::plugin::Result<()> {
