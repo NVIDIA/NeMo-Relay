@@ -28,8 +28,9 @@ use nemo_relay::plugin::dynamic::{
     load_native_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, deregister_plugin,
-    initialize_plugins_exact, list_plugin_kinds,
+    ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, PluginRegistrationContext,
+    Result as PluginResult, clear_plugin_configuration, deregister_plugin,
+    initialize_plugins_exact, list_plugin_kinds, lookup_plugin, register_plugin,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -38,6 +39,34 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct ReplacementRegistryPlugin;
+
+impl Plugin for ReplacementRegistryPlugin {
+    fn plugin_kind(&self) -> &str {
+        "fixture_native"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
+
+    fn register<'a>(
+        &'a self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &'a mut PluginRegistrationContext,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct FixtureNativeRegistrationCleanup;
+
+impl Drop for FixtureNativeRegistrationCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_plugin("fixture_native");
+    }
+}
 
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
@@ -1141,6 +1170,44 @@ async fn plugin_host_clear_surfaces_missing_kind_and_releases_safe_owner() {
     )
     .await
     .expect("a safely absent plugin kind should release the owner");
+    activation.clear().expect("recovered host should clear");
+}
+
+#[tokio::test]
+async fn plugin_host_clear_preserves_a_replacement_registration() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("plugin host should activate");
+
+    assert!(deregister_plugin("fixture_native"));
+    let replacement: Arc<dyn Plugin> = Arc::new(ReplacementRegistryPlugin);
+    register_plugin(Arc::clone(&replacement)).expect("replacement plugin should register");
+    let _cleanup = FixtureNativeRegistrationCleanup;
+
+    let error = activation
+        .clear()
+        .expect_err("replacement during teardown should be surfaced")
+        .to_string();
+    assert!(error.contains("fixture_native"), "{error}");
+    assert!(error.contains("was replaced"), "{error}");
+    assert!(error.contains("left registered"), "{error}");
+
+    let registered = lookup_plugin("fixture_native").expect("replacement must remain registered");
+    assert!(Arc::ptr_eq(&registered, &replacement));
+    assert!(deregister_plugin("fixture_native"));
+
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("safe replacement detection should release the host owner");
     activation.clear().expect("recovered host should clear");
 }
 

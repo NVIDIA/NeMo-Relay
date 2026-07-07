@@ -121,6 +121,10 @@ name = "native_plugin_integration"
 path = "tests/integration/native_plugin_tests.rs"
 
 [[test]]
+name = "plugin_host_builtin_ownership"
+path = "tests/integration/plugin_host_builtin_ownership_tests.rs"
+
+[[test]]
 name = "worker_plugin_integration"
 path = "tests/integration/worker_plugin_tests.rs"
 required-features = ["worker-grpc"]
