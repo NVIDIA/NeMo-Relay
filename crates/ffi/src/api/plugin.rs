@@ -13,10 +13,10 @@ use super::{
     initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
     nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
     status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_sanitize_fn,
-    wrap_event_subscriber, wrap_llm_conditional_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
-    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
+    wrap_llm_request_intercept_fn, wrap_llm_response_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
+    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -170,10 +170,15 @@ fn lock_plugin_activation(
 
 /// Load and activate dynamic plugins as one owned transaction.
 ///
-/// `config_json` is the base [`PluginConfig`] document and
-/// `dynamic_plugins_json` is an array of explicit dynamic-plugin activation
-/// specifications. On success, the caller owns `out_activation` and must clear
-/// and free it with `nemo_relay_plugin_activation_clear` and
+/// **Experimental:** this API needs a production consumer before its lifecycle
+/// contract is considered stable.
+///
+/// `config_json` is the base [`PluginConfig`] document. Its static components
+/// initialize before components appended by the dynamic plugins.
+/// `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
+/// activation specification; use `nemo_relay_initialize_plugins` for a
+/// static-only configuration. On success, the caller owns `out_activation` and
+/// must clear and free it with `nemo_relay_plugin_activation_clear` and
 /// `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
 /// string and must be released with `nemo_relay_string_free`.
 ///

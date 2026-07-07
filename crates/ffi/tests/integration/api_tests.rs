@@ -27,7 +27,7 @@ use nemo_relay_ffi::types::{
     nemo_relay_event_uuid, nemo_relay_llm_handle_attributes, nemo_relay_llm_handle_free,
     nemo_relay_llm_handle_name, nemo_relay_llm_handle_parent_uuid, nemo_relay_llm_handle_uuid,
     nemo_relay_llm_request_content, nemo_relay_llm_request_free, nemo_relay_llm_request_headers,
-    nemo_relay_llm_request_new, nemo_relay_otel_subscriber_free, nemo_relay_plugin_activation_free,
+    nemo_relay_llm_request_new, nemo_relay_otel_subscriber_free,
     nemo_relay_scope_handle_attributes, nemo_relay_scope_handle_data, nemo_relay_scope_handle_free,
     nemo_relay_scope_handle_metadata, nemo_relay_scope_handle_name,
     nemo_relay_scope_handle_parent_uuid, nemo_relay_scope_handle_scope_type,

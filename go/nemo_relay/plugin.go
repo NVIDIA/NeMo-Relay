@@ -262,6 +262,9 @@ type DynamicPluginActivationSpec struct {
 // PluginActivation owns the runtime registrations, native libraries, and
 // workers created by ActivateDynamicPlugins. Copies share one activation
 // lifetime and may be closed safely from any copy.
+//
+// Experimental: this API needs a production consumer before its lifecycle
+// contract is considered stable.
 type PluginActivation struct {
 	state *pluginActivationState
 }
@@ -498,19 +501,27 @@ func InitializePlugins(config PluginConfig) (ConfigReport, error) {
 
 // ActivateDynamicPlugins loads explicit dynamic plugins and activates them
 // together with the supplied base plugin configuration as one transaction.
+// Static components in config are initialized before components appended by
+// dynamic plugins. At least one dynamic plugin specification is required; use
+// InitializePlugins for a static-only configuration.
 //
 // The caller must retain the returned activation for as long as plugin
 // callbacks may run and call Close during orderly shutdown.
+//
+// Experimental: this API needs a production consumer before its lifecycle
+// contract is considered stable.
 func ActivateDynamicPlugins(
 	config PluginConfig,
 	dynamicPlugins []DynamicPluginActivationSpec,
 ) (*PluginActivation, ConfigReport, error) {
+	if len(dynamicPlugins) == 0 {
+		return nil, ConfigReport{}, errors.New(
+			"dynamic plugin activation requires at least one dynamic plugin; use InitializePlugins for a static-only configuration",
+		)
+	}
 	configPayload, err := jsonMarshal(config)
 	if err != nil {
 		return nil, ConfigReport{}, err
-	}
-	if dynamicPlugins == nil {
-		dynamicPlugins = []DynamicPluginActivationSpec{}
 	}
 	dynamicPluginsPayload, err := jsonMarshal(dynamicPlugins)
 	if err != nil {

@@ -6,96 +6,34 @@
 use super::*;
 
 #[test]
-fn test_ffi_dynamic_plugin_activation_owns_an_idempotent_lifecycle() {
+fn test_ffi_dynamic_plugin_activation_rejects_empty_specs_without_outputs() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
     let _ = nemo_relay_clear_plugin_configuration();
 
     let config = cstring(r#"{"version":1,"components":[]}"#);
     let specs = cstring("[]");
-    let mut activation = ptr::null_mut();
-    let mut report_json = ptr::null_mut();
-    unsafe {
-        assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut activation,
-                &mut report_json,
-            ),
-            NemoRelayStatus::Ok
-        );
-        assert!(!activation.is_null());
-        assert_eq!(returned_json(report_json)["diagnostics"], json!([]));
-
-        let mut conflicting_activation = ptr::null_mut();
-        let mut conflicting_report = ptr::null_mut();
-        assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut conflicting_activation,
-                &mut conflicting_report,
-            ),
-            NemoRelayStatus::AlreadyExists
-        );
-        assert!(conflicting_activation.is_null());
-        assert!(conflicting_report.is_null());
-        assert!(
-            read_last_error()
-                .unwrap_or_default()
-                .contains("active dynamic plugin host")
-        );
-
-        assert_eq!(
-            nemo_relay_plugin_activation_clear(activation),
-            NemoRelayStatus::Ok
-        );
-        assert_eq!(
-            nemo_relay_plugin_activation_clear(activation),
-            NemoRelayStatus::Ok
-        );
-        assert_eq!(
-            nemo_relay_plugin_activation_clear(ptr::null_mut()),
-            NemoRelayStatus::Ok
-        );
-        nemo_relay_plugin_activation_free(&mut activation);
-        assert!(activation.is_null());
-        nemo_relay_plugin_activation_free(&mut activation);
-        nemo_relay_plugin_activation_free(ptr::null_mut());
-
-        let mut dropped_activation = ptr::null_mut();
-        let mut dropped_report = ptr::null_mut();
-        assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut dropped_activation,
-                &mut dropped_report,
-            ),
-            NemoRelayStatus::Ok
-        );
-        returned_json(dropped_report);
-        nemo_relay_plugin_activation_free(&mut dropped_activation);
-        assert!(dropped_activation.is_null());
-
-        let mut after_drop_activation = ptr::null_mut();
-        let mut after_drop_report = ptr::null_mut();
-        assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
-                config.as_ptr(),
-                specs.as_ptr(),
-                &mut after_drop_activation,
-                &mut after_drop_report,
-            ),
-            NemoRelayStatus::Ok
-        );
-        returned_json(after_drop_report);
-        assert_eq!(
-            nemo_relay_plugin_activation_clear(after_drop_activation),
-            NemoRelayStatus::Ok
-        );
-        nemo_relay_plugin_activation_free(&mut after_drop_activation);
+    for _ in 0..2 {
+        let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
+        let mut report_json = std::ptr::dangling_mut::<c_char>();
+        unsafe {
+            assert_eq!(
+                nemo_relay_activate_dynamic_plugins(
+                    config.as_ptr(),
+                    specs.as_ptr(),
+                    &mut activation,
+                    &mut report_json,
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert!(activation.is_null());
+            assert!(report_json.is_null());
+            assert!(
+                read_last_error()
+                    .unwrap_or_default()
+                    .contains("at least one dynamic plugin")
+            );
+        }
     }
 }
 
@@ -218,22 +156,19 @@ fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner(
                 .contains("native plugin load failed")
         );
 
-        let empty_specs = cstring("[]");
+        let mut retry_activation = ptr::null_mut();
+        let mut retry_report = ptr::null_mut();
         assert_eq!(
             nemo_relay_activate_dynamic_plugins(
                 config.as_ptr(),
-                empty_specs.as_ptr(),
-                &mut activation,
-                &mut report,
+                specs.as_ptr(),
+                &mut retry_activation,
+                &mut retry_report,
             ),
-            NemoRelayStatus::Ok
+            NemoRelayStatus::NotFound
         );
-        returned_json(report);
-        assert_eq!(
-            nemo_relay_plugin_activation_clear(activation),
-            NemoRelayStatus::Ok
-        );
-        nemo_relay_plugin_activation_free(&mut activation);
+        assert!(retry_activation.is_null());
+        assert!(retry_report.is_null());
     }
 }
 

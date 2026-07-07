@@ -1419,10 +1419,15 @@ NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpe
 /**
  * Load and activate dynamic plugins as one owned transaction.
  *
- * `config_json` is the base [`PluginConfig`] document and
- * `dynamic_plugins_json` is an array of explicit dynamic-plugin activation
- * specifications. On success, the caller owns `out_activation` and must clear
- * and free it with `nemo_relay_plugin_activation_clear` and
+ * **Experimental:** this API needs a production consumer before its lifecycle
+ * contract is considered stable.
+ *
+ * `config_json` is the base [`PluginConfig`] document. Its static components
+ * initialize before components appended by the dynamic plugins.
+ * `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
+ * activation specification; use `nemo_relay_initialize_plugins` for a
+ * static-only configuration. On success, the caller owns `out_activation` and
+ * must clear and free it with `nemo_relay_plugin_activation_clear` and
  * `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
  * string and must be released with `nemo_relay_string_free`.
  *
