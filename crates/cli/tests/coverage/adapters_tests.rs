@@ -5,7 +5,63 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::adapters::{claude_code, codex, hermes};
+use crate::adapters::{claude_code, codex, hermes, openclaw};
+
+#[test]
+fn maps_openclaw_bridge_lifecycle_llm_and_tool_events() {
+    let headers = HeaderMap::new();
+
+    let started = openclaw::adapt(
+        json!({
+            "session_id": "openclaw-session",
+            "hook_event_name": "session_start"
+        }),
+        &headers,
+    );
+    assert!(matches!(
+        &started.events[0],
+        NormalizedEvent::AgentStarted(event)
+            if event.agent_kind == AgentKind::OpenClaw
+                && event.session_id == "openclaw-session"
+    ));
+
+    let hint = openclaw::adapt(
+        json!({
+            "session_id": "openclaw-session",
+            "hook_event_name": "preLlmCall",
+            "request_id": "run-1",
+            "model": "claude-test"
+        }),
+        &headers,
+    );
+    assert!(matches!(
+        &hint.events[0],
+        NormalizedEvent::LlmHint(event)
+            if event.agent_kind == AgentKind::OpenClaw
+                && event.request_id.as_deref() == Some("run-1")
+                && event.model.as_deref() == Some("claude-test")
+    ));
+
+    let tool = openclaw::adapt(
+        json!({
+            "session_id": "openclaw-session",
+            "hook_event_name": "tool_end",
+            "tool_call_id": "tool-1",
+            "tool_name": "exec",
+            "tool_input": {"command": "pwd"},
+            "tool_output": {"content": [{"type": "text", "text": "/workspace"}]}
+        }),
+        &headers,
+    );
+    assert!(matches!(
+        &tool.events[0],
+        NormalizedEvent::ToolEnded(event)
+            if event.agent_kind == AgentKind::OpenClaw
+                && event.tool_call_id == "tool-1"
+                && event.tool_name == "exec"
+                && event.arguments == json!({"command": "pwd"})
+    ));
+}
 
 #[test]
 fn maps_claude_canonical_tool_payload() {

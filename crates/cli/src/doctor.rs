@@ -397,7 +397,7 @@ async fn collect_agents(
         (CodingAgent::ClaudeCode, "claude", "claude"),
         (CodingAgent::Codex, "codex", "codex"),
         (CodingAgent::Hermes, "hermes", "hermes"),
-        (CodingAgent::Openclaw, "openclaw", "openclaw"),
+        (CodingAgent::OpenClaw, "openclaw", "openclaw"),
     ];
     let mut out = Vec::with_capacity(supported.len());
     for (agent, display_name, default_exec) in supported {
@@ -474,7 +474,7 @@ fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option
         CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
-        CodingAgent::Openclaw => agents.openclaw.command.as_ref(),
+        CodingAgent::OpenClaw => agents.openclaw.command.as_ref(),
     }
 }
 
@@ -488,7 +488,7 @@ fn configured_agent_names(agents: &AgentConfigs) -> Vec<String> {
         (CodingAgent::ClaudeCode, "claude"),
         (CodingAgent::Codex, "codex"),
         (CodingAgent::Hermes, "hermes"),
-        (CodingAgent::Openclaw, "openclaw"),
+        (CodingAgent::OpenClaw, "openclaw"),
     ]
     .into_iter()
     .filter_map(|(agent, name)| agent_configured(agent, agents).then_some(name.to_string()))
@@ -536,34 +536,10 @@ fn hook_status(
             ),
             None => (Status::Info, "hooks: not configured".into()),
         },
-        CodingAgent::Openclaw => match crate::openclaw::detect_relay_plugin() {
-            crate::openclaw::RelayPluginDetection::DetectedEnabled => (
-                Status::Pass,
-                "hook/tool telemetry: nemo-relay-openclaw detected".into(),
-            ),
-            crate::openclaw::RelayPluginDetection::DetectedDisabled => (
-                Status::Info,
-                "hook/tool telemetry: nemo-relay-openclaw is installed but disabled".into(),
-            ),
-            crate::openclaw::RelayPluginDetection::DetectedError => (
-                Status::Warn,
-                "hook/tool telemetry: nemo-relay-openclaw is installed but failed to load".into(),
-            ),
-            crate::openclaw::RelayPluginDetection::Detected => (
-                Status::Pass,
-                "hook/tool telemetry: nemo-relay-openclaw is installed".into(),
-            ),
-            crate::openclaw::RelayPluginDetection::NotDetected => (
-                Status::Info,
-                "hook/tool telemetry: optional nemo-relay-openclaw plugin not detected; Relay does not install it automatically"
-                    .into(),
-            ),
-            crate::openclaw::RelayPluginDetection::Unknown => (
-                Status::Info,
-                "hook/tool telemetry: could not inspect optional nemo-relay-openclaw plugin state"
-                    .into(),
-            ),
-        },
+        CodingAgent::OpenClaw => (
+            Status::Pass,
+            "hooks: temporary CLI bridge injected during run".into(),
+        ),
     }
 }
 

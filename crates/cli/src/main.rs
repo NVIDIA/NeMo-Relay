@@ -81,8 +81,8 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Hermes(command) => {
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
-        Command::Openclaw(command) => {
-            launcher::easy_path(CodingAgent::Openclaw, command, Some(server)).await
+        Command::OpenClaw(command) => {
+            launcher::easy_path(CodingAgent::OpenClaw, command, Some(server)).await
         }
         Command::Config(command) => run_config(command).await,
         Command::Plugins(command) => run_plugins(command, server),

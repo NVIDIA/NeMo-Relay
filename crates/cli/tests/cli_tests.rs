@@ -1172,7 +1172,7 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    for agent in ["claude", "codex", "hermes"] {
+    for agent in ["claude", "codex", "hermes", "openclaw"] {
         assert!(
             stdout.contains(&format!("  {agent}")),
             "expected `--help` to list `{agent}` subcommand, got:\n{stdout}"

@@ -106,8 +106,10 @@ OpenClaw launches in an embedded local or foreground-gateway mode so the
 temporary provider overlay reaches the model-serving process. Relay routes
 deterministically API-key-backed Anthropic Messages, OpenAI Chat Completions,
 and OpenAI Responses providers while leaving custom, remote, or ambiguous
-provider paths unchanged. Relay detects the optional `nemo-relay-openclaw`
-plugin but never installs or enables it automatically.
+provider paths unchanged. The overlay also injects a temporary hook bridge that
+forwards OpenClaw lifecycle events into the CLI gateway. The bridge has no Relay
+runtime dependency, and any separately configured embedded Relay plugin is
+disabled for the wrapped invocation so only the CLI-owned runtime is active.
 
 Use `run --dry-run` to inspect resolved config without spawning the agent:
 

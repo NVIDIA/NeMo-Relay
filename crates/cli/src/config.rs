@@ -71,16 +71,18 @@ pub(crate) enum Command {
     Hermes(EasyPathCommand),
     /// Run OpenClaw with observability (setup on first use)
     #[command(
+        name = "openclaw",
         long_about = "Run OpenClaw under an ephemeral NeMo Relay gateway. Relay creates a \
-                      temporary JSON5 overlay and routes API-key-backed canonical Anthropic and \
-                      OpenAI providers through the gateway without modifying OpenClaw's source \
-                      configuration, state, credentials, or plugin installation.",
+                      temporary JSON5 overlay that injects hook forwarding and routes \
+                      API-key-backed canonical Anthropic and OpenAI providers through one \
+                      CLI-owned Relay runtime without modifying OpenClaw's source configuration, \
+                      state, credentials, or plugin installation.",
         after_help = "Examples:\n  \
                       nemo-relay openclaw\n  \
                       nemo-relay openclaw -- agent --agent main --message \"summarize this project\"\n  \
                       nemo-relay openclaw -- gateway run"
     )]
-    Openclaw(EasyPathCommand),
+    OpenClaw(EasyPathCommand),
     /// Run the interactive setup (writes `.nemo-relay/config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -538,7 +540,8 @@ pub(crate) enum CodingAgent {
     ClaudeCode,
     Codex,
     Hermes,
-    Openclaw,
+    #[value(name = "openclaw")]
+    OpenClaw,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -1369,9 +1372,7 @@ impl CodingAgent {
             Self::ClaudeCode => "/hooks/claude-code",
             Self::Codex => "/hooks/codex",
             Self::Hermes => "/hooks/hermes",
-            // OpenClaw hook/tool telemetry stays in the separately installed npm plugin. The
-            // hidden hook-forward command rejects this path before issuing an HTTP request.
-            Self::Openclaw => "/hooks/openclaw",
+            Self::OpenClaw => "/hooks/openclaw",
         }
     }
 
@@ -1383,7 +1384,7 @@ impl CodingAgent {
             Self::ClaudeCode => "claude",
             Self::Codex => "codex",
             Self::Hermes => "hermes",
-            Self::Openclaw => "openclaw",
+            Self::OpenClaw => "openclaw",
         }
     }
 
@@ -1398,7 +1399,7 @@ impl CodingAgent {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
             "hermes" | "hermes-agent" => Some(Self::Hermes),
-            "openclaw" | "openclaw.exe" => Some(Self::Openclaw),
+            "openclaw" | "openclaw.exe" => Some(Self::OpenClaw),
             _ => None,
         }
     }

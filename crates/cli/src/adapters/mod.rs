@@ -4,6 +4,7 @@
 pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod hermes;
+pub(crate) mod openclaw;
 
 use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
@@ -180,11 +181,13 @@ pub(crate) trait AgentPayloadExtractor {
 pub(super) struct ClaudeCodePayloadExtractor;
 pub(super) struct CodexPayloadExtractor;
 pub(super) struct HermesPayloadExtractor;
+pub(super) struct OpenClawPayloadExtractor;
 
 pub(super) static CLAUDE_CODE_PAYLOAD_EXTRACTOR: ClaudeCodePayloadExtractor =
     ClaudeCodePayloadExtractor;
 pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadExtractor;
 pub(super) static HERMES_PAYLOAD_EXTRACTOR: HermesPayloadExtractor = HermesPayloadExtractor;
+pub(super) static OPENCLAW_PAYLOAD_EXTRACTOR: OpenClawPayloadExtractor = OpenClawPayloadExtractor;
 
 /// Claude Code reports its native tool identifier as `tool_use_id`, so it uses
 /// a tool path set that prefers that key. Every other hook field matches the
@@ -219,6 +222,14 @@ impl AgentPayloadExtractor for CodexPayloadExtractor {
 impl AgentPayloadExtractor for HermesPayloadExtractor {
     fn subagent_id_paths(&self) -> &'static [&'static [&'static str]] {
         HERMES_SUBAGENT_ID_PATHS
+    }
+}
+
+/// OpenClaw's temporary CLI bridge supplies Relay-normalized field names and
+/// must not inherit Claude Code's installed-mode session header.
+impl AgentPayloadExtractor for OpenClawPayloadExtractor {
+    fn session_header_policy(&self) -> SessionHeaderPolicy {
+        SessionHeaderPolicy::RelayOnly
     }
 }
 
@@ -886,7 +897,7 @@ fn classify_primary(
     } else {
         match normalized.as_str() {
             "afteragentresponse" | "agentresponse" | "assistantresponse" | "afteragentthought"
-            | "prellmcall" | "postllmcall" | "stop" => {
+            | "llminput" | "prellmcall" | "postllmcall" | "stop" => {
                 NormalizedEvent::LlmHint(common_llm_hint_event_with_fallback(
                     payload,
                     headers,

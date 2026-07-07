@@ -227,7 +227,7 @@ fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
     assert_eq!(default_command_for(CodingAgent::ClaudeCode), "claude");
     assert_eq!(default_command_for(CodingAgent::Codex), "codex");
     assert_eq!(default_command_for(CodingAgent::Hermes), "hermes");
-    assert_eq!(default_command_for(CodingAgent::Openclaw), "openclaw");
+    assert_eq!(default_command_for(CodingAgent::OpenClaw), "openclaw");
 
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
@@ -249,7 +249,7 @@ fn resolves_configured_openclaw_command_and_inference() {
         ..AgentConfigs::default()
     };
     let command = RunCommand {
-        agent: Some(CodingAgent::Openclaw),
+        agent: Some(CodingAgent::OpenClaw),
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
@@ -262,7 +262,7 @@ fn resolves_configured_openclaw_command_and_inference() {
 
     let (agent, argv) = resolve_agent_and_argv(&command, &agents).unwrap();
 
-    assert_eq!(agent, CodingAgent::Openclaw);
+    assert_eq!(agent, CodingAgent::OpenClaw);
     assert_eq!(argv, ["openclaw", "tui"]);
 }
 

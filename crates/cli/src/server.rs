@@ -275,6 +275,7 @@ fn router_with_state(state: AppState) -> Router {
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
         .route("/hooks/hermes", post(hermes_hook))
+        .route("/hooks/openclaw", post(openclaw_hook))
         .route("/responses", post(gateway::passthrough))
         .route("/chat/completions", post(gateway::passthrough))
         .route("/models", get(gateway::models))
@@ -404,6 +405,23 @@ async fn hermes_hook(
     state.touch();
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = hermes::adapt(payload, &headers);
+    state
+        .sessions
+        .apply_events(&headers, outcome.events)
+        .await?;
+    Ok(Json(outcome.response))
+}
+
+// Handles events from the temporary OpenClaw bridge injected by the CLI wrapper. The bridge does
+// not host Relay or mutate tool results; provider requests still enter the managed LLM gateway.
+async fn openclaw_hook(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    payload: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, CliError> {
+    state.touch();
+    let Json(payload) = payload.map_err(hook_payload_rejection)?;
+    let outcome = crate::adapters::openclaw::adapt(payload, &headers);
     state
         .sessions
         .apply_events(&headers, outcome.events)

@@ -105,7 +105,7 @@ fn detect_installed_agents_finds_binaries_on_path() {
     let detected = detect_installed_agents_in(Some(temp.path().as_os_str()));
     assert!(detected.contains(&CodingAgent::ClaudeCode));
     assert!(detected.contains(&CodingAgent::Hermes));
-    assert!(detected.contains(&CodingAgent::Openclaw));
+    assert!(detected.contains(&CodingAgent::OpenClaw));
     assert!(!detected.contains(&CodingAgent::Codex));
 }
 
@@ -155,7 +155,7 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
         agents: vec![
             CodingAgent::ClaudeCode,
             CodingAgent::Codex,
-            CodingAgent::Openclaw,
+            CodingAgent::OpenClaw,
         ],
         hermes_hooks_path: None,
     };

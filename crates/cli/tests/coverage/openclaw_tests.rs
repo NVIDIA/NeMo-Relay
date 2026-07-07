@@ -423,6 +423,7 @@ fn temporary_overlay_preserves_source_config_metadata_and_explicit_relay_upstrea
     let original = r#"{
       // This comment and formatting must remain byte-for-byte unchanged.
       agents: { defaults: { model: { primary: "openai/gpt-test" } } },
+      plugins: { load: { paths: ["/existing/openclaw/plugin"] } },
       models: { providers: { openai: {
         baseUrl: "https://source-upstream.example/v1",
         api: "openai-responses",
@@ -437,6 +438,9 @@ fn temporary_overlay_preserves_source_config_metadata_and_explicit_relay_upstrea
         &executable,
         r#"#!/bin/sh
 case "$*" in
+  "plugins inspect nemo-relay --json")
+    printf '%s' '{"plugin":{"id":"nemo-relay","enabled":true}}'
+    ;;
   *"models auth list --provider openai --json"*|*"models auth list --provider anthropic --json"*)
     printf '%s' '{"profiles":[]}'
     ;;
@@ -496,15 +500,69 @@ esac
         overlay["models"]["providers"]["openai"]["baseUrl"],
         "http://127.0.0.1:43127/v1"
     );
+    assert_eq!(
+        overlay["plugins"]["entries"][RELAY_OPENCLAW_PLUGIN_ID]["enabled"],
+        false
+    );
+    assert_eq!(
+        overlay["plugins"]["entries"][RELAY_OPENCLAW_BRIDGE_ID]["enabled"],
+        true
+    );
+    assert_eq!(
+        overlay["plugins"]["entries"][RELAY_OPENCLAW_BRIDGE_ID]["hooks"]["allowConversationAccess"],
+        true
+    );
+    let bridge_dir = prepared.temp_dirs.first().unwrap();
+    assert_eq!(
+        overlay["plugins"]["load"]["paths"],
+        json!([
+            "/existing/openclaw/plugin",
+            bridge_dir.display().to_string()
+        ])
+    );
+    assert_eq!(
+        std::fs::read_to_string(bridge_dir.join("package.json")).unwrap(),
+        BRIDGE_PACKAGE_JSON
+    );
+    assert_eq!(
+        std::fs::read_to_string(bridge_dir.join("openclaw.plugin.json")).unwrap(),
+        BRIDGE_MANIFEST_JSON
+    );
+    let bridge = std::fs::read_to_string(bridge_dir.join("index.js")).unwrap();
+    assert!(bridge.contains("/hooks/openclaw"));
+    assert!(bridge.contains("before_tool_call"));
+    assert!(bridge.contains("after_tool_call"));
+    assert!(!bridge.contains("nemo-relay-node"));
+    assert!(!bridge.contains("registerAgentToolResultMiddleware"));
     assert_eq!(overlay_path.parent(), source.parent());
     std::fs::remove_file(&prepared.temp_files[0]).unwrap();
+    std::fs::remove_dir_all(bridge_dir).unwrap();
     assert!(!overlay_path.exists());
+    assert!(!bridge_dir.exists());
     assert!(source.exists());
+}
+
+#[test]
+fn config_resolution_does_not_fall_back_to_legacy_clawdbot_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let legacy = temp.path().join(".clawdbot/clawdbot.json");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, "{}").unwrap();
+    let _env = EnvScope::provider_test(&[("OPENCLAW_HOME", Some(temp.path().as_os_str()))]);
+
+    assert_eq!(
+        resolve_config_path(&["openclaw".into()]).unwrap(),
+        temp.path().join(".openclaw/openclaw.json")
+    );
+    assert_eq!(
+        probe_state_dir(&["openclaw".into()]).unwrap(),
+        temp.path().join(".openclaw")
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn read_only_probes_detect_plugin_state_and_deterministic_auth_profiles() {
+fn read_only_probes_detect_deterministic_auth_profiles() {
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().unwrap();
@@ -515,9 +573,6 @@ fn read_only_probes_detect_plugin_state_and_deterministic_auth_profiles() {
         &executable,
         r#"#!/bin/sh
 case "$*" in
-  "plugins inspect nemo-relay --json")
-    printf '%s' '{"enabled":false}'
-    ;;
   *"models auth --agent work list --provider openai --json"*)
     printf '%s' '{"profiles":[{"id":"openai:work","type":"api_key"}]}'
     ;;
@@ -540,10 +595,6 @@ esac
     let argv = vec![executable.display().to_string()];
 
     assert_eq!(
-        probe_relay_plugin(&argv, &source),
-        RelayPluginDetection::DetectedDisabled
-    );
-    assert_eq!(
         probe_auth_profiles(&argv, &source, None, ProviderFamily::OpenAi),
         AuthProfileEvidence::ApiKeyOnly
     );
@@ -562,16 +613,6 @@ esac
     assert_eq!(
         probe_auth_profiles(&selected, &source, None, ProviderFamily::OpenAi),
         AuthProfileEvidence::ApiKeyOnly
-    );
-
-    std::fs::write(
-        &executable,
-        "#!/bin/sh\nprintf '%s' '{\"plugin\":{\"enabled\":true,\"status\":\"error\"}}'\n",
-    )
-    .unwrap();
-    assert_eq!(
-        probe_relay_plugin(&argv, &source),
-        RelayPluginDetection::DetectedError
     );
 }
 

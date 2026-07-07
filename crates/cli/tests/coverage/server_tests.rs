@@ -303,6 +303,32 @@ async fn codex_hook_keeps_codex_response_shape() {
 }
 
 #[tokio::test]
+async fn openclaw_bridge_hook_is_accepted() {
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/openclaw")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "openclaw-1",
+                        "hook_event_name": "session_start"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body, json!({}));
+}
+
+#[tokio::test]
 async fn hook_payload_above_axum_default_succeeds_with_relay_default_limit() {
     let app = router(test_config());
     let response = app

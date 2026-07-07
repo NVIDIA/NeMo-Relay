@@ -118,9 +118,12 @@ provider is deterministically API-key-backed:
 nemo-relay openclaw -- agent --message "Summarize this repository."
 ```
 
-Relay uses a temporary JSON5 include overlay and removes it when the child or
-launcher exits. Remote OpenClaw gateways, custom providers, and ambiguous
-OAuth/token routes are left unchanged rather than being claimed as intercepted.
+Relay uses a temporary JSON5 include overlay to inject a lightweight hook bridge
+and provider routing, then removes both when the child or launcher exits. The
+bridge forwards into the same CLI-owned Relay runtime as the provider gateway;
+it does not load a second Relay instance. Remote OpenClaw gateways, custom
+providers, and ambiguous OAuth/token routes are left unchanged rather than being
+claimed as intercepted.
 
 Refer to the full [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for more options.
 
@@ -298,7 +301,7 @@ coverage.
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
 | Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
 | Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
-| OpenClaw | Yes | Partial | Partial | Local or foreground API-key-backed Anthropic/OpenAI requests can be gateway-routed. Embedded hook/tool telemetry requires the separately installed OpenClaw plugin. |
+| OpenClaw | Yes | Partial | Partial | The CLI wrapper injects hook forwarding and routes local or foreground API-key-backed Anthropic/OpenAI requests through one Relay runtime. |
 
 ### Public API Integrations
 

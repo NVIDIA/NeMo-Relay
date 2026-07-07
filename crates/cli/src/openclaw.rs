@@ -15,9 +15,115 @@ use crate::error::CliError;
 
 const OPENCLAW_CONFIG_PATH: &str = "OPENCLAW_CONFIG_PATH";
 const RELAY_OPENCLAW_PLUGIN_ID: &str = "nemo-relay";
-const RELAY_OPENCLAW_PACKAGE: &str = "nemo-relay-openclaw";
+const RELAY_OPENCLAW_BRIDGE_ID: &str = "nemo-relay-cli-bridge";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
+
+const BRIDGE_PACKAGE_JSON: &str = r#"{
+  "name": "nemo-relay-cli-openclaw-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}
+"#;
+
+const BRIDGE_MANIFEST_JSON: &str = r#"{
+  "id": "nemo-relay-cli-bridge",
+  "name": "NeMo Relay CLI Bridge",
+  "description": "Temporary hook bridge owned by the NeMo Relay CLI wrapper.",
+  "activation": {"onStartup": true},
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
+"#;
+
+const BRIDGE_INDEX_JS: &str = r#"const HOOK_EVENT_NAMES = {
+  session_start: "session_start",
+  session_end: "session_end",
+  llm_input: "preLlmCall",
+  before_tool_call: "tool_start",
+  after_tool_call: "tool_end",
+  subagent_spawned: "subagent_start",
+  subagent_ended: "subagent_end",
+};
+
+let warned = false;
+
+function firstString(...values) {
+  return values.find((value) => typeof value === "string" && value.length > 0);
+}
+
+function payloadFor(hookName, event = {}, ctx = {}) {
+  const sessionId = firstString(
+    event.sessionId,
+    ctx.sessionId,
+    event.sessionKey,
+    ctx.sessionKey,
+    event.requesterSessionKey,
+    ctx.requesterSessionKey,
+    event.runId,
+    ctx.runId,
+  );
+  const toolCallId = firstString(event.toolCallId, ctx.toolCallId);
+  const toolName = firstString(event.toolName, ctx.toolName);
+  return {
+    ...event,
+    hook_event_name: HOOK_EVENT_NAMES[hookName] ?? hookName,
+    session_id: sessionId,
+    conversation_id: firstString(event.sessionKey, ctx.sessionKey, sessionId),
+    request_id: firstString(event.callId, event.requestId, event.runId, ctx.runId),
+    generation_id: firstString(event.callId, event.runId, ctx.runId),
+    agent_id: firstString(event.agentId, ctx.agentId),
+    subagent_id: firstString(event.childSessionKey, event.targetSessionKey),
+    tool_call_id: toolCallId,
+    tool_name: toolName,
+    tool_input: event.params,
+    tool_output: event.result,
+    status: event.error ? "error" : undefined,
+  };
+}
+
+async function forward(api, hookName, event, ctx) {
+  const baseUrl = process.env.NEMO_RELAY_GATEWAY_URL;
+  if (!baseUrl) return;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
+  timer.unref?.();
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/$/, "")}/hooks/openclaw`, {
+      method: "POST",
+      headers: {"content-type": "application/json"},
+      body: JSON.stringify(payloadFor(hookName, event, ctx)),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch (error) {
+    if (!warned) {
+      warned = true;
+      api.logger.warn?.(`NeMo Relay CLI hook forwarding degraded: ${String(error)}`);
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export default {
+  id: "nemo-relay-cli-bridge",
+  name: "NeMo Relay CLI Bridge",
+  register(api) {
+    for (const hookName of Object.keys(HOOK_EVENT_NAMES)) {
+      api.on(hookName, (event, ctx) => forward(api, hookName, event, ctx));
+    }
+  },
+};
+"#;
 
 /// Records which Relay upstream flags were explicitly supplied by the caller.
 #[derive(Debug, Clone, Copy, Default)]
@@ -33,16 +139,6 @@ pub(crate) struct Preparation {
     pub(crate) temp_dirs: Vec<PathBuf>,
     pub(crate) temp_files: Vec<PathBuf>,
     pub(crate) notes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RelayPluginDetection {
-    DetectedEnabled,
-    DetectedDisabled,
-    DetectedError,
-    Detected,
-    NotDetected,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -173,6 +269,12 @@ pub(crate) fn prepare(
 
     let source_path = resolve_config_path(argv)?;
     let (source_config, source_exists) = read_source_config(&source_path)?;
+    let disable_embedded_relay = source_config.as_ref().is_some_and(|config| {
+        config
+            .pointer("/plugins/entries")
+            .and_then(Value::as_object)
+            .is_some_and(|entries| entries.contains_key(RELAY_OPENCLAW_PLUGIN_ID))
+    }) || probe_relay_plugin_installed(argv, &source_path);
     let auth_profiles = AuthProfileEvidenceSet {
         openai: probe_auth_profiles(
             argv,
@@ -213,19 +315,10 @@ pub(crate) fn prepare(
         }
     }
 
-    routing.notes.push(plugin_detection_note(probe_relay_plugin(
-        argv,
-        &source_path,
-    )));
-
-    let overlay = overlay_document(
-        source_exists.then_some(source_path.as_path()),
-        routing.provider_overrides,
-    );
     if dry_run {
         let mut notes = routing.notes;
         notes.push(format!(
-            "would generate a temporary OpenClaw JSON5 overlay for {}",
+            "would generate a temporary OpenClaw JSON5 overlay and CLI hook bridge for {}",
             source_path.display()
         ));
         return Ok(Preparation {
@@ -239,12 +332,27 @@ pub(crate) fn prepare(
         });
     }
 
-    let overlay_path = temporary_overlay_path(&source_path)?;
+    let bridge_dir = write_bridge_plugin()?;
+    let overlay = overlay_document(
+        source_exists.then_some(source_path.as_path()),
+        source_config.as_ref(),
+        routing.provider_overrides,
+        &bridge_dir,
+        disable_embedded_relay,
+    );
+    let overlay_path = match temporary_overlay_path(&source_path) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&bridge_dir);
+            return Err(error);
+        }
+    };
     let write_result = serde_json::to_vec_pretty(&overlay)
         .map_err(|error| CliError::Launch(format!("could not serialize OpenClaw overlay: {error}")))
         .and_then(|contents| std::fs::write(&overlay_path, contents).map_err(CliError::from));
     if let Err(error) = write_result {
         let _ = std::fs::remove_file(&overlay_path);
+        let _ = std::fs::remove_dir_all(&bridge_dir);
         return Err(error);
     }
 
@@ -254,18 +362,14 @@ pub(crate) fn prepare(
     )];
     Ok(Preparation {
         env,
-        temp_dirs: Vec::new(),
+        temp_dirs: vec![bridge_dir],
         temp_files: vec![overlay_path],
-        notes: routing.notes,
+        notes: routing
+            .notes
+            .into_iter()
+            .chain(["OpenClaw hooks forwarded to the CLI-owned Relay runtime".into()])
+            .collect(),
     })
-}
-
-pub(crate) fn detect_relay_plugin() -> RelayPluginDetection {
-    let argv = vec!["openclaw".to_string()];
-    let Ok(source_path) = resolve_config_path(&argv) else {
-        return RelayPluginDetection::Unknown;
-    };
-    probe_relay_plugin(&argv, &source_path)
 }
 
 fn normalize_foreground_argv(argv: &mut Vec<String>) -> Result<(), CliError> {
@@ -721,7 +825,13 @@ fn nonempty_dotenv_value(value: &str) -> bool {
     !value.is_empty() && value != "\"\"" && value != "''"
 }
 
-fn overlay_document(source: Option<&Path>, providers: Map<String, Value>) -> Value {
+fn overlay_document(
+    source: Option<&Path>,
+    source_config: Option<&Value>,
+    providers: Map<String, Value>,
+    bridge_dir: &Path,
+    disable_embedded_relay: bool,
+) -> Value {
     let mut overlay = Map::new();
     if let Some(source) = source {
         overlay.insert(
@@ -732,7 +842,65 @@ fn overlay_document(source: Option<&Path>, providers: Map<String, Value>) -> Val
     if !providers.is_empty() {
         overlay.insert("models".into(), json!({"providers": providers}));
     }
+    let mut load_paths = source_config
+        .and_then(|config| config.pointer("/plugins/load/paths"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let bridge_path = bridge_dir.display().to_string();
+    if !load_paths
+        .iter()
+        .any(|path| path.as_str() == Some(bridge_path.as_str()))
+    {
+        load_paths.push(Value::String(bridge_path));
+    }
+    let mut entries = Map::from_iter([(
+        RELAY_OPENCLAW_BRIDGE_ID.to_string(),
+        json!({
+            "enabled": true,
+            "config": {},
+            "hooks": {"allowConversationAccess": true}
+        }),
+    )]);
+    if disable_embedded_relay {
+        entries.insert(
+            RELAY_OPENCLAW_PLUGIN_ID.to_string(),
+            json!({"enabled": false}),
+        );
+    }
+    overlay.insert(
+        "plugins".into(),
+        json!({
+            "enabled": true,
+            "load": {"paths": load_paths},
+            "entries": entries
+        }),
+    );
     Value::Object(overlay)
+}
+
+fn probe_relay_plugin_installed(argv: &[String], source_path: &Path) -> bool {
+    let args = ["plugins", "inspect", RELAY_OPENCLAW_PLUGIN_ID, "--json"].map(str::to_string);
+    run_read_only_probe(argv, source_path, &args).is_some_and(|output| output.status.success())
+}
+
+fn write_bridge_plugin() -> Result<PathBuf, CliError> {
+    let root = std::env::temp_dir().join(format!(
+        "nemo-relay-openclaw-bridge-{}-{}",
+        std::process::id(),
+        unique_stamp()?
+    ));
+    let result = std::fs::create_dir_all(&root)
+        .and_then(|()| std::fs::write(root.join("package.json"), BRIDGE_PACKAGE_JSON))
+        .and_then(|()| std::fs::write(root.join("openclaw.plugin.json"), BRIDGE_MANIFEST_JSON))
+        .and_then(|()| std::fs::write(root.join("index.js"), BRIDGE_INDEX_JS));
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&root);
+        return Err(CliError::Launch(format!(
+            "could not create temporary OpenClaw CLI bridge: {error}"
+        )));
+    }
+    Ok(root)
 }
 
 fn add_invocation_metadata(gateway: &mut GatewayConfig) {
@@ -788,13 +956,6 @@ fn resolve_config_path(argv: &[String]) -> Result<PathBuf, CliError> {
             .join("openclaw.json"));
     }
     let primary = home.join(".openclaw").join("openclaw.json");
-    if primary.exists() {
-        return Ok(primary);
-    }
-    let legacy = home.join(".clawdbot").join("clawdbot.json");
-    if legacy.exists() {
-        return Ok(legacy);
-    }
     Ok(primary)
 }
 
@@ -917,53 +1078,6 @@ fn resolve_openclaw_path(value: OsString) -> Result<PathBuf, CliError> {
     } else {
         Ok(std::env::current_dir()?.join(path))
     }
-}
-
-fn probe_relay_plugin(argv: &[String], source_path: &Path) -> RelayPluginDetection {
-    let args = ["plugins", "inspect", RELAY_OPENCLAW_PLUGIN_ID, "--json"].map(str::to_string);
-    let Some(output) = run_read_only_probe(argv, source_path, &args) else {
-        return RelayPluginDetection::Unknown;
-    };
-    if output.status.success() {
-        let Ok(value) = serde_json::from_slice::<Value>(&output.stdout) else {
-            return RelayPluginDetection::Unknown;
-        };
-        match plugin_status(&value) {
-            Some("error") => return RelayPluginDetection::DetectedError,
-            Some("disabled") => return RelayPluginDetection::DetectedDisabled,
-            _ => {}
-        }
-        return match plugin_enabled(&value) {
-            Some(true) => RelayPluginDetection::DetectedEnabled,
-            Some(false) => RelayPluginDetection::DetectedDisabled,
-            None => RelayPluginDetection::Detected,
-        };
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).to_ascii_lowercase();
-    if stderr.contains("not found")
-        || stderr.contains("unknown plugin")
-        || stderr.contains("no plugin")
-    {
-        RelayPluginDetection::NotDetected
-    } else {
-        RelayPluginDetection::Unknown
-    }
-}
-
-fn plugin_status(value: &Value) -> Option<&str> {
-    value
-        .get("status")
-        .and_then(Value::as_str)
-        .or_else(|| value.pointer("/plugin/status").and_then(Value::as_str))
-        .or_else(|| value.pointer("/record/status").and_then(Value::as_str))
-}
-
-fn plugin_enabled(value: &Value) -> Option<bool> {
-    value
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .or_else(|| value.pointer("/plugin/enabled").and_then(Value::as_bool))
-        .or_else(|| value.pointer("/record/enabled").and_then(Value::as_bool))
 }
 
 fn probe_auth_profiles(
@@ -1109,44 +1223,11 @@ fn probe_state_dir(argv: &[String]) -> Result<PathBuf, CliError> {
         return Ok(home.join(format!(".openclaw-{profile}")));
     }
     let primary = home.join(".openclaw");
-    if primary.exists() {
-        return Ok(primary);
-    }
-    let legacy = home.join(".clawdbot");
-    if legacy.exists() {
-        return Ok(legacy);
-    }
     Ok(primary)
 }
 
-fn plugin_detection_note(detection: RelayPluginDetection) -> String {
-    match detection {
-        RelayPluginDetection::DetectedEnabled => format!(
-            "{RELAY_OPENCLAW_PACKAGE} detected; hook and tool telemetry remain owned by the embedded OpenClaw plugin"
-        ),
-        RelayPluginDetection::DetectedDisabled => format!(
-            "{RELAY_OPENCLAW_PACKAGE} is installed but disabled; Relay did not change OpenClaw plugin state"
-        ),
-        RelayPluginDetection::DetectedError => format!(
-            "{RELAY_OPENCLAW_PACKAGE} is installed but failed to load; Relay did not change OpenClaw plugin state"
-        ),
-        RelayPluginDetection::Detected => format!(
-            "{RELAY_OPENCLAW_PACKAGE} is installed; Relay did not change OpenClaw plugin state"
-        ),
-        RelayPluginDetection::NotDetected => format!(
-            "{RELAY_OPENCLAW_PACKAGE} not detected; Relay will not install it automatically, so this run has provider routing but no embedded hook/tool forwarding"
-        ),
-        RelayPluginDetection::Unknown => format!(
-            "could not determine whether {RELAY_OPENCLAW_PACKAGE} is installed; Relay did not modify OpenClaw plugin state"
-        ),
-    }
-}
-
 fn temporary_overlay_path(source_path: &Path) -> Result<PathBuf, CliError> {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| CliError::Launch(error.to_string()))?
-        .as_nanos();
+    let stamp = unique_stamp()?;
     let parent = source_path.parent().ok_or_else(|| {
         CliError::Launch(format!(
             "OpenClaw config path {} has no parent directory",
@@ -1158,6 +1239,13 @@ fn temporary_overlay_path(source_path: &Path) -> Result<PathBuf, CliError> {
         ".openclaw.nemo-relay-{}-{stamp}.json5",
         std::process::id()
     )))
+}
+
+fn unique_stamp() -> Result<u128, CliError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| CliError::Launch(error.to_string()))
+        .map(|duration| duration.as_nanos())
 }
 
 fn nonempty_env_os(name: &str) -> Option<OsString> {

@@ -124,7 +124,7 @@ impl TransparentRun {
         let gateway_url = format!("http://{address}");
         resolved.gateway.bind = address;
 
-        let openclaw = if agent == CodingAgent::Openclaw {
+        let openclaw = if agent == CodingAgent::OpenClaw {
             Some(crate::openclaw::prepare(
                 &mut argv,
                 &gateway_url,
@@ -312,7 +312,7 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
         CodingAgent::ClaudeCode => "claude",
         CodingAgent::Codex => "codex",
         CodingAgent::Hermes => "hermes",
-        CodingAgent::Openclaw => "openclaw",
+        CodingAgent::OpenClaw => "openclaw",
     }
 }
 
@@ -338,7 +338,7 @@ fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<S
         CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
         CodingAgent::Codex => agents.codex.command.as_ref(),
         CodingAgent::Hermes => agents.hermes.command.as_ref(),
-        CodingAgent::Openclaw => agents.openclaw.command.as_ref(),
+        CodingAgent::OpenClaw => agents.openclaw.command.as_ref(),
     }?;
     let argv: Vec<_> = command.split_whitespace().map(ToOwned::to_owned).collect();
     (!argv.is_empty()).then_some(argv)
@@ -477,7 +477,7 @@ impl PreparedRun {
             }
             // OpenClaw preparation happens before this generic constructor because it also
             // selects provider-specific upstreams on the gateway configuration.
-            CodingAgent::Openclaw => {}
+            CodingAgent::OpenClaw => {}
         }
         Ok(run)
     }
@@ -689,7 +689,7 @@ impl PreparedRun {
         // OpenClaw routing notes visible on stderr because they are part of the interception
         // contract rather than decoration.
         if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-            if agent == CodingAgent::Openclaw {
+            if agent == CodingAgent::OpenClaw {
                 for note in &self.notes {
                     eprintln!("nemo-relay openclaw: {note}");
                 }
