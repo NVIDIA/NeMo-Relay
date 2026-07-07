@@ -12,6 +12,8 @@ const ObservabilityPluginKind = "observability"
 type ObservabilityMarkProjection string
 
 const (
+	// ObservabilityMarkProjectionInherit preserves exporter-native mark handling.
+	ObservabilityMarkProjectionInherit ObservabilityMarkProjection = "inherit"
 	// ObservabilityMarkProjectionEvent preserves marks as events.
 	ObservabilityMarkProjectionEvent ObservabilityMarkProjection = "event"
 	// ObservabilityMarkProjectionTool emits visible tool projections.
@@ -177,7 +179,7 @@ func NewObservabilityAtifConfig() ObservabilityAtifConfig {
 	return ObservabilityAtifConfig{
 		AgentName:        "NeMo Relay",
 		ModelName:        "unknown",
-		MarkProjection:   ObservabilityMarkProjectionEvent,
+		MarkProjection:   ObservabilityMarkProjectionInherit,
 		MarkExcludeNames: []string{"llm.chunk"},
 		FilenameTemplate: "nemo-relay-atif-{session_id}.json",
 	}
@@ -197,7 +199,7 @@ func NewObservabilityHttpStorageConfig(endpoint string) ObservabilityHttpStorage
 func NewObservabilityOtlpConfig() ObservabilityOtlpConfig {
 	return ObservabilityOtlpConfig{
 		Transport:          "http_binary",
-		MarkProjection:     ObservabilityMarkProjectionEvent,
+		MarkProjection:     ObservabilityMarkProjectionInherit,
 		MarkExcludeNames:   []string{"llm.chunk"},
 		Headers:            map[string]string{},
 		ResourceAttributes: map[string]string{},

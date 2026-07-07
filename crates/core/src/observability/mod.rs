@@ -32,8 +32,10 @@ pub mod plugin_component;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MarkProjection {
-    /// Preserve marks as ATIF system steps or OTEL span events.
+    /// Use each exporter’s native handling for marks.
     #[default]
+    Inherit,
+    /// Force marks into ATIF system steps or OTEL span events.
     Event,
     /// Render non-excluded marks as deterministic ATIF tool steps or
     /// zero-duration OTEL child spans so trace-tree consumers can display them

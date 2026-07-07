@@ -55,7 +55,7 @@ The following table describes OpenTelemetry exporter settings:
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
-| `mark_projection` | `event` | `event` attaches marks to active parent spans. `tool` emits zero-duration child spans for trace-tree visibility. |
+| `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration child spans for trace-tree visibility. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain native event handling. Metadata `hook_event_name` aliases are also matched. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
@@ -73,7 +73,7 @@ The collector should receive OTLP trace export requests. The tracing backend
 should show spans for NeMo Relay scopes, tools, LLM calls, and marks grouped by
 root scope.
 
-The default `event` projection follows the OpenTelemetry span-event model. Set
+The default `inherit` projection follows the OpenTelemetry span-event model. Set
 `mark_projection = "tool"` only when the target backend needs non-streaming
 marks represented as visible child spans. Projected marks use `SpanKind::Internal`, carry
 `nemo_relay.mark.projection = "tool"`, and retain mark UUID, parentage,

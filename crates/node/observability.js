@@ -43,7 +43,7 @@ function atifConfig(config = {}) {
     enabled: false,
     agent_name: 'NeMo Relay',
     model_name: 'unknown',
-    mark_projection: 'event',
+    mark_projection: 'inherit',
     mark_exclude_names: ['llm.chunk'],
     filename_template: 'nemo-relay-atif-{session_id}.json',
     ...config,
@@ -59,7 +59,7 @@ function atifConfig(config = {}) {
 function otlpConfig(config = {}) {
   return {
     enabled: false,
-    mark_projection: 'event',
+    mark_projection: 'inherit',
     mark_exclude_names: ['llm.chunk'],
     transport: 'http_binary',
     headers: {},

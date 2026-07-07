@@ -368,7 +368,8 @@ impl AtifExporter {
 
     /// Selects how point-in-time marks are represented in ATIF output.
     ///
-    /// The default [`MarkProjection::Event`] preserves marks as system steps.
+    /// The default [`MarkProjection::Inherit`] preserves exporter-native mark
+    /// handling. [`MarkProjection::Event`] forces system steps, while
     /// [`MarkProjection::Tool`] creates deterministic agent/tool steps for
     /// consumers that visualize tool calls but do not render system events.
     pub fn with_mark_projection(self, mark_projection: MarkProjection) -> Self {
@@ -2633,13 +2634,15 @@ impl StepConversionState {
     }
 
     fn handle_mark(&mut self, mark: &Event, lookups: &EventLookupMaps) {
-        if is_llm_chunk_mark(mark) {
+        let excluded = mark_name_is_excluded(mark, &self.mark_exclude_names);
+        if (self.mark_projection == MarkProjection::Inherit
+            || (self.mark_projection == MarkProjection::Tool && excluded))
+            && is_llm_chunk_mark(mark)
+        {
             return;
         }
         self.flush_observations();
-        if self.mark_projection == MarkProjection::Tool
-            && !mark_name_is_excluded(mark, &self.mark_exclude_names)
-        {
+        if self.mark_projection == MarkProjection::Tool && !excluded {
             self.handle_mark_as_tool(mark, lookups, mark.data());
             return;
         }

@@ -228,7 +228,7 @@ pub struct AtifSectionConfig {
     /// Default model name.
     #[serde(default = "default_model_name")]
     pub model_name: String,
-    /// Representation used for mark events: `event` or `tool`.
+    /// Representation used for mark events: `inherit`, `event`, or `tool`.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
     pub mark_projection: MarkProjection,
@@ -384,7 +384,7 @@ pub struct OtlpSectionConfig {
     /// Whether the subscriber is active.
     #[serde(default)]
     pub enabled: bool,
-    /// Representation used for mark events: `event` or `tool`.
+    /// Representation used for mark events: `inherit`, `event`, or `tool`.
     #[serde(default)]
     #[cfg_attr(feature = "schema", schemars(schema_with = "mark_projection_schema"))]
     pub mark_projection: MarkProjection,
@@ -495,7 +495,7 @@ crate::editor_config! {
         agent_name => { label: "agent_name", kind: String },
         agent_version => { label: "agent_version", kind: String },
         model_name => { label: "model_name", kind: String },
-        mark_projection => { label: "mark_projection", kind: Enum, values: ["event", "tool"] },
+        mark_projection => { label: "mark_projection", kind: Enum, values: ["inherit", "event", "tool"] },
         mark_exclude_names => { label: "mark_exclude_names", kind: Json },
         tool_definitions => { label: "tool_definitions", kind: Json, optional: true },
         extra => { label: "extra", kind: Json, optional: true },
@@ -508,7 +508,7 @@ crate::editor_config! {
 crate::editor_config! {
     impl OtlpSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
-        mark_projection => { label: "mark_projection", kind: Enum, values: ["event", "tool"] },
+        mark_projection => { label: "mark_projection", kind: Enum, values: ["inherit", "event", "tool"] },
         mark_exclude_names => { label: "mark_exclude_names", kind: Json },
         transport => { label: "transport", kind: Enum, values: ["http_binary", "grpc"] },
         endpoint => { label: "endpoint", kind: String, optional: true },
@@ -608,7 +608,7 @@ fn otlp_transport_schema(
 fn mark_projection_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
-    string_enum_schema(generator, &["event", "tool"], Some("event"))
+    string_enum_schema(generator, &["inherit", "event", "tool"], Some("inherit"))
 }
 
 #[cfg(feature = "schema")]

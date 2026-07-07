@@ -3624,6 +3624,24 @@ fn test_exporter_skips_llm_chunk_marks() {
 }
 
 #[test]
+fn test_exporter_event_projection_includes_llm_chunk_marks() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info())
+        .with_mark_projection(MarkProjection::Event);
+
+    exporter.state.lock().unwrap().events.push(
+        event_builder(Uuid::now_v7(), EventType::Mark)
+            .name("llm.chunk")
+            .data(json!({"delta": "partial"}))
+            .build(),
+    );
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(trajectory.steps.len(), 1);
+    assert_eq!(trajectory.steps[0].source, "system");
+    assert_eq!(trajectory.steps[0].message, json!("llm.chunk"));
+}
+
+#[test]
 fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let base = base_timestamp();

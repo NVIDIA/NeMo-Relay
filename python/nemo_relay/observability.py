@@ -10,7 +10,7 @@ from typing import Literal, Protocol, cast
 
 from nemo_relay import Json, JsonObject, UnsupportedBehavior
 
-MarkProjection = Literal["event", "tool"]
+MarkProjection = Literal["inherit", "event", "tool"]
 
 
 class _SupportsToDict(Protocol):
@@ -167,7 +167,7 @@ class AtifConfig:
     agent_name: str = "NeMo Relay"
     agent_version: str | None = None
     model_name: str = "unknown"
-    mark_projection: MarkProjection = "event"
+    mark_projection: MarkProjection = "inherit"
     mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
     tool_definitions: list[JsonObject] | None = None
     extra: JsonObject | None = None
@@ -200,7 +200,7 @@ class OtlpConfig:
     """Shared OpenTelemetry/OpenInference OTLP export settings."""
 
     enabled: bool = False
-    mark_projection: MarkProjection = "event"
+    mark_projection: MarkProjection = "inherit"
     mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
     transport: Literal["http_binary", "grpc"] = "http_binary"
     endpoint: str | None = None

@@ -495,7 +495,7 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(defaults.transport, OtlpTransport::HttpBinary);
     assert_eq!(defaults.service_name, "nemo-relay");
     assert_eq!(defaults.instrumentation_scope, "nemo-relay-openinference");
-    assert_eq!(defaults.mark_projection, MarkProjection::Event);
+    assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
     assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(defaults.timeout, Duration::from_secs(3));
     assert!(defaults.headers.is_empty());

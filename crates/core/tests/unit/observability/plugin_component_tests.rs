@@ -216,13 +216,13 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(atif.agent_name, "NeMo Relay");
     assert_eq!(atif.agent_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(atif.model_name, "unknown");
-    assert_eq!(atif.mark_projection, MarkProjection::Event);
+    assert_eq!(atif.mark_projection, MarkProjection::Inherit);
     assert_eq!(atif.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(atif.filename_template, "nemo-relay-atif-{session_id}.json");
 
     let otlp = OtlpSectionConfig::default();
     assert!(!otlp.enabled);
-    assert_eq!(otlp.mark_projection, MarkProjection::Event);
+    assert_eq!(otlp.mark_projection, MarkProjection::Inherit);
     assert_eq!(otlp.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(otlp.transport, "http_binary");
     assert_eq!(otlp.service_name, "nemo-relay");
@@ -254,6 +254,12 @@ fn mark_projection_parses_per_exporter_and_rejects_unknown_values() {
     .unwrap();
     assert_eq!(atif.mark_projection, MarkProjection::Tool);
     assert_eq!(otlp.mark_projection, MarkProjection::Tool);
+
+    let inherited: AtifSectionConfig = serde_json::from_value(json!({
+        "mark_projection": "inherit"
+    }))
+    .unwrap();
+    assert_eq!(inherited.mark_projection, MarkProjection::Inherit);
 
     let custom_exclusions: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool",
@@ -336,7 +342,7 @@ fn schema_contains_every_supported_observability_option() {
     assert!(schema_property_has_enum(
         &schema,
         "mark_projection",
-        &["event", "tool"]
+        &["inherit", "event", "tool"]
     ));
     assert!(schema_property_has_default(
         &schema,

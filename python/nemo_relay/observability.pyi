@@ -10,7 +10,7 @@ from typing import Literal
 
 from nemo_relay import JsonObject, UnsupportedBehavior
 
-MarkProjection = Literal["event", "tool"]
+MarkProjection = Literal["inherit", "event", "tool"]
 
 @dataclass(slots=True)
 class ConfigPolicy:
