@@ -7,7 +7,7 @@ import "testing"
 
 func TestPiiRedactionConfigHelpers(t *testing.T) {
 	config := NewPiiRedactionConfig()
-	if config.Version != 1 || config.Mode != "builtin" || !config.Input || !config.Output || !config.ToolInput || !config.ToolOutput || config.Priority != 100 {
+	if config.Version != 1 || config.Mode != "builtin" || !config.Input || !config.Output || !config.Mark || !config.ToolInput || !config.ToolOutput || config.Priority != 100 {
 		t.Fatalf("unexpected PII redaction defaults: %#v", config)
 	}
 	if config.Builtin == nil || config.Builtin.Action != "remove" || len(config.Builtin.TargetPaths) != 0 {
@@ -29,6 +29,9 @@ func TestPiiRedactionConfigHelpers(t *testing.T) {
 	}
 	if component.Config["mode"] != "builtin" || component.Config["priority"] != float64(100) {
 		t.Fatalf("unexpected serialized config: %#v", component.Config)
+	}
+	if component.Config["mark"] != true {
+		t.Fatalf("expected mark redaction to be enabled: %#v", component.Config)
 	}
 	serializedBuiltin, ok := component.Config["builtin"].(map[string]any)
 	if !ok {

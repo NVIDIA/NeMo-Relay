@@ -13,6 +13,7 @@ typedef void (*NemoRelayFreeFn)(void* user_data);
 typedef char* (*NemoRelayPluginValidateCb)(void* user_data, const char* plugin_config_json);
 typedef int32_t (*NemoRelayPluginRegisterCb)(void* user_data, const char* plugin_config_json, FfiPluginContext* ctx);
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const void* event);
+typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const void* event, const char* fields_json);
 typedef char* (*NemoRelayToolSanitizeFn)(void* user_data, const char* name, const char* args_json);
 typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, const char* args_json);
 typedef void* (*NemoRelayLlmRequestCb)(void* user_data, const void* request);
@@ -34,6 +35,9 @@ extern int32_t nemo_relay_deregister_plugin(const char* plugin_kind);
 extern void nemo_relay_string_free(char* ptr);
 
 extern int32_t nemo_relay_plugin_context_register_subscriber(FfiPluginContext* ctx, const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_mark_sanitize_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_sanitize_request_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_sanitize_response_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_conditional_execution_guardrail(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolConditionalFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -49,6 +53,7 @@ extern int32_t nemo_relay_plugin_context_register_tool_execution_intercept(FfiPl
 extern char* goPluginValidateTrampoline(void*, const char*);
 extern int32_t goPluginRegisterTrampoline(void*, const char*, FfiPluginContext*);
 extern void goEventSubscriberTrampoline(void*, const void*);
+extern char* goEventSanitizeTrampoline(void*, const void*, const char*);
 extern void goFreeTrampoline(void*);
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
@@ -340,6 +345,42 @@ func (ctx *PluginContext) RegisterSubscriber(name string, fn EventSubscriberFunc
 		userData,
 		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
 	))
+}
+
+func (ctx *PluginContext) registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, surface int) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New(errPluginContextClosed)
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	userData := registerClosure(fn)
+	callback := C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline)
+	free := C.NemoRelayFreeFn(C.goFreeTrampoline)
+	var status C.int32_t
+	switch surface {
+	case 0:
+		status = C.nemo_relay_plugin_context_register_mark_sanitize_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
+	case 1:
+		status = C.nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
+	default:
+		status = C.nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(ctx.ptr, cName, C.int32_t(priority), callback, userData, free)
+	}
+	return checkStatus(status)
+}
+
+// RegisterMarkSanitizeGuardrail registers a mark event sanitizer for this component.
+func (ctx *PluginContext) RegisterMarkSanitizeGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
+	return ctx.registerEventSanitizer(name, priority, fn, 0)
+}
+
+// RegisterScopeSanitizeStartGuardrail registers a scope-start sanitizer for this component.
+func (ctx *PluginContext) RegisterScopeSanitizeStartGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
+	return ctx.registerEventSanitizer(name, priority, fn, 1)
+}
+
+// RegisterScopeSanitizeEndGuardrail registers a scope-end sanitizer for this component.
+func (ctx *PluginContext) RegisterScopeSanitizeEndGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
+	return ctx.registerEventSanitizer(name, priority, fn, 2)
 }
 
 // RegisterToolSanitizeRequestGuardrail registers a tool sanitize-request guardrail for this component.
