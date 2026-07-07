@@ -81,11 +81,12 @@ function initialize(config) {
 /**
  * Load and activate explicitly resolved dynamic plugins.
  *
- * @param {object} config - Base plugin configuration document.
- * @param {Array<object>} specs - Native-library or worker plugin load specifications.
+ * @param {object} config - Base configuration, including any static components.
+ * @param {Array<object>} specs - Non-empty native-library or worker plugin specifications.
  * @returns {Promise<object>} An owned activation with `report`, `active`, and `close()`.
  * @remarks Keep the returned activation alive while its callbacks may run and
- * call `close()` for deterministic teardown.
+ * call `close()` for deterministic teardown. Use `initialize()` for a
+ * static-only configuration.
  */
 function activateDynamicPlugins(config, specs) {
   return lib.activateDynamicPlugins(config, specs);

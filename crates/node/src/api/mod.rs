@@ -4211,8 +4211,11 @@ impl Drop for DynamicPluginActivation {
 
 /// Load and activate explicitly resolved dynamic plugins.
 ///
-/// The returned object owns all loaded libraries and worker processes. Its
-/// validation report is available through the `report` property.
+/// `config` may contain statically registered components; dynamic components
+/// are activated after that base configuration. At least one dynamic plugin is
+/// required. Static-only callers should use `initializePlugins`. The returned
+/// object owns all loaded libraries and worker processes. Its validation report
+/// is available through the `report` property.
 #[napi]
 pub async fn activate_dynamic_plugins(
     config: Json,

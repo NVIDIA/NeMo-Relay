@@ -194,6 +194,44 @@ after(() => {
 });
 
 describe('dynamic plugin host', () => {
+  it('rejects empty specs without taking over static initialization', async () => {
+    await assert.rejects(
+      () => plugin.activateDynamicPlugins({ version: 1, components: [] }, []),
+      /at least one dynamic plugin/i,
+    );
+
+    assert.deepEqual(await plugin.initialize({ version: 1, components: [] }), { diagnostics: [] });
+    plugin.clear();
+  });
+
+  it('activates static base components with dynamic plugins', async () => {
+    const staticKind = 'node.fixture.static-base';
+    plugin.register(staticKind, {
+      register(_config, context) {
+        context.registerToolRequestIntercept('mark-static-base', 0, false, (_name, args) => ({
+          ...args,
+          staticBase: true,
+        }));
+      },
+    });
+    let activation;
+    try {
+      activation = await plugin.activateDynamicPlugins(
+        {
+          version: 1,
+          components: [{ kind: staticKind, enabled: true, config: {} }],
+        },
+        [activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef)],
+      );
+      const result = await executeTool('node_static_and_dynamic_tool');
+      assert.equal(result.staticBase, true);
+      assert.equal(result.native_plugin_tool_execution, true);
+    } finally {
+      await activation?.close();
+      plugin.deregister(staticKind);
+    }
+  });
+
   it('owns native managed callbacks until idempotent close', async () => {
     const activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
       activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
