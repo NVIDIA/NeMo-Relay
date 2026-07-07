@@ -221,7 +221,7 @@ def _normalize(value: object) -> Json:
     if isinstance(value, list):
         return [_normalize(item) for item in value]
     if isinstance(value, dict):
-        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
+        return {cast(str, key): _normalize(val) for key, val in value.items()}
     return cast(Json, value)
 
 

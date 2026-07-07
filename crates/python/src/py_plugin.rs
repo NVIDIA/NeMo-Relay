@@ -706,8 +706,180 @@ fn initialize_plugins_py<'py>(
 /// before unloading plugin code.
 #[pyclass(name = "_PluginHostActivation")]
 struct PyPluginHostActivation {
-    activation: Mutex<Option<PluginHostActivation>>,
+    close_state: Arc<PluginHostCloseState>,
     report: nemo_relay::plugin::ConfigReport,
+}
+
+#[derive(Clone, Copy)]
+enum PluginTeardownErrorKind {
+    Value,
+    NotFound,
+    Runtime,
+}
+
+#[derive(Clone)]
+struct PluginTeardownError {
+    kind: PluginTeardownErrorKind,
+    message: String,
+}
+
+impl PluginTeardownError {
+    fn from_plugin_error(error: PluginError) -> Self {
+        let message = error.to_string();
+        let kind = match error {
+            PluginError::InvalidConfig(_) | PluginError::Serialization(_) => {
+                PluginTeardownErrorKind::Value
+            }
+            PluginError::NotFound(_) => PluginTeardownErrorKind::NotFound,
+            PluginError::Conflict(_)
+            | PluginError::Internal(_)
+            | PluginError::RegistrationFailed(_) => PluginTeardownErrorKind::Runtime,
+        };
+        Self { kind, message }
+    }
+
+    fn runtime(message: impl Into<String>) -> Self {
+        Self {
+            kind: PluginTeardownErrorKind::Runtime,
+            message: message.into(),
+        }
+    }
+
+    fn to_py_err(&self) -> PyErr {
+        match self.kind {
+            PluginTeardownErrorKind::Value => {
+                pyo3::exceptions::PyValueError::new_err(self.message.clone())
+            }
+            PluginTeardownErrorKind::NotFound => {
+                pyo3::exceptions::PyFileNotFoundError::new_err(self.message.clone())
+            }
+            PluginTeardownErrorKind::Runtime => {
+                pyo3::exceptions::PyRuntimeError::new_err(self.message.clone())
+            }
+        }
+    }
+}
+
+type PluginTeardownResult = std::result::Result<(), PluginTeardownError>;
+
+enum PluginHostCloseStatus {
+    Active(Option<PluginHostActivation>),
+    Closing,
+    Closed,
+}
+
+struct PluginHostCloseState {
+    status: Mutex<PluginHostCloseStatus>,
+    completion: tokio::sync::watch::Sender<Option<PluginTeardownResult>>,
+}
+
+impl PluginHostCloseState {
+    fn new(activation: PluginHostActivation) -> Self {
+        let (completion, _) = tokio::sync::watch::channel(None);
+        Self {
+            status: Mutex::new(PluginHostCloseStatus::Active(Some(activation))),
+            completion,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        let status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &*status {
+            PluginHostCloseStatus::Active(activation) => activation
+                .as_ref()
+                .is_some_and(PluginHostActivation::is_active),
+            PluginHostCloseStatus::Closing | PluginHostCloseStatus::Closed => false,
+        }
+    }
+
+    fn begin_close(self: &Arc<Self>) {
+        let activation = {
+            let mut status = self
+                .status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match &mut *status {
+                PluginHostCloseStatus::Active(activation) => {
+                    let activation = activation.take();
+                    *status = PluginHostCloseStatus::Closing;
+                    activation
+                }
+                PluginHostCloseStatus::Closing | PluginHostCloseStatus::Closed => None,
+            }
+        };
+        let Some(activation) = activation else {
+            return;
+        };
+
+        // Keep the activation outside the spawned closure so a thread-spawn
+        // failure cannot drop it and synchronously run teardown on the caller.
+        let activation = Arc::new(Mutex::new(Some(activation)));
+        let worker_activation = Arc::clone(&activation);
+        let close_state = Arc::clone(self);
+        let spawn = std::thread::Builder::new()
+            .name("nemo-relay-python-plugin-teardown".into())
+            .spawn(move || {
+                let activation = worker_activation
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                let result = match activation {
+                    Some(activation) => {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            activation.clear()
+                        }))
+                        .map_err(|_| {
+                            PluginTeardownError::runtime("dynamic plugin teardown task panicked")
+                        })
+                        .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error))
+                    }
+                    None => Err(PluginTeardownError::runtime(
+                        "dynamic plugin teardown task lost its activation",
+                    )),
+                };
+                close_state.finish(result);
+            });
+
+        if let Err(error) = spawn {
+            // Cleanup must never fall back to the Python thread. Retain the
+            // activation for process lifetime if no teardown thread can start.
+            if let Some(activation) = activation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                std::mem::forget(activation);
+            }
+            self.finish(Err(PluginTeardownError::runtime(format!(
+                "failed to start dynamic plugin teardown task: {error}"
+            ))));
+        }
+    }
+
+    fn finish(&self, result: PluginTeardownResult) {
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = PluginHostCloseStatus::Closed;
+        self.completion.send_replace(Some(result));
+    }
+
+    async fn wait_for_close(&self) -> PluginTeardownResult {
+        let mut completion = self.completion.subscribe();
+        loop {
+            if let Some(result) = completion.borrow().clone() {
+                return result;
+            }
+            if completion.changed().await.is_err() {
+                return Err(PluginTeardownError::runtime(
+                    "dynamic plugin teardown result channel closed unexpectedly",
+                ));
+            }
+        }
+    }
 }
 
 #[pymethods]
@@ -723,54 +895,26 @@ impl PyPluginHostActivation {
     /// Return whether this object still owns an active dynamic plugin host.
     #[getter]
     fn is_active(&self) -> PyResult<bool> {
-        let activation = self.activation.lock().map_err(|error| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!(
-                "dynamic plugin activation lock poisoned: {error}"
-            ))
-        })?;
-        Ok(activation
-            .as_ref()
-            .is_some_and(PluginHostActivation::is_active))
+        Ok(self.close_state.is_active())
     }
 
     /// Clear callbacks and unload the dynamic plugin host.
     #[pyo3(signature = () -> "None", text_signature = "($self) -> None")]
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let activation = self
-            .activation
-            .lock()
-            .map_err(|error| {
-                pyo3::exceptions::PyRuntimeError::new_err(format!(
-                    "dynamic plugin activation lock poisoned: {error}"
-                ))
-            })?
-            .take();
+        let close_state = Arc::clone(&self.close_state);
+        close_state.begin_close();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let Some(activation) = activation else {
-                return Ok(());
-            };
-            tokio::task::spawn_blocking(move || activation.clear())
+            close_state
+                .wait_for_close()
                 .await
-                .map_err(|error| {
-                    pyo3::exceptions::PyRuntimeError::new_err(format!(
-                        "dynamic plugin teardown task failed: {error}"
-                    ))
-                })?
-                .map_err(plugin_error_to_py_err)
+                .map_err(|error| error.to_py_err())
         })
     }
 }
 
 impl Drop for PyPluginHostActivation {
     fn drop(&mut self) {
-        let activation = self
-            .activation
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
-            .take();
-        if let Some(activation) = activation {
-            let _ = activation.clear();
-        }
+        self.close_state.begin_close();
     }
 }
 
@@ -797,7 +941,7 @@ fn activate_dynamic_plugins_py<'py>(
             Py::new(
                 py,
                 PyPluginHostActivation {
-                    activation: Mutex::new(Some(activation)),
+                    close_state: Arc::new(PluginHostCloseState::new(activation)),
                     report,
                 },
             )

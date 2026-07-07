@@ -9,16 +9,20 @@ import asyncio
 import gc
 import hashlib
 import os
+import signal
 import subprocess
 import sys
 import textwrap
+import threading
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from nemo_relay import Json, plugin, tools
+from nemo_relay import Json, plugin, scope, tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +178,25 @@ def test_dynamic_plugin_activation_spec_serializes_canonical_shape():
     }
 
 
+def test_dynamic_plugin_activation_spec_preserves_nested_json_nulls():
+    spec = plugin.DynamicPluginActivationSpec(
+        plugin_id="example.plugin",
+        kind="worker",
+        manifest_ref="/plugins/example/relay-plugin.toml",
+        config={
+            "top_level": None,
+            "nested": {"value": None},
+            "items": [None, {"value": None}],
+        },
+    )
+
+    assert spec.to_dict()["config"] == {
+        "top_level": None,
+        "nested": {"value": None},
+        "items": [None, {"value": None}],
+    }
+
+
 async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
     native_dynamic_plugin: _BuiltPlugin,
 ):
@@ -192,6 +215,60 @@ async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
     result = await tools.execute("python-native-after-close", {"input": True}, lambda args: {"args": args})
     assert "native_plugin_tool_execution" not in result
     assert result == {"args": {"input": True}}
+
+
+async def test_concurrent_close_waiters_share_cancellation_resistant_teardown(
+    native_dynamic_plugin: _BuiltPlugin,
+):
+    started = threading.Event()
+    release = threading.Event()
+    plugin_kind = "python.dynamic_close_waiter"
+
+    class BlockingSubscriberPlugin:
+        def validate(self, _plugin_config):
+            return None
+
+        def register(self, _plugin_config, context):
+            def block(_event):
+                started.set()
+                assert release.wait(timeout=5)
+
+            context.register_subscriber("block_teardown", block)
+
+    plugin.register(plugin_kind, cast(plugin.Plugin, BlockingSubscriberPlugin()))
+    activation = await plugin.activate_dynamic_plugins(
+        {
+            "version": 1,
+            "components": [{"kind": plugin_kind, "config": {}}],
+        },
+        [native_dynamic_plugin.spec()],
+    )
+    second_close: asyncio.Task[None] | None = None
+    try:
+        scope.event("python-dynamic-close-blocker")
+        assert await asyncio.to_thread(started.wait, 2)
+
+        first_close = asyncio.create_task(activation.close())
+        while activation.is_active:
+            await asyncio.sleep(0)
+        first_close.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_close
+
+        second_close = asyncio.create_task(activation.close())
+        await asyncio.sleep(0.05)
+        assert not second_close.done()
+
+        release.set()
+        await second_close
+        await activation.close()
+        assert not activation.is_active
+    finally:
+        release.set()
+        if second_close is not None:
+            await asyncio.gather(second_close, return_exceptions=True)
+        await activation.close()
+        plugin.deregister(plugin_kind)
 
 
 async def test_activation_reports_conflicts_and_rolls_back_partial_loads(
@@ -251,9 +328,73 @@ async def test_native_activation_finalizer_releases_callbacks(native_dynamic_plu
     await asyncio.sleep(0)
     gc.collect()
 
+    for _ in range(100):
+        if "fixture_native" not in plugin.list_kinds():
+            break
+        await asyncio.sleep(0.01)
     assert "fixture_native" not in plugin.list_kinds()
     result = await tools.execute("python-native-after-finalize", {"input": True}, lambda args: args)
     assert result == {"input": True}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX worker stop/continue signals")
+async def test_worker_activation_finalizer_never_waits_on_python_thread(
+    worker_dynamic_plugin: _BuiltPlugin,
+    tmp_path: Path,
+):
+    with worker_dynamic_plugin.manifest.open("rb") as file:
+        worker_entrypoint = Path(tomllib.load(file)["load"]["entrypoint"])
+
+    pid_file = tmp_path / "worker.pid"
+    wrapper = tmp_path / "worker-wrapper.sh"
+    wrapper.write_text(f"#!/bin/sh\nprintf '%s' \"$$\" > {str(pid_file)!r}\nexec {str(worker_entrypoint)!r}\n")
+    wrapper.chmod(0o755)
+    manifest = tmp_path / "relay-plugin.toml"
+    manifest.write_text(
+        worker_dynamic_plugin.manifest.read_text().replace(
+            f"entrypoint = {str(worker_entrypoint)!r}",
+            f"entrypoint = {str(wrapper)!r}",
+        )
+    )
+
+    activation = await plugin.activate_dynamic_plugins(
+        {},
+        [_BuiltPlugin("fixture_worker", "worker", manifest).spec()],
+    )
+    native_activation = getattr(activation, "_native")
+    del activation
+    await asyncio.sleep(0)
+    gc.collect()
+
+    worker_pid = int(pid_file.read_text())
+    os.kill(worker_pid, signal.SIGSTOP)
+    resumer = subprocess.Popen(
+        [
+            "/bin/sh",
+            "-c",
+            'sleep 0.8; kill -CONT "$1"',
+            "resume-worker",
+            str(worker_pid),
+        ]
+    )
+    started_at = time.perf_counter()
+    try:
+        del native_activation
+        gc.collect()
+        elapsed = time.perf_counter() - started_at
+    finally:
+        try:
+            os.kill(worker_pid, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+        resumer.wait(timeout=5)
+
+    assert elapsed < 0.4
+    for _ in range(500):
+        if "fixture_worker" not in plugin.list_kinds():
+            break
+        await asyncio.sleep(0.01)
+    assert "fixture_worker" not in plugin.list_kinds()
 
 
 async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_plugin: _BuiltPlugin):
