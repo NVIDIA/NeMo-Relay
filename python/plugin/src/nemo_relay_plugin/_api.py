@@ -69,7 +69,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 grpc: Any = importlib.import_module("grpc")
@@ -80,6 +80,16 @@ pb_grpc: Any = importlib.import_module("._proto.plugin_worker_pb2_grpc", __packa
 Json: TypeAlias = Any
 #: A Relay event represented as a JSON object.
 Event: TypeAlias = dict[str, Any]
+
+
+class EventSanitizeFields(TypedDict):
+    """Observability fields returned by event sanitizer callbacks."""
+
+    data: Json | None
+    category_profile: dict[str, Any] | None
+    metadata: Json | None
+
+
 #: A Relay LLM request represented as a JSON object.
 LlmRequest: TypeAlias = dict[str, Any]
 #: An annotated Relay LLM request represented as a JSON object.
@@ -393,6 +403,10 @@ class _SupportsWorkerPlugin(Protocol):
 
 
 SubscriberCallback: TypeAlias = Callable[[Event], None | Awaitable[None]]
+EventSanitizeCallback: TypeAlias = Callable[
+    [Event, EventSanitizeFields],
+    EventSanitizeFields | Awaitable[EventSanitizeFields],
+]
 ToolSanitizeCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 ToolConditionalCallback: TypeAlias = Callable[[str, Json], str | None | Awaitable[str | None]]
 ToolRequestCallback: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
@@ -418,6 +432,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
 class _Handlers:
     registrations: list[Any]
     subscribers: dict[str, SubscriberCallback]
+    event_sanitizers: dict[str, EventSanitizeCallback]
     tool_sanitize_requests: dict[str, ToolSanitizeCallback]
     tool_sanitize_responses: dict[str, ToolSanitizeCallback]
     tool_conditionals: dict[str, ToolConditionalCallback]
@@ -435,6 +450,7 @@ class _Handlers:
         return cls(
             registrations=[],
             subscribers={},
+            event_sanitizers={},
             tool_sanitize_requests={},
             tool_sanitize_responses={},
             tool_conditionals={},
@@ -498,6 +514,34 @@ class PluginContext:
         """
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
+
+    def _register_event_sanitizer(
+        self,
+        name: str,
+        callback: EventSanitizeCallback,
+        surface: int,
+        priority: int,
+    ) -> None:
+        self._push_registration(name, surface, priority, False)
+        self._handlers.event_sanitizers[name] = callback
+
+    def register_mark_sanitize_guardrail(
+        self, name: str, callback: EventSanitizeCallback, *, priority: int = 0
+    ) -> None:
+        """Register a sanitizer for mark event observability fields."""
+        self._register_event_sanitizer(name, callback, pb.MARK_SANITIZE_GUARDRAIL, priority)
+
+    def register_scope_sanitize_start_guardrail(
+        self, name: str, callback: EventSanitizeCallback, *, priority: int = 0
+    ) -> None:
+        """Register a sanitizer for scope start event observability fields."""
+        self._register_event_sanitizer(name, callback, pb.SCOPE_SANITIZE_START_GUARDRAIL, priority)
+
+    def register_scope_sanitize_end_guardrail(
+        self, name: str, callback: EventSanitizeCallback, *, priority: int = 0
+    ) -> None:
+        """Register a sanitizer for scope end event observability fields."""
+        self._register_event_sanitizer(name, callback, pb.SCOPE_SANITIZE_END_GUARDRAIL, priority)
 
     def register_tool_sanitize_request_guardrail(
         self,
@@ -1422,6 +1466,22 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 await _maybe_await(self._handler(self._handlers.subscribers, request.registration_name)(event))
                 return pb.InvokeResponse(empty=pb.EmptyResult())
+            if request.surface in {
+                pb.MARK_SANITIZE_GUARDRAIL,
+                pb.SCOPE_SANITIZE_START_GUARDRAIL,
+                pb.SCOPE_SANITIZE_END_GUARDRAIL,
+            }:
+                event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
+                fields: EventSanitizeFields = {
+                    "data": event.get("data"),
+                    "category_profile": event.get("category_profile"),
+                    "metadata": event.get("metadata"),
+                }
+                return _json_response(
+                    await _maybe_await(
+                        self._handler(self._handlers.event_sanitizers, request.registration_name)(event, fields)
+                    )
+                )
             if request.surface == pb.TOOL_SANITIZE_REQUEST_GUARDRAIL:
                 return _json_response(
                     await _maybe_await(
@@ -1584,6 +1644,9 @@ def _plugin_id(plugin: _SupportsWorkerPlugin) -> str:
 def _all_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.MARK_SANITIZE_GUARDRAIL,
+        pb.SCOPE_SANITIZE_START_GUARDRAIL,
+        pb.SCOPE_SANITIZE_END_GUARDRAIL,
         pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
         pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
         pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,

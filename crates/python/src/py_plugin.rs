@@ -16,16 +16,21 @@ use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
+    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
+use nemo_relay::api::runtime::EventSanitizeFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
@@ -35,11 +40,11 @@ use nemo_relay::plugin::{
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_callable::{
-    wrap_py_event_subscriber, wrap_py_llm_conditional_fn, wrap_py_llm_exec_intercept_fn,
-    wrap_py_llm_request_intercept_fn, wrap_py_llm_sanitize_request_fn,
-    wrap_py_llm_sanitize_response_fn, wrap_py_llm_stream_exec_intercept_fn,
-    wrap_py_tool_conditional_fn, wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn,
-    wrap_py_tool_request_intercept_fn,
+    wrap_py_event_sanitize_fn, wrap_py_event_subscriber, wrap_py_llm_conditional_fn,
+    wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
+    wrap_py_llm_sanitize_request_fn, wrap_py_llm_sanitize_response_fn,
+    wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn,
+    wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
 
 #[cfg(test)]
@@ -206,10 +211,94 @@ impl PyPluginContext {
     fn qualify_name(&self, name: &str) -> String {
         format!("{}{}", self.namespace_prefix, name)
     }
+
+    fn register_event_sanitizer(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+        register: fn(&str, i32, EventSanitizeFn) -> FlowResult<()>,
+        deregister: fn(&str) -> FlowResult<bool>,
+        label: &'static str,
+    ) -> PyResult<()> {
+        let qualified_name = self.qualify_name(name);
+        register(
+            &qualified_name,
+            priority,
+            wrap_py_event_sanitize_fn(callback),
+        )
+        .map_err(to_py_err)?;
+
+        let name_owned = qualified_name;
+        let mut guard = self.registrations.lock().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
+        })?;
+        guard.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister(&name_owned).map(|_| ()).map_err(|e| {
+                    PluginError::RegistrationFailed(format!("{label} deregistration failed: {e}"))
+                })
+            }),
+        ));
+        Ok(())
+    }
 }
 
 #[pymethods]
 impl PyPluginContext {
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_mark_sanitize_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            callback,
+            register_mark_sanitize_guardrail,
+            deregister_mark_sanitize_guardrail,
+            "mark sanitize guardrail",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_scope_sanitize_start_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            callback,
+            register_scope_sanitize_start_guardrail,
+            deregister_scope_sanitize_start_guardrail,
+            "scope start sanitize guardrail",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_scope_sanitize_end_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            callback,
+            register_scope_sanitize_end_guardrail,
+            deregister_scope_sanitize_end_guardrail,
+            "scope end sanitize guardrail",
+        )
+    }
+
     #[pyo3(
         signature = (name: "str", callback: "object") -> "None",
         text_signature = "(name: str, callback: object) -> None"
