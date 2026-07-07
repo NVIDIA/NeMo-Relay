@@ -197,6 +197,16 @@ def test_dynamic_plugin_activation_spec_preserves_nested_json_nulls():
     }
 
 
+async def test_empty_dynamic_specs_preserve_static_initialization_path():
+    with pytest.raises(ValueError, match="at least one dynamic plugin"):
+        await plugin.activate_dynamic_plugins(plugin.PluginConfig(), [])
+
+    assert plugin.report() is None
+    report = await plugin.initialize(plugin.PluginConfig())
+    assert report == {"diagnostics": []}
+    plugin.clear()
+
+
 async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
     native_dynamic_plugin: _BuiltPlugin,
 ):

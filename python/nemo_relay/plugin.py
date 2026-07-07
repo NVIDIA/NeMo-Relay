@@ -425,9 +425,10 @@ async def activate_dynamic_plugins(
     """Load dynamic plugins and activate their components as one owned host.
 
     Args:
-        config: Base plugin configuration activated alongside dynamic plugins.
-        dynamic_plugins: Ordered activation specifications. Dataclass instances
-            and equivalent JSON objects may be mixed.
+        config: Base plugin configuration activated before the dynamic
+            components. It may contain statically registered components.
+        dynamic_plugins: Non-empty ordered activation specifications. Dataclass
+            instances and equivalent JSON objects may be mixed.
 
     Returns:
         An owned activation containing the successful validation report.
@@ -435,7 +436,8 @@ async def activate_dynamic_plugins(
     Behavior:
         Only one dynamic plugin host may be active in a process. Errors roll
         back partial loads. The returned object must remain alive until agent
-        work is complete.
+        work is complete. Use :func:`initialize` when no dynamic plugins are
+        configured.
     """
     normalized_plugins = [_normalize_object(spec) for spec in dynamic_plugins]
     native = await _activate_dynamic_plugins(_normalize_object(config), normalized_plugins)
