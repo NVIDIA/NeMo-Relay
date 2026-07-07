@@ -70,4 +70,4 @@ assert_eq!(payload["ok"], true);
 
 - [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
 - [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Rust worker SDK](../worker/README.md)
+- [Rust worker SDK](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker/README.md)

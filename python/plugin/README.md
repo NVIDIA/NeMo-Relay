@@ -102,7 +102,7 @@ imports that function and awaits the returned coroutine when it starts the
 worker process.
 
 For a complete manifest and runnable plugin, see the
-[Python gRPC worker plugin example](../../examples/python-grpc-worker-plugin/README.md).
+[Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).
 
 ## Request Intercepts
 
@@ -174,4 +174,4 @@ required gRPC runtime.
 
 - [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
 - [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Python gRPC worker plugin example](../../examples/python-grpc-worker-plugin/README.md)
+- [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)

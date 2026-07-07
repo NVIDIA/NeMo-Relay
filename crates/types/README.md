@@ -71,4 +71,4 @@ assert_eq!(payload["source"], "my-integration");
 ## Documentation
 
 - [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
-- [NeMo Relay Rust crate](../core/README.md)
+- [NeMo Relay Rust crate](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/core/README.md)

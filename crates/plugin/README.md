@@ -93,4 +93,4 @@ complete example for platform-specific artifact and manifest setup.
 
 - [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
 - [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Rust native plugin example](../../examples/rust-native-plugin/README.md)
+- [Rust native plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/rust-native-plugin/README.md)

@@ -97,4 +97,4 @@ that arbitrary blocking work started by the callback has stopped.
 
 - [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
 - [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Python gRPC worker plugin example](../../examples/python-grpc-worker-plugin/README.md)
+- [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)
