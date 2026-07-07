@@ -1,0 +1,157 @@
+---
+title: "Native Dynamic Plugins (Rust)"
+description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v1."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Native dynamic plugins are trusted in-process shared libraries. Use them when
+plugin behavior needs host-process access while still following the Relay plugin
+contract: a stable kind, JSON component configuration, validation diagnostics,
+and registration through a component-scoped context.
+
+<Warning>
+Native plugins are not sandboxed. They run in the gateway process, must not
+unwind across ABI callbacks, and remain loaded until Relay removes their
+registered callbacks.
+</Warning>
+
+## Manifest
+
+Use the following manifest:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "acme.native_policy"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[source]
+artifact = "target/release/libacme_native_policy.dylib"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+library = "target/release/libacme_native_policy.dylib"
+symbol = "nemo_relay_register_plugin"
+```
+
+Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"1"`, and
+`capabilities.items` to include `plugin_native`. Relay resolves relative paths
+from the manifest. The exported symbol must return a descriptor whose
+`plugin_kind` matches `plugin.id` exactly.
+
+## Create a Native Plugin
+
+Create a Rust library project with the following `Cargo.toml` file:
+
+```toml
+[package]
+name = "acme-native-policy"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nemo-relay-plugin = "0.5.0"
+serde_json = "1"
+```
+
+Add the following implementation to `src/lib.rs`:
+
+```rust
+use nemo_relay_plugin::{Json, NativePlugin, PluginContext, Result};
+use serde_json::Map;
+
+struct NativePolicy;
+
+impl NativePlugin for NativePolicy {
+    fn plugin_kind(&self) -> &str {
+        "acme.native_policy"
+    }
+
+    fn register(
+        &mut self,
+        _config: &Map<String, Json>,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        context.register_subscriber("audit", |_| {})?;
+        Ok(())
+    }
+}
+
+nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || NativePolicy);
+```
+
+Build the library with the following command:
+
+```bash
+cargo build --release
+```
+
+Update `source.artifact` and `load.library` with the resulting platform library
+path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
+`.dylib` on macOS, `.so` on Linux, or `.dll` on Windows. Refer to [Build a Rust
+Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
+with validation, middleware, scopes, and configuration schema support.
+
+## Native ABI v1
+
+The host passes a `NemoRelayNativeHostApiV1` table to the entry symbol. The
+plugin returns a `NemoRelayNativePluginV1` descriptor:
+
+```rust
+extern "C" fn nemo_relay_register_plugin(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus
+```
+
+Text and JSON data cross this boundary as host-owned
+`NemoRelayNativeString` handles. ABI structs also carry scalars, opaque
+handles, callback pointers, and plugin-owned `user_data`. Do not pass Rust
+runtime types, trait objects, futures, `serde_json::Value`, or allocator-owned
+strings across the ABI.
+
+ABI callbacks can register these runtime surfaces:
+
+- Subscribers
+- Tool and LLM guardrails or intercepts, including stream intercepts
+- Marks, scopes, and isolated scope stacks
+
+Relay keeps the library alive while those registrations exist and deregisters
+them before unloading it.
+
+Use the `nemo-relay-plugin` crate rather than the host `nemo-relay` runtime
+crate. Refer to [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)
+for the SDK-backed example.
+
+## Register the Plugin
+
+After you package the manifest and library, register and validate the plugin:
+
+```bash
+nemo-relay plugins add ./relay-plugin.toml
+nemo-relay plugins enable acme.native_policy
+nemo-relay plugins validate acme.native_policy
+```
+
+Refer to [Configure Discoverable
+Plugins](/configure-plugins/discoverable-plugins) for lifecycle and trust-policy
+configuration.

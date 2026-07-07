@@ -3,16 +3,76 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
+[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
+[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
+[![Release](https://img.shields.io/github/v/release/NVIDIA/NeMo-Relay?color=green)](https://github.com/NVIDIA/NeMo-Relay/releases)
+[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
+[![PyPI](https://img.shields.io/pypi/v/nemo-relay-plugin?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay-plugin/)
+[![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
+[![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/NVIDIA/NeMo-Relay)
+
 # nemo-relay-plugin
 
-Python authoring SDK for NeMo Relay out-of-process dynamic worker plugins.
+`nemo-relay-plugin` is the Python authoring SDK for NeMo Relay out-of-process
+dynamic worker plugins. Use it when plugin code should run in its own Python
+process and communicate with Relay through the versioned `grpc-v1` worker
+protocol.
 
-Declare this package as a dependency of a Python worker project and expose a
-`module:function` entrypoint that calls `serve_plugin`. Register the manifest
-with `nemo-relay plugins add`; Relay creates a per-plugin virtual environment,
-installs `source.manifest_root`, and records that environment for activation.
-Enable it with `nemo-relay plugins enable <plugin_id>` after registration. Python
-workers without a lifecycle-managed environment are rejected.
+## Why Use It?
+
+- **Isolate plugin dependencies**: Run custom policy, middleware, or exporter
+  code outside the Relay host process.
+- **Use the shared runtime contract**: Register subscribers, guardrails, and
+  intercepts through `WorkerPlugin` and `PluginContext`.
+- **Call back into Relay safely**: Emit marks, create scopes, and continue
+  managed execution through the host runtime handle.
+- **Keep worker lifecycle managed**: Let Relay provision the worker environment,
+  start the entrypoint, and supply authenticated local endpoints.
+
+## What You Get
+
+- **`WorkerPlugin` and `PluginContext`**: The plugin validation and registration
+  contract for worker-owned runtime behavior.
+- **`serve_plugin`**: An AsyncIO gRPC server wired to the Relay-managed worker
+  environment.
+- **Typed runtime helpers**: JSON, event, scope, middleware, continuation, and
+  diagnostic types shared with Relay.
+- **Generated transport bindings**: Private protobuf bindings included in built
+  wheels; published-wheel installation does not require `protoc` or
+  `grpcio-tools`.
+
+## Installation
+
+Add the SDK to the Python worker project's dependencies:
+
+```bash
+uv add nemo-relay-plugin
+```
+
+If you are not using `uv`, install it with `pip`:
+
+```bash
+pip install nemo-relay-plugin
+```
+
+Declare a `module:function` entrypoint that starts the worker with
+`serve_plugin`. Register the plugin manifest through the CLI; Relay creates a
+per-plugin virtual environment, installs `source.manifest_root`, and records
+that environment for activation:
+
+```bash
+nemo-relay plugins add ./relay-plugin.toml
+nemo-relay plugins enable <plugin_id>
+```
+
+Python workers cannot be loaded directly from `plugins.toml`. They must be
+registered through `plugins add`, which provisions the required managed
+environment. `plugins remove <plugin_id>` deletes that environment.
+
+## Getting Started
 
 A minimal worker plugin looks like this:
 
@@ -41,6 +101,11 @@ Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
 worker process.
 
+For a complete manifest and runnable plugin, see the
+[Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).
+
+## Request Intercepts
+
 LLM request intercepts return one canonical outcome:
 
 ```python
@@ -61,13 +126,6 @@ When `annotated` is present, it is authoritative for provider-body content:
 leave raw `request["content"]` unchanged, edit normalized fields or provider
 extensions through the annotation, and use `request["headers"]` for transport
 headers.
-
-The SDK owns gRPC serving, JSON envelope conversion, callback dispatch,
-continuations, host runtime calls, and local scope-stack binding. Its private
-protobuf bindings are generated from the canonical Relay schema while the
-package is built; they are included in installed wheels but are not committed
-to the source repository. Installing the published wheel never requires
-`protoc` or `grpcio-tools`.
 
 ## Callback Concurrency
 
@@ -111,3 +169,9 @@ Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and
 tests for this SDK on Windows ARM64 rather than creating a package without its
 required gRPC runtime.
+
+## Documentation
+
+- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
+- [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
+- [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)

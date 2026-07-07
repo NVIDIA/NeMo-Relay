@@ -1,6 +1,6 @@
 ---
 title: "Overview"
-description: ""
+description: "Learn how NeMo Relay manages scopes, middleware, plugins, and lifecycle events for agent systems."
 position: 1
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -14,7 +14,7 @@ applications, framework integrations, middleware, and observability backends a
 shared runtime for scopes, policy, plugins, and lifecycle events.
 
 Agent systems usually cross several boundaries in one request: an entrypoint
-starts work, a model is called, tools run, subagents may branch off, and
+starts work, a model is called, tools run, subagents can branch off, and
 observability or policy systems need to understand what happened. Relay gives
 those boundaries one runtime contract instead of asking each layer to invent its
 own wrappers, trace vocabulary, and cleanup rules.
@@ -46,7 +46,7 @@ Pick the row closest to what you are trying to do.
 | Instrument application-owned LLM or tool calls | [Instrument Applications](/instrument-applications/about) | Direct SDK instrumentation gives Relay full managed-call semantics around callbacks your code owns. |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](/supported-integrations/about) | Maintained integrations use public framework or plugin APIs where they preserve enough lifecycle fidelity. |
 | Build a framework, host, or provider integration | [Integrate into Frameworks](/integrate-into-frameworks/about) | Integration guidance helps you choose managed wrappers, explicit lifecycle APIs, hook replay, provider codecs, or upstream support. |
-| Package reusable exporters, middleware, or policy | [Build Plugins](/build-plugins/about), [Observability](/observability-plugin/about), and [NeMo Guardrails Plugin](/nemo-guardrails-plugin/about) | Plugins are the configuration-driven path for behavior that should be shared across applications or teams. |
+| Package reusable exporters, middleware, or policy | [Build Plugins](/build-plugins/about) and [Configure Plugins](/configure-plugins/about) | Plugins are the configuration-driven path for behavior that should be shared across applications or teams. |
 | Develop or validate the repository itself | [Development Setup](/contribute/development-setup) and [Testing and Docs](/contribute/testing-and-docs) | Use the contributor workflow when you are changing Relay source, docs, examples, bindings, or integrations. |
 
 <Note>
@@ -57,10 +57,10 @@ guardrails, or adaptive behavior.
 
 ## Validate Raw Capture First
 
-Start with [Agent Trajectory Observability Format (ATOF) JSONL](/observability-plugin/atof),
+Start with [Agent Trajectory Observability Format (ATOF) JSONL](/configure-plugins/observability/atof),
 the raw canonical event stream. It shows the lifecycle events Relay actually
 captured before anything is translated into
-[Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif),
+[Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif),
 OpenTelemetry, or OpenInference output.
 
 A good first integration process workflow is as follows:
@@ -116,9 +116,9 @@ Use the tasks below to build your understanding and set up Relay:
 |---|---|
 | Install packages | [Installation](/getting-started/installation) |
 | Understand the mental model | [Agent Runtime Primer](/getting-started/agent-runtime-primer) |
-| Configure plugin files | [Plugin Configuration Files](/build-plugins/plugin-configuration-files) |
-| Export traces or trajectories | [Observability](/observability-plugin/about) |
-| Tune performance with adaptive behavior | [Adaptive](/adaptive-plugin/about) |
+| Configure plugin files | [Plugin Configuration Files](/configure-plugins/plugin-configuration-files) |
+| Export traces or trajectories | [Observability](/configure-plugins/observability/about) |
+| Tune performance with adaptive behavior | [Adaptive](/configure-plugins/adaptive/about) |
 | Debug trace incidents | [Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook) |
 | Look up symbols | [APIs](/reference/api) |
 

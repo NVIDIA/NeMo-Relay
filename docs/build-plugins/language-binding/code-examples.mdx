@@ -1,0 +1,363 @@
+---
+title: "Code Examples"
+description: "Explore reusable NeMo Relay plugin patterns for request interception, event logging, and policy bundles."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+This page shows reusable Python and Node.js plugin patterns for request
+interception, event logging, multi-surface policies, and framework-neutral
+behavior. The same plugin contract applies to Rust. Refer to the [Header Plugin
+Example](/build-plugins/language-binding/register-behavior#header-plugin-example)
+for Rust-specific registration guidance.
+
+## Dynamic Header Injection
+
+Use an LLM request intercept when a plugin needs to inject tenant or routing metadata into every provider request.
+
+LLM request intercepts receive `name`, `request`, and `annotated`. Python
+intercepts receive an immutable request, so they return a new request with the
+required changes. Node.js intercepts receive a normal JavaScript request
+object; return a complete outcome containing the intended request rather than
+relying on in-place mutation. Rust intercepts receive a mutable request.
+
+The following complete examples define, register, validate, and activate a
+plugin that adds a request header. Each example clears the active configuration
+during shutdown.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+from typing import Any
+
+import nemo_relay
+
+class HeaderPlugin:
+    def validate(self, plugin_config: dict[str, Any]) -> list[dict[str, str]]:
+        diagnostics = []
+        for field in ("header_name", "value"):
+            if not isinstance(plugin_config.get(field), str):
+                diagnostics.append({
+                    "level": "error",
+                    "code": "header-plugin.invalid_config",
+                    "component": "header-plugin",
+                    "field": field,
+                    "message": f"{field} must be a string",
+                })
+        return diagnostics
+
+    def register(self, plugin_config: dict[str, Any], context: nemo_relay.plugin.PluginContext):
+        def add_header(
+            name: str,
+            request: nemo_relay.LLMRequest,
+            annotated: nemo_relay.AnnotatedLLMRequest | None
+        ) -> nemo_relay.LLMRequestInterceptOutcome:
+            # Return a new request with updated headers.
+            headers = request.headers.copy()
+            headers[plugin_config["header_name"]] = plugin_config["value"]
+            return nemo_relay.LLMRequestInterceptOutcome(
+                nemo_relay.LLMRequest(headers=headers, content=request.content),
+                annotated,
+            )
+
+        context.register_llm_request_intercept("inject-header", 100, False, add_header)
+
+async def main() -> None:
+    nemo_relay.plugin.register("header-plugin", HeaderPlugin())
+
+    config = nemo_relay.plugin.PluginConfig(
+        components=[
+            nemo_relay.plugin.ComponentSpec(
+                kind="header-plugin",
+                config={"header_name": "x-tenant", "value": "tenant-a"},
+            )
+        ]
+    )
+    report = nemo_relay.plugin.validate(config)
+    if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+        raise RuntimeError(report["diagnostics"])
+
+    try:
+        active_report = await nemo_relay.plugin.initialize(config)
+        print("Activation report:", active_report)
+        # Run instrumented application work here.
+    finally:
+        nemo_relay.plugin.clear()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const plugin = require('nemo-relay-node/plugin');
+
+const headerPlugin = {
+  validate(pluginConfig) {
+    const diagnostics = [];
+    for (const field of ['header_name', 'value']) {
+      if (typeof pluginConfig[field] !== 'string') {
+        diagnostics.push({
+          level: 'error',
+          code: 'header-plugin.invalid_config',
+          component: 'header-plugin',
+          field,
+          message: `${field} must be a string`,
+        });
+      }
+    }
+    return diagnostics;
+  },
+  register(pluginConfig, context) {
+    context.registerLlmRequestIntercept('inject-header', 100, false, ({ request, annotated }) => {
+      if (
+        typeof request !== 'object' ||
+        request === null ||
+        Array.isArray(request) ||
+        typeof request.headers !== 'object' ||
+        request.headers === null ||
+        Array.isArray(request.headers)
+      ) {
+        throw new Error('Expected an LLM request object with headers.');
+      }
+      return {
+        request: {
+          ...request,
+          headers: {
+            ...request.headers,
+            [String(pluginConfig.header_name)]: String(pluginConfig.value),
+          },
+        },
+        annotated,
+      };
+    });
+  },
+};
+
+void (async () => {
+  plugin.register('header-plugin', headerPlugin);
+
+  const config = plugin.defaultConfig();
+  config.components = [
+    plugin.ComponentSpec(
+      'header-plugin',
+      { header_name: 'x-tenant', value: 'tenant-a' },
+      { enabled: true },
+    ),
+  ];
+  const report = plugin.validate(config);
+  if (report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
+    throw new Error(JSON.stringify(report.diagnostics));
+  }
+
+  try {
+    const activeReport = await plugin.initialize(config);
+    console.log('Activation report:', activeReport);
+    // Run instrumented application work here.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+</Tabs>
+
+This pattern is useful for:
+
+- Tenant identity
+- Trace correlation
+- Region or deployment routing
+
+## Subscriber Logging Pattern
+
+Use a subscriber-oriented plugin when the component should watch the full
+lifecycle rather than rewrite requests. The following examples log each event
+in Python and Node.js. They do not transform events into OpenInference spans.
+Refer to
+[OpenInference](/configure-plugins/observability/openinference) for the
+built-in OpenInference exporter.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+class EventLoggingPlugin:
+    def register(self, plugin_config, context):
+        def on_event(event):
+            print("event", event)
+
+        context.register_subscriber("event-logging", on_event)
+
+async def main() -> None:
+    nemo_relay.plugin.register("event-logging", EventLoggingPlugin())
+    config = nemo_relay.plugin.PluginConfig(
+        components=[
+            nemo_relay.plugin.ComponentSpec(kind="event-logging", config={})
+        ]
+    )
+    report = nemo_relay.plugin.validate(config)
+    if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+        raise RuntimeError(report["diagnostics"])
+
+    try:
+        active_report = await nemo_relay.plugin.initialize(config)
+        print("Activation report:", active_report)
+        # Run managed tool or LLM work here to log lifecycle events.
+    finally:
+        nemo_relay.plugin.clear()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const plugin = require('nemo-relay-node/plugin');
+
+const eventLoggingPlugin = {
+  register(pluginConfig, context) {
+    context.registerSubscriber('event-logging', (event) => {
+      console.log('event', event);
+    });
+  },
+};
+
+void (async () => {
+  plugin.register('event-logging', eventLoggingPlugin);
+  const config = plugin.defaultConfig();
+  config.components = [plugin.ComponentSpec('event-logging', {})];
+
+  const report = plugin.validate(config);
+  if (report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
+    throw new Error(JSON.stringify(report.diagnostics));
+  }
+
+  try {
+    const activeReport = await plugin.initialize(config);
+    console.log('Activation report:', activeReport);
+    // Run managed tool or LLM work here to log lifecycle events.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+</Tabs>
+
+This is the right pattern when the component:
+
+- Logs events across tools and LLMs
+- Adds application-specific logging or filtering
+- Should not change execution behavior
+
+## Multi-Surface Policy Bundle
+
+A plugin can register more than one runtime surface when one configuration document controls a related behavior bundle.
+
+The following Python example installs a subscriber and an LLM request intercept
+from one component configuration:
+
+```python
+import asyncio
+from typing import Any
+
+import nemo_relay
+
+class CorrelationPolicy:
+    def validate(self, plugin_config: dict[str, Any]) -> list[dict[str, str]]:
+        if isinstance(plugin_config.get("header_name"), str):
+            return []
+        return [{
+            "level": "error",
+            "code": "correlation-policy.invalid_config",
+            "component": "correlation-policy",
+            "field": "header_name",
+            "message": "header_name must be a string",
+        }]
+
+    def register(
+        self,
+        plugin_config: dict[str, Any],
+        context: nemo_relay.plugin.PluginContext,
+    ) -> None:
+        def on_event(event: nemo_relay.Event) -> None:
+            print("event", event)
+
+        def add_correlation_header(
+            name: str,
+            request: nemo_relay.LLMRequest,
+            annotated: nemo_relay.AnnotatedLLMRequest | None,
+        ) -> nemo_relay.LLMRequestInterceptOutcome:
+            headers = request.headers.copy()
+            headers[plugin_config["header_name"]] = "policy-bundle"
+            return nemo_relay.LLMRequestInterceptOutcome(
+                nemo_relay.LLMRequest(headers=headers, content=request.content),
+                annotated,
+            )
+
+        context.register_subscriber("event-logging", on_event)
+        context.register_llm_request_intercept(
+            "add-correlation-header", 100, False, add_correlation_header
+        )
+
+async def main() -> None:
+    nemo_relay.plugin.register("correlation-policy", CorrelationPolicy())
+    config = nemo_relay.plugin.PluginConfig(
+        components=[
+            nemo_relay.plugin.ComponentSpec(
+                kind="correlation-policy",
+                config={"header_name": "x-correlation-source"},
+            )
+        ]
+    )
+    report = nemo_relay.plugin.validate(config)
+    if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+        raise RuntimeError(report["diagnostics"])
+
+    try:
+        await nemo_relay.plugin.initialize(config)
+        # Run managed tool or LLM work here.
+    finally:
+        nemo_relay.plugin.clear()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+This bundle registers:
+
+- An event-logging subscriber
+- An LLM request intercept that adds correlation metadata
+
+Use this pattern when one component makes the configured behavior easier to
+reason about than several unrelated plugin components. Keep each registered
+surface small. Make the component configuration explicit about which surfaces
+are enabled.
+
+## Framework-Neutral Plugin Design
+
+Plugins can stay framework-agnostic if they operate on the normalized runtime data rather than framework-specific objects.
+
+Good examples:
+
+- Rewrite provider headers
+- Emit tracing data
+- Attach scheduling hints
+- Apply cross-framework safety policies

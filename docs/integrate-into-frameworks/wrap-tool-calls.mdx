@@ -124,7 +124,7 @@ async fn run_framework_tool() -> anyhow::Result<serde_json::Value> {
 
 Use explicit lifecycle APIs only when the framework owns the real tool invocation internally and exposes only start and finish hooks. In that case, the integration must preserve the returned handle and call the matching end helper on every success and failure path.
 
-Use standalone request-intercept or conditional-execution helpers when the framework needs only partial middleware behavior before it continues down its own invocation path. See [Code Examples](/integrate-into-frameworks/code-examples#fallback-explicit-api-calls) for those fallback surfaces.
+Use standalone request-intercept or conditional-execution helpers when the framework needs only partial middleware behavior before it continues down its own invocation path. Refer to [Code Examples](/integrate-into-frameworks/code-examples#fallback-explicit-api-calls) for those fallback surfaces.
 
 ## Validate the Tool Wrapper
 
