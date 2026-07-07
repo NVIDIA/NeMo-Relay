@@ -9,8 +9,11 @@ use serde::de::DeserializeOwned;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
+use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn};
+use nemo_relay::api::runtime::{
+    EventSanitizeFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn,
+};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
@@ -254,6 +257,30 @@ impl CompiledBuiltinBackend {
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
     Arc::new(move |_name: &str, payload: Json| backend.sanitize_json_preorder_dfs(payload))
+}
+
+pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventSanitizeFn {
+    Arc::new(move |event, mut fields| {
+        if matches!(event, Event::Scope(_))
+            && event
+                .category()
+                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"))
+        {
+            return fields;
+        }
+
+        fields.data = fields
+            .data
+            .map(|data| backend.sanitize_json_preorder_dfs(data));
+        fields.metadata = fields
+            .metadata
+            .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+        fields.category_profile = fields.category_profile.map(|profile| {
+            sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile.clone())
+                .unwrap_or(profile)
+        });
+        fields
+    })
 }
 
 pub(super) fn llm_sanitize_request_callback(

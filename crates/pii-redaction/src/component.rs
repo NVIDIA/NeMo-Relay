@@ -81,6 +81,9 @@ pub struct PiiRedactionConfig {
     /// Whether to sanitize managed LLM response payloads.
     #[serde(default = "default_true")]
     pub output: bool,
+    /// Whether to sanitize mark event observability fields.
+    #[serde(default = "default_true")]
+    pub mark: bool,
     /// Whether to sanitize managed tool request payloads.
     #[serde(default = "default_true")]
     pub tool_input: bool,
@@ -112,6 +115,7 @@ impl Default for PiiRedactionConfig {
             mode: default_mode(),
             input: true,
             output: true,
+            mark: true,
             tool_input: true,
             tool_output: true,
             priority: default_priority(),
@@ -199,6 +203,7 @@ nemo_relay::editor_config! {
         },
         input => { label: "input", kind: Boolean },
         output => { label: "output", kind: Boolean },
+        mark => { label: "mark", kind: Boolean },
         tool_input => { label: "tool_input", kind: Boolean },
         tool_output => { label: "tool_output", kind: Boolean },
         priority => { label: "priority", kind: Integer },
@@ -423,6 +428,7 @@ fn validate_pii_redaction_plugin_config(
             "mode",
             "input",
             "output",
+            "mark",
             "tool_input",
             "tool_output",
             "priority",
@@ -497,7 +503,7 @@ fn validate_surface_selection(
     policy: &ConfigPolicy,
     config: &PiiRedactionConfig,
 ) {
-    if config.input || config.output || config.tool_input || config.tool_output {
+    if config.input || config.output || config.mark || config.tool_input || config.tool_output {
         return;
     }
 
@@ -725,6 +731,14 @@ fn register_builtin_backend(
     })?;
     let compiled = CompiledBuiltinBackend::new(builtin, config.codec.clone())?;
 
+    if config.mark {
+        ctx.register_mark_sanitize_guardrail(
+            "mark",
+            config.priority,
+            super::builtin::event_sanitize_callback(compiled.clone()),
+        )?;
+    }
+
     if config.tool_input {
         let sanitizer = tool_sanitize_callback(compiled.clone());
         ctx.register_tool_sanitize_request_guardrail("tool_input", config.priority, sanitizer)?;
@@ -734,12 +748,28 @@ fn register_builtin_backend(
         ctx.register_tool_sanitize_response_guardrail("tool_output", config.priority, sanitizer)?;
     }
     if config.input {
-        let sanitizer = llm_sanitize_request_callback(compiled.clone());
-        ctx.register_llm_sanitize_request_guardrail("input", config.priority, sanitizer)?;
+        ctx.register_llm_sanitize_request_guardrail(
+            "input",
+            config.priority,
+            llm_sanitize_request_callback(compiled.clone()),
+        )?;
+        ctx.register_scope_sanitize_start_guardrail(
+            "input",
+            config.priority,
+            super::builtin::event_sanitize_callback(compiled.clone()),
+        )?;
     }
     if config.output {
-        let sanitizer = llm_sanitize_response_callback(compiled);
-        ctx.register_llm_sanitize_response_guardrail("output", config.priority, sanitizer)?;
+        ctx.register_llm_sanitize_response_guardrail(
+            "output",
+            config.priority,
+            llm_sanitize_response_callback(compiled.clone()),
+        )?;
+        ctx.register_scope_sanitize_end_guardrail(
+            "output",
+            config.priority,
+            super::builtin::event_sanitize_callback(compiled),
+        )?;
     }
 
     Ok(())

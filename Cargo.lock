@@ -1607,11 +1607,13 @@ version = "0.6.0"
 dependencies = [
  "futures",
  "nemo-relay",
+ "opentelemetry_sdk",
  "regex",
  "schemars",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tokio",
 ]
 
