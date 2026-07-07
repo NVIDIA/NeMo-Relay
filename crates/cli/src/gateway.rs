@@ -955,16 +955,11 @@ impl ProviderRoute {
         }
     }
 
-    // Returns the provider route name recorded in LLM event metadata. These names split OpenAI API
-    // variants because their request/response schemas differ even when they share a base URL.
+    // Returns the provider route name recorded on managed LLM events. These names split OpenAI API
+    // variants because their request/response schemas differ even when they share a base URL, and
+    // they double as codec hints for ambiguous provider request shapes.
     const fn name(self) -> &'static str {
-        match self {
-            Self::OpenAiResponses => "openai.responses",
-            Self::OpenAiChatCompletions => "openai.chat_completions",
-            Self::OpenAiModels => "openai.models",
-            Self::AnthropicMessages => "anthropic.messages",
-            Self::AnthropicCountTokens => "anthropic.count_tokens",
-        }
+        self.alignment_route().name()
     }
 
     // Builds the upstream URL by combining the configured provider base with the original path and

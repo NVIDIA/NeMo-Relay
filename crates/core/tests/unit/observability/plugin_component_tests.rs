@@ -509,7 +509,7 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("endpoints[2].timeout_millis") })
     );
-    #[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+    #[cfg(feature = "atof-streaming")]
     assert!(
         report
             .diagnostics
@@ -1161,9 +1161,9 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
             .contains("no output path")
     );
     let remote_error = results[1].1.as_ref().unwrap_err().to_string();
-    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    #[cfg(feature = "object-store")]
     assert!(remote_error.contains("storage[0]"));
-    #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+    #[cfg(not(feature = "object-store"))]
     assert!(remote_error.contains("ATIF storage support is not enabled in this build"));
 }
 
@@ -1875,7 +1875,7 @@ fn atif_storage_secret_var_empty_name_is_rejected() {
 }
 
 #[test]
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
     let missing = "NEMO_RELAY_TEST_ATIF_HELPER_MISSING_ZZZZ";
     let empty = "NEMO_RELAY_TEST_ATIF_HELPER_EMPTY_ZZZZ";

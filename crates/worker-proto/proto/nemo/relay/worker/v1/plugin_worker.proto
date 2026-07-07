@@ -166,6 +166,7 @@ message InvokeResponse {
     GuardrailResult guardrail = 3;
     LlmRequestInterceptResult llm_request = 4;
     WorkerError error = 5;
+    ToolExecutionInterceptResult tool_execution = 6;
   }
 }
 
@@ -181,9 +182,11 @@ message GuardrailResult {
 }
 
 message LlmRequestInterceptResult {
-  JsonEnvelope request = 1;
-  JsonEnvelope annotated_request = 2;
-  bool has_annotated_request = 3;
+  JsonEnvelope outcome = 1;
+}
+
+message ToolExecutionInterceptResult {
+  JsonEnvelope outcome = 1;
 }
 
 message StreamChunk {

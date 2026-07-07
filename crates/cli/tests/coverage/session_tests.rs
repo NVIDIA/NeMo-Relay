@@ -720,7 +720,7 @@ async fn parallel_subagents_are_siblings_under_turn_scope() {
 }
 
 #[tokio::test]
-async fn codex_turn_is_agent_scope_with_turn_role_metadata() {
+async fn codex_turn_is_custom_scope_with_turn_role_metadata() {
     let manager = SessionManager::new(session_test_config());
     manager
         .apply_events(
@@ -748,7 +748,7 @@ async fn codex_turn_is_agent_scope_with_turn_role_metadata() {
     assert!(session.agent_scope.is_none());
     let turn = active_turn_scope(session);
     assert_eq!(turn.name, "codex-turn");
-    assert_eq!(turn.scope_type, ScopeType::Agent);
+    assert_eq!(turn.scope_type, ScopeType::Custom);
     assert_eq!(
         turn.metadata.as_ref().unwrap()["nemo_relay_scope_role"],
         json!("turn")
@@ -1820,7 +1820,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
         .iter()
         .find(|event| {
             event["name"] == "codex-turn"
-                && event["category"] == "agent"
+                && event["category"] == "custom"
                 && event["scope_category"] == "start"
         })
         .expect("Codex turn start should be observed");
@@ -1828,7 +1828,7 @@ async fn codex_stop_snapshots_atif_without_session_end() {
         .iter()
         .find(|event| {
             event["name"] == "codex-turn"
-                && event["category"] == "agent"
+                && event["category"] == "custom"
                 && event["scope_category"] == "end"
         })
         .expect("Codex Stop should close the turn scope");
@@ -1917,7 +1917,7 @@ async fn codex_openinference_spans_match_shared_contract() {
         turn_attributes
             .get("openinference.span.kind")
             .map(String::as_str),
-        Some("AGENT")
+        Some("CHAIN")
     );
     assert_eq!(
         llm_attributes
@@ -2967,7 +2967,7 @@ async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
     let turn_start = atof_events
         .iter()
         .find(|event| {
-            event["category"] == "agent"
+            event["category"] == "custom"
                 && event["scope_category"] == "start"
                 && event["metadata"]["session_id"] == json!("hermes-orphan")
                 && event["metadata"]["nemo_relay_scope_role"] == json!("turn")
@@ -2998,7 +2998,7 @@ async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
             attributes
                 .get("openinference.span.kind")
                 .map(String::as_str)
-                == Some("AGENT")
+                == Some("CHAIN")
                 && attributes.get("metadata").is_some_and(|metadata| {
                     serde_json::from_str::<Value>(metadata)
                         .ok()
@@ -3110,7 +3110,7 @@ async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage(
     let parent_turn = atof_events
         .iter()
         .find(|event| {
-            event["category"] == "agent"
+            event["category"] == "custom"
                 && event["scope_category"] == "start"
                 && event["metadata"]["session_id"] == json!("parent-session")
                 && event["metadata"]["nemo_relay_scope_role"] == json!("turn")
@@ -3143,7 +3143,7 @@ async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage(
             attributes
                 .get("openinference.span.kind")
                 .map(String::as_str)
-                == Some("AGENT")
+                == Some("CHAIN")
                 && attributes.get("metadata").is_some_and(|metadata| {
                     serde_json::from_str::<Value>(metadata)
                         .ok()

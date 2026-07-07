@@ -35,14 +35,15 @@ use crate::error::{
     status_from_plugin_error,
 };
 use crate::types::{
-    FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiOpenInferenceSubscriber,
-    FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle, FfiScopeStack,
-    FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
+    FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest,
+    FfiOpenInferenceSubscriber, FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle,
+    FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
 };
 pub use crate::types::{nemo_relay_openinference_subscriber_free, nemo_relay_otel_subscriber_free};
 use libc::c_char;
+use nemo_relay::api::event::PendingMarkSpec;
 use nemo_relay::api::llm as core_llm_api;
-use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
+use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
 use nemo_relay::api::runtime::{
@@ -236,6 +237,87 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercepts(
             NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Allocate canonical JSON for a C LLM request-intercept callback result.
+///
+/// `annotated_json` may be null. `pending_marks_json` may be null, in which
+/// case an empty list is serialized. When used by a
+/// `NemoRelayLlmRequestInterceptCb`, assign the successful output to the
+/// callback's `out_outcome_json`; ownership transfers to Relay when the
+/// callback returns, so the callback must not free or reuse it. Outside a
+/// callback, the caller owns the returned string and must release it with
+/// `nemo_relay_string_free`.
+///
+/// # Safety
+///
+/// `request` must point to a live `FfiLLMRequest`, optional JSON inputs must
+/// be valid null-terminated strings when non-null, and `out_outcome_json` must
+/// be writable. A successful output must either be transferred through a
+/// callback's `out_outcome_json` or freed by its caller with
+/// `nemo_relay_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
+    request: *const FfiLLMRequest,
+    annotated_json: *const c_char,
+    pending_marks_json: *const c_char,
+    out_outcome_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out_outcome_json.is_null() {
+        set_last_error("out_outcome_json must be non-null");
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_outcome_json = std::ptr::null_mut() };
+    if request.is_null() {
+        set_last_error("request must be non-null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let annotated_request = if annotated_json.is_null() {
+        None
+    } else {
+        let value = match c_str_to_json(annotated_json) {
+            Some(value) => value,
+            None => return NemoRelayStatus::InvalidJson,
+        };
+        match serde_json::from_value(value) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                set_last_error(&format!("invalid annotated request JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        }
+    };
+    let pending_marks = if pending_marks_json.is_null() {
+        Vec::new()
+    } else {
+        let value = match c_str_to_json(pending_marks_json) {
+            Some(value) => value,
+            None => return NemoRelayStatus::InvalidJson,
+        };
+        match serde_json::from_value::<Vec<PendingMarkSpec>>(value) {
+            Ok(value) => value,
+            Err(error) => {
+                set_last_error(&format!("invalid pending marks JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        }
+    };
+    let outcome = LlmRequestInterceptOutcome {
+        request: unsafe { &*request }.0.clone(),
+        annotated_request,
+        pending_marks,
+    };
+    match serde_json::to_value(outcome) {
+        Ok(value) => {
+            unsafe { *out_outcome_json = json_to_c_string(&value) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&format!("failed to serialize intercept outcome: {error}"));
+            NemoRelayStatus::Internal
+        }
     }
 }
 

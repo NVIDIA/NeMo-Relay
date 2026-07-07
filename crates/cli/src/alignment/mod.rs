@@ -14,6 +14,7 @@ use nemo_relay::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
 use crate::config::header_string;
+pub(crate) use crate::json_path::{string_at_any as json_string_at, value_at_any as json_value_at};
 use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
 
 pub(crate) mod claude_code;
@@ -50,6 +51,30 @@ pub(crate) enum GatewayRouteKind {
     AnthropicCountTokens,
 }
 
+impl GatewayRouteKind {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::OpenAiResponses,
+        Self::OpenAiChatCompletions,
+        Self::OpenAiModels,
+        Self::AnthropicMessages,
+        Self::AnthropicCountTokens,
+    ];
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::OpenAiResponses => "openai.responses",
+            Self::OpenAiChatCompletions => "openai.chat_completions",
+            Self::OpenAiModels => "openai.models",
+            Self::AnthropicMessages => "anthropic.messages",
+            Self::AnthropicCountTokens => "anthropic.count_tokens",
+        }
+    }
+
+    pub(crate) fn from_provider_name(provider: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|route| route.name() == provider)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GatewayManagementPolicy {
     Managed,
@@ -69,6 +94,114 @@ impl GatewayManagementPolicy {
             Self::Managed => None,
             Self::UnmanagedProbe { status, source } => Some((status, source)),
         }
+    }
+}
+
+/// Strategy for extracting provider-request facts used by gateway alignment.
+///
+/// This stays separate from [`SessionAlignmentState`] because extraction is a
+/// stateless read of request JSON, while ownership resolution is stateful and
+/// depends on active scopes, hints, aliases, and recent tool activity.
+pub(crate) trait ProviderRequestExtractor {
+    /// Extract the gateway session id using route-specific header/body rules.
+    fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String>;
+
+    /// Build a stable request-affinity key from user task text, when supported.
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String>;
+
+    /// Build fallback turn input for gateway calls that beat an agent prompt hook.
+    fn gateway_turn_input(&self, agent_kind: AgentKind, request: &LlmRequest) -> Option<Value>;
+}
+
+struct OpenAiResponsesRequestExtractor;
+struct OpenAiChatCompletionsRequestExtractor;
+struct OpenAiModelsRequestExtractor;
+struct AnthropicMessagesRequestExtractor;
+struct AnthropicCountTokensRequestExtractor;
+
+static OPENAI_RESPONSES_REQUEST_EXTRACTOR: OpenAiResponsesRequestExtractor =
+    OpenAiResponsesRequestExtractor;
+static OPENAI_CHAT_COMPLETIONS_REQUEST_EXTRACTOR: OpenAiChatCompletionsRequestExtractor =
+    OpenAiChatCompletionsRequestExtractor;
+static OPENAI_MODELS_REQUEST_EXTRACTOR: OpenAiModelsRequestExtractor = OpenAiModelsRequestExtractor;
+static ANTHROPIC_MESSAGES_REQUEST_EXTRACTOR: AnthropicMessagesRequestExtractor =
+    AnthropicMessagesRequestExtractor;
+static ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR: AnthropicCountTokensRequestExtractor =
+    AnthropicCountTokensRequestExtractor;
+
+impl ProviderRequestExtractor for OpenAiResponsesRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+            .or_else(|| codex::prompt_cache_session_id(body, GatewayRouteKind::OpenAiResponses))
+            .or_else(|| openai_body_session_id(body, GatewayRouteKind::OpenAiResponses))
+    }
+
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        affinity_key_from_task_text(responses_user_task_text(&request.content)?)
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
+    }
+}
+
+impl ProviderRequestExtractor for OpenAiChatCompletionsRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+            .or_else(|| openai_body_session_id(body, GatewayRouteKind::OpenAiChatCompletions))
+    }
+
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        affinity_key_from_task_text(messages_user_task_text(&request.content)?)
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
+    }
+}
+
+impl ProviderRequestExtractor for OpenAiModelsRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, _body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+    }
+
+    fn request_affinity_key(&self, _request: &LlmRequest) -> Option<String> {
+        None
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
+    }
+}
+
+impl ProviderRequestExtractor for AnthropicMessagesRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, _body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+    }
+
+    fn request_affinity_key(&self, request: &LlmRequest) -> Option<String> {
+        affinity_key_from_task_text(messages_user_task_text(&request.content)?)
+    }
+
+    fn gateway_turn_input(&self, agent_kind: AgentKind, request: &LlmRequest) -> Option<Value> {
+        if agent_kind != AgentKind::ClaudeCode {
+            return None;
+        }
+        messages_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+    }
+}
+
+impl ProviderRequestExtractor for AnthropicCountTokensRequestExtractor {
+    fn gateway_session_id(&self, headers: &HeaderMap, _body: &Value) -> Option<String> {
+        gateway_header_session_id(headers)
+    }
+
+    fn request_affinity_key(&self, _request: &LlmRequest) -> Option<String> {
+        None
+    }
+
+    fn gateway_turn_input(&self, _agent_kind: AgentKind, _request: &LlmRequest) -> Option<Value> {
+        None
     }
 }
 
@@ -340,18 +473,38 @@ fn prune_task_sessions(
 
 // Resolves the session id for a gateway request in precedence order:
 // explicit NeMo Relay header, agent-native headers, agent-specific body fallbacks, then the
-// generic OpenAI-compatible `session_id` body field. Keeping the provider fallbacks behind one
-// function makes a new agent integration add one small alignment adapter instead of threading
-// bespoke checks through gateway request construction.
+/// Extract a gateway session id for the selected provider route.
+///
+/// Keeping provider fallbacks behind one function makes a new agent integration
+/// add one small alignment adapter instead of threading bespoke checks through
+/// gateway request construction.
 pub(crate) fn gateway_session_id(
     headers: &HeaderMap,
     body: &Value,
     route: GatewayRouteKind,
 ) -> Option<String> {
+    provider_request_extractor(route).gateway_session_id(headers, body)
+}
+
+fn provider_request_extractor(route: GatewayRouteKind) -> &'static dyn ProviderRequestExtractor {
+    match route {
+        GatewayRouteKind::OpenAiResponses => &OPENAI_RESPONSES_REQUEST_EXTRACTOR,
+        GatewayRouteKind::OpenAiChatCompletions => &OPENAI_CHAT_COMPLETIONS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::OpenAiModels => &OPENAI_MODELS_REQUEST_EXTRACTOR,
+        GatewayRouteKind::AnthropicMessages => &ANTHROPIC_MESSAGES_REQUEST_EXTRACTOR,
+        GatewayRouteKind::AnthropicCountTokens => &ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR,
+    }
+}
+
+fn provider_request_extractor_for_name(
+    provider: &str,
+) -> Option<&'static dyn ProviderRequestExtractor> {
+    GatewayRouteKind::from_provider_name(provider).map(provider_request_extractor)
+}
+
+fn gateway_header_session_id(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-nemo-relay-session-id")
         .or_else(|| claude_code::session_id_from_headers(headers))
-        .or_else(|| codex::prompt_cache_session_id(body, route))
-        .or_else(|| openai_body_session_id(body, route))
 }
 
 fn openai_body_session_id(body: &Value, route: GatewayRouteKind) -> Option<String> {
@@ -368,9 +521,10 @@ fn openai_body_session_id(body: &Value, route: GatewayRouteKind) -> Option<Strin
         .map(ToOwned::to_owned)
 }
 
-// Gives provider adapters a chance to select an agent-native upstream before the gateway falls
-// back to configured provider bases. Codex uses this for ChatGPT OAuth tokens that target the
-// ChatGPT backend instead of the public OpenAI API.
+/// Select an agent-native upstream before falling back to configured providers.
+///
+/// Codex uses this for ChatGPT OAuth tokens that target the ChatGPT backend
+/// instead of the public OpenAI API.
 pub(crate) fn gateway_upstream_url_override(
     headers: &HeaderMap,
     route: GatewayRouteKind,
@@ -385,9 +539,10 @@ pub(crate) fn gateway_upstream_url_override(
     )
 }
 
-// Lets provider adapters remove or preserve agent-native auth material before generic provider
-// auth injection runs. Codex strips ChatGPT OAuth JWTs only when an OpenAI API key is available to
-// replace them.
+/// Remove or preserve agent-native auth before generic provider auth injection.
+///
+/// Codex strips ChatGPT OAuth JWTs only when an OpenAI API key is available to
+/// replace them.
 pub(crate) fn gateway_forward_headers(
     headers: &HeaderMap,
     route: GatewayRouteKind,
@@ -396,16 +551,19 @@ pub(crate) fn gateway_forward_headers(
     codex::strip_chatgpt_oauth_for_openai_route(headers, route, has_openai_replacement_key)
 }
 
-// Reads the explicit subagent header that callers can use when the gateway request already knows
-// the target worker scope. Unlike session ids, there is intentionally no body fallback here:
-// subagent body fields are provider-specific and easy to confuse with tool-call payload content.
+/// Read the explicit subagent header from a gateway request.
+///
+/// Unlike session ids, there is intentionally no body fallback here: subagent
+/// body fields are provider-specific and easy to confuse with tool-call payload
+/// content.
 pub(crate) fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-nemo-relay-subagent-id")
 }
 
-// Resolves a correlation identifier from a dedicated header before trying known JSON body paths.
-// Header precedence lets callers disambiguate requests even when provider payloads contain stale
-// or differently scoped identifiers.
+/// Resolve a correlation identifier from a header or known JSON body paths.
+///
+/// Header precedence lets callers disambiguate requests even when provider
+/// payloads contain stale or differently scoped identifiers.
 pub(crate) fn gateway_identifier(
     headers: &HeaderMap,
     body: &Value,
@@ -415,9 +573,10 @@ pub(crate) fn gateway_identifier(
     header_string(headers, header_name).or_else(|| json_string_at(body, body_paths))
 }
 
-// Infers the owning agent for a session created by a gateway request that beat its SessionStart
-// hook. This is the last chance to label the root scope correctly because exporter identities are
-// baked when the scope opens.
+/// Infer the owning agent for a session opened first by a gateway request.
+///
+/// This is the last chance to label the root scope correctly because exporter
+/// identities are baked when the scope opens.
 pub(crate) fn agent_kind_for_gateway_provider(provider: &str) -> AgentKind {
     if claude_code::owns_gateway_provider(provider) {
         AgentKind::ClaudeCode
@@ -428,6 +587,7 @@ pub(crate) fn agent_kind_for_gateway_provider(provider: &str) -> AgentKind {
     }
 }
 
+/// Decide whether a gateway request should enter the managed correlation path.
 pub(crate) fn gateway_management_policy(
     agent_kind: AgentKind,
     provider: &str,
@@ -446,17 +606,21 @@ pub(crate) fn gateway_management_policy(
     }
 }
 
-// Not every harness has a reliable process/session end signal. Claude Code and Codex sessions can
-// outlive a user-visible run, so the CLI represents their work with bounded turn scopes instead of
-// exporting a long-lived agent scope that needs synthetic termination.
+/// Decide whether this agent kind should emit a long-lived session agent scope.
+///
+/// Claude Code and Codex can outlive a user-visible run, so the CLI represents
+/// their work with bounded Custom turn scopes instead of exporting a long-lived
+/// agent scope that needs synthetic termination. Every turn uses Custom scope
+/// semantics, while Agent scopes remain reserved for agent and subagent lineage.
 pub(crate) fn should_emit_session_agent_scope(agent_kind: AgentKind) -> bool {
     !matches!(agent_kind, AgentKind::ClaudeCode | AgentKind::Codex)
 }
 
-// Detects agent harnesses that report a child session which should become a subagent under another
-// session. Codex is the first such harness: it starts child threads with parent-thread metadata.
-// Future harness-specific detectors should plug in here so the session manager can stay provider
-// neutral.
+/// Detect child sessions that should become subagents under another session.
+///
+/// Codex starts child threads with parent-thread metadata. Future
+/// harness-specific detectors should plug in here so the session manager can
+/// stay provider neutral.
 pub(crate) async fn subagent_session_context(
     event: &SessionEvent,
 ) -> Option<SubagentSessionContext> {
@@ -466,8 +630,10 @@ pub(crate) async fn subagent_session_context(
         .or_else(|| hermes::subagent_context(event).map(SubagentSessionContext::Hermes))
 }
 
-// Converts an AgentStarted event into a pending child-session record when a harness explicitly
-// reports parentage. The caller still decides whether the child session is empty enough to promote.
+/// Convert an agent start into a pending child-session record when possible.
+///
+/// The caller still decides whether the child session is empty enough to
+/// promote.
 pub(crate) async fn pending_subagent_start(
     event: &mut NormalizedEvent,
 ) -> Option<(String, PendingSubagentStart)> {
@@ -490,8 +656,10 @@ pub(crate) async fn pending_subagent_start(
     ))
 }
 
-// Lets the owning alignment adapter stamp provider-specific debug fields on a child SessionStart
-// before the generic session manager promotes it to a subagent.
+/// Stamp provider-specific debug fields onto child-session metadata.
+///
+/// This runs before the generic session manager promotes the child session to a
+/// subagent.
 pub(crate) fn augment_subagent_session_metadata(
     metadata: Value,
     context: &SubagentSessionContext,
@@ -506,9 +674,10 @@ pub(crate) fn augment_subagent_session_metadata(
     }
 }
 
-// Converts a child SessionStart into the provider-appropriate SubagentStarted event. The session
-// manager only knows that a child session should be promoted; the adapter owns how to preserve the
-// provider's original metadata.
+/// Convert a child session start into a provider-appropriate subagent start.
+///
+/// The session manager only knows that a child session should be promoted; the
+/// adapter owns how to preserve provider-specific metadata.
 pub(crate) fn subagent_start_event(
     event: &SessionEvent,
     context: &SubagentSessionContext,
@@ -519,8 +688,10 @@ pub(crate) fn subagent_start_event(
     }
 }
 
-// Builds the alias used to route later child-session events through the promoted parent/subagent
-// pair. The adapter supplies provider-specific metadata explaining why the alias exists.
+/// Build the alias used to route later child-session events through a parent.
+///
+/// The adapter supplies provider-specific metadata explaining why the alias
+/// exists.
 pub(crate) fn alias_for_child_session(
     child_session_id: String,
     context: &SubagentSessionContext,
@@ -535,6 +706,7 @@ pub(crate) fn alias_for_child_session(
     }
 }
 
+/// Extract an explicit child-session alias from a subagent-start event.
 pub(crate) fn explicit_subagent_alias(
     event: &mut NormalizedEvent,
 ) -> Option<(String, SessionAlias)> {
@@ -547,9 +719,10 @@ pub(crate) fn explicit_subagent_alias(
     Some((explicit.child_session_id, explicit.alias))
 }
 
-// Recovers provider-specific metadata from a subagent scope and copies only the fields that should
-// follow LLM spans. Codex contributes thread identifiers today; other harnesses can add filters
-// here without changing session ownership code.
+/// Recover provider-specific metadata that should follow owned LLM spans.
+///
+/// Codex contributes thread identifiers today; other harnesses can add filters
+/// here without changing session ownership code.
 pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
     merge_metadata(
         codex::llm_owner_metadata(scope_metadata),
@@ -557,40 +730,40 @@ pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
     )
 }
 
-// Builds a provider-neutral affinity key from the user task text inside common LLM request
-// formats. Coding agents often replay the same task prompt on later provider calls without a
-// worker id; this key lets session correlation pair those calls with the subagent that first owned
-// the task. The extractor understands Anthropic Messages, OpenAI Chat Completions, and OpenAI
-// Responses shapes, and deliberately ignores raw count-token/file payloads.
-pub(crate) fn request_affinity_key(request: &LlmRequest) -> Option<String> {
-    let task_text = request_user_task_text(&request.content)?;
-    let normalized = normalize_affinity_text(&task_text);
-    (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
-        .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
+/// Build a route-specific affinity key from provider request user task text.
+///
+/// Coding agents often replay the same task prompt on later provider calls
+/// without a worker id; this key lets session correlation pair those calls with
+/// the subagent that first owned the same task.
+pub(crate) fn request_affinity_key(provider: &str, request: &LlmRequest) -> Option<String> {
+    provider_request_extractor_for_name(provider)?.request_affinity_key(request)
 }
 
-// Builds a non-null turn input when a direct gateway request arrives before the prompt hook. This
-// is intentionally limited to Claude-owned Anthropic Messages requests because Claude installed
-// mode is the path where the provider request can race the `UserPromptSubmit` hook.
+/// Build fallback turn input when a gateway request arrives before a prompt hook.
+///
+/// This is intentionally limited to Claude-owned Anthropic Messages requests
+/// because Claude installed mode is the path where provider requests can race
+/// the `UserPromptSubmit` hook.
 pub(crate) fn gateway_turn_input(
     agent_kind: AgentKind,
     provider: &str,
     request: &LlmRequest,
 ) -> Option<Value> {
-    if agent_kind != AgentKind::ClaudeCode || provider != "anthropic.messages" {
-        return None;
-    }
-    request_user_task_text(&request.content).map(|prompt| json!({ "prompt": prompt }))
+    provider_request_extractor_for_name(provider)?.gateway_turn_input(agent_kind, request)
 }
 
-// Detects tool results that imply a subagent completed. Claude Code reports this through the
-// `Agent` tool today; keeping the check here avoids leaking that tool shape into session teardown.
+/// Detect tool results that imply a subagent completed.
+///
+/// Claude Code reports this through the `Agent` tool today; keeping the check
+/// here avoids leaking that tool shape into session teardown.
 pub(crate) fn completed_subagent_from_tool(event: &ToolEvent) -> Option<String> {
     claude_code::completed_subagent_from_agent_tool(event)
 }
 
-// Some harnesses route child-session turn boundaries through a parent-owned subagent alias. A
-// child turn end should close that subagent, not the parent turn containing all sibling work.
+/// Return the aliased subagent id that should own a child turn end.
+///
+/// A child turn end should close that subagent, not the parent turn containing
+/// all sibling work.
 pub(crate) fn aliased_turn_subagent_id(event: &SessionEvent) -> Option<String> {
     json_string_at(
         &event.metadata,
@@ -603,9 +776,11 @@ pub(crate) fn aliased_turn_subagent_id(event: &SessionEvent) -> Option<String> {
     )
 }
 
-// Routes events from an aliased child session through the parent session/subagent pair. The alias
-// records why the child is not a top-level agent; this generic router only rewrites ownership and
-// preserves the adapter-supplied metadata for filtering/debugging in Phoenix.
+/// Route events from an aliased child session through the parent/subagent pair.
+///
+/// The alias records why the child is not a top-level agent; this generic router
+/// only rewrites ownership and preserves the adapter-supplied metadata for
+/// filtering and debugging in Phoenix.
 pub(crate) fn route_event_through_alias(
     event: NormalizedEvent,
     aliases: &HashMap<String, SessionAlias>,
@@ -869,13 +1044,24 @@ const TASK_SESSION_SCOPE_PATHS: &[&[&str]] = &[
     &["extra", "parentSessionId"],
 ];
 
-fn request_user_task_text(payload: &Value) -> Option<String> {
+fn messages_user_task_text(payload: &Value) -> Option<String> {
     payload
         .get("messages")
         .and_then(Value::as_array)
         .and_then(|messages| messages.iter().rev().find_map(user_message_task_text))
-        .or_else(|| responses_input_task_text(payload.get("input")?))
-        .or_else(|| prompt_task_text(payload.get("prompt")?))
+}
+
+fn responses_user_task_text(payload: &Value) -> Option<String> {
+    payload
+        .get("input")
+        .and_then(responses_input_task_text)
+        .or_else(|| payload.get("prompt").and_then(prompt_task_text))
+}
+
+fn affinity_key_from_task_text(task_text: String) -> Option<String> {
+    let normalized = normalize_affinity_text(&task_text);
+    (normalized.chars().count() >= REQUEST_AFFINITY_KEY_MIN_CHARS)
+        .then(|| truncate_affinity_text(&normalized, REQUEST_AFFINITY_KEY_MAX_CHARS))
 }
 
 fn user_message_task_text(message: &Value) -> Option<String> {
@@ -944,33 +1130,10 @@ fn truncate_affinity_text(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
-// Reads the first string-like value from any candidate JSON path. Scalar numbers and booleans are
-// accepted for IDs because provider payloads are not always strict about identifier types.
-pub(crate) fn json_string_at(payload: &Value, paths: &[&[&str]]) -> Option<String> {
-    json_value_at(payload, paths)
-        .and_then(|value| match value {
-            Value::String(value) => Some(value),
-            Value::Number(value) => Some(value.to_string()),
-            Value::Bool(value) => Some(value.to_string()),
-            _ => None,
-        })
-        .filter(|value| !value.is_empty())
-}
-
-// Reads the first JSON value from any candidate path. The clone is intentional because extracted
-// correlation data must live independently of the provider payload it was read from.
-pub(crate) fn json_value_at(payload: &Value, paths: &[&[&str]]) -> Option<Value> {
-    paths.iter().find_map(|path| {
-        let mut current = payload;
-        for key in *path {
-            current = current.get(*key)?;
-        }
-        Some(current.clone())
-    })
-}
-
-// Inserts an optional string value into a JSON object while omitting absent fields entirely. This
-// keeps correlation metadata compact and avoids serializing nulls as meaningful observations.
+/// Insert an optional string value into a JSON object.
+///
+/// Absent fields are omitted entirely to keep correlation metadata compact and
+/// avoid serializing nulls as meaningful observations.
 pub(crate) fn insert_optional(object: &mut Map<String, Value>, key: &str, value: Option<&str>) {
     if let Some(value) = value {
         object.insert(key.to_string(), json!(value));

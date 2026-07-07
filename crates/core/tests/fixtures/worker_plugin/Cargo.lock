@@ -536,7 +536,7 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
 name = "nemo-relay-types"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bitflags",
  "chrono",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "futures-util",
  "hyper-util",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "nemo-relay-worker-proto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "prost",
  "prost-build",

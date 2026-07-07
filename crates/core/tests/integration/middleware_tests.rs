@@ -14,12 +14,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use nemo_relay::api::event::{Event, ScopeCategory};
-use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::event::{
+    CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
     llm_stream_call_execute,
 };
+use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
@@ -49,10 +51,11 @@ use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{
-    tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
-    tool_request_intercepts,
+    ToolExecutionInterceptOutcome, tool_call, tool_call_end, tool_call_execute,
+    tool_conditional_execution, tool_request_intercepts,
 };
 use nemo_relay::error::FlowError;
+use nemo_relay::plugin::{PluginRegistrationContext, rollback_registrations};
 use serde_json::json;
 
 // All tests share the global context, so we serialize them.
@@ -454,7 +457,7 @@ async fn test_execution_intercept_calls_next() {
         Arc::new(|_name, args, next| {
             Box::pin(async move {
                 // Call next — this should reach the original callable
-                next(args).await
+                next(args).await.map(Into::into)
             })
         }),
     )
@@ -503,7 +506,7 @@ async fn test_execution_intercept_skips_next() {
         Arc::new(|_name, _args, _next| {
             Box::pin(async move {
                 // Return a custom result without calling next
-                Ok(json!({"intercepted": true}))
+                Ok(json!({"intercepted": true}).into())
             })
         }),
     )
@@ -556,7 +559,7 @@ async fn test_execution_intercept_chain_ordering() {
                 o.lock().unwrap().push("intercept_1_before".into());
                 let result = next(args).await;
                 o.lock().unwrap().push("intercept_1_after".into());
-                result
+                result.map(Into::into)
             })
         }),
     )
@@ -573,7 +576,7 @@ async fn test_execution_intercept_chain_ordering() {
                 o.lock().unwrap().push("intercept_2_before".into());
                 let result = next(args).await;
                 o.lock().unwrap().push("intercept_2_after".into());
-                result
+                result.map(Into::into)
             })
         }),
     )
@@ -629,7 +632,7 @@ async fn test_execution_intercept_modifies_args() {
                 args.as_object_mut()
                     .unwrap()
                     .insert("injected".into(), json!(true));
-                next(args).await
+                next(args).await.map(Into::into)
             })
         }),
     )
@@ -652,6 +655,449 @@ async fn test_execution_intercept_modifies_args() {
 
     // Cleanup
     deregister_tool_execution_intercept("arg_modifier").unwrap();
+}
+
+#[tokio::test]
+async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "tool_outcome_mark_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let mut plugin_ctx = PluginRegistrationContext::new();
+    plugin_ctx
+        .register_tool_execution_intercept(
+            "outcome_outer",
+            1,
+            Arc::new(|_name, args, next| {
+                Box::pin(async move {
+                    let result = next(args).await?;
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("tool.mark.outer")
+                                .data(json!({"layer": "outer"}))
+                                .build(),
+                        ),
+                    )
+                })
+            }),
+        )
+        .unwrap();
+    register_tool_execution_intercept(
+        "passthrough_between_outcomes",
+        2,
+        Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+    )
+    .unwrap();
+    plugin_ctx
+        .register_tool_execution_intercept(
+            "outcome_inner",
+            3,
+            Arc::new(|_name, args, next| {
+                Box::pin(async move {
+                    let mut result = next(args).await?;
+                    result["compressed"] = json!(true);
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("tool.mark.inner")
+                                .category(EventCategory::custom())
+                                .category_profile(
+                                    CategoryProfile::builder()
+                                        .subtype("example.tool.compression")
+                                        .build(),
+                                )
+                                .data(json!({"saved_tokens": 12}))
+                                .metadata(json!({"source": "test"}))
+                                .build(),
+                        ),
+                    )
+                })
+            }),
+        )
+        .unwrap();
+
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("tool-outcome")
+            .args(json!({"value": 42}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, json!({"value": 42, "compressed": true}));
+    assert!(result.get("pending_marks").is_none());
+
+    flush_subscribers().unwrap();
+    let captured = events.lock().unwrap();
+    let start_index = captured
+        .iter()
+        .position(|event| {
+            event.name() == "tool-outcome" && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    let end_index = captured
+        .iter()
+        .position(|event| {
+            event.name() == "tool-outcome" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    let inner_index = captured
+        .iter()
+        .position(|event| event.name() == "tool.mark.inner")
+        .unwrap();
+    let outer_index = captured
+        .iter()
+        .position(|event| event.name() == "tool.mark.outer")
+        .unwrap();
+    assert!(start_index < end_index);
+    assert!(end_index < inner_index);
+    assert!(inner_index < outer_index);
+
+    let start = &captured[start_index];
+    let end = &captured[end_index];
+    let inner = &captured[inner_index];
+    let outer = &captured[outer_index];
+    assert_eq!(inner.parent_uuid(), Some(start.uuid()));
+    assert_eq!(outer.parent_uuid(), Some(start.uuid()));
+    assert!(inner.timestamp() > end.timestamp());
+    assert!(outer.timestamp() > inner.timestamp());
+    assert_eq!(end.data().unwrap(), &result);
+    assert_eq!(inner.category().map(EventCategory::as_str), Some("custom"));
+    assert_eq!(
+        inner
+            .category_profile()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("example.tool.compression")
+    );
+    assert_eq!(inner.data().unwrap()["saved_tokens"], 12);
+    assert_eq!(inner.metadata().unwrap()["source"], "test");
+    drop(captured);
+
+    deregister_tool_execution_intercept("passthrough_between_outcomes").unwrap();
+    let mut registrations = plugin_ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+    deregister_subscriber("tool_outcome_mark_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_tool_execution_error_discards_downstream_pending_marks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "tool_outcome_error_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    register_tool_execution_intercept(
+        "error_after_outcome",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let _ = next(args).await?;
+                Err(FlowError::Internal("outer failure".into()))
+            })
+        }),
+    )
+    .unwrap();
+    let mut plugin_ctx = PluginRegistrationContext::new();
+    plugin_ctx
+        .register_tool_execution_intercept(
+            "outcome_before_error",
+            2,
+            Arc::new(|_name, args, next| {
+                Box::pin(async move {
+                    let result = next(args).await?;
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("tool.mark.must_not_emit")
+                                .build(),
+                        ),
+                    )
+                })
+            }),
+        )
+        .unwrap();
+
+    let error = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("tool-outcome-error")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("outer failure"));
+
+    flush_subscribers().unwrap();
+    let captured = events.lock().unwrap();
+    assert!(
+        captured
+            .iter()
+            .all(|event| event.name() != "tool.mark.must_not_emit")
+    );
+    assert!(captured.iter().any(|event| {
+        event.name() == "tool-outcome-error" && event.scope_category() == Some(ScopeCategory::End)
+    }));
+    drop(captured);
+
+    deregister_tool_execution_intercept("error_after_outcome").unwrap();
+    let mut registrations = plugin_ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+    deregister_subscriber("tool_outcome_error_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_managed_tool_reuses_start_subscriber_snapshot_for_end_and_marks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let original_events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_original = original_events.clone();
+    register_subscriber(
+        "tool_lifecycle_original",
+        Arc::new(move |event| captured_original.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let replacement_events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_replacement = replacement_events.clone();
+    let mut plugin_ctx = PluginRegistrationContext::new();
+    plugin_ctx
+        .register_tool_execution_intercept(
+            "mutate_tool_subscribers",
+            1,
+            Arc::new(move |_name, args, next| {
+                let captured_replacement = captured_replacement.clone();
+                Box::pin(async move {
+                    assert!(deregister_subscriber("tool_lifecycle_original").unwrap());
+                    register_subscriber(
+                        "tool_lifecycle_replacement",
+                        Arc::new(move |event| {
+                            captured_replacement.lock().unwrap().push(event.clone());
+                        }),
+                    )
+                    .unwrap();
+                    let result = next(args).await?;
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("tool.snapshot.mark")
+                                .build(),
+                        ),
+                    )
+                })
+            }),
+        )
+        .unwrap();
+
+    tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("tool-subscriber-snapshot")
+            .args(json!({"value": 1}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .unwrap();
+    flush_subscribers().unwrap();
+
+    let original_events = original_events.lock().unwrap();
+    assert!(original_events.iter().any(|event| {
+        event.name() == "tool-subscriber-snapshot"
+            && event.scope_category() == Some(ScopeCategory::Start)
+    }));
+    assert!(original_events.iter().any(|event| {
+        event.name() == "tool-subscriber-snapshot"
+            && event.scope_category() == Some(ScopeCategory::End)
+    }));
+    assert!(
+        original_events
+            .iter()
+            .any(|event| event.name() == "tool.snapshot.mark")
+    );
+    drop(original_events);
+    assert!(replacement_events.lock().unwrap().is_empty());
+
+    assert!(deregister_subscriber("tool_lifecycle_replacement").unwrap());
+    let mut registrations = plugin_ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+}
+
+#[tokio::test]
+async fn test_managed_tool_reuses_start_subscriber_snapshot_for_error_end() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let original_events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_original = original_events.clone();
+    register_subscriber(
+        "tool_error_original",
+        Arc::new(move |event| captured_original.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let replacement_events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_replacement = replacement_events.clone();
+    register_tool_execution_intercept(
+        "mutate_tool_error_subscribers",
+        1,
+        Arc::new(move |_name, _args, _next| {
+            let captured_replacement = captured_replacement.clone();
+            Box::pin(async move {
+                assert!(deregister_subscriber("tool_error_original").unwrap());
+                register_subscriber(
+                    "tool_error_replacement",
+                    Arc::new(move |event| {
+                        captured_replacement.lock().unwrap().push(event.clone());
+                    }),
+                )
+                .unwrap();
+                Err(FlowError::Internal("managed tool failure".into()))
+            })
+        }),
+    )
+    .unwrap();
+
+    let error = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("tool-error-subscriber-snapshot")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("managed tool failure"));
+    flush_subscribers().unwrap();
+
+    let original_events = original_events.lock().unwrap();
+    assert!(original_events.iter().any(|event| {
+        event.name() == "tool-error-subscriber-snapshot"
+            && event.scope_category() == Some(ScopeCategory::Start)
+    }));
+    assert!(original_events.iter().any(|event| {
+        event.name() == "tool-error-subscriber-snapshot"
+            && event.scope_category() == Some(ScopeCategory::End)
+    }));
+    drop(original_events);
+    assert!(replacement_events.lock().unwrap().is_empty());
+
+    deregister_tool_execution_intercept("mutate_tool_error_subscribers").unwrap();
+    assert!(deregister_subscriber("tool_error_replacement").unwrap());
+}
+
+#[tokio::test]
+async fn test_repeated_next_marks_follow_invocation_order_not_completion_order() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured_events = events.clone();
+    register_subscriber(
+        "tool_concurrent_next_observer",
+        Arc::new(move |event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    register_tool_execution_intercept(
+        "concurrent_next",
+        1,
+        Arc::new(|_name, _args, next| {
+            Box::pin(async move {
+                let first = next(json!({"branch": "first", "delay_ms": 40}));
+                let second = next(json!({"branch": "second", "delay_ms": 1}));
+                let (first, second) = tokio::join!(first, second);
+                Ok(json!({
+                    "first": first?,
+                    "second": second?,
+                })
+                .into())
+            })
+        }),
+    )
+    .unwrap();
+
+    let completion_order = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured_completion_order = completion_order.clone();
+    let mut plugin_ctx = PluginRegistrationContext::new();
+    plugin_ctx
+        .register_tool_execution_intercept(
+            "delayed_outcomes",
+            2,
+            Arc::new(move |_name, args, next| {
+                let captured_completion_order = captured_completion_order.clone();
+                Box::pin(async move {
+                    let branch = args["branch"].as_str().unwrap().to_string();
+                    let delay_ms = args["delay_ms"].as_u64().unwrap();
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    let result = next(args).await?;
+                    captured_completion_order
+                        .lock()
+                        .unwrap()
+                        .push(branch.clone());
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name(format!("tool.concurrent.{branch}"))
+                                .build(),
+                        ),
+                    )
+                })
+            }),
+        )
+        .unwrap();
+
+    tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("tool-concurrent-next")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .unwrap();
+    flush_subscribers().unwrap();
+
+    assert_eq!(
+        *completion_order.lock().unwrap(),
+        vec!["second".to_string(), "first".to_string()]
+    );
+    let events = events.lock().unwrap();
+    let marks = events
+        .iter()
+        .filter(|event| event.name().starts_with("tool.concurrent."))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marks.iter().map(|event| event.name()).collect::<Vec<_>>(),
+        ["tool.concurrent.first", "tool.concurrent.second"]
+    );
+    assert!(marks[0].timestamp() < marks[1].timestamp());
+    drop(events);
+
+    deregister_tool_execution_intercept("concurrent_next").unwrap();
+    let mut registrations = plugin_ctx.into_registrations();
+    rollback_registrations(&mut registrations);
+    deregister_subscriber("tool_concurrent_next_observer").unwrap();
 }
 
 // =========================================================================
@@ -989,7 +1435,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
         1,
         Arc::new(move |_name, args, next| {
             ic.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -1147,7 +1593,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
                 o.lock().unwrap().push("global_before".into());
                 let r = next(args).await;
                 o.lock().unwrap().push("global_after".into());
-                r
+                r.map(Into::into)
             })
         }),
     )
@@ -1165,7 +1611,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
                 o.lock().unwrap().push("local_before".into());
                 let r = next(args).await;
                 o.lock().unwrap().push("local_after".into());
-                r
+                r.map(Into::into)
             })
         }),
     )
@@ -1288,7 +1734,7 @@ async fn test_conditional_rejection_prevents_execution() {
         1,
         Arc::new(move |_name, args, next| {
             ec.store(true, Ordering::SeqCst);
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -1700,13 +2146,17 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
                     Arc::new(move |_, request, annotated| {
                         record_middleware_callback(&tracked, "llm_request_late");
                         assert_middleware_callback_locks_are_free();
-                        Ok((request, annotated))
+                        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                            request, annotated,
+                        ))
                     }),
                 )
                 .unwrap();
             }
 
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -1719,7 +2169,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
         },
     )
     .unwrap();
-    assert_eq!(request.content["round"], 1);
+    assert_eq!(request.request.content["round"], 1);
     assert_middleware_callback_labels(&callbacks, &["llm_request_initial"]);
 
     callbacks.lock().unwrap().clear();
@@ -1731,7 +2181,7 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
         },
     )
     .unwrap();
-    assert_eq!(request.content["round"], 2);
+    assert_eq!(request.request.content["round"], 2);
     assert_middleware_callback_labels(&callbacks, &["llm_request_initial", "llm_request_late"]);
 
     deregister_llm_request_intercept("snapshot_llm_request_initial").unwrap();
@@ -1823,7 +2273,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args, next| {
             record_middleware_callback(&tracked, "tool_execution_global");
             assert_middleware_callback_locks_are_free();
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -1835,7 +2285,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, args, next| {
             record_middleware_callback(&tracked, "tool_execution_scope");
             assert_middleware_callback_locks_are_free();
-            Box::pin(async move { next(args).await })
+            Box::pin(async move { next(args).await.map(Into::into) })
         }),
     )
     .unwrap();
@@ -1947,7 +2397,9 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, request, annotated| {
             record_middleware_callback(&tracked, "llm_request_global");
             assert_middleware_callback_locks_are_free();
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -1960,7 +2412,9 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         Arc::new(move |_, request, annotated| {
             record_middleware_callback(&tracked, "llm_request_scope");
             assert_middleware_callback_locks_are_free();
-            Ok((request, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -2223,7 +2677,7 @@ async fn test_full_pipeline_integration() {
             let o = o4.clone();
             Box::pin(async move {
                 o.lock().unwrap().push("execution_intercept".into());
-                next(args).await
+                next(args).await.map(Into::into)
             })
         }),
     )
@@ -2571,7 +3025,9 @@ async fn test_llm_request_intercept_transforms() {
         false,
         Arc::new(|_name: &str, mut req: LlmRequest, annotated| {
             req.headers.insert("x-intercepted".into(), json!(true));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -2582,10 +3038,221 @@ async fn test_llm_request_intercept_transforms() {
     };
 
     let result = llm_request_intercepts("test_llm", request).unwrap();
-    assert_eq!(result.headers["x-intercepted"], true);
+    assert_eq!(result.request.headers["x-intercepted"], true);
 
     // Cleanup
     deregister_llm_request_intercept("llm_req_i").unwrap();
+}
+
+#[test]
+fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    for (name, priority, break_chain, mark_name) in [
+        ("pending_first", 1, false, "first"),
+        ("pending_break", 2, true, "second"),
+        ("pending_skipped", 3, false, "skipped"),
+    ] {
+        register_llm_request_intercept(
+            name,
+            priority,
+            break_chain,
+            Arc::new(move |_name, request, annotated| {
+                Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_pending_mark(PendingMarkSpec::builder().name(mark_name).build()))
+            }),
+        )
+        .unwrap();
+    }
+
+    let outcome = llm_request_intercepts(
+        "llm",
+        LlmRequest {
+            headers: serde_json::Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        outcome
+            .pending_marks
+            .iter()
+            .map(|mark| mark.name.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(outcome.request.content["prompt"], "hello");
+
+    for name in ["pending_first", "pending_break", "pending_skipped"] {
+        deregister_llm_request_intercept(name).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_managed_llm_emits_pending_marks_under_started_scope() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "pending_mark_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    register_llm_request_intercept(
+        "pending_managed",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("request.optimized")
+                        .category(EventCategory::custom())
+                        .category_profile(
+                            CategoryProfile::builder()
+                                .subtype("optimizer.saved_tokens")
+                                .build(),
+                        )
+                        .data(json!({"saved_tokens": 12}))
+                        .build(),
+                )
+                .with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("request.optimized.second")
+                        .build(),
+                ))
+        }),
+    )
+    .unwrap();
+
+    let provider_request = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured_request = provider_request.clone();
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("pending-managed-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::from_iter([(
+                    "x-pending-mark-test".into(),
+                    json!("preserved"),
+                )]),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(move |request| {
+                *captured_request.lock().unwrap() = Some(request);
+                Box::pin(async { Ok(json!({"response": "done"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let provider_request = provider_request.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        provider_request.headers.get("x-pending-mark-test"),
+        Some(&json!("preserved"))
+    );
+    assert_eq!(provider_request.content["prompt"], "hello");
+    assert!(provider_request.content.get("pending_marks").is_none());
+    assert!(provider_request.content.get("annotated_request").is_none());
+
+    let captured = captured_events_snapshot(&events);
+    let start = captured
+        .iter()
+        .find(|event| {
+            event.name() == "pending-managed-llm"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    let mark = captured
+        .iter()
+        .find(|event| event.name() == "request.optimized")
+        .unwrap();
+    let second_mark = captured
+        .iter()
+        .find(|event| event.name() == "request.optimized.second")
+        .unwrap();
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "pending-managed-llm"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(mark.parent_uuid(), Some(start.uuid()));
+    assert_eq!(second_mark.parent_uuid(), Some(start.uuid()));
+    assert!(mark.timestamp() > start.timestamp());
+    assert_eq!(mark.timestamp(), second_mark.timestamp());
+    assert!(end.timestamp() >= mark.timestamp());
+    assert_eq!(mark.data().unwrap()["saved_tokens"], 12);
+
+    deregister_llm_request_intercept("pending_managed").unwrap();
+    deregister_subscriber("pending_mark_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_failed_request_intercept_does_not_emit_pending_marks_or_start_scope() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "failed_pending_mark_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        "pending_before_failure",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()))
+        }),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        "pending_failure",
+        2,
+        false,
+        Arc::new(|_name, _request, _annotated| {
+            Err(FlowError::Internal("request intercept failed".into()))
+        }),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = provider_called.clone();
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("failed-pending-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(move |_request| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({"response": "unexpected"})) })
+            }))
+            .build(),
+    )
+    .await;
+
+    assert!(result.is_err());
+    assert!(!provider_called.load(Ordering::SeqCst));
+    assert!(captured_events_snapshot(&events).is_empty());
+
+    deregister_llm_request_intercept("pending_before_failure").unwrap();
+    deregister_llm_request_intercept("pending_failure").unwrap();
+    deregister_subscriber("failed_pending_mark_observer").unwrap();
 }
 
 /// LLM execution intercept middleware chain with next().
@@ -2672,7 +3339,9 @@ async fn test_llm_start_emits_before_short_circuit_execution_intercept() {
                 .as_object_mut()
                 .unwrap()
                 .insert("phase".into(), json!("request"));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();
@@ -2764,7 +3433,9 @@ async fn test_llm_stream_start_emits_before_short_circuit_execution_intercept() 
                 .as_object_mut()
                 .unwrap()
                 .insert("phase".into(), json!("request"));
-            Ok((req, annotated))
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                req, annotated,
+            ))
         }),
     )
     .unwrap();

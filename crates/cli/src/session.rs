@@ -971,6 +971,7 @@ impl Session {
                 }
                 let owner = self.resolve_llm_owner(&start);
                 self.record_llm_request_affinity(
+                    &start.provider,
                     &start.request,
                     owner.subagent_id.as_deref(),
                     owner.status,
@@ -1034,6 +1035,7 @@ impl Session {
                     self.resolve_llm_owner(&start)
                 };
                 self.record_llm_request_affinity(
+                    &start.provider,
                     &start.request,
                     owner.subagent_id.as_deref(),
                     owner.status,
@@ -1081,7 +1083,7 @@ impl Session {
     }
 
     // Lazily opens the root agent scope for harnesses that have a meaningful session boundary.
-    // Harnesses without a reliable session end deliberately skip this and use bounded turn agent
+    // Harnesses without a reliable session end deliberately skip this and use bounded Custom turn
     // scopes as the top-level observable unit.
     fn ensure_agent_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
         if self.agent_scope.is_some()
@@ -1105,7 +1107,7 @@ impl Session {
         Ok(())
     }
 
-    // Opens a new turn agent scope for a user prompt. If the previous turn never received a
+    // Opens a new Custom turn scope for a user prompt. If the previous turn never received a
     // terminal hook, close it first so each user input gets a bounded reviewable trace segment.
     async fn start_turn(&mut self, event: SessionEvent) -> Result<(), CliError> {
         if alignment::aliased_turn_subagent_id(&event).is_some() {
@@ -1179,7 +1181,7 @@ impl Session {
         let scope = push_scope(
             PushScopeParams::builder()
                 .name(turn_name.as_str())
-                .scope_type(ScopeType::Agent)
+                .scope_type(ScopeType::Custom)
                 .parent_opt(self.agent_scope.as_ref())
                 .metadata(metadata)
                 .input(input)
@@ -1362,8 +1364,9 @@ impl Session {
         self.turn_scope.clone().or_else(|| self.agent_scope.clone())
     }
 
-    // Starts a subagent agent scope under the active turn. Duplicate subagent starts are ignored so
-    // integrations that retry or emit both "start" and "created" style hooks do not double-nest.
+    // Starts an Agent subagent scope under the active Custom turn scope. Duplicate subagent starts
+    // are ignored so integrations that retry or emit both "start" and "created" style hooks do
+    // not double-nest.
     //
     // Subagents get their own runtime stack seeded with the turn parent. That keeps Phoenix
     // parentage sibling-shaped within a turn while still allowing parallel workers to end out of
@@ -1848,7 +1851,7 @@ impl Session {
     // pair unhinted Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses calls with
     // the subagent that first owned the same coding task.
     fn request_affinity_owner(&mut self, start: &LlmGatewayStart) -> Option<LlmOwnerResolution> {
-        let key = alignment::request_affinity_key(&start.request)?;
+        let key = alignment::request_affinity_key(&start.provider, &start.request)?;
         let subagent_id = self.llm_request_affinity.get(&key).cloned().flatten()?;
         let parent = match self.subagents.get(&subagent_id).cloned() {
             Some(parent) => parent,
@@ -2041,6 +2044,7 @@ impl Session {
     // is meant to correct when multiple coding-agent workers share a root session.
     fn record_llm_request_affinity(
         &mut self,
+        provider: &str,
         request: &LlmRequest,
         subagent_id: Option<&str>,
         status: &str,
@@ -2051,7 +2055,7 @@ impl Session {
         let Some(subagent_id) = subagent_id else {
             return;
         };
-        let Some(key) = alignment::request_affinity_key(request) else {
+        let Some(key) = alignment::request_affinity_key(provider, request) else {
             return;
         };
         match self.llm_request_affinity.get_mut(&key) {
@@ -2083,8 +2087,8 @@ impl Session {
             }));
     }
 
-    // Remembers the latest completed LLM response owned by the turn/root agent so the enclosing
-    // turn agent scope can export the final assistant output. Subagent-owned responses are
+    // Remembers the latest completed LLM response owned by the turn or root Agent scope so the
+    // enclosing Custom turn scope can export the final assistant output. Subagent-owned responses are
     // deliberately excluded; otherwise a worker's last local answer can overwrite the parent
     // agent's final synthesis.
     fn record_completed_llm_response(

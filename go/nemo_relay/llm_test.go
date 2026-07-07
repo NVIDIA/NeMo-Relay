@@ -440,8 +440,8 @@ func TestLlmConditionalBlocksExecution(t *testing.T) {
 
 func TestLlmRequestInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterLlmRequestIntercept("go_llm_req", 1, false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
-			return headers, content, annotated, nil
+		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
+			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	)
 	if err != nil {
@@ -521,14 +521,15 @@ func TestLlmStreamExecutionInterceptCanCallNext(t *testing.T) {
 
 func TestLlmRequestInterceptModifies(t *testing.T) {
 	RegisterLlmRequestIntercept("go_llm_req_mod", 1, false,
-		func(name string, headers, content, annotated json.RawMessage) (json.RawMessage, json.RawMessage, json.RawMessage, error) {
+		func(name string, request LLMRequestDTO, annotated json.RawMessage) (LLMRequestInterceptOutcome, error) {
 			var m map[string]interface{}
-			json.Unmarshal(content, &m)
+			json.Unmarshal(request.Content, &m)
 			m["intercepted"] = true
-			out, _ := json.Marshal(m)
-			return headers, out, annotated, nil
+			request.Content, _ = json.Marshal(m)
+			return LLMRequestInterceptOutcome{Request: request, AnnotatedRequest: annotated}, nil
 		},
 	)
+	t.Cleanup(func() { _ = DeregisterLlmRequestIntercept("go_llm_req_mod") })
 
 	request := makeRequest()
 	result, err := LlmCallExecute("int_llm", request,
@@ -550,8 +551,6 @@ func TestLlmRequestInterceptModifies(t *testing.T) {
 	if output["saw_intercepted"] != true {
 		t.Fatalf("expected saw_intercepted=true, got %v", output)
 	}
-
-	DeregisterLlmRequestIntercept("go_llm_req_mod")
 }
 
 func TestLlmExecutionInterceptReplaces(t *testing.T) {

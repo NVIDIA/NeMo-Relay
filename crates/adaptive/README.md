@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -27,27 +26,27 @@ framework.
 
 ## Why Use It?
 
-- ⚙️ **Install adaptive behavior through plugins**: Enable adaptive runtime
+- **Install adaptive behavior through plugins**: Enable adaptive runtime
   components through the same configuration path as other NeMo Relay plugins.
-- 📈 **Learn from observed executions**: Derive runtime hints from scope, tool,
+- **Learn from observed executions**: Derive runtime hints from scope, tool,
   and LLM events without replacing the application framework.
-- 💾 **Choose local or shared state**: Use in-memory state for local runs or the
+- **Choose local or shared state**: Use in-memory state for local runs or the
   optional Redis backend for shared persistence.
-- 🧩 **Keep adaptive behavior reusable**: Package telemetry, hint injection,
+- **Keep adaptive behavior reusable**: Package telemetry, hint injection,
   tool parallelism, and cache-governor behavior behind stable component
   settings.
 
 ## What You Get
 
-- ✅ **`AdaptiveConfig`**: A canonical config contract for the top-level
+- **`AdaptiveConfig`**: A canonical config contract for the top-level
   `adaptive` plugin component.
-- ✅ **Built-in component settings**: Typed config helpers for telemetry,
+- **Built-in component settings**: Typed config helpers for telemetry,
   adaptive hints, tool parallelism, and the Adaptive Cache Governor.
-- ✅ **State backends**: In-memory state by default and Redis-backed state behind
+- **State backends**: In-memory state by default and Redis-backed state behind
   the `redis-backend` feature.
-- ✅ **Learning primitives**: Runtime helpers and learners built on NeMo Relay
+- **Learning primitives**: Runtime helpers and learners built on NeMo Relay
   events.
-- ✅ **Adaptive Cache Governor (ACG) module surface**: The canonical
+- **Adaptive Cache Governor (ACG) module surface**: The canonical
   `nemo_relay_adaptive::acg` module for PromptIR, provider plugins, stability
   analysis, and cache telemetry normalization.
 

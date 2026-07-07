@@ -38,11 +38,11 @@ _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
 _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
-    _Json | Awaitable[_Json],
+    "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
-    tuple["LLMRequest", "AnnotatedLLMRequest | None"],
+    "LLMRequestInterceptOutcome",
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
     [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
@@ -381,6 +381,59 @@ class LLMRequest:
     def content(self) -> _JsonObject:
         """Return the request content body as a JSON object."""
         ...
+
+class PendingMarkSpec:
+    """A runtime-owned mark specification returned by lifecycle middleware."""
+    def __init__(
+        self,
+        name: str,
+        category: Optional[str] = ...,
+        category_profile: Optional[_Json] = ...,
+        data: Optional[_Json] = ...,
+        metadata: Optional[_Json] = ...,
+    ) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def category(self) -> Optional[str]: ...
+    @property
+    def category_profile(self) -> Optional[_Json]: ...
+    @property
+    def data(self) -> Optional[_Json]: ...
+    @property
+    def metadata(self) -> Optional[_Json]: ...
+
+class LLMRequestInterceptOutcome:
+    """Canonical result returned by an LLM request intercept."""
+    def __init__(
+        self,
+        request: LLMRequest,
+        annotated_request: Optional[AnnotatedLLMRequest] = ...,
+        pending_marks: list[PendingMarkSpec] = ...,
+    ) -> None: ...
+    @property
+    def request(self) -> LLMRequest: ...
+    @property
+    def annotated_request(self) -> Optional[AnnotatedLLMRequest]: ...
+    @property
+    def pending_marks(self) -> list[PendingMarkSpec]: ...
+
+class ToolExecutionInterceptOutcome:
+    """Canonical result returned by a tool execution intercept.
+
+    ``result`` is passed to the remaining middleware and application.
+    ``pending_marks`` are Relay-owned lifecycle metadata emitted after the
+    tool-end event and are not included in the application-visible result.
+    """
+    def __init__(
+        self,
+        result: _Json,
+        pending_marks: list[PendingMarkSpec] = ...,
+    ) -> None: ...
+    @property
+    def result(self) -> _Json: ...
+    @property
+    def pending_marks(self) -> list[PendingMarkSpec]: ...
 
 class AnnotatedLLMRequest:
     """Structured view of an LLM request produced by a codec.
@@ -1509,7 +1562,7 @@ def tool_conditional_execution(name: str, args: _Json) -> None:
     """
     ...
 
-def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequest:
+def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequestInterceptOutcome:
     """Run the registered LLM request-intercept chain.
 
     Args:
@@ -1709,7 +1762,10 @@ def register_tool_execution_intercept(name: str, priority: int, callable: _ToolE
     Args:
         name: Unique intercept name.
         priority: Execution order; lower values run first.
-        callable: Middleware callback that may call or short-circuit ``next``.
+        callable: Middleware callback returning
+            ``ToolExecutionInterceptOutcome``. It may call or short-circuit
+            ``next``; ``next`` resolves to the raw downstream result while
+            Relay retains downstream pending marks.
 
     Returns:
         ``None``.
@@ -1939,7 +1995,10 @@ def scope_register_tool_execution_intercept(
         scope_uuid: UUID of the owning scope.
         name: Unique intercept name within that scope.
         priority: Execution order; lower values run first.
-        callable: Middleware callback used while the owning scope is active.
+        callable: Middleware callback returning
+            ``ToolExecutionInterceptOutcome`` while the owning scope is active.
+            Its ``next`` continuation resolves to the raw downstream result
+            while Relay retains downstream pending marks.
 
     Returns:
         ``None``.

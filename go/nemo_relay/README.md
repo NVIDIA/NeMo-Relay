@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -27,26 +26,26 @@ primary supported surfaces.
 
 ## Why Use It?
 
-- 🧭 **Use NeMo Relay from Go**: Group agent, tool, and LLM work into the same
+- **Use NeMo Relay from Go**: Group agent, tool, and LLM work into the same
   scope and lifecycle model as the Rust runtime.
-- 🔌 **Bridge through CGo and FFI**: Consume the shared runtime through the
+- **Bridge through CGo and FFI**: Consume the shared runtime through the
   repository-maintained `nemo-relay-ffi` layer.
-- 📡 **Observe runtime behavior**: Register subscribers for scope, tool, LLM,
+- **Observe runtime behavior**: Register subscribers for scope, tool, LLM,
   and mark events emitted by the runtime.
-- 🚧 **Evaluate an experimental binding**: Use the source-first Go surface when
+- **Evaluate an experimental binding**: Use the source-first Go surface when
   a Go integration needs NeMo Relay semantics.
 
 ## What You Get
 
-- ✅ **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
+- **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
   shared Rust runtime.
-- ✅ **Middleware APIs**: Guardrails and intercepts for request rewriting,
+- **Middleware APIs**: Guardrails and intercepts for request rewriting,
   blocking, sanitization, and execution wrapping.
-- ✅ **Event subscribers**: Runtime lifecycle callbacks for observability and
+- **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
-- ✅ **Convenience subpackages**: Short imports for scopes, tools, LLM calls,
+- **Convenience subpackages**: Short imports for scopes, tools, LLM calls,
   guardrails, intercepts, subscribers, plugins, and adaptive helpers.
-- ✅ **Local source-first workflow**: Build the FFI library locally, then test or
+- **Local source-first workflow**: Build the FFI library locally, then test or
   consume the Go module from the checkout.
 
 ## Installation

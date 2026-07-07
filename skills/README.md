@@ -27,10 +27,9 @@ Use these skills for tasks such as:
 - Setting up observability and trace export
 - Debugging application-side NeMo Relay integrations
 
-When a skill mentions Go, WebAssembly, or raw FFI, treat those as source-first
-advanced surfaces. Their APIs are tracked in `go/nemo_relay`, `crates/wasm`, and
-`crates/ffi`, but the primary end-user docs and quick starts focus on Rust,
-Python, and Node.js.
+When a skill mentions Go or raw FFI, treat those as source-first advanced
+surfaces. Their APIs are tracked in `go/nemo_relay` and `crates/ffi`, but the
+primary end-user docs and quick starts focus on Rust, Python, and Node.js.
 
 Maintainer-only repository development skills live in `.agents/skills/`.
 The agent-specific directories `.claude/skills`, `.codex/skills`, and

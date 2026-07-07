@@ -13,7 +13,15 @@ integration-provided codecs independently of any one framework adapter.
 
 from typing import cast
 
-from nemo_relay import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, scope
+from nemo_relay import (
+    AnnotatedLLMRequest,
+    JsonObject,
+    LLMRequest,
+    LLMRequestInterceptOutcome,
+    ScopeType,
+    llm,
+    scope,
+)
 from nemo_relay.codecs import (
     LlmCodec,
 )
@@ -448,7 +456,7 @@ class TestLangGraphDelegation:
             if annotated is not None:
                 intercept_data["model"] = annotated.model
                 intercept_data["messages"] = annotated.messages
-            return (request, annotated)
+            return LLMRequestInterceptOutcome(request, annotated)
 
         intercepts.register_llm_request("delegation-test-intercept", 1, False, annotated_intercept)
 

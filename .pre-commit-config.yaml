@@ -83,7 +83,7 @@ repos:
           - --exclude
           - '^https?://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?(/.*)?$'
           - --exclude
-          - '^https://www\.npmjs\.com/package/nemo-relay-(node|wasm)$'
+          - '^https://www\.npmjs\.com/package/nemo-relay-node$'
           - --exclude
           - '^https://github\.com/NVIDIA/NeMo-Relay(?:/.*)?$'
           - --exclude
@@ -207,12 +207,12 @@ repos:
         name: node prettier check
         entry: node scripts/lint/prettier-precommit.mjs
         language: system
-        files: '^(crates/node|crates/wasm/(wrappers|tests-js|scripts))/.*\.(?:[cm]?js|[mc]?ts|tsx)$'
+        files: '^crates/node/.*\.(?:[cm]?js|[mc]?ts|tsx)$'
         pass_filenames: false
 
       - id: node-docstrings-check
         name: node docstrings check
         entry: node scripts/lint/check_public_docstrings.mjs all
         language: system
-        files: '^(?:(?:crates/node|crates/wasm/wrappers/(?:esm|nodejs))/(?:plugin|adaptive|typed)\.(?:js|d\.ts))$'
+        files: '^crates/node/(?:plugin|adaptive|typed)\.(?:js|d\.ts)$'
         pass_filenames: false

@@ -9,7 +9,17 @@ from typing import cast
 
 import pytest
 
-from nemo_relay import AnnotatedLLMRequest, JsonObject, LLMRequest, ScopeType, llm, plugin, scope, tools
+from nemo_relay import (
+    AnnotatedLLMRequest,
+    JsonObject,
+    LLMRequest,
+    LLMRequestInterceptOutcome,
+    ScopeType,
+    llm,
+    plugin,
+    scope,
+    tools,
+)
 from nemo_relay import adaptive as adaptive_module
 from nemo_relay.adaptive import (
     ADAPTIVE_PLUGIN_KIND,
@@ -250,7 +260,7 @@ class TestAdaptivePluginConfiguration:
             with scope.scope("adaptive-runtime-translate", ScopeType.Agent) as handle:
                 runtime.bind_scope(handle)
                 translated = llm.request_intercepts("anthropic", request)
-                assert translated.content == {
+                assert translated.request.content == {
                     "messages": [{"role": "user", "content": "Hello"}],
                     "system": "You are helpful.",
                     "model": "claude-sonnet-4-20250514",
@@ -324,7 +334,7 @@ class TestAdaptivePluginConfiguration:
                 def intercept(_name, request, annotated):
                     headers = dict(request.headers)
                     headers["x-python-plugin"] = f"priority:{priority}"
-                    return LLMRequest(headers, request.content), annotated
+                    return LLMRequestInterceptOutcome(LLMRequest(headers, request.content), annotated)
 
                 async def llm_exec_intercept(_name, request, next_call):
                     response = await next_call(request)

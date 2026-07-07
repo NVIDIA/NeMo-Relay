@@ -35,14 +35,7 @@ func TestPricingPackageHelpers(t *testing.T) {
 
 func TestPricingPackageSourceAndRateHelpers(t *testing.T) {
 	fileSource := NewFileSource("/tmp/pricing.json")
-	payload, err := json.Marshal(fileSource)
-	if err != nil {
-		t.Fatalf("marshal file source: %v", err)
-	}
-	var parsedSource map[string]any
-	if err := json.Unmarshal(payload, &parsedSource); err != nil {
-		t.Fatalf("unmarshal file source: %v", err)
-	}
+	parsedSource := marshalObject(t, "file source", fileSource)
 	if parsedSource["type"] != "file" || parsedSource["path"] != "/tmp/pricing.json" {
 		t.Fatalf("unexpected file source: %#v", parsedSource)
 	}
@@ -58,25 +51,40 @@ func TestPricingPackageSourceAndRateHelpers(t *testing.T) {
 	tier.MinPromptTokens = &minTokens
 	tier.MaxPromptTokens = &maxTokens
 	schedule := NewPromptTokenThresholdRateSchedule(tier)
-	schedulePayload, err := json.Marshal(schedule)
+	assertPromptTokenThresholdSchedule(t, schedule, minTokens, maxTokens)
+
+	config := NewConfig()
+	component := Component(config)
+	if component.Kind != PluginKind || !component.Enabled {
+		t.Fatalf("unexpected model pricing component: %#v", component)
+	}
+}
+
+func marshalObject(t *testing.T, name string, value any) map[string]any {
+	t.Helper()
+	payload, err := json.Marshal(value)
 	if err != nil {
-		t.Fatalf("marshal rate schedule: %v", err)
+		t.Fatalf("marshal %s: %v", name, err)
 	}
-	var parsedSchedule map[string]any
-	if err := json.Unmarshal(schedulePayload, &parsedSchedule); err != nil {
-		t.Fatalf("unmarshal rate schedule: %v", err)
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal %s: %v", name, err)
 	}
+	return parsed
+}
+
+func assertPromptTokenThresholdSchedule(
+	t *testing.T,
+	schedule PromptTokenThresholdRateSchedule,
+	minTokens uint64,
+	maxTokens uint64,
+) {
+	t.Helper()
+	parsedSchedule := marshalObject(t, "rate schedule", schedule)
 	if parsedSchedule["type"] != "prompt_token_threshold" || parsedSchedule["applies_to"] != "full_request" {
 		t.Fatalf("unexpected rate schedule: %#v", parsedSchedule)
 	}
-	tiers, ok := parsedSchedule["tiers"].([]any)
-	if !ok || len(tiers) != 1 {
-		t.Fatalf("unexpected rate schedule tiers: %#v", parsedSchedule["tiers"])
-	}
-	parsedTier, ok := tiers[0].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected rate schedule tier: %#v", tiers[0])
-	}
+	parsedTier := singleScheduleTier(t, parsedSchedule)
 	if parsedTier["min_prompt_tokens"] != float64(minTokens) || parsedTier["max_prompt_tokens"] != float64(maxTokens) {
 		t.Fatalf("unexpected token bounds: %#v", parsedTier)
 	}
@@ -87,10 +95,17 @@ func TestPricingPackageSourceAndRateHelpers(t *testing.T) {
 	if rates["input_per_million"] != float64(3) || rates["output_per_million"] != float64(4) {
 		t.Fatalf("unexpected tier rate values: %#v", rates)
 	}
+}
 
-	config := NewConfig()
-	component := Component(config)
-	if component.Kind != PluginKind || !component.Enabled {
-		t.Fatalf("unexpected model pricing component: %#v", component)
+func singleScheduleTier(t *testing.T, parsedSchedule map[string]any) map[string]any {
+	t.Helper()
+	tiers, ok := parsedSchedule["tiers"].([]any)
+	if !ok || len(tiers) != 1 {
+		t.Fatalf("unexpected rate schedule tiers: %#v", parsedSchedule["tiers"])
 	}
+	parsedTier, ok := tiers[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected rate schedule tier: %#v", tiers[0])
+	}
+	return parsedTier
 }

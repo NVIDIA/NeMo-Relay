@@ -9,23 +9,16 @@
 //! incompatible bindings fail fast instead of silently creating a second
 //! independent runtime.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::fmt;
-#[cfg(any(test, not(target_arch = "wasm32")))]
 use std::sync::Mutex;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
 
-#[cfg(any(test, not(target_arch = "wasm32")))]
 use crate::error::FlowError;
 use crate::error::Result;
 
-#[cfg(not(target_arch = "wasm32"))]
 const BINDING_KIND_ENV: &str = "NEMO_RELAY_BINDING_KIND";
-#[cfg(not(target_arch = "wasm32"))]
 const OWNER_TOKEN_ENV: &str = "NEMO_RELAY_RUNTIME_OWNER";
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RuntimeOwner {
     pid: u32,
@@ -33,7 +26,6 @@ struct RuntimeOwner {
     major_version: String,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl RuntimeOwner {
     fn current(binding_kind: String) -> Result<Self> {
         Ok(Self {
@@ -94,7 +86,6 @@ impl RuntimeOwner {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl fmt::Display for RuntimeOwner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -105,21 +96,17 @@ impl fmt::Display for RuntimeOwner {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct RuntimeOwnerController {
     binding_kind: Option<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 static RUNTIME_OWNER_CONTROLLER: OnceLock<Mutex<RuntimeOwnerController>> = OnceLock::new();
 
-#[cfg(not(target_arch = "wasm32"))]
 fn runtime_owner_controller() -> &'static Mutex<RuntimeOwnerController> {
     RUNTIME_OWNER_CONTROLLER.get_or_init(|| Mutex::new(RuntimeOwnerController::default()))
 }
 
-#[cfg(any(test, not(target_arch = "wasm32")))]
 fn compatibility_major_version(version: &str) -> Result<&str> {
     version
         .split('.')
@@ -132,19 +119,16 @@ fn compatibility_major_version(version: &str) -> Result<&str> {
         })
 }
 
-#[cfg(any(test, not(target_arch = "wasm32")))]
 fn current_compatibility_version() -> Result<&'static str> {
     compatibility_major_version(env!("CARGO_PKG_VERSION"))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn resolve_binding_kind(binding_kind: Option<String>) -> String {
     binding_kind
         .or_else(|| std::env::var(BINDING_KIND_ENV).ok())
         .unwrap_or_else(|| "rust".to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_process_runtime_owner() -> Result<Option<RuntimeOwner>> {
     let Some(token) = std::env::var(OWNER_TOKEN_ENV)
         .ok()
@@ -162,19 +146,16 @@ fn read_process_runtime_owner() -> Result<Option<RuntimeOwner>> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn publish_process_runtime_owner(owner: &RuntimeOwner) {
     // Runtime ownership is intentionally process-global.
     unsafe { std::env::set_var(OWNER_TOKEN_ENV, owner.token()) };
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn clear_process_runtime_owner() {
     // Runtime ownership is intentionally process-global.
     unsafe { std::env::remove_var(OWNER_TOKEN_ENV) };
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub fn initialize_shared_runtime_binding(binding_kind: &str) -> Result<()> {
     let previous_binding_kind = {
@@ -212,13 +193,6 @@ pub fn initialize_shared_runtime_binding(binding_kind: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_arch = "wasm32")]
-#[doc(hidden)]
-pub fn initialize_shared_runtime_binding(_binding_kind: &str) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn ensure_process_runtime_owner() -> Result<()> {
     let binding_kind = {
         let controller = runtime_owner_controller();
@@ -246,11 +220,6 @@ pub(crate) fn ensure_process_runtime_owner() -> Result<()> {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn ensure_process_runtime_owner() -> Result<()> {
-    Ok(())
-}
-
 #[cfg(test)]
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -261,20 +230,12 @@ pub(crate) fn runtime_owner_test_mutex() -> &'static Mutex<()> {
 
 #[cfg(test)]
 pub(crate) fn reset_runtime_owner_for_tests() {
-    #[cfg(target_arch = "wasm32")]
-    {
-        return;
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        clear_process_runtime_owner();
-        let controller = runtime_owner_controller();
-        let mut guard = controller.lock().unwrap();
-        guard.binding_kind = None;
-    }
+    clear_process_runtime_owner();
+    let controller = runtime_owner_controller();
+    let mut guard = controller.lock().unwrap();
+    guard.binding_kind = None;
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 #[path = "../tests/coverage/shared_runtime_tests.rs"]
 mod tests;

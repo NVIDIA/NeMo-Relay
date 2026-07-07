@@ -65,7 +65,8 @@ def require_query(tool_name, args):
 async def measure_tool(tool_name, args, next_call):
     started = time.perf_counter()
     try:
-        return await next_call(args)
+        result = await next_call(args)
+        return nemo_relay.ToolExecutionInterceptOutcome(result)
     finally:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         print(f"{tool_name} completed in {elapsed_ms} ms")
@@ -98,7 +99,8 @@ registerToolConditionalExecutionGuardrail("search.require_query", 20, (_toolName
 registerToolExecutionIntercept("search.measure", 30, async (args, next) => {
   const started = performance.now();
   try {
-    return await next(args);
+    const result = await next(args);
+    return { result };
   } finally {
     console.log(`search completed in ${Math.round(performance.now() - started)} ms`);
   }
@@ -113,6 +115,7 @@ use nemo_relay::api::registry::{
     register_tool_execution_intercept,
     register_tool_sanitize_request_guardrail,
 };
+use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
@@ -145,11 +148,12 @@ register_tool_execution_intercept(
     "search.measure",
     30,
     Arc::new(|name, args, next| {
+        let name = name.to_owned();
         Box::pin(async move {
             let started = Instant::now();
-            let result = next(name.clone(), args).await;
+            let result = next(args).await;
             println!("{name} completed in {:?}", started.elapsed());
-            result
+            Ok(ToolExecutionInterceptOutcome::new(result?))
         })
     }),
 )?;
@@ -157,6 +161,10 @@ register_tool_execution_intercept(
 </Tab>
 
 </Tabs>
+
+Tool execution intercepts return an outcome even when they only forward the
+result from `next`. Refer to [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for pending marks, lifecycle ordering, and binding-specific return types.
 
 ## Scope Middleware to One Request
 

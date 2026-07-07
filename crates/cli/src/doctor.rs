@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::config::{
     AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
-    ServerArgs, resolve_server_config,
+    ServerArgs, default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
 use crate::error::CliError;
 
@@ -66,6 +66,7 @@ pub(crate) struct DoctorReport {
     pub environment: EnvironmentInfo,
     pub configuration: ConfigurationInfo,
     pub agents: Vec<AgentInfo>,
+    pub host_plugins: Vec<crate::plugin_install::HostPluginReadiness>,
     pub observability: Vec<Check>,
     pub completions: Vec<Check>,
 }
@@ -82,10 +83,18 @@ pub(crate) struct ConfigurationInfo {
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,
+    pub plugin_configs: Vec<ConfigLayer>,
+    pub plugin_resolution: Check,
     pub resolution: Check,
     pub default_agent: Option<String>,
     pub configured_agents: Vec<String>,
     pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
+}
+
+struct PluginConfigurationDiagnostics {
+    sources: Vec<PathBuf>,
+    error: Option<String>,
+    resolution: Check,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +152,17 @@ pub(crate) async fn collect_report(
     let cwd = std::env::current_dir().ok();
     let home = home_dir();
     let configured_agents = configured_agent_names(&resolved.agents);
+    let (plugin_sources, plugin_error) = match effective_plugin_toml_sources() {
+        Ok(sources) => (sources, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    let plugin_resolution =
+        plugin_resolution_check(&resolved, &resolution, plugin_error.as_deref());
+    let plugin_diagnostics = PluginConfigurationDiagnostics {
+        sources: plugin_sources,
+        error: plugin_error,
+        resolution: plugin_resolution,
+    };
 
     Ok(DoctorReport {
         schema_version: 1,
@@ -155,8 +175,10 @@ pub(crate) async fn collect_report(
             resolution,
             configured_agents,
             &resolved.dynamic_plugins,
+            &plugin_diagnostics,
         ),
         agents: collect_agents(target_agent, &resolved).await,
+        host_plugins: crate::plugin_install::collect_default_host_plugin_readiness(),
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
     })
@@ -191,6 +213,7 @@ fn collect_configuration(
     resolution: Check,
     configured_agents: Vec<String>,
     dynamic_plugins: &[crate::config::ResolvedDynamicPluginConfig],
+    plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
     let workspace_path = cwd
         .map(|p| p.join(".nemo-relay").join("config.toml"))
@@ -207,6 +230,17 @@ fn collect_configuration(
         workspace: layer_status(&workspace_path),
         global: layer_status(&global_path),
         system: layer_status(&system_path),
+        plugin_configs: default_plugin_config_paths()
+            .iter()
+            .map(|path| {
+                plugin_layer_status(
+                    path,
+                    &plugin_diagnostics.sources,
+                    plugin_diagnostics.error.as_deref(),
+                )
+            })
+            .collect(),
+        plugin_resolution: plugin_diagnostics.resolution.clone(),
         resolution,
         // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
         // out of FileConfig. Doctor reports `None` until that lands.
@@ -221,6 +255,50 @@ fn collect_configuration(
                 host_config_status: plugin.host_config_status(),
             })
             .collect(),
+    }
+}
+
+fn plugin_resolution_check(
+    resolved: &ResolvedConfig,
+    resolution: &Check,
+    plugin_error: Option<&str>,
+) -> Check {
+    if let Some(error) = plugin_error {
+        return Check {
+            name: "Plugin resolution",
+            status: Status::Fail,
+            details: format!(
+                "could not resolve plugins.toml: {error}; update the named source and run `nemo-relay plugins edit`"
+            ),
+        };
+    }
+    if matches!(resolution.status, Status::Fail) {
+        return Check {
+            name: "Plugin resolution",
+            status: Status::Fail,
+            details: resolution.details.clone(),
+        };
+    }
+    if resolved.gateway.plugin_config.is_some() {
+        Check {
+            name: "Plugin resolution",
+            status: Status::Info,
+            details: "effective plugin configuration loaded; see Plugin validation below".into(),
+        }
+    } else if !resolved.dynamic_plugins.is_empty() {
+        Check {
+            name: "Plugin resolution",
+            status: Status::Info,
+            details: "dynamic plugin configuration loaded; see Dynamic plugin checks below".into(),
+        }
+    } else {
+        Check {
+            name: "Plugin resolution",
+            status: Status::Info,
+            details:
+                "plugins.toml not configured; run `nemo-relay plugins edit` to configure plugins"
+                    .into(),
+        }
     }
 }
 
@@ -286,6 +364,29 @@ fn layer_status(path: &Path) -> ConfigLayer {
             details: format!("unreadable: {err}"),
         },
     }
+}
+
+fn plugin_layer_status(
+    path: &Path,
+    contributing_paths: &[PathBuf],
+    plugin_error: Option<&str>,
+) -> ConfigLayer {
+    let mut layer = layer_status(path);
+    if let Some(error) = plugin_error.filter(|error| error.contains(&path.display().to_string()))
+        && matches!(layer.status, Status::Pass)
+    {
+        layer.status = Status::Fail;
+        layer.active = false;
+        layer.details = format!("invalid plugin configuration: {error}");
+        return layer;
+    }
+    if layer.active && contributing_paths.iter().any(|source| source == path) {
+        layer.details = "discovered and contributes to plugin resolution".into();
+    } else if layer.active {
+        layer.active = false;
+        layer.details = "valid but does not contribute effective plugin configuration".into();
+    }
+    layer
 }
 
 async fn collect_agents(
@@ -507,7 +608,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
 
     let Some(plugin_value) = &gateway.plugin_config else {
         checks.push(Check {
-            name: "Plugins",
+            name: "Plugin validation",
             status: Status::Info,
             details: "plugins.toml not configured".into(),
         });
@@ -518,7 +619,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         Ok(config) => config,
         Err(err) => {
             checks.push(Check {
-                name: "Plugins",
+                name: "Plugin validation",
                 status: Status::Fail,
                 details: format!("invalid plugin config: {err}"),
             });
@@ -544,7 +645,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     let report = validate_plugin_config(&plugin_config);
     if report.diagnostics.is_empty() {
         checks.push(Check {
-            name: "Plugins",
+            name: "Plugin validation",
             status: Status::Pass,
             details: "validation passed".into(),
         });
@@ -769,7 +870,7 @@ fn atof_endpoint_count(config: &Value) -> usize {
 }
 
 fn atof_streaming_supported() -> bool {
-    cfg!(all(feature = "atof-streaming", not(target_arch = "wasm32")))
+    cfg!(feature = "atof-streaming")
 }
 
 async fn observability_atof_endpoint_checks(config: &Value) -> Vec<Check> {
@@ -906,7 +1007,6 @@ async fn probe_atof_http_upload(
     index: usize,
     transport: &str,
 ) -> Check {
-    crate::tls::install_rustls_crypto_provider();
     let client = match reqwest::Client::builder().timeout(timeout_duration).build() {
         Ok(client) => client,
         Err(err) => {
@@ -1094,7 +1194,6 @@ fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
 }
 
 async fn probe_http_named(name: &'static str, url: &str) -> Check {
-    crate::tls::install_rustls_crypto_provider();
     let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
         Ok(c) => c,
         Err(err) => {
@@ -1197,9 +1296,11 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
             .agents
             .iter()
             .any(|agent| matches!(agent.status, Status::Fail))
+        || report.host_plugins.iter().any(|plugin| !plugin.ok())
         || matches!(report.configuration.workspace.status, Status::Fail)
         || matches!(report.configuration.global.status, Status::Fail)
         || matches!(report.configuration.system.status, Status::Fail)
+        || matches!(report.configuration.plugin_resolution.status, Status::Fail)
         || matches!(report.configuration.resolution.status, Status::Fail);
     u8::from(any_fail)
 }
@@ -1217,9 +1318,11 @@ fn report_has_warn(report: &DoctorReport) -> bool {
             .agents
             .iter()
             .any(|agent| matches!(agent.status, Status::Warn))
+        || report.host_plugins.iter().any(|plugin| !plugin.ok())
         || matches!(report.configuration.workspace.status, Status::Warn)
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
+        || matches!(report.configuration.plugin_resolution.status, Status::Warn)
         || matches!(report.configuration.resolution.status, Status::Warn)
 }
 
@@ -1229,11 +1332,27 @@ fn report_has_warn(report: &DoctorReport) -> bool {
 /// pure formatter stays banner-free for tests.
 pub(crate) fn format_human(report: &DoctorReport) -> String {
     let mut out = String::new();
+    format_human_header(&mut out, report);
+    format_human_environment(&mut out, report);
+    format_human_configuration(&mut out, report);
+    format_human_plugin_configuration(&mut out, report);
+    format_human_agents(&mut out, report);
+    format_human_host_plugins(&mut out, report);
+    format_human_checks(&mut out, "Observability", &report.observability);
+    format_human_completion_checks(&mut out, &report.completions);
+    format_human_conclusion(&mut out, report);
+    out
+}
+
+fn format_human_header(out: &mut String, report: &DoctorReport) {
     out.push_str(&format!("\n  NeMo Relay {}\n", report.binary_version));
     out.push_str("  ─────────────────────────────────────────────\n");
     if let Some(agent) = &report.target_agent {
         out.push_str(&format!("  Target agent  {agent}\n\n"));
     }
+}
+
+fn format_human_environment(out: &mut String, report: &DoctorReport) {
     out.push_str("  Environment\n");
     out.push_str(&format!(
         "    OS         {}\n",
@@ -1244,7 +1363,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         out.push_str(&format!("    Shell      {shell}\n"));
     }
     out.push('\n');
+}
 
+fn format_human_configuration(out: &mut String, report: &DoctorReport) {
     out.push_str("  Configuration\n");
     out.push_str(&format!(
         "    Workspace  {}\n",
@@ -1271,23 +1392,36 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
             report.configuration.configured_agents.join(", ")
         ));
     }
-    if !report.configuration.dynamic_plugins.is_empty() {
-        for (index, plugin) in report.configuration.dynamic_plugins.iter().enumerate() {
-            let label = if index == 0 { "Dynamic" } else { "           " };
-            let config_suffix = if matches!(
-                plugin.host_config_status,
-                DynamicPluginHostConfigStatus::Present
-            ) {
-                "; host config"
-            } else {
-                ""
-            };
-            out.push_str(&format!(
-                "    {label:<10}{} ({}){}\n",
-                plugin.plugin_id, plugin.manifest_ref, config_suffix
-            ));
+    out.push('\n');
+}
+
+fn format_human_plugin_configuration(out: &mut String, report: &DoctorReport) {
+    out.push_str("  Plugin configuration\n");
+    for plugin in &report.configuration.dynamic_plugins {
+        let config_suffix = if matches!(
+            plugin.host_config_status,
+            DynamicPluginHostConfigStatus::Present
+        ) {
+            "; host config"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "    Dynamic    {} ({}){}\n",
+            plugin.plugin_id, plugin.manifest_ref, config_suffix
+        ));
+    }
+    if !report.configuration.plugin_configs.is_empty() {
+        for (index, layer) in report.configuration.plugin_configs.iter().enumerate() {
+            let label = if index == 0 { "Plugin files" } else { "" };
+            out.push_str(&format!("    {label:<13}{}\n", format_layer(layer)));
         }
     }
+    out.push_str(&format!(
+        "    Plugins    {} {}\n",
+        format_status(report.configuration.plugin_resolution.status),
+        report.configuration.plugin_resolution.details
+    ));
     for plugin in &report.configuration.dynamic_plugins {
         for check in [
             dynamic_plugin_reference_check(plugin),
@@ -1301,7 +1435,9 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         }
     }
     out.push('\n');
+}
 
+fn format_human_agents(out: &mut String, report: &DoctorReport) {
     out.push_str("  Agents detected\n");
     for agent in &report.agents {
         let status = format_status(agent.status);
@@ -1327,19 +1463,52 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
         }
     }
     out.push('\n');
+}
 
-    out.push_str("  Observability\n");
-    for check in &report.observability {
+fn format_human_host_plugins(out: &mut String, report: &DoctorReport) {
+    out.push_str("  Host plugins\n");
+    if report.host_plugins.is_empty() {
+        out.push_str("    ·  none installed; run `nemo-relay install <host>` to enable persistent host plugins\n");
+    } else {
+        for plugin in &report.host_plugins {
+            out.push_str(&format!(
+                "    {}  {}\n",
+                if plugin.ok() { "✓" } else { "✗" },
+                plugin.host
+            ));
+            for check in &plugin.checks {
+                out.push_str(&format!(
+                    "          {}  {}: {}\n",
+                    if check.ok { "✓" } else { "✗" },
+                    check.name,
+                    check.details
+                ));
+            }
+            if !plugin.ok() {
+                out.push_str(&format!("          repair: {}\n", plugin.remediation));
+            }
+        }
+    }
+    out.push('\n');
+}
+
+fn format_human_checks(out: &mut String, title: &str, checks: &[Check]) {
+    out.push_str(&format!("  {title}\n"));
+    for check in checks {
         out.push_str(&format!("    {:<22}  {}\n", check.name, check.details));
     }
     out.push('\n');
+}
 
+fn format_human_completion_checks(out: &mut String, checks: &[Check]) {
     out.push_str("  Completions\n");
-    for check in &report.completions {
+    for check in checks {
         out.push_str(&format!("    {}\n", check.details));
     }
     out.push('\n');
+}
 
+fn format_human_conclusion(out: &mut String, report: &DoctorReport) {
     if exit_code(report) == 0 {
         if report_has_warn(report) {
             out.push_str("  All checks passed, but some issued warnings; see details above.\n");
@@ -1349,7 +1518,6 @@ pub(crate) fn format_human(report: &DoctorReport) -> String {
     } else {
         out.push_str("  Some checks FAILED; see details above.\n");
     }
-    out
 }
 
 fn format_layer(layer: &ConfigLayer) -> String {

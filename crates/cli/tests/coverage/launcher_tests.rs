@@ -4,11 +4,10 @@
 use super::*;
 use crate::config::{AgentCommandConfig, GatewayConfig};
 use std::ffi::OsString;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 fn current_dir_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+    &crate::test_support::CWD_TEST_LOCK
 }
 
 struct EnvScope {
@@ -61,7 +60,7 @@ fn infers_agent_from_command_or_uses_override() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["/usr/bin/codex".into()],
@@ -94,7 +93,7 @@ fn uses_configured_command_when_no_argv_is_supplied() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -121,7 +120,7 @@ fn uses_configured_hermes_command_when_no_argv_is_supplied() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -141,7 +140,7 @@ fn inference_failure_has_actionable_message() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["my-agent".into()],
@@ -166,7 +165,7 @@ fn missing_command_without_agent_errors() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -189,7 +188,7 @@ fn agent_without_configured_command_falls_back_to_default_binary() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec![],
@@ -210,7 +209,7 @@ fn agent_with_passthrough_args_appends_to_configured_command() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: vec!["--model".into(), "openai/openai/gpt-5.1-codex".into()],
@@ -392,6 +391,51 @@ fn exporter_destinations_describe_observability_outputs() {
         destinations
             .iter()
             .any(|line| line == "OpenInference OTLP endpoint from environment/default")
+    );
+}
+
+#[test]
+fn exporter_destinations_describe_atif_remote_storage_instead_of_local_path() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": OBSERVABILITY_PLUGIN_KIND,
+                "enabled": true,
+                "config": {
+                    "version": 1,
+                    "atif": {
+                        "enabled": true,
+                        "output_directory": "trajectories",
+                        "filename_template": "agent-{session_id}.json",
+                        "storage": [
+                            {"type": "s3", "bucket": "traj-bucket", "key_prefix": "runs/"},
+                            {"type": "http", "endpoint": "https://collector.example/ingest"}
+                        ]
+                    }
+                }
+            }]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let destinations = exporter_destinations(&gateway);
+
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATIF s3://traj-bucket/runs")
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATIF https://collector.example/ingest")
+    );
+    // The local path is skipped at runtime when storage is configured, so it must not be reported.
+    assert!(
+        !destinations
+            .iter()
+            .any(|line| line.contains("agent-{session_id}.json"))
     );
 }
 
@@ -834,7 +878,7 @@ async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: command_argv,
@@ -875,7 +919,7 @@ async fn dry_run_does_not_spawn_agent() {
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: true,
         print: false,
         command: vec!["/path/that/does/not/exist".into()],
@@ -936,7 +980,7 @@ entrypoint = "acme.worker:create_plugin"
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: true,
         print: false,
         command: vec!["codex".into()],

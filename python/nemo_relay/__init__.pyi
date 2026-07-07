@@ -70,6 +70,9 @@ from nemo_relay._native import (
     LLMRequest as LLMRequest,
 )
 from nemo_relay._native import (
+    LLMRequestInterceptOutcome as LLMRequestInterceptOutcome,
+)
+from nemo_relay._native import (
     MarkEvent as MarkEvent,
 )
 from nemo_relay._native import (
@@ -83,6 +86,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
+)
+from nemo_relay._native import (
+    PendingMarkSpec as PendingMarkSpec,
 )
 from nemo_relay._native import (
     ScopeAttributes as ScopeAttributes,
@@ -101,6 +107,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     ToolAttributes as ToolAttributes,
+)
+from nemo_relay._native import (
+    ToolExecutionInterceptOutcome as ToolExecutionInterceptOutcome,
 )
 from nemo_relay._native import (
     ToolHandle as ToolHandle,
@@ -193,7 +202,7 @@ Return:
 """
 ToolExecutionIntercept: TypeAlias = Callable[
     [str, Json, Callable[[Json], Awaitable[Json]]],
-    Json | Awaitable[Json],
+    ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
 """Execution intercept callback that wraps tool execution.
 
@@ -201,7 +210,7 @@ Arguments:
     The tool name, current JSON arguments, and next callable.
 
 Return:
-    A JSON-compatible result, either directly or as an awaitable.
+    A canonical tool execution outcome, either directly or as an awaitable.
 
 Exceptional flow:
     The callback may short-circuit by not invoking ``next``. Exceptions
@@ -209,7 +218,7 @@ Exceptional flow:
 """
 LlmRequestIntercept: TypeAlias = Callable[
     [str, LLMRequest, AnnotatedLLMRequest | None],
-    tuple[LLMRequest, AnnotatedLLMRequest | None],
+    LLMRequestInterceptOutcome,
 ]
 """Request intercept callback that rewrites raw and annotated LLM requests.
 
@@ -217,7 +226,7 @@ Arguments:
     The logical LLM name, raw request, and optional annotated request view.
 
 Return:
-    The request and optional annotated view passed to later middleware.
+    The complete canonical outcome passed to later middleware.
 """
 LlmExecutionIntercept: TypeAlias = Callable[
     [str, LLMRequest, Callable[[LLMRequest], Awaitable[Json]]],

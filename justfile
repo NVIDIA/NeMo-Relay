@@ -572,7 +572,7 @@ set_project_version() {
     local version="$1"
     set_cargo_workspace_version "$version"
     set_node_package_versions "$version"
-    set_python_package_version "$version"
+    set_python_package_version "$version" false
     set_python_plugin_package_version "$version"
     set_coding_agent_plugin_versions "$version"
 }
@@ -617,24 +617,25 @@ PY
 
 set_python_package_version() {
     local cargo_version="$1"
+    local materialize_version="${2:-true}"
     local version=""
     local python_executable=""
     version="$(semver_to_pep440 "$cargo_version")"
     python_executable="$(uv_python_executable)"
 
-    "$python_executable" - "$version" "$cargo_version" <<'PY'
+    "$python_executable" - "$version" "$materialize_version" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 version = sys.argv[1]
-cargo_version = sys.argv[2]
+materialize_version = sys.argv[2] == "true"
 path = Path("pyproject.toml")
 text = path.read_text()
 
-if 'dynamic = ["version"]' in text:
+if materialize_version and 'dynamic = ["version"]' in text:
     updated = text.replace('dynamic = ["version"]', f'version = "{version}"', 1)
-elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
+elif materialize_version and re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
     updated, count = re.subn(
         r'^version = "(.*)"$',
         f'version = "{version}"',
@@ -644,21 +645,37 @@ elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
     )
     if count != 1:
         raise SystemExit("Failed to update version in pyproject.toml")
+elif not materialize_version and 'dynamic = ["version"]' in text:
+    updated = text
+elif not materialize_version and re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
+    updated, count = re.subn(
+        r'^version = "(.*)"$',
+        'dynamic = ["version"]',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise SystemExit("Failed to restore dynamic version in pyproject.toml")
 else:
-    raise SystemExit("Failed to find dynamic or static version field in pyproject.toml")
+    raise SystemExit("Failed to find version field in pyproject.toml")
 
-path.write_text(updated)
-print(f"pyproject.toml version updated to {version}")
+if updated != text:
+    path.write_text(updated)
+if materialize_version:
+    print(f"pyproject.toml version updated to {version}")
+else:
+    print("pyproject.toml uses the dynamic Cargo version")
 
 path = Path("crates/python/Cargo.toml")
 text = path.read_text()
 
 if "version.workspace = true" in text:
-    updated = text.replace("version.workspace = true", f'version = "{cargo_version}"', 1)
+    updated = text
 elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
     updated, count = re.subn(
         r'^version = "(.*)"$',
-        f'version = "{cargo_version}"',
+        "version.workspace = true",
         text,
         count=1,
         flags=re.MULTILINE,
@@ -668,8 +685,9 @@ elif re.search(r'^version = "(.*)"$', text, flags=re.MULTILINE):
 else:
     raise SystemExit("Failed to find workspace or static version field in crates/python/Cargo.toml")
 
-path.write_text(updated)
-print(f"crates/python/Cargo.toml version updated to {cargo_version}")
+if updated != text:
+    path.write_text(updated)
+print("crates/python/Cargo.toml uses the workspace version")
 PY
 }
 
@@ -953,6 +971,12 @@ check-python-worker-proto:
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     PY
 
+generate-worker-plugin-lockfile:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo generate-lockfile --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
+
 
 # --set [ci=true|false]
 build-go:
@@ -981,18 +1005,7 @@ build-node:
         npm run build --workspace=nemo-relay-node
     fi
 
-# --set [ci=true|false]
-build-wasm:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    cd "$NEMO_RELAY_REPO_ROOT"
-    if is_true "{{ ci }}"; then
-        npm run build:pkg --workspace=nemo-relay-wasm
-    else
-        NEMO_RELAY_WASM_RELEASE=1 npm run build:pkg --workspace=nemo-relay-wasm
-    fi
-
-build-all: build-rust build-python build-python-plugin build-go build-node build-wasm
+build-all: build-rust build-python build-python-plugin build-go build-node
 
 # remove local build and test artifacts
 clean:
@@ -1010,9 +1023,6 @@ clean:
         crates/node/index.js \
         crates/node/junit.xml \
         crates/node/node_modules \
-        crates/wasm/node_modules \
-        crates/wasm/pkg-test/ \
-        crates/wasm/pkg/ \
         integrations/openclaw/*.profraw \
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
@@ -1177,6 +1187,84 @@ test-python-plugin:
         --cov=nemo_relay_plugin \
         --cov-report term-missing \
         --cov-fail-under=95
+    just test-python-plugin-e2e
+
+test-python-plugin-e2e:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    python_executable="$(uv_python_executable)"
+    sync_args=(--inexact --all-packages --no-install-project --no-install-package nemo-relay)
+    if python_plugin_grpc_dependencies_supported "$python_executable"; then
+        sync_args+=(--reinstall-package nemo-relay-plugin)
+    fi
+    while IFS= read -r -d '' arg; do
+        sync_args+=("$arg")
+    done < <(python_plugin_sync_args "$python_executable")
+    uv sync "${sync_args[@]}"
+    activate_project_venv
+    python_executable="$(project_python_executable)"
+    configure_python_plugin_test_environment "$python_executable"
+    if ! python_plugin_grpc_dependencies_supported "$python_executable"; then
+        exit 0
+    fi
+    tmp="$(mktemp -d)"
+    gateway_pid=""
+    cleanup() {
+        if [[ -n "$gateway_pid" ]]; then
+            kill "$gateway_pid" 2>/dev/null || true
+            wait "$gateway_pid" 2>/dev/null || true
+        fi
+        rm -rf "$tmp"
+    }
+    trap cleanup EXIT
+
+    uv build --wheel --out-dir "$tmp/wheels" python/plugin
+    cargo build -p nemo-relay-cli
+    cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
+    config="$tmp/gateway.toml"
+    # Explicit --config paths must exist; plugin state is written to sibling files.
+    : > "$config"
+    manifest="$NEMO_RELAY_REPO_ROOT/examples/python-grpc-worker-plugin/relay-plugin.toml"
+    PIP_FIND_LINKS="$tmp/wheels" NEMO_RELAY_PYTHON="$python_executable" \
+        "$cli" --config "$config" plugins add "$manifest"
+    "$cli" --config "$config" plugins enable examples.python_grpc_worker
+    environment_ref="$("$python_executable" -c \
+        'import json, sys; print(json.load(open(sys.argv[1]))["records"][0]["source"]["environment_ref"])' \
+        "$tmp/.dynamic-plugins.json")"
+    test -x "$environment_ref/bin/python" || test -x "$environment_ref/Scripts/python.exe"
+
+    port="$("$python_executable" -c \
+        'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+    "$cli" --config "$config" --bind "127.0.0.1:$port" >"$tmp/gateway.log" 2>&1 &
+    gateway_pid=$!
+    ready=false
+    for _ in $(seq 1 100); do
+        if "$python_executable" -c \
+            'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=0.2).read()' \
+            "http://127.0.0.1:$port/healthz" 2>/dev/null; then
+            ready=true
+            break
+        fi
+        if ! kill -0 "$gateway_pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+    done
+    if [[ "$ready" != true ]]; then
+        cat "$tmp/gateway.log"
+        exit 1
+    fi
+    NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
+        cargo test -p nemo-relay --features worker-grpc \
+        --test worker_plugin_integration \
+        python_worker_host_runtime_mark_and_mutated_request_round_trip \
+        -- --nocapture
+    kill "$gateway_pid" 2>/dev/null || true
+    wait "$gateway_pid" 2>/dev/null || true
+    gateway_pid=""
+    "$cli" --config "$config" plugins remove examples.python_grpc_worker
+    test ! -e "$environment_ref"
 
 test-python-langchain:
     #!/usr/bin/env bash
@@ -1318,27 +1406,7 @@ test-openclaw:
     npm run pack:check --workspace=nemo-relay-openclaw
 
 # --set [output_dir=<path>] [ci=true|false]
-test-wasm:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    output_dir="{{ output_dir }}"
-    coverage_out=""
-    junit_out=""
-    cd "$NEMO_RELAY_REPO_ROOT"
-    wasm-pack test --node crates/wasm
-    npm install --workspace=nemo-relay-wasm --ignore-scripts
-    if is_true "{{ ci }}"; then
-        coverage_out="$(prepare_artifact wasm-js.xml)"
-        junit_out="$(prepare_artifact wasm-junit.xml)"
-        npm run coverage:pkg --workspace=nemo-relay-wasm
-        cp crates/wasm/coverage/cobertura-coverage.xml "$coverage_out"
-        cp crates/wasm/junit.xml "$junit_out"
-    else
-        npm run test:pkg --workspace=nemo-relay-wasm
-    fi
-
-# --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-wasm
+test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw
 
 # [version] or --set ref_name=<version>
 set-version version="":
@@ -1520,10 +1588,10 @@ package-python:
         sha="$(head_git_sha)"
         version="$(read_workspace_version)"
         echo "Non-release build: appending commit hash to version"
-        set_python_package_version "${version}+${sha}"
+        set_python_package_version "${version}+${sha}" true
     else
         echo "Using explicit version {{ ref_name }}"
-        set_python_package_version "{{ ref_name }}"
+        set_python_package_version "{{ ref_name }}" true
     fi
     build_args=()
     while IFS= read -r -d '' arg; do
@@ -1571,35 +1639,5 @@ package-python-plugin:
     wheels=("$package_dir"/*.whl)
     if ((${#wheels[@]} == 0)); then
         echo "Error: No Python plugin wheels found in $package_dir"
-        exit 1
-    fi
-
-# --set [output_dir=<path>] [ref_name=<name>]
-package-wasm:
-    #!/usr/bin/env bash
-    {{ bash_helpers }}
-    # `prepare_pkg.mjs` rewrites the wasm-pack output into the publishable npm
-    # layout before this target sets the package version and packs the tarball.
-    output_dir="{{ output_dir }}"
-    cd "$NEMO_RELAY_REPO_ROOT"
-    package_dir="$(prepare_package_dir wasm)"
-    wasm-pack build --release crates/wasm
-    node crates/wasm/scripts/prepare_pkg.mjs
-    if [[ -z "{{ ref_name }}" ]]; then
-        sha="$(head_git_sha)"
-        version="$(read_npm_package_version crates/wasm/pkg/package.json)"
-        echo "Non-release build: appending commit hash to version"
-        set_npm_package_version crates/wasm/pkg/package.json "" "${version}-${sha}"
-    else
-        echo "Using explicit version {{ ref_name }}"
-        set_npm_package_version crates/wasm/pkg/package.json "" "{{ ref_name }}"
-    fi
-    pushd crates/wasm/pkg >/dev/null
-    npm pack --pack-destination "$package_dir"
-    popd >/dev/null
-    shopt -s nullglob
-    packages=("$package_dir"/*.tgz)
-    if ((${#packages[@]} == 0)); then
-        echo "Error: No wasm packages found in $package_dir"
         exit 1
     fi

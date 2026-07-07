@@ -3121,6 +3121,10 @@ fn agent_scope_role(event: &Event) -> Option<&str> {
         .and_then(Json::as_str)
 }
 
+fn is_agent_scope_event(event: &Event) -> bool {
+    event.scope_type() == Some(crate::api::scope::ScopeType::Agent)
+}
+
 fn is_subagent_reference_event(event: &Event) -> bool {
     agent_scope_role(event) == Some("subagent")
         || event.metadata().and_then(delegation_tool_call_id).is_some()
@@ -3191,9 +3195,7 @@ fn events_to_trajectory(
 
 fn can_use_agent_scope_tree(tree: &AgentScopeTree, events: &[&Event]) -> bool {
     events.iter().all(|event| {
-        event.scope_type() == Some(crate::api::scope::ScopeType::Agent)
-            || !is_step_event(event)
-            || tree.owner_agent(event).is_some()
+        is_agent_scope_event(event) || !is_step_event(event) || tree.owner_agent(event).is_some()
     })
 }
 

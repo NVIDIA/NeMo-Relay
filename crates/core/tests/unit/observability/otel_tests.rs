@@ -404,7 +404,6 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert!(defaults.resource_attributes.is_empty());
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn grpc_config_requires_a_tokio_runtime() {
     let err = match OpenTelemetrySubscriber::new(OpenTelemetryConfig::grpc("demo-agent")) {
@@ -414,7 +413,6 @@ fn grpc_config_requires_a_tokio_runtime() {
     assert!(matches!(err, OpenTelemetryError::MissingTokioRuntime));
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn invalid_grpc_headers_are_rejected() {
     let err = build_grpc_metadata(&HashMap::from([(
@@ -510,7 +508,6 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
     );
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn http_config_exports_scope_push_pop_and_marks_without_tokio_runtime() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
@@ -968,6 +965,43 @@ fn llm_end_with_unannotated_openai_response_uses_codec_cost() {
     assert_eq!(
         attributes.get("nemo_relay.llm.cost.currency"),
         Some(&"USD".to_string())
+    );
+}
+
+#[test]
+fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
+    let _pricing_guard = pricing_test_mutex().lock().unwrap();
+    install_openai_disambiguation_pricing("priced-model");
+    let _reset_guard = ResetPricingResolverGuard;
+
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(uuid, None, "other", ScopeType::Llm, None));
+    processor.process(&make_end_event(
+        uuid,
+        None,
+        "other",
+        ScopeType::Llm,
+        Some(openai_chat_provider_response("priced-model")),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let keys: Vec<String> = spans[0]
+        .attributes
+        .iter()
+        .map(|kv| kv.key.as_str().to_string())
+        .collect();
+
+    assert!(keys.iter().any(|k| k == "nemo_relay.llm.cost.total"));
+    assert!(keys.iter().any(|k| k == "nemo_relay.llm.cost.currency"));
+    assert!(
+        keys.iter()
+            .all(|k| !k.to_ascii_lowercase().contains("token") && !k.starts_with("gen_ai")),
+        "no token attributes expected on the LLM span: {keys:?}"
     );
 }
 
@@ -1454,7 +1488,6 @@ fn provider_builders_cover_success_paths() {
     subscriber.shutdown().unwrap();
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn grpc_metadata_and_runtime_builder_paths_succeed() {
     let metadata = build_grpc_metadata(&HashMap::from([(

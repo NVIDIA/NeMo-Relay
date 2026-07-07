@@ -1,6 +1,6 @@
 {
   "name": "nemo-relay-node",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Node.js bindings for the NeMo Relay agent runtime.",
   "keywords": [
     "agents",
@@ -65,7 +65,6 @@
     "build": "napi build --platform --release",
     "build-debug": "napi build --platform",
     "check:docstrings": "node ../../scripts/lint/check_public_docstrings.mjs node",
-    "check:docstrings:wasm": "node ../../scripts/lint/check_public_docstrings.mjs wasm",
     "check:docstrings:all": "node ../../scripts/lint/check_public_docstrings.mjs all",
     "format": "prettier --write \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",
     "format:check": "prettier --check \"*.{js,ts,d.ts}\" \"tests/**/*.{mjs,cjs,js,mts,cts,ts,tsx}\"",

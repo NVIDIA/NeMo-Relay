@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#![cfg(not(target_arch = "wasm32"))]
-
 //! Integration coverage for SDK-built native dynamic plugins.
 
 use std::path::{Path, PathBuf};
@@ -158,6 +156,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         tool_result["args"]["native_plugin_tool_execution_request"],
         true
     );
+    assert!(tool_result.get("pending_marks").is_none());
 
     flush_subscribers().expect("native fixture events should flush");
     let first_events = events.lock().unwrap().clone();
@@ -199,6 +198,34 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         tool_end.output().unwrap()["native_plugin_tool_sanitize_response"],
         true
     );
+    assert!(tool_end.output().unwrap().get("pending_marks").is_none());
+    let tool_mark = find_event(&first_events, "fixture.native.tool_execution.mark", None);
+    assert_eq!(tool_mark.parent_uuid(), Some(tool_start.uuid()));
+    assert_eq!(
+        tool_mark.category().map(|category| category.as_str()),
+        Some("custom")
+    );
+    assert_eq!(
+        tool_mark
+            .category_profile()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("fixture.native.tool_execution")
+    );
+    assert_eq!(tool_mark.data().unwrap()["source"], "native_tool_execution");
+    assert_eq!(tool_mark.metadata().unwrap()["fixture"], true);
+    assert!(tool_mark.timestamp() > tool_end.timestamp());
+    let tool_end_index = first_events
+        .iter()
+        .position(|event| {
+            event.name() == "native-fixture-tool"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    let tool_mark_index = first_events
+        .iter()
+        .position(|event| event.name() == "fixture.native.tool_execution.mark")
+        .unwrap();
+    assert!(tool_end_index < tool_mark_index);
 
     events.lock().unwrap().clear();
     let isolated_next_stack = create_scope_stack();
@@ -342,6 +369,24 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         llm_start.input().unwrap()["content"]["native_plugin_llm_request_intercept"],
         true
     );
+    let pending_mark = find_event(&managed_llm_events, "fixture.native.llm_request.mark", None);
+    assert_eq!(pending_mark.parent_uuid(), Some(llm_start.uuid()));
+    assert_eq!(
+        pending_mark.category().map(|category| category.as_str()),
+        Some("custom")
+    );
+    assert_eq!(
+        pending_mark
+            .category_profile()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("fixture.native.pending")
+    );
+    assert_eq!(
+        pending_mark.data().unwrap()["source"],
+        "native_request_intercept"
+    );
+    assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
+    assert!(pending_mark.timestamp() > llm_start.timestamp());
     let llm_end = find_event(
         &managed_llm_events,
         "native-fixture-llm-execute",
@@ -400,6 +445,13 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert_eq!(*collected_stream_chunks.lock().unwrap(), stream_chunks);
     flush_subscribers().expect("stream native fixture events should flush");
     let stream_events = events.lock().unwrap().clone();
+    let stream_start = find_event(
+        &stream_events,
+        "native-fixture-llm-stream",
+        Some(ScopeCategory::Start),
+    );
+    let stream_pending_mark = find_event(&stream_events, "fixture.native.llm_request.mark", None);
+    assert_eq!(stream_pending_mark.parent_uuid(), Some(stream_start.uuid()));
     let stream_end = find_event(
         &stream_events,
         "native-fixture-llm-stream",
@@ -480,6 +532,73 @@ async fn native_validation_diagnostics_prevent_initialization() {
     assert!(error.contains("fixture rejection requested"), "{error}");
 
     clear_plugin_configuration().expect("native plugin config should clear");
+    activation.clear();
+}
+
+#[tokio::test]
+async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref =
+        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_tool_outcome_errors");
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("raw native outcome fixture should load");
+    let mut cleanup = NativePluginTestCleanup::new();
+
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("raw native outcome fixture should initialize");
+    cleanup.mark_plugin_configuration_active();
+
+    for (name, expected) in [
+        (
+            "fixture-null-outcome",
+            "native tool execution returned null outcome",
+        ),
+        (
+            "fixture-malformed-outcome",
+            "invalid native tool execution outcome JSON",
+        ),
+        (
+            "fixture-status-error-outcome",
+            "fixture tool execution failed",
+        ),
+    ] {
+        let error = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name(name)
+                .args(json!({ "input": true }))
+                .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+                .build(),
+        )
+        .await
+        .expect_err("invalid native tool outcome should fail")
+        .to_string();
+        assert!(
+            error.contains(expected),
+            "expected {expected:?} in {error:?}"
+        );
+    }
+
+    let result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("fixture-valid-outcome")
+            .args(json!({ "input": true }))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .expect("native loader should remain usable after rejected outcomes");
+    assert_eq!(result["raw_tool_outcome"], true);
+    assert!(result.get("pending_marks").is_none());
+
+    drop(cleanup);
     activation.clear();
 }
 

@@ -7,9 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 
 Python authoring SDK for NeMo Relay out-of-process dynamic worker plugins.
 
-Install this package in the Python environment used by a worker manifest with
-`load.runtime = "python"`, then expose a `module:function` entrypoint that calls
-`serve_plugin`.
+Declare this package as a dependency of a Python worker project and expose a
+`module:function` entrypoint that calls `serve_plugin`. Register the manifest
+with `nemo-relay plugins add`; Relay creates a per-plugin virtual environment,
+installs `source.manifest_root`, and records that environment for activation.
+Enable it with `nemo-relay plugins enable <plugin_id>` after registration. Python
+workers without a lifecycle-managed environment are rejected.
+
+A minimal worker plugin looks like this:
 
 ```python
 from nemo_relay_plugin import Json, PluginContext, WorkerPlugin, serve_plugin
@@ -35,6 +40,27 @@ async def main() -> None:
 Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
 worker process.
+
+LLM request intercepts return one canonical outcome:
+
+```python
+from nemo_relay_plugin import LlmRequestInterceptOutcome, PendingMarkSpec
+
+
+def intercept(model_name, request, annotated):
+    del model_name
+    headers = {**request.get("headers", {}), "x-policy": "checked"}
+    return LlmRequestInterceptOutcome(
+        request={**request, "headers": headers},
+        annotated_request=annotated,
+        pending_marks=[PendingMarkSpec("acme.policy.checked")],
+    )
+```
+
+When `annotated` is present, it is authoritative for provider-body content:
+leave raw `request["content"]` unchanged, edit normalized fields or provider
+extensions through the annotation, and use `request["headers"]` for transport
+headers.
 
 The SDK owns gRPC serving, JSON envelope conversion, callback dispatch,
 continuations, host runtime calls, and local scope-stack binding. Its private

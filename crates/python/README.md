@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -26,23 +25,23 @@ crate directly.
 
 ## Why Use It?
 
-- 🧩 **Bridge Python to the shared runtime**: Connect Python applications to the
+- **Bridge Python to the shared runtime**: Connect Python applications to the
   Rust NeMo Relay runtime without reimplementing runtime semantics in Python.
-- 🛠️ **Build through standard Python packaging**: Use the repository
+- **Build through standard Python packaging**: Use the repository
   `pyproject.toml`, Maturin, and PyO3 to produce the native extension behind
   `nemo-relay`.
-- 🔁 **Keep binding behavior aligned**: Expose the same scopes, middleware,
+- **Keep binding behavior aligned**: Expose the same scopes, middleware,
   plugins, lifecycle events, and adaptive helpers used by the rest of NeMo Relay.
 
 ## What You Get
 
-- ✅ **Native extension**: The compiled `nemo_relay._native` module used by the
+- **Native extension**: The compiled `nemo_relay._native` module used by the
   public Python package.
-- ✅ **Runtime APIs for Python**: Access to scopes, tool calls, LLM calls,
+- **Runtime APIs for Python**: Access to scopes, tool calls, LLM calls,
   middleware, subscribers, plugins, typed helpers, codecs, and adaptive helpers.
-- ✅ **Shared Rust semantics**: Python behavior backed by the same runtime
+- **Shared Rust semantics**: Python behavior backed by the same runtime
   contract as the Rust crate.
-- ✅ **Local development path**: `uv sync` builds the editable package and native
+- **Local development path**: `uv sync` builds the editable package and native
   extension from the repository root.
 
 ## Installation

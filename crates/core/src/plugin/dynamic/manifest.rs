@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
@@ -35,6 +35,9 @@ pub struct DynamicPluginManifest {
     pub defaults: DynamicPluginManifestDefaults,
     /// Required capability declarations.
     pub capabilities: DynamicPluginManifestCapabilities,
+    /// Optional static configuration schema reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_schema: Option<DynamicPluginManifestConfigSchema>,
     /// Runtime load contract.
     #[cfg_attr(feature = "schema", schemars(with = "DynamicPluginManifestLoadSchema"))]
     pub load: DynamicPluginManifestLoad,
@@ -95,6 +98,14 @@ pub struct DynamicPluginManifestDefaults {
 pub struct DynamicPluginManifestCapabilities {
     /// Required capability set.
     pub items: Vec<DynamicPluginCapability>,
+}
+
+/// Static configuration schema block for authored manifests.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DynamicPluginManifestConfigSchema {
+    /// Local JSON Schema path, resolved relative to `relay-plugin.toml`.
+    pub path: String,
 }
 
 /// Load block for authored manifests.
@@ -321,6 +332,7 @@ impl DynamicPluginManifest {
             ));
         }
         reject_duplicate_capabilities(&self.capabilities.items)?;
+        validate_config_schema_contract(&self.capabilities.items, self.config_schema.as_ref())?;
 
         if self.defaults.enabled {
             return Err(PluginError::InvalidConfig(
@@ -332,6 +344,34 @@ impl DynamicPluginManifest {
         validate_load_shape(self.plugin.kind, &self.load)?;
         validate_compat_shape(self.plugin.kind, &self.compat)?;
         Ok(())
+    }
+
+    /// Resolves the declared configuration schema path without accessing it.
+    ///
+    /// Relative schema paths are resolved from the parent directory of the
+    /// canonical `relay-plugin.toml` path. Absolute local paths are returned
+    /// unchanged.
+    pub fn resolve_config_schema_path(
+        &self,
+        canonical_manifest_path: impl AsRef<Path>,
+    ) -> Result<Option<PathBuf>> {
+        let Some(config_schema) = &self.config_schema else {
+            return Ok(None);
+        };
+
+        let schema_path = Path::new(validate_config_schema_path(config_schema)?);
+        if schema_path.is_absolute() {
+            return Ok(Some(schema_path.to_path_buf()));
+        }
+
+        let manifest_path = canonical_manifest_path.as_ref();
+        let manifest_parent = manifest_path.parent().ok_or_else(|| {
+            PluginError::InvalidConfig(format!(
+                "dynamic plugin manifest path '{}' has no parent directory",
+                manifest_path.display()
+            ))
+        })?;
+        Ok(Some(manifest_parent.join(schema_path)))
     }
 
     /// Converts the authored manifest into a durable control-plane record.
@@ -457,6 +497,64 @@ fn reject_duplicate_capabilities(capabilities: &[DynamicPluginCapability]) -> Re
         }
     }
     Ok(())
+}
+
+fn validate_config_schema_contract(
+    capabilities: &[DynamicPluginCapability],
+    config_schema: Option<&DynamicPluginManifestConfigSchema>,
+) -> Result<()> {
+    let has_capability = capabilities.contains(&DynamicPluginCapability::ConfigSchema);
+    match (has_capability, config_schema) {
+        (true, None) => {
+            return Err(PluginError::InvalidConfig(
+                "capabilities.items containing config_schema requires a [config_schema] section"
+                    .into(),
+            ));
+        }
+        (false, Some(_)) => {
+            return Err(PluginError::InvalidConfig(
+                "[config_schema] requires capabilities.items containing config_schema".into(),
+            ));
+        }
+        (false, None) => return Ok(()),
+        (true, Some(config_schema)) => {
+            validate_config_schema_path(config_schema)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_config_schema_path(config_schema: &DynamicPluginManifestConfigSchema) -> Result<&str> {
+    let path = required_trimmed_string(Some(&config_schema.path), "config_schema.path")?;
+    if has_uri_scheme(path) || is_unc_path(path) {
+        return Err(PluginError::InvalidConfig(
+            "config_schema.path must be a local filesystem path, not a URI or network share".into(),
+        ));
+    }
+    Ok(path)
+}
+
+fn is_unc_path(value: &str) -> bool {
+    // A leading `//` can identify a local path on POSIX, but manifests are portable and the same
+    // spelling is a UNC network share on Windows, so reject it consistently on every platform.
+    value.starts_with(r"\\") || value.starts_with("//")
+}
+
+fn has_uri_scheme(value: &str) -> bool {
+    if value
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file:"))
+    {
+        return true;
+    }
+    let Some((scheme, _)) = value.split_once("://") else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.'))
 }
 
 fn validate_capability_shape(

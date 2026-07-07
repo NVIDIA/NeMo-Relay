@@ -49,24 +49,9 @@ use uuid::Uuid;
 
 const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
 
-#[cfg(target_arch = "wasm32")]
-use async_trait::async_trait;
-#[cfg(target_arch = "wasm32")]
-use opentelemetry_http::{
-    Bytes, HttpClient, HttpError, Request as HttpRequest, Response as HttpResponse,
-};
-#[cfg(not(target_arch = "wasm32"))]
 use opentelemetry_otlp::WithTonicConfig;
-#[cfg(not(target_arch = "wasm32"))]
 use tokio::runtime::Handle;
-#[cfg(not(target_arch = "wasm32"))]
 use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::{JsCast, JsValue};
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::{JsFuture, spawn_local};
-#[cfg(target_arch = "wasm32")]
-use web_sys::{Request as WebRequest, RequestInit};
 
 /// Result type for the OpenInference subscriber crate.
 pub type Result<T> = std::result::Result<T, OpenInferenceError>;
@@ -77,12 +62,6 @@ pub enum OpenInferenceError {
     /// The tonic gRPC exporter requires an active Tokio runtime.
     #[error("the OTLP gRPC exporter requires an active Tokio runtime")]
     MissingTokioRuntime,
-    /// The requested transport is not available on this target.
-    #[error("the OTLP {transport} transport is not supported on this target")]
-    UnsupportedTransport {
-        /// Human-readable transport label used in the error message.
-        transport: &'static str,
-    },
     /// Failed to parse a configured gRPC metadata header.
     #[error("invalid OTLP gRPC header {key:?}: {message}")]
     InvalidGrpcHeader {
@@ -221,14 +200,9 @@ struct Inner {
 impl OpenInferenceSubscriber {
     /// Builds a subscriber backed by a new OTLP tracer provider.
     pub fn new(config: OpenInferenceConfig) -> Result<Self> {
-        #[cfg(not(target_arch = "wasm32"))]
         if config.transport == OtlpTransport::Grpc && tokio::runtime::Handle::try_current().is_err()
         {
             return Err(OpenInferenceError::MissingTokioRuntime);
-        }
-        #[cfg(target_arch = "wasm32")]
-        if config.transport == OtlpTransport::Grpc {
-            return Err(OpenInferenceError::UnsupportedTransport { transport: "gRPC" });
         }
 
         let provider = build_tracer_provider(&config)?;
@@ -308,88 +282,9 @@ impl OpenInferenceSubscriber {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-#[derive(Debug, Clone, Copy, Default)]
-struct WasmHttpClient;
-
-#[cfg(target_arch = "wasm32")]
-#[async_trait]
-impl HttpClient for WasmHttpClient {
-    async fn send_bytes(
-        &self,
-        request: HttpRequest<Bytes>,
-    ) -> std::result::Result<HttpResponse<Bytes>, HttpError> {
-        let (parts, body) = request.into_parts();
-
-        let request = {
-            let request_url = parts.uri.to_string();
-            let init = RequestInit::new();
-            init.set_method(parts.method.as_str());
-            if !body.is_empty() {
-                let body_bytes = js_sys::Uint8Array::from(body.as_ref());
-                init.set_body_opt_u8_array(Some(&body_bytes));
-            }
-
-            let request =
-                WebRequest::new_with_str_and_init(&request_url, &init).map_err(js_error)?;
-            let request_headers = request.headers();
-            for (name, value) in &parts.headers {
-                let value = value
-                    .to_str()
-                    .map_err(|e| http_error(format!("invalid OTLP HTTP header {name}: {e}")))?;
-                request_headers
-                    .set(name.as_str(), value)
-                    .map_err(js_error)?;
-            }
-            request
-        };
-
-        let fetch_promise = if let Some(window) = web_sys::window() {
-            window.fetch_with_request(&request)
-        } else {
-            let global = js_sys::global();
-            let fetch = js_sys::Reflect::get(&global, &JsValue::from_str("fetch"))
-                .map_err(js_error)?
-                .dyn_into::<js_sys::Function>()
-                .map_err(js_error)?;
-            fetch.call1(&global, &request).map_err(js_error)?.into()
-        };
-        // Waiting on the fetch promise from a synchronous wasm call stack can deadlock
-        // Node/browser event processing, so dispatch the request asynchronously.
-        spawn_local(async move {
-            if let Err(error) = JsFuture::from(fetch_promise).await {
-                web_sys::console::warn_1(&JsValue::from_str(&format!(
-                    "OpenInference OTLP/HTTP export failed: {error:?}"
-                )));
-            }
-        });
-
-        HttpResponse::builder()
-            .status(202)
-            .body(Bytes::new())
-            .map_err(|e| http_error(e.to_string()))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn js_error(value: JsValue) -> HttpError {
-    http_error(
-        value
-            .as_string()
-            .unwrap_or_else(|| format!("JavaScript error: {value:?}")),
-    )
-}
-
-#[cfg(target_arch = "wasm32")]
-fn http_error(message: impl Into<String>) -> HttpError {
-    Box::new(std::io::Error::other(message.into()))
-}
-
 fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
-            #[cfg(not(target_arch = "wasm32"))]
-            install_rustls_crypto_provider();
             let mut builder = SpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
@@ -400,15 +295,10 @@ fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvid
             if !config.headers.is_empty() {
                 builder = builder.with_headers(config.headers.clone());
             }
-            #[cfg(target_arch = "wasm32")]
-            {
-                builder = builder.with_http_client(WasmHttpClient);
-            }
             builder
                 .build()
                 .map_err(|e| OpenInferenceError::ExporterBuild(e.to_string()))?
         }
-        #[cfg(not(target_arch = "wasm32"))]
         OtlpTransport::Grpc => {
             let mut builder = SpanExporter::builder()
                 .with_tonic()
@@ -423,10 +313,6 @@ fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvid
             builder
                 .build()
                 .map_err(|e| OpenInferenceError::ExporterBuild(e.to_string()))?
-        }
-        #[cfg(target_arch = "wasm32")]
-        OtlpTransport::Grpc => {
-            return Err(OpenInferenceError::UnsupportedTransport { transport: "gRPC" });
         }
     };
 
@@ -457,26 +343,13 @@ fn build_tracer_provider(config: &OpenInferenceConfig) -> Result<SdkTracerProvid
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        if Handle::try_current().is_ok() {
-            Ok(builder.with_batch_exporter(exporter).build())
-        } else {
-            Ok(builder.with_simple_exporter(exporter).build())
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
+    if Handle::try_current().is_ok() {
+        Ok(builder.with_batch_exporter(exporter).build())
+    } else {
         Ok(builder.with_simple_exporter(exporter).build())
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn install_rustls_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {
     let mut metadata = MetadataMap::new();
     for (key, value) in headers {

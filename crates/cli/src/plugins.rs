@@ -10,23 +10,27 @@
 use std::io::IsTerminal;
 use std::path::Path;
 
-use console::{Key, Term, style};
+use console::{Key, Term, style, truncate_str};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Select};
 use nemo_relay::config_editor::{EditorFieldKind, EditorFieldSpec};
-use nemo_relay::plugin::PluginConfig;
 use serde_json::{Value, json};
 
 use crate::config::PluginsEditCommand;
 use crate::error::CliError;
 
 pub(crate) mod config_io;
+mod dynamic_editor;
 mod editor_model;
 pub(crate) mod lifecycle;
 pub(crate) mod policy;
+pub(crate) mod schema;
 
 use self::config_io::*;
+use self::dynamic_editor::*;
 use self::editor_model::*;
+
+const PLUGIN_EDIT_CANCELLED_MESSAGE: &str = "plugin edit cancelled; no plugin changes saved";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuShortcut {
@@ -88,39 +92,47 @@ fn configured_label(configured: bool, label: impl AsRef<str>) -> String {
 }
 
 fn print_save_success(path: &Path) {
-    println!("  {} Saved {}", style("✔").green(), path.display());
+    println!(
+        "  {} Saved {}",
+        style("✔").green(),
+        single_line_text(&path.display().to_string())
+    );
 }
 
 pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
     ensure_tty()?;
     let scope = target_scope(&command.scope)?;
     let path = target_path(scope)?;
-    let mut config = read_plugin_config(&path)?;
-    ensure_observability_component(&mut config)?;
-    ensure_adaptive_component(&mut config)?;
-    let mut components = editable_components(&config)?;
+    let mut document = PluginConfigDocument::read(&path)?;
+    ensure_observability_component(document.config_mut())?;
+    ensure_adaptive_component(document.config_mut())?;
+    let mut components = editable_components(document.config())?;
+    let mut dynamic_plugins = load_dynamic_plugin_states(&document)?;
 
     let theme = ColorfulTheme::default();
     crate::banner::print_intro();
-    println!("  Editing plugin config at {}", path.display());
-    println!("  Tip: ↑/↓ or j/k to move, SPACE/ENTER to select, p to preview, s to save.");
+    println!(
+        "  Editing plugin config at {}",
+        single_line_text(&path.display().to_string())
+    );
+    println!("  Tip: ↑/↓ or j/k to move, PageUp/PageDown to scroll, SPACE/ENTER to select.");
     println!();
     let mut selected_index = 0;
     loop {
-        let (items, actions) = plugin_menu_items(&components, &path);
-        println!();
-        for component in &components {
-            println!("{}: {}", component.label(), component.summary());
-        }
+        let dynamic_rows = dynamic_plugins
+            .iter()
+            .map(|plugin| (plugin.label().to_owned(), plugin.menu_summary()))
+            .collect::<Vec<_>>();
+        let (items, actions) = plugin_menu_items(&components, &dynamic_rows, &path);
         let selection = prompt_menu(&theme, "plugins.toml", &items, selected_index)?;
         if let Some(selected) = menu_response_index(&selection) {
             selected_index = selected;
         }
         if handle_menu_response(
             &theme,
-            &path,
-            &mut config,
+            &mut document,
             &mut components,
+            &mut dynamic_plugins,
             &actions,
             selection,
         )? == EditLoopControl::Finish
@@ -132,25 +144,27 @@ pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
 
 fn handle_menu_response(
     theme: &ColorfulTheme,
-    path: &Path,
-    config: &mut PluginConfig,
+    document: &mut PluginConfigDocument,
     components: &mut [EditableComponent],
+    dynamic_plugins: &mut [DynamicPluginEditorState],
     actions: &[MenuAction],
     selection: MenuResponse,
 ) -> Result<EditLoopControl, CliError> {
     match selection {
         MenuResponse::Selected(selection) => handle_menu_action(
             theme,
-            path,
-            config,
+            document,
             components,
+            dynamic_plugins,
             actions.get(selection).copied(),
         ),
         MenuResponse::Shortcut(MenuShortcut::Preview, _) => {
-            preview_components(config, components)?;
+            preview_document(document, components, dynamic_plugins)?;
             Ok(EditLoopControl::Continue)
         }
-        MenuResponse::Shortcut(MenuShortcut::Save, _) => save_components(path, config, components),
+        MenuResponse::Shortcut(MenuShortcut::Save, _) => {
+            save_document(document, components, dynamic_plugins)
+        }
         MenuResponse::Shortcut(MenuShortcut::Help, _) => {
             print_editor_help();
             Ok(EditLoopControl::Continue)
@@ -165,65 +179,98 @@ fn handle_menu_response(
 
 fn handle_menu_action(
     theme: &ColorfulTheme,
-    path: &Path,
-    config: &mut PluginConfig,
+    document: &mut PluginConfigDocument,
     components: &mut [EditableComponent],
+    dynamic_plugins: &mut [DynamicPluginEditorState],
     action: Option<MenuAction>,
 ) -> Result<EditLoopControl, CliError> {
     match action {
-        Some(MenuAction::ToggleComponent(component_index)) => {
+        Some(MenuAction::EditComponent(component_index)) => {
             if let Some(component) = components.get_mut(component_index) {
-                component.toggle_enabled();
+                edit_component(theme, component)?;
             }
             Ok(EditLoopControl::Continue)
         }
-        Some(MenuAction::EditField {
-            component_index,
-            field_index,
-        }) => {
-            edit_selected_component_field(theme, components, component_index, field_index)?;
+        Some(MenuAction::EditDynamic(dynamic_index)) => {
+            if let Some(plugin) = dynamic_plugins.get_mut(dynamic_index) {
+                edit_dynamic_plugin(theme, plugin)?;
+            }
             Ok(EditLoopControl::Continue)
         }
         Some(MenuAction::Preview) => {
-            preview_components(config, components)?;
+            preview_document(document, components, dynamic_plugins)?;
             Ok(EditLoopControl::Continue)
         }
-        Some(MenuAction::Save) => save_components(path, config, components),
+        Some(MenuAction::Save) => save_document(document, components, dynamic_plugins),
         Some(MenuAction::Cancel) | None => Err(cancelled_error()),
     }
 }
 
-fn edit_selected_component_field(
+fn edit_component(
     theme: &ColorfulTheme,
-    components: &mut [EditableComponent],
-    component_index: usize,
-    field_index: usize,
+    component: &mut EditableComponent,
 ) -> Result<(), CliError> {
-    if let Some(component) = components.get_mut(component_index)
-        && let Some(field) = component.fields().get(field_index)
-    {
-        edit_component_field(theme, component, *field)?;
+    let mut selected_index = 0;
+    loop {
+        let (items, actions) = component_menu_items(component);
+        let selection = prompt_menu(theme, component.label(), &items, selected_index)?;
+        if let Some(selected) = menu_response_index(&selection) {
+            selected_index = selected;
+        }
+        match selection {
+            MenuResponse::Selected(selected) => match actions.get(selected).copied() {
+                Some(ComponentMenuAction::Toggle) => component.toggle_enabled(),
+                Some(ComponentMenuAction::EditField(field_index)) => {
+                    if let Some(field) = component.fields().get(field_index) {
+                        edit_component_field(theme, component, *field)?;
+                    }
+                }
+                Some(ComponentMenuAction::Back) | None => return Ok(()),
+            },
+            MenuResponse::Shortcut(MenuShortcut::Reset, selected) => {
+                reset_component_menu_item(component, actions.get(selected).copied())?;
+            }
+            MenuResponse::Shortcut(MenuShortcut::Clear, selected) => {
+                clear_component_menu_item(component, actions.get(selected).copied())?;
+            }
+            MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
+            MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+                println!("  Preview and save are available from the main plugins.toml menu.");
+            }
+            MenuResponse::Cancel => return Ok(()),
+        }
     }
-    Ok(())
 }
 
-fn preview_components(
-    config: &PluginConfig,
+fn preview_document(
+    document: &PluginConfigDocument,
     components: &[EditableComponent],
+    dynamic_plugins: &[DynamicPluginEditorState],
 ) -> Result<(), CliError> {
-    let preview_config = config_with_editable_components(config, components)?;
-    print_preview(&preview_config)
+    let mut preview = document.clone();
+    preview.set_config(config_with_editable_components(
+        document.config(),
+        components,
+    )?);
+    for plugin in dynamic_plugins {
+        plugin.apply_to_document(&mut preview, true)?;
+    }
+    print_document_preview(&preview)
 }
 
-fn save_components(
-    path: &Path,
-    config: &mut PluginConfig,
+fn save_document(
+    document: &mut PluginConfigDocument,
     components: &[EditableComponent],
+    dynamic_plugins: &[DynamicPluginEditorState],
 ) -> Result<EditLoopControl, CliError> {
-    store_editable_components(config, components)?;
-    validate_config(config)?;
-    write_plugin_config(path, config)?;
-    print_save_success(path);
+    store_editable_components(document.config_mut(), components)?;
+    validate_config(document.config())?;
+    for plugin in dynamic_plugins {
+        plugin.validate()?;
+        plugin.apply_to_document(document, false)?;
+    }
+    document.write()?;
+    print_save_success(document.path());
     Ok(EditLoopControl::Finish)
 }
 
@@ -232,36 +279,54 @@ fn handle_reset_or_clear_shortcut(
     action: Option<MenuAction>,
     shortcut: MenuShortcut,
 ) -> Result<EditLoopControl, CliError> {
-    match action {
-        Some(MenuAction::ToggleComponent(component_index)) => {
-            if let Some(component) = components.get_mut(component_index) {
-                apply_component_enablement_shortcut(component, shortcut);
-            }
-        }
-        Some(MenuAction::EditField {
-            component_index,
-            field_index,
-        }) => reset_selected_component_field(components, component_index, field_index)?,
-        _ => println!("  Select a component or editable field to reset or clear."),
-    }
+    let _ = (components, action, shortcut);
+    println!("  Open a plugin to reset or clear its settings.");
     Ok(EditLoopControl::Continue)
 }
 
-fn reset_selected_component_field(
-    components: &mut [EditableComponent],
-    component_index: usize,
-    field_index: usize,
+fn reset_component_menu_item(
+    component: &mut EditableComponent,
+    action: Option<ComponentMenuAction>,
 ) -> Result<(), CliError> {
-    if let Some(component) = components.get_mut(component_index)
-        && let Some(field) = component.fields().get(field_index)
-    {
-        component.reset_field(*field)?;
+    match action {
+        Some(ComponentMenuAction::Toggle) => component.reset_enabled(),
+        Some(ComponentMenuAction::EditField(field_index)) => {
+            if let Some(field) = component.fields().get(field_index) {
+                component.reset_field(*field)?;
+            }
+        }
+        Some(ComponentMenuAction::Back) | None => {
+            println!("  Select a component setting to reset.");
+        }
+    }
+    Ok(())
+}
+
+fn clear_component_menu_item(
+    component: &mut EditableComponent,
+    action: Option<ComponentMenuAction>,
+) -> Result<(), CliError> {
+    match action {
+        Some(ComponentMenuAction::Toggle) => component.set_enabled(false),
+        Some(ComponentMenuAction::EditField(field_index)) => {
+            if let Some(field) = component.fields().get(field_index)
+                && !component.clear_field(*field)?
+            {
+                println!(
+                    "  {} is required; use reset to restore its default.",
+                    field.label
+                );
+            }
+        }
+        Some(ComponentMenuAction::Back) | None => {
+            println!("  Select a component setting to clear.");
+        }
     }
     Ok(())
 }
 
 fn cancelled_error() -> CliError {
-    CliError::Config("plugin edit cancelled; no config saved".into())
+    CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
 }
 
 fn edit_component_field(
@@ -288,14 +353,6 @@ fn edit_component_field(
         }
     }
     Ok(())
-}
-
-fn apply_component_enablement_shortcut(component: &mut EditableComponent, shortcut: MenuShortcut) {
-    match shortcut {
-        MenuShortcut::Reset => component.reset_enabled(),
-        MenuShortcut::Clear => component.set_enabled(false),
-        _ => {}
-    }
 }
 
 fn menu_response_index(response: &MenuResponse) -> Option<usize> {
@@ -329,23 +386,29 @@ fn prompt_menu(
         if rendered_lines > 0 {
             term.clear_last_lines(rendered_lines).map_err(menu_error)?;
         }
-        let lines = render_menu(theme, prompt, items, selected);
+        let (rows, columns) = term.size();
+        let viewport = menu_viewport(items.len(), selected, usize::from(rows));
+        let lines = render_menu_for_size(
+            theme,
+            prompt,
+            items,
+            selected,
+            usize::from(rows),
+            usize::from(columns),
+        );
         rendered_lines = lines.len();
         for line in &lines {
             term.write_line(line).map_err(menu_error)?;
         }
         term.flush().map_err(menu_error)?;
-        match term.read_key().map_err(menu_error)? {
-            Key::ArrowUp | Key::Char('k') => {
-                selected = if selected == 0 {
-                    items.len() - 1
-                } else {
-                    selected - 1
-                };
-            }
-            Key::ArrowDown | Key::Char('j') => {
-                selected = (selected + 1) % items.len();
-            }
+        let key = term.read_key().map_err(menu_error)?;
+        if let Some(next) =
+            menu_selection_after_key(&key, selected, items.len(), viewport.page_size)
+        {
+            selected = next;
+            continue;
+        }
+        match key {
             Key::Enter | Key::Char(' ') => {
                 clear_menu(&term, rendered_lines)?;
                 return Ok(MenuResponse::Selected(selected));
@@ -379,41 +442,162 @@ fn prompt_menu(
     }
 }
 
-fn render_menu(
+fn menu_selection_after_key(
+    key: &Key,
+    selected: usize,
+    item_count: usize,
+    page_size: usize,
+) -> Option<usize> {
+    if item_count == 0 {
+        return None;
+    }
+
+    let last = item_count - 1;
+    let selected = selected.min(last);
+    match key {
+        Key::ArrowUp | Key::Char('k') => Some(if selected == 0 { last } else { selected - 1 }),
+        Key::ArrowDown | Key::Char('j') => Some((selected + 1) % item_count),
+        Key::PageUp => Some(selected.saturating_sub(page_size)),
+        Key::PageDown => Some(selected.saturating_add(page_size).min(last)),
+        Key::Home => Some(0),
+        Key::End => Some(last),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MenuViewport {
+    start: usize,
+    end: usize,
+    page_size: usize,
+    indicators: bool,
+}
+
+fn menu_viewport(item_count: usize, selected: usize, terminal_rows: usize) -> MenuViewport {
+    let terminal_rows = terminal_rows.max(1);
+    let header_rows = menu_header_rows(terminal_rows);
+    let available_without_indicators = terminal_rows.saturating_sub(header_rows).max(1);
+    if item_count <= available_without_indicators {
+        return MenuViewport {
+            start: 0,
+            end: item_count,
+            page_size: available_without_indicators,
+            indicators: false,
+        };
+    }
+
+    let indicator_rows = usize::from(terminal_rows.saturating_sub(header_rows) >= 3) * 2;
+    let page_size = terminal_rows
+        .saturating_sub(header_rows + indicator_rows)
+        .max(1);
+    let selected = selected.min(item_count.saturating_sub(1));
+    let start = selected
+        .saturating_sub(page_size.saturating_sub(1))
+        .min(item_count.saturating_sub(page_size));
+    MenuViewport {
+        start,
+        end: (start + page_size).min(item_count),
+        page_size,
+        indicators: indicator_rows > 0,
+    }
+}
+
+fn menu_header_rows(terminal_rows: usize) -> usize {
+    match terminal_rows {
+        0 | 1 => 0,
+        2..=4 => 1,
+        _ => 2,
+    }
+}
+
+fn render_menu_for_size(
     theme: &ColorfulTheme,
     prompt: &str,
     items: &[MenuItem],
     selected: usize,
+    terminal_rows: usize,
+    terminal_columns: usize,
 ) -> Vec<String> {
-    let mut lines = Vec::with_capacity(items.len() + 2);
-    lines.push(format!(
-        "{} {} {}",
-        theme.prompt_prefix,
-        theme.prompt_style.apply_to(prompt),
-        theme.prompt_suffix
-    ));
-    lines.push(
-        theme
-            .hint_style
-            .apply_to("  ↑/↓ or j/k move, Enter/Space select, p preview, s save, r reset, Backspace/Delete clear, ? help, q cancel.")
-            .to_string(),
-    );
-    lines.extend(items.iter().enumerate().map(|(index, item)| {
-        if index == selected {
-            format!(
-                "{} {}",
-                theme.active_item_prefix,
-                theme.active_item_style.apply_to(&item.label)
-            )
+    let terminal_rows = terminal_rows.max(1);
+    let viewport = menu_viewport(items.len(), selected, terminal_rows);
+    let mut lines = Vec::with_capacity(viewport.page_size + 4);
+    let header_rows = menu_header_rows(terminal_rows);
+    if header_rows >= 1 {
+        lines.push(format!(
+            "{} {} {}",
+            theme.prompt_prefix,
+            theme.prompt_style.apply_to(single_line_text(prompt)),
+            theme.prompt_suffix
+        ));
+    }
+    if header_rows >= 2 {
+        lines.push(
+            theme
+                .hint_style
+                .apply_to("  ↑/↓ or j/k move, PgUp/PgDn page, Home/End jump, Enter/Space select, p preview, s save, r reset, Backspace/Delete clear, ? help, q cancel.")
+                .to_string(),
+        );
+    }
+    if viewport.indicators {
+        lines.push(if viewport.start > 0 {
+            theme
+                .hint_style
+                .apply_to(format!("  ↑ {} more", viewport.start))
+                .to_string()
         } else {
-            format!(
-                "{} {}",
-                theme.inactive_item_prefix,
-                theme.inactive_item_style.apply_to(&item.label)
-            )
-        }
-    }));
+            String::new()
+        });
+    }
+    lines.extend(
+        items[viewport.start..viewport.end]
+            .iter()
+            .enumerate()
+            .map(|(offset, item)| {
+                let index = viewport.start + offset;
+                let label = single_line_text(&item.label);
+                if index == selected {
+                    format!(
+                        "{} {}",
+                        theme.active_item_prefix,
+                        theme.active_item_style.apply_to(label)
+                    )
+                } else {
+                    format!(
+                        "{} {}",
+                        theme.inactive_item_prefix,
+                        theme.inactive_item_style.apply_to(label)
+                    )
+                }
+            }),
+    );
+    if viewport.indicators {
+        lines.push(if viewport.end < items.len() {
+            theme
+                .hint_style
+                .apply_to(format!("  ↓ {} more", items.len() - viewport.end))
+                .to_string()
+        } else {
+            String::new()
+        });
+    }
+    let width = terminal_columns.max(1);
     lines
+        .into_iter()
+        .map(|line| truncate_str(&line, width, "…").into_owned())
+        .collect()
+}
+
+fn single_line_text(value: &str) -> String {
+    console::strip_ansi_codes(value)
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn clear_menu(term: &Term, rendered_lines: usize) -> Result<(), CliError> {
@@ -428,7 +612,7 @@ fn menu_error(error: std::io::Error) -> CliError {
         error.kind(),
         std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
     ) {
-        CliError::Config("plugin edit cancelled; no config saved".into())
+        CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
     } else {
         CliError::Config(format!("plugin editor terminal error: {error}"))
     }
@@ -442,6 +626,10 @@ fn print_editor_help() {
         style("Plugin editor keys").bold()
     );
     println!("  {}  move", style("↑/↓ or j/k").cyan());
+    println!(
+        "  {} move by page or jump to an end",
+        style("PageUp/PageDown, Home/End").cyan()
+    );
     println!(
         "  {} select/toggle the highlighted item",
         style("Enter/Space").cyan()
@@ -1183,7 +1371,7 @@ fn editor_error(err: dialoguer::Error) -> CliError {
                 std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
             ) =>
         {
-            CliError::Config("plugin edit cancelled; no config saved".into())
+            CliError::Config(PLUGIN_EDIT_CANCELLED_MESSAGE.into())
         }
         other => CliError::Config(format!("plugin edit error: {other}")),
     }

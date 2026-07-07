@@ -584,7 +584,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
         },
     )
     .unwrap();
-    assert_eq!(request.content["messages"], json!([]));
+    assert_eq!(request.request.content["messages"], json!([]));
 
     let llm_func: LlmExecutionNextFn =
         Arc::new(|_req: LlmRequest| Box::pin(async { Ok(json!({"response": "ok"})) }));
@@ -718,7 +718,9 @@ impl Plugin for HeaderPlugin {
                 false,
                 Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!("set"));
-                    Ok((request, annotated))
+                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ))
                 }),
             )?;
             ctx.register_tool_request_intercept(
@@ -803,7 +805,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
         },
     )
     .unwrap();
-    assert_eq!(request.headers.get("x-plugin"), Some(&json!("set")));
+    assert_eq!(request.request.headers.get("x-plugin"), Some(&json!("set")));
 
     let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
     let tool_result = tool_call_execute(

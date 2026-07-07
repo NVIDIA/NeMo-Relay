@@ -286,6 +286,7 @@ fn relay_validation_command() -> String {
 
 fn write_installed_state(host: PluginHost, dir: &Path) {
     let layout = PluginLayout::new(host, dir);
+    write_plugin_marketplace(host, &layout, &options(dir)).unwrap();
     write_state(&layout, &options(dir)).unwrap();
     mark_plugin_setup_installed(host, &layout, &options(dir)).unwrap();
 }
@@ -751,7 +752,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         .unwrap_err()
         .to_string();
     assert!(
-        codex_doctor_error.contains("required `nemo-relay` executable"),
+        codex_doctor_error.contains("nemo-relay install codex --force"),
         "error was: {codex_doctor_error}"
     );
 
@@ -1364,6 +1365,196 @@ fn doctor_json_uses_quiet_plugin_report() {
 }
 
 #[test]
+fn readiness_report_marks_missing_generated_plugin_files_as_failed() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list",
+            "nemo-relay-plugin@nemo-relay-local installed, enabled\n",
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            "nemo-relay-local /tmp/nemo-relay-local\n",
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    std::fs::remove_file(layout.plugin_manifest).unwrap();
+
+    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+
+    assert!(!report.ok());
+    assert!(report.checks.iter().any(|check| {
+        check.name == "Generated plugin" && !check.ok && check.details.contains("missing")
+    }));
+    assert_eq!(
+        setup_runner.calls(),
+        vec![format!("doctor-json codex {DEFAULT_GATEWAY_URL}")]
+    );
+}
+
+#[test]
+fn readiness_report_rejects_invalid_generated_manifest_contents() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list",
+            "nemo-relay-plugin@nemo-relay-local installed, enabled\n",
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            "nemo-relay-local /tmp/nemo-relay-local\n",
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    std::fs::write(
+        &layout.marketplace_manifest,
+        r#"{"name":"wrong-marketplace"}"#,
+    )
+    .unwrap();
+
+    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+
+    assert!(!report.ok());
+    assert!(report.checks.iter().any(|check| {
+        check.name == "Generated marketplace" && !check.ok && check.details.contains("unexpected")
+    }));
+}
+
+#[test]
+fn readiness_report_accepts_generated_plugin_manifest_from_an_older_version() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_capture_output(
+            "/bin/codex plugin list",
+            "nemo-relay-plugin@nemo-relay-local installed, enabled\n",
+        )
+        .with_capture_output(
+            "/bin/codex plugin marketplace list",
+            "nemo-relay-local /tmp/nemo-relay-local\n",
+        );
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let mut manifest = plugin_manifest(PluginHost::Codex);
+    manifest["version"] = json!("0.0.0");
+    std::fs::write(
+        &layout.plugin_manifest,
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+
+    assert!(report.ok());
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == "Generated plugin" && check.ok)
+    );
+}
+
+#[test]
+fn doctor_json_preserves_unknown_host_registration_state() {
+    let dir = tempdir().unwrap();
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::Codex, dir.path());
+
+    let report = doctor_host_json_value(
+        PluginHost::Codex,
+        &options,
+        &MockRunner::default(),
+        &setup_runner,
+    )
+    .unwrap();
+
+    assert_eq!(report["host_registration"]["ok"], json!(false));
+    assert!(report["host_registration"]["host_plugin_registered"].is_null());
+    assert!(report["host_registration"]["host_marketplace_registered"].is_null());
+}
+
+#[test]
+fn timed_out_host_plugin_readiness_is_actionable() {
+    let state_path = PathBuf::from("/tmp/nemo-relay/codex.json");
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let _sender = sender;
+
+    let report = receive_host_plugin_readiness(
+        PendingHostPluginReadiness {
+            host: PluginHost::Codex,
+            state_path: state_path.clone(),
+            receiver,
+        },
+        Duration::ZERO,
+    );
+
+    assert!(!report.ok());
+    assert_eq!(report.state_path, state_path);
+    assert_eq!(report.remediation, "nemo-relay install codex --force");
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|check| check.name == "Host readiness" && !check.ok)
+    );
+}
+
+#[test]
+fn stopped_lazy_sidecar_does_not_fail_host_readiness() {
+    let mut readiness = HostPluginReadiness {
+        host: "codex".into(),
+        remediation: "nemo-relay install codex --force".into(),
+        state_path: PathBuf::from("/tmp/codex.json"),
+        marketplace: None,
+        plugin: None,
+        checks: vec![],
+        relay: None,
+        host_plugin_registered: None,
+        host_marketplace_registered: None,
+        plugin_setup: None,
+    };
+
+    append_plugin_setup_checks(
+        &mut readiness,
+        &json!({
+            "sidecar_health": "not_running_lazy_start",
+            "checks": {
+                "plugin_binary": true,
+                "sidecar_running": false,
+                "codex_provider_alias": true,
+                "codex_hooks": true
+            }
+        }),
+    );
+
+    assert!(readiness.ok());
+    assert!(
+        readiness
+            .checks
+            .iter()
+            .any(|check| check.name == "Sidecar health")
+    );
+    assert!(
+        !readiness
+            .checks
+            .iter()
+            .any(|check| check.name == "sidecar running")
+    );
+}
+
+#[test]
 fn doctor_validates_claude_host_registration_before_setup_doctor() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()
@@ -1391,7 +1582,7 @@ fn doctor_validates_claude_host_registration_before_setup_doctor() {
 
     assert_eq!(
         setup_runner.calls(),
-        vec![format!("doctor claude-code {DEFAULT_GATEWAY_URL}")]
+        vec![format!("doctor-json claude-code {DEFAULT_GATEWAY_URL}")]
     );
     assert_eq!(
         runner.capture_commands(),
@@ -1422,8 +1613,11 @@ fn doctor_fails_when_claude_host_plugin_is_missing() {
 
     let error = doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
 
-    assert!(error.contains("nemo-relay-plugin@nemo-relay-local"));
-    assert!(setup_runner.calls().is_empty());
+    assert!(error.contains("nemo-relay install claude-code --force"));
+    assert_eq!(
+        setup_runner.calls(),
+        vec![format!("doctor-json claude-code {DEFAULT_GATEWAY_URL}")]
+    );
 }
 
 #[test]
@@ -1449,8 +1643,11 @@ fn doctor_fails_when_claude_host_marketplace_is_missing() {
 
     let error = doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
 
-    assert!(error.contains("nemo-relay-local host marketplace"));
-    assert!(setup_runner.calls().is_empty());
+    assert!(error.contains("nemo-relay install claude-code --force"));
+    assert_eq!(
+        setup_runner.calls(),
+        vec![format!("doctor-json claude-code {DEFAULT_GATEWAY_URL}")]
+    );
 }
 
 #[test]

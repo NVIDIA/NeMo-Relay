@@ -12,9 +12,10 @@
 //! so configuration remains portable across bindings. Agent Trajectory
 //! Observability Format (ATOF), OpenTelemetry, and OpenInference each register
 //! one global subscriber when enabled. Agent Trajectory Interchange Format
-//! (ATIF) uses a global dispatcher that detects top-level agent scopes and
-//! creates one scope-local exporter for each trajectory run. Coding-agent turns
-//! that need bounded traces are represented as agent scopes with role metadata.
+//! (ATIF) uses a global dispatcher that detects top-level agent or turn scopes
+//! and creates one scope-local exporter for each trajectory run. Coding-agent
+//! turns that need bounded traces carry role metadata; their declared scope
+//! type is preserved in the exported event stream.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -752,7 +753,7 @@ fn deregister_atif_shutdown_subscriber(scope_uuid: &Uuid, name: &str) -> PluginR
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn build_atif_storage(
     index: usize,
     config: &AtifStorageConfig,
@@ -762,7 +763,7 @@ fn build_atif_storage(
         .map_err(observability_registration_error)
 }
 
-#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+#[cfg(not(feature = "object-store"))]
 fn build_atif_storage(
     _index: usize,
     _config: &AtifStorageConfig,
@@ -861,17 +862,11 @@ struct ManagedAtifExporter {
 
 struct PendingAtifWrite {
     agent_uuid: Uuid,
-    #[cfg_attr(
-        not(all(feature = "object-store", not(target_arch = "wasm32"))),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(feature = "object-store"), allow(dead_code))]
     session_id: String,
     // `filename` is consumed by the remote upload path, which is gated on the
     // object-store feature; without it, only the local sink reads `local_path`.
-    #[cfg_attr(
-        not(all(feature = "object-store", not(target_arch = "wasm32"))),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(feature = "object-store"), allow(dead_code))]
     filename: String,
     local_path: Option<PathBuf>,
     payload: Vec<u8>,
@@ -1285,7 +1280,7 @@ fn write_atif_local(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, payload)
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn write_atif_remote(
     storage: &[Arc<AtifRemoteStorage>],
     index: usize,
@@ -1297,7 +1292,7 @@ fn write_atif_remote(
     sink.put(&write.filename, &write.session_id, &write.payload)
 }
 
-#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+#[cfg(not(feature = "object-store"))]
 fn write_atif_remote(
     _storage: &[Arc<AtifRemoteStorage>],
     _index: usize,
@@ -1321,7 +1316,14 @@ fn is_top_level_trajectory_start(event: &Event) -> bool {
     if event.scope_category() != Some(ScopeCategory::Start) {
         return false;
     }
-    if event.scope_type() != Some(ScopeType::Agent) {
+    let is_agent_scope = event.scope_type() == Some(ScopeType::Agent);
+    let is_turn_scope = event.scope_type() == Some(ScopeType::Custom)
+        && event
+            .metadata()
+            .and_then(|metadata| metadata.get("nemo_relay_scope_role"))
+            .and_then(Json::as_str)
+            == Some("turn");
+    if !is_agent_scope && !is_turn_scope {
         return false;
     }
     let Some(parent_uuid) = event.parent_uuid() else {
@@ -1559,35 +1561,7 @@ fn validate_atof_section(
     validate_atof_feature_support(diagnostics, policy, section);
 }
 
-#[cfg(target_arch = "wasm32")]
-fn validate_atof_feature_support(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
-    section: &AtofSectionConfig,
-) {
-    if section.enabled {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "observability.unsupported_value",
-            Some("atof".to_string()),
-            Some("enabled".to_string()),
-            "ATOF file export is not supported on WebAssembly".to_string(),
-        );
-    }
-    if section.enabled && !section.endpoints.is_empty() {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "observability.unsupported_value",
-            Some("atof".to_string()),
-            Some("endpoints".to_string()),
-            "ATOF streaming endpoints are not supported on WebAssembly".to_string(),
-        );
-    }
-}
-
-#[cfg(all(not(feature = "atof-streaming"), not(target_arch = "wasm32")))]
+#[cfg(not(feature = "atof-streaming"))]
 fn validate_atof_feature_support(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
@@ -1605,7 +1579,7 @@ fn validate_atof_feature_support(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn validate_atof_feature_support(
     _diagnostics: &mut Vec<ConfigDiagnostic>,
     _policy: &ConfigPolicy,
@@ -1623,25 +1597,6 @@ fn validate_atif_section(
     validate_atif_storage_support(diagnostics, policy, section);
 }
 
-#[cfg(target_arch = "wasm32")]
-fn validate_atif_file_export_support(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
-    section: &AtifSectionConfig,
-) {
-    if section.enabled {
-        push_policy_diag(
-            diagnostics,
-            policy.unsupported_value,
-            "observability.unsupported_value",
-            Some("atif".to_string()),
-            Some("enabled".to_string()),
-            "ATIF file export is not supported on WebAssembly".to_string(),
-        );
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn validate_atif_file_export_support(
     _diagnostics: &mut Vec<ConfigDiagnostic>,
     _policy: &ConfigPolicy,
@@ -1649,7 +1604,7 @@ fn validate_atif_file_export_support(
 ) {
 }
 
-#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+#[cfg(not(feature = "object-store"))]
 fn validate_atif_storage_support(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
@@ -1667,7 +1622,7 @@ fn validate_atif_storage_support(
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn validate_atif_storage_support(
     _diagnostics: &mut Vec<ConfigDiagnostic>,
     _policy: &ConfigPolicy,
@@ -1873,12 +1828,12 @@ fn validate_atof_endpoint_values(
     }
 }
 
-#[cfg(all(feature = "atof-streaming", not(target_arch = "wasm32")))]
+#[cfg(feature = "atof-streaming")]
 fn is_valid_atof_endpoint_url(url: &str) -> bool {
     reqwest::Url::parse(url).is_ok()
 }
 
-#[cfg(any(not(feature = "atof-streaming"), target_arch = "wasm32"))]
+#[cfg(not(feature = "atof-streaming"))]
 fn is_valid_atof_endpoint_url(_url: &str) -> bool {
     true
 }
@@ -1986,7 +1941,7 @@ fn validate_atif_http_header(
     _value: &str,
 ) {
     validate_atif_http_header_name(diagnostics, policy, field, header);
-    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    #[cfg(feature = "object-store")]
     if let Err(err) = reqwest::header::HeaderValue::from_str(_value) {
         push_policy_diag(
             diagnostics,
@@ -2005,9 +1960,9 @@ fn validate_atif_http_header_name(
     field: &str,
     header: &str,
 ) {
-    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    #[cfg(feature = "object-store")]
     let is_valid = reqwest::header::HeaderName::from_bytes(header.as_bytes()).is_ok();
-    #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+    #[cfg(not(feature = "object-store"))]
     let is_valid = !header.trim().is_empty() && header.trim() == header;
     if !is_valid {
         push_policy_diag(
@@ -2029,14 +1984,14 @@ fn validate_atif_http_endpoint(
 ) {
     let trimmed = endpoint.trim();
     let mut is_valid = !trimmed.is_empty() && trimmed == endpoint;
-    #[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+    #[cfg(feature = "object-store")]
     {
         is_valid = is_valid
             && reqwest::Url::parse(endpoint)
                 .map(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
                 .unwrap_or(false);
     }
-    #[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+    #[cfg(not(feature = "object-store"))]
     {
         let valid_scheme = trimmed.starts_with("http://") || trimmed.starts_with("https://");
         let has_host = trimmed
@@ -2235,7 +2190,7 @@ fn default_output_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-#[cfg(not(all(feature = "object-store", not(target_arch = "wasm32"))))]
+#[cfg(not(feature = "object-store"))]
 struct AtifRemoteStorage;
 
 /// Remote storage handle for ATIF trajectory uploads.
@@ -2245,13 +2200,13 @@ struct AtifRemoteStorage;
 /// event) submit uploads over a synchronous channel and block on the reply, so
 /// the handle stays safe to drive from any thread regardless of whether the
 /// caller is already inside another tokio runtime.
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 struct AtifRemoteStorage {
     sender: std::sync::mpsc::Sender<AtifUploadRequest>,
     key_prefix: String,
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 struct AtifUploadRequest {
     key: String,
     filename: String,
@@ -2260,7 +2215,7 @@ struct AtifUploadRequest {
     reply: std::sync::mpsc::Sender<std::io::Result<()>>,
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 #[derive(Clone)]
 struct HttpUploadConfig {
     endpoint: String,
@@ -2268,7 +2223,7 @@ struct HttpUploadConfig {
     timeout: Duration,
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 #[derive(Default)]
 struct S3BuilderOverrides {
     access_key_id: Option<String>,
@@ -2279,7 +2234,7 @@ struct S3BuilderOverrides {
     allow_http: Option<bool>,
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 impl S3BuilderOverrides {
     fn resolve(index: usize, s3: &S3StorageConfig) -> std::io::Result<Self> {
         Ok(Self {
@@ -2324,7 +2279,7 @@ impl S3BuilderOverrides {
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn resolve_env_var_field(field: &str, var_name: Option<&str>) -> std::io::Result<Option<String>> {
     let Some(var_name) = var_name else {
         return Ok(None);
@@ -2345,7 +2300,7 @@ fn resolve_env_var_field(field: &str, var_name: Option<&str>) -> std::io::Result
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 impl AtifRemoteStorage {
     fn from_config(index: usize, config: &AtifStorageConfig) -> std::io::Result<Self> {
         match config {
@@ -2362,7 +2317,6 @@ impl AtifRemoteStorage {
         std::thread::Builder::new()
             .name("nemo-relay-atif-storage".to_string())
             .spawn(move || {
-                install_rustls_crypto_provider();
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -2431,7 +2385,6 @@ impl AtifRemoteStorage {
         std::thread::Builder::new()
             .name("nemo-relay-atif-storage".to_string())
             .spawn(move || {
-                install_rustls_crypto_provider();
                 let runtime = match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -2516,7 +2469,7 @@ impl AtifRemoteStorage {
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 impl HttpUploadConfig {
     fn resolve(index: usize, http: &HttpStorageConfig) -> std::io::Result<Self> {
         let endpoint = http.endpoint.trim();
@@ -2560,7 +2513,7 @@ impl HttpUploadConfig {
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn validate_http_headers(index: usize, headers: &HashMap<String, String>) -> std::io::Result<()> {
     for (header, value) in headers {
         reqwest::header::HeaderName::from_bytes(header.as_bytes()).map_err(|err| {
@@ -2577,7 +2530,7 @@ fn validate_http_headers(index: usize, headers: &HashMap<String, String>) -> std
     Ok(())
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 async fn post_atif_http(
     client: &reqwest::Client,
     config: &HttpUploadConfig,
@@ -2614,12 +2567,7 @@ async fn post_atif_http(
     }
 }
 
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
-fn install_rustls_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-}
-
-#[cfg(all(feature = "object-store", not(target_arch = "wasm32")))]
+#[cfg(feature = "object-store")]
 fn normalize_storage_key_prefix(raw: Option<&str>) -> String {
     let trimmed = raw.unwrap_or("").trim();
     if trimmed.is_empty() {

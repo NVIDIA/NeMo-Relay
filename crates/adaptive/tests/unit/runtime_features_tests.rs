@@ -147,7 +147,11 @@ fn assert_llm_request_intercept_registered(name: &str) {
             name,
             i32::MAX,
             false,
-            Arc::new(|_name, request, annotated| Ok((request, annotated))),
+            Arc::new(|_name, request, annotated| {
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
+            }),
         ),
         name,
     );
@@ -158,7 +162,11 @@ fn assert_llm_request_intercept_absent(name: &str) {
         name,
         i32::MAX,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
+        }),
     )
     .unwrap();
     deregister_llm_request_intercept(name).unwrap();
@@ -208,14 +216,22 @@ fn assert_llm_stream_execution_intercept_absent(name: &str) {
 
 fn assert_tool_execution_intercept_registered(name: &str) {
     assert_already_registered(
-        register_tool_execution_intercept(name, i32::MAX, Arc::new(|_name, args, next| next(args))),
+        register_tool_execution_intercept(
+            name,
+            i32::MAX,
+            Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+        ),
         name,
     );
 }
 
 fn assert_tool_execution_intercept_absent(name: &str) {
-    register_tool_execution_intercept(name, i32::MAX, Arc::new(|_name, args, next| next(args)))
-        .unwrap();
+    register_tool_execution_intercept(
+        name,
+        i32::MAX,
+        Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+    )
+    .unwrap();
     deregister_tool_execution_intercept(name).unwrap();
 }
 
@@ -565,7 +581,7 @@ async fn adaptive_hints_feature_registers_request_intercept() {
         },
     )
     .unwrap();
-    assert!(request.headers.contains_key(AGENT_HINTS_HEADER_KEY));
+    assert!(request.request.headers.contains_key(AGENT_HINTS_HEADER_KEY));
 
     let mut registrations = ctx.finish();
     rollback_registrations(&mut registrations);
@@ -728,7 +744,11 @@ async fn registration_context_registers_all_supported_callback_types() {
         "adaptive_test_request",
         5,
         false,
-        Arc::new(|_name, request, annotated| Ok((request, annotated))),
+        Arc::new(|_name, request, annotated| {
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                request, annotated,
+            ))
+        }),
     )
     .unwrap();
     ctx.register_llm_execution_intercept(
@@ -757,7 +777,7 @@ async fn registration_context_registers_all_supported_callback_types() {
     ctx.register_tool_execution_intercept(
         "adaptive_test_tool",
         8,
-        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args) })),
+        Arc::new(|_name, args, _next| Box::pin(async move { Ok(args.into()) })),
     )
     .unwrap();
 

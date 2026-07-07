@@ -148,7 +148,7 @@ extern int32_t nemo_relay_register_llm_conditional_execution_guardrail(const cha
 extern int32_t nemo_relay_deregister_llm_conditional_execution_guardrail(const char* name);
 
 // LLM intercepts
-typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const FfiLLMRequest* request, const char* annotated_json, FfiLLMRequest** out_request, char** out_annotated_json);
+typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const FfiLLMRequest* request, const char* annotated_json, char** out_outcome_json);
 extern int32_t nemo_relay_register_llm_request_intercept(const char* name, int32_t priority, _Bool break_chain, NemoRelayLlmRequestInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_llm_request_intercept(const char* name);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
@@ -269,7 +269,7 @@ extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNe
 extern char* goCodecDecodeTrampoline(void*, const FfiLLMRequest*);
 extern char* goCodecEncodeTrampoline(void*, const char*, const FfiLLMRequest*);
 extern int32_t goLlmRequestInterceptTrampoline(
-    void*, const char*, const FfiLLMRequest*, const char*, FfiLLMRequest**, char**);
+    void*, const char*, const FfiLLMRequest*, const char*, char**);
 */
 import "C"
 
@@ -2431,7 +2431,7 @@ func ToolConditionalExecution(name string, args json.RawMessage) error {
 
 // LlmRequestIntercepts runs the registered LLM request intercept chain on the
 // given request (serialized as JSON) and returns the transformed request JSON.
-func LlmRequestIntercepts(name string, request json.RawMessage) (json.RawMessage, error) {
+func LlmRequestIntercepts(name string, request json.RawMessage) (LLMRequestInterceptOutcome, error) {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	cRequest := C.CString(string(request))
@@ -2440,10 +2440,14 @@ func LlmRequestIntercepts(name string, request json.RawMessage) (json.RawMessage
 	var out *C.char
 	status := C.nemo_relay_llm_request_intercepts(cName, cRequest, &out)
 	if err := checkStatus(status); err != nil {
-		return nil, err
+		return LLMRequestInterceptOutcome{}, err
 	}
 	defer C.nemo_relay_string_free(out)
-	return json.RawMessage(C.GoString(out)), nil
+	var outcome LLMRequestInterceptOutcome
+	if err := jsonUnmarshal([]byte(C.GoString(out)), &outcome); err != nil {
+		return LLMRequestInterceptOutcome{}, err
+	}
+	return outcome, nil
 }
 
 // LlmConditionalExecution runs the registered LLM conditional execution

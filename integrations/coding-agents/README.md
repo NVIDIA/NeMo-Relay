@@ -193,7 +193,6 @@ Useful wrapper options:
 
 - `--session-metadata '<json>'` adds structured metadata to the agent begin
   event.
-- `--plugin-config '<json>'` records scope-local plugin configuration metadata.
 - `--profile <name>` records a configuration profile in session metadata.
 - `--gateway-mode hook-only|passthrough|required` records the expected gateway
   behavior in session metadata.

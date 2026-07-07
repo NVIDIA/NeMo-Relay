@@ -123,8 +123,7 @@ exporter, consume the same event stream and serialize the same canonical event
 shape for their target backend.
 
 Native subscribers are invoked by one process-wide worker thread in FIFO event
-order and subscriber snapshot order. WebAssembly keeps its current synchronous
-delivery behavior because it does not use thread-based dispatch.
+order and subscriber snapshot order.
 
 ## Waiting for Delivery
 
@@ -136,7 +135,6 @@ side effects from subscriber callbacks that have already been queued:
 - Node.js: `flushSubscribers()`, then await an event-loop tick for JavaScript
   callback side effects
 - FFI: `nemo_relay_flush_subscribers()`
-- WebAssembly: `flushSubscribers()` succeeds as a no-op
 
 ### Forwarding and Export
 

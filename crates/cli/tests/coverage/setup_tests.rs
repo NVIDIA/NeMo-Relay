@@ -455,7 +455,8 @@ fn write_or_merge_recovers_from_non_table_agents_value() {
 agents = "not-a-table"
 
 [plugins]
-enabled = true
+config = { version = 1, components = [] }
+
 "#,
     )
     .unwrap();
@@ -470,7 +471,7 @@ enabled = true
     let merged = std::fs::read_to_string(path).unwrap();
     assert!(merged.contains("[agents.codex]"));
     assert!(merged.contains(r#"command = "codex""#));
-    assert!(merged.contains("[plugins]"));
+    assert!(!merged.contains("[plugins]"));
 }
 
 #[test]
@@ -573,4 +574,55 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
         error.contains("could not parse existing config"),
         "error was: {error}"
     );
+}
+
+#[test]
+fn plugins_edit_command_for_scope_targets_expected_plugin_scope() {
+    use crate::plugins::config_io::{TargetScope, target_scope};
+
+    let cases = [
+        (ConfigScope::Project, TargetScope::Project),
+        (ConfigScope::Global, TargetScope::User),
+        (ConfigScope::Both, TargetScope::Project),
+    ];
+
+    for (scope, expected) in cases {
+        let command = plugins_edit_command_for_scope(scope);
+        assert_eq!(
+            target_scope(&command.scope).unwrap(),
+            expected,
+            "unexpected plugin target scope for {scope:?}"
+        );
+    }
+}
+
+#[test]
+fn plugins_resume_command_matches_scope() {
+    let cases = [
+        (ConfigScope::Project, "nemo-relay plugins edit --project"),
+        (ConfigScope::Both, "nemo-relay plugins edit --project"),
+        (ConfigScope::Global, "nemo-relay plugins edit"),
+    ];
+
+    for (scope, expected) in cases {
+        assert_eq!(
+            plugins_resume_command(scope),
+            expected,
+            "unexpected resume command for {scope:?}"
+        );
+    }
+}
+
+#[test]
+fn plugin_prompt_interruption_recognizes_cancel_inputs() {
+    for kind in [
+        std::io::ErrorKind::Interrupted,
+        std::io::ErrorKind::UnexpectedEof,
+    ] {
+        let error = dialoguer::Error::IO(std::io::Error::from(kind));
+        assert!(plugin_prompt_was_interrupted(&error));
+    }
+
+    let error = dialoguer::Error::IO(std::io::Error::other("boom"));
+    assert!(!plugin_prompt_was_interrupted(&error));
 }

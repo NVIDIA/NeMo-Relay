@@ -27,7 +27,8 @@ pub(crate) use self::model::reset;
 use self::model::{
     ConfigScope, SetupAnswers, agent_key_and_command, build_config, detect_installed_agents,
     hermes_hook_targets, hermes_hooks_path_for_scope, home_dir, install_hermes_hooks,
-    preview_paths, read_existing_defaults, save_config,
+    plugins_edit_command_for_scope, plugins_resume_command, preview_paths, read_existing_defaults,
+    save_config,
 };
 
 #[cfg(test)]
@@ -133,9 +134,73 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
     for path in &written {
         println!("    {}", path.display());
     }
-    println!("  Configure plugins with `nemo-relay plugins edit`.");
     println!();
-    Ok(())
+    continue_to_plugins(answers.scope)
+}
+
+/// After the base config is saved, offers to continue into plugin configuration in-process.
+///
+/// Prompts once. On acceptance it runs the existing plugin editor targeting the scope derived
+/// from the base setup (project for `Project`/`Both`, user for `Global`). On decline it reports
+/// that the base config was saved, that plugin setup was skipped, and prints the command to
+/// resume later. Prompt interruption is treated as a skip; other prompt or editor failures
+/// surface an error that makes clear the base config remains saved. The saved `config.toml`
+/// is never rolled back here.
+fn continue_to_plugins(scope: ConfigScope) -> Result<(), CliError> {
+    let proceed = match Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Configure Relay plugins now?")
+        .default(true)
+        .interact()
+    {
+        Ok(proceed) => proceed,
+        Err(error) if plugin_prompt_was_interrupted(&error) => {
+            print_plugins_skipped(scope);
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(CliError::Config(format!(
+                "plugin setup did not complete; base configuration remains saved. \
+                 Resume with `{}`. Cause: {error}",
+                plugins_resume_command(scope)
+            )));
+        }
+    };
+    if !proceed {
+        print_plugins_skipped(scope);
+        return Ok(());
+    }
+    crate::plugins::edit(plugins_edit_command_for_scope(scope)).map_err(|error| {
+        let cause = match error {
+            CliError::Config(message) => message,
+            other => other.to_string(),
+        };
+        CliError::Config(format!(
+            "plugin setup did not complete; base configuration remains saved. \
+             Resume with `{}`. Cause: {cause}",
+            plugins_resume_command(scope)
+        ))
+    })
+}
+
+fn plugin_prompt_was_interrupted(error: &dialoguer::Error) -> bool {
+    matches!(
+        error,
+        dialoguer::Error::IO(io_error)
+            if matches!(
+                io_error.kind(),
+                std::io::ErrorKind::Interrupted | std::io::ErrorKind::UnexpectedEof
+            )
+    )
+}
+
+fn print_plugins_skipped(scope: ConfigScope) {
+    println!();
+    println!("  Base configuration saved. Plugin configuration skipped.");
+    println!(
+        "  Configure plugins later with `{}`.",
+        plugins_resume_command(scope)
+    );
+    println!();
 }
 
 fn print_codex_api_key_guide() {

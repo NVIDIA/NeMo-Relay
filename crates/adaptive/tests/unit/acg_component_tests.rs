@@ -1344,12 +1344,14 @@ fn acg_component_request_intercept_passes_original_request_and_annotation_when_t
         plugin,
     );
 
-    let (translated, returned_annotated) = intercept(
+    let outcome = intercept(
         "anthropic",
         invalid_request.clone(),
         Some(annotated.clone()),
     )
     .expect("request intercept should pass through");
+    let translated = outcome.request;
+    let returned_annotated = outcome.annotated_request;
 
     assert_eq!(translated.content, invalid_request.content);
     assert_eq!(

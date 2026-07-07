@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_relay::observability::plugin_component::{
+    AtifStorageConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
+};
 use nemo_relay::plugin::PluginConfig;
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -74,7 +76,7 @@ pub(crate) async fn easy_path(
         openai_base_url: None,
         anthropic_base_url: None,
         session_metadata: None,
-        plugin_config: None,
+        plugin_config_path: None,
         dry_run: false,
         print: false,
         command: command.command,
@@ -558,23 +560,7 @@ impl PreparedRun {
         // Color decisions key off stderr (where we actually emit), not stdout.
         let use_color = std::io::IsTerminal::is_terminal(&std::io::stderr())
             && std::env::var_os("NO_COLOR").is_none();
-        let max_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
-        // 1-char padding on each side of the longest line.
-        let inner = max_w + 2;
-
-        eprintln!();
-        eprint_border_line('╭', '╮', inner, use_color);
-        for line in &lines {
-            let pad = max_w - line.chars().count();
-            let body = format!(" {line}{spaces} ", spaces = " ".repeat(pad));
-            if use_color {
-                eprintln!("\x1b[38;5;112m│\x1b[0m{body}\x1b[38;5;112m│\x1b[0m");
-            } else {
-                eprintln!("│{body}│");
-            }
-        }
-        eprint_border_line('╰', '╯', inner, use_color);
-        eprintln!();
+        eprint!("{}", render_status_frame(&lines, use_color));
     }
 
     // Prints the resolved transparent-run plan, including dynamic gateway URL, upstream base URLs,
@@ -613,7 +599,32 @@ impl PreparedRun {
     }
 }
 
-fn exporter_destinations(config: &GatewayConfig) -> Vec<String> {
+/// Renders a bordered status frame for daemon and transparent-run startup output.
+pub(crate) fn render_status_frame(lines: &[String], color: bool) -> String {
+    let max_w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    // 1-char padding on each side of the longest line.
+    let inner = max_w + 2;
+    let mut output = String::new();
+
+    output.push('\n');
+    push_status_border(&mut output, '╭', '╮', inner, color);
+    for line in lines {
+        let pad = max_w - line.chars().count();
+        let body = format!(" {line}{spaces} ", spaces = " ".repeat(pad));
+        if color {
+            output.push_str(&format!(
+                "\x1b[38;5;112m│\x1b[0m{body}\x1b[38;5;112m│\x1b[0m\n"
+            ));
+        } else {
+            output.push_str(&format!("│{body}│\n"));
+        }
+    }
+    push_status_border(&mut output, '╰', '╯', inner, color);
+    output.push('\n');
+    output
+}
+
+pub(crate) fn exporter_destinations(config: &GatewayConfig) -> Vec<String> {
     let Some(plugin_config) = config.plugin_config.as_ref() else {
         return Vec::new();
     };
@@ -654,14 +665,23 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
         destinations.push(format!("ATOF {}", path.display()));
     }
     if let Some(section) = config.atif.as_ref().filter(|section| section.enabled) {
-        let directory = section
-            .output_directory
-            .clone()
-            .unwrap_or_else(current_output_directory);
-        destinations.push(format!(
-            "ATIF {}",
-            directory.join(&section.filename_template).display()
-        ));
+        if section.storage.is_empty() {
+            let directory = section
+                .output_directory
+                .clone()
+                .unwrap_or_else(current_output_directory);
+            destinations.push(format!(
+                "ATIF {}",
+                directory.join(&section.filename_template).display()
+            ));
+        } else {
+            // Non-empty `storage` skips the local file write and uploads to each remote backend
+            // instead, so report the actual upload destinations rather than a local path that is
+            // never written.
+            for backend in &section.storage {
+                destinations.push(format!("ATIF {}", atif_storage_destination(backend)));
+            }
+        }
     }
     if let Some(section) = config
         .opentelemetry
@@ -692,6 +712,23 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
     destinations
 }
 
+// Renders a single ATIF remote storage backend as a human-readable destination for the status
+// banner. S3 keys are summarized as `s3://<bucket>/<key_prefix>`; the per-trajectory object suffix
+// is omitted because it is only known once a session starts.
+fn atif_storage_destination(storage: &AtifStorageConfig) -> String {
+    match storage {
+        AtifStorageConfig::Http(http) => http.endpoint.clone(),
+        AtifStorageConfig::S3(s3) => {
+            let prefix = s3.key_prefix.as_deref().unwrap_or("").trim_matches('/');
+            if prefix.is_empty() {
+                format!("s3://{}", s3.bucket)
+            } else {
+                format!("s3://{}/{}", s3.bucket, prefix)
+            }
+        }
+    }
+}
+
 fn current_output_directory() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
@@ -709,7 +746,6 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
 // Polls the ephemeral gateway health endpoint for roughly one second before launching the agent.
 // Startup failures return a launcher error so the child command is never run against a dead proxy.
 async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
-    crate::tls::install_rustls_crypto_provider();
     let client = Client::new();
     let url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
     for _ in 0..50 {
@@ -744,15 +780,20 @@ fn codex_gateway_provider_config(gateway_url: &str) -> String {
     )
 }
 
-// Prints one horizontal border line for the live-status frame in NVIDIA green when color is
-// enabled, otherwise plain ASCII-compatible box-drawing. Writes to stderr so the banner doesn't
-// contaminate piped/redirected agent stdout.
-fn eprint_border_line(left: char, right: char, inner_width: usize, color: bool) {
+// Appends one horizontal border line in NVIDIA green when color is enabled, otherwise plain
+// ASCII-compatible box-drawing.
+fn push_status_border(
+    output: &mut String,
+    left: char,
+    right: char,
+    inner_width: usize,
+    color: bool,
+) {
     let dashes = "─".repeat(inner_width);
     if color {
-        eprintln!("\x1b[38;5;112m{left}{dashes}{right}\x1b[0m");
+        output.push_str(&format!("\x1b[38;5;112m{left}{dashes}{right}\x1b[0m\n"));
     } else {
-        eprintln!("{left}{dashes}{right}");
+        output.push_str(&format!("{left}{dashes}{right}\n"));
     }
 }
 

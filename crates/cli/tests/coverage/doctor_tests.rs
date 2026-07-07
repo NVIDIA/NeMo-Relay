@@ -8,6 +8,8 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use crate::config::ResolvedDynamicPluginConfig;
+
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -113,6 +115,12 @@ fn empty_report() -> DoctorReport {
                 active: false,
                 details: "not present".into(),
             },
+            plugin_configs: vec![],
+            plugin_resolution: Check {
+                name: "Plugin resolution",
+                status: Status::Info,
+                details: "plugins.toml not configured".into(),
+            },
             resolution: Check {
                 name: "Resolution",
                 status: Status::Pass,
@@ -123,6 +131,7 @@ fn empty_report() -> DoctorReport {
             dynamic_plugins: vec![],
         },
         agents: vec![],
+        host_plugins: vec![],
         observability: vec![],
         completions: vec![],
     }
@@ -188,6 +197,43 @@ fn exit_code_fails_when_agent_readiness_fails() {
 }
 
 #[test]
+fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
+    let mut report = empty_report();
+    report
+        .host_plugins
+        .push(crate::plugin_install::HostPluginReadiness {
+            host: "codex".into(),
+            remediation: "nemo-relay install codex --force".into(),
+            state_path: PathBuf::from("/tmp/codex.json"),
+            marketplace: Some(PathBuf::from("/tmp/codex-marketplace")),
+            plugin: Some(PathBuf::from(
+                "/tmp/codex-marketplace/plugins/nemo-relay-plugin",
+            )),
+            checks: vec![crate::plugin_install::HostPluginReadinessCheck {
+                name: "Host CLI".into(),
+                ok: false,
+                details: "required `codex` CLI was not found on PATH".into(),
+            }],
+            relay: None,
+            host_plugin_registered: None,
+            host_marketplace_registered: None,
+            plugin_setup: None,
+        });
+
+    assert_eq!(exit_code(&report), 1);
+    let rendered = format_human(&report);
+    assert!(rendered.contains("Host plugins"));
+    assert!(rendered.contains("repair: nemo-relay install codex --force"));
+    let json: serde_json::Value = serde_json::from_str(&format_json(&report).unwrap()).unwrap();
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["host_plugins"][0]["checks"][0]["ok"], false);
+    assert_eq!(
+        json["host_plugins"][0]["remediation"],
+        "nemo-relay install codex --force"
+    );
+}
+
+#[test]
 fn format_human_emits_fixed_section_order() {
     let report = empty_report();
     let rendered = format_human(&report);
@@ -197,6 +243,9 @@ fn format_human_emits_fixed_section_order() {
     let cfg_idx = rendered
         .find("Configuration")
         .expect("Configuration header");
+    let plugins_idx = rendered
+        .find("Plugin configuration")
+        .expect("Plugin configuration header");
     let agents_idx = rendered.find("Agents detected").expect("Agents header");
     let obs_idx = rendered
         .find("Observability")
@@ -204,9 +253,41 @@ fn format_human_emits_fixed_section_order() {
     let comp_idx = rendered.find("Completions").expect("Completions header");
 
     assert!(env_idx < cfg_idx);
-    assert!(cfg_idx < agents_idx);
+    assert!(cfg_idx < plugins_idx);
+    assert!(plugins_idx < agents_idx);
     assert!(agents_idx < obs_idx);
     assert!(obs_idx < comp_idx);
+}
+
+#[test]
+fn format_human_renders_completion_details_without_check_name() {
+    let mut report = empty_report();
+    report.completions.push(Check {
+        name: "Completions",
+        status: Status::Pass,
+        details: "zsh: /tmp/_nemo-relay".into(),
+    });
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("  Completions\n    zsh: /tmp/_nemo-relay\n"));
+    assert!(!rendered.contains("    Completions"));
+}
+
+#[test]
+fn format_human_distinguishes_plugin_files_from_plugin_resolution() {
+    let mut report = empty_report();
+    report.configuration.plugin_configs.push(ConfigLayer {
+        path: PathBuf::from("/tmp/plugins.toml"),
+        status: Status::Pass,
+        active: true,
+        details: "discovered and contributes to plugin resolution".into(),
+    });
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Plugin files /tmp/plugins.toml"));
+    assert!(rendered.contains("Plugins    · plugins.toml not configured"));
 }
 
 #[test]
@@ -368,6 +449,117 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
 }
 
 #[test]
+fn plugin_layer_status_marks_a_discovered_plugins_toml_as_contributing() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(&path, "version = 1\ncomponents = []\n").unwrap();
+
+    let layer = plugin_layer_status(&path, std::slice::from_ref(&path), None);
+
+    assert_eq!(layer.status, Status::Pass);
+    assert!(layer.active);
+    assert!(layer.details.contains("contributes to plugin resolution"));
+}
+
+#[test]
+fn plugin_layer_status_marks_non_contributing_files_as_inactive() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(&path, "version = 1\ncomponents = []\n").unwrap();
+
+    let layer = plugin_layer_status(&path, &[], None);
+
+    assert_eq!(layer.status, Status::Pass);
+    assert!(!layer.active);
+    assert!(layer.details.contains("does not contribute"));
+}
+
+#[test]
+fn plugin_layer_status_surfaces_source_specific_semantic_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plugins.toml");
+    std::fs::write(&path, "[plugins]\ndynamic = 1\n").unwrap();
+    let error = format!("invalid dynamic plugin config in {}", path.display());
+
+    let layer = plugin_layer_status(&path, &[], Some(&error));
+
+    assert_eq!(layer.status, Status::Fail);
+    assert!(!layer.active);
+    assert!(layer.details.contains("invalid plugin configuration"));
+}
+
+#[test]
+fn plugin_resolution_check_covers_all_resolution_outcomes() {
+    let valid = Check {
+        name: "Resolution",
+        status: Status::Pass,
+        details: "valid".into(),
+    };
+    let failed = Check {
+        name: "Resolution",
+        status: Status::Fail,
+        details: "merged configuration failed".into(),
+    };
+    let mut with_runtime_config = ResolvedConfig::default();
+    with_runtime_config.gateway.plugin_config = Some(serde_json::json!({"version": 1}));
+    let mut with_dynamic_plugin = ResolvedConfig::default();
+    with_dynamic_plugin
+        .dynamic_plugins
+        .push(ResolvedDynamicPluginConfig {
+            plugin_id: "acme.worker".into(),
+            manifest_ref: "/tmp/relay-plugin.toml".into(),
+            config: serde_json::Map::new(),
+            has_explicit_config: false,
+            source: PathBuf::from("/tmp/plugins.toml"),
+        });
+
+    let cases = [
+        (
+            ResolvedConfig::default(),
+            &valid,
+            Some("invalid plugin TOML"),
+            Status::Fail,
+            "could not resolve plugins.toml",
+        ),
+        (
+            ResolvedConfig::default(),
+            &failed,
+            None,
+            Status::Fail,
+            "merged configuration failed",
+        ),
+        (
+            with_runtime_config,
+            &valid,
+            None,
+            Status::Info,
+            "effective plugin configuration loaded",
+        ),
+        (
+            with_dynamic_plugin,
+            &valid,
+            None,
+            Status::Info,
+            "dynamic plugin configuration loaded",
+        ),
+        (
+            ResolvedConfig::default(),
+            &valid,
+            None,
+            Status::Info,
+            "plugins.toml not configured",
+        ),
+    ];
+
+    for (resolved, resolution, plugin_error, status, detail) in cases {
+        let check = plugin_resolution_check(&resolved, resolution, plugin_error);
+        assert_eq!(check.name, "Plugin resolution");
+        assert_eq!(check.status, status);
+        assert!(check.details.contains(detail));
+    }
+}
+
+#[test]
 fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("workspace");
@@ -401,6 +593,15 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
         },
         vec!["codex".into(), "hermes".into()],
         &[],
+        &PluginConfigurationDiagnostics {
+            sources: vec![],
+            error: None,
+            resolution: Check {
+                name: "Plugin resolution",
+                status: Status::Pass,
+                details: "valid".into(),
+            },
+        },
     );
 
     assert_eq!(configuration.workspace.status, Status::Pass);
@@ -580,6 +781,15 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         },
         vec!["codex".into()],
         &[],
+        &PluginConfigurationDiagnostics {
+            sources: vec![],
+            error: None,
+            resolution: Check {
+                name: "Plugin resolution",
+                status: Status::Pass,
+                details: "valid".into(),
+            },
+        },
     );
     assert_eq!(info.workspace.status, Status::Pass);
     assert!(info.global.path.starts_with(&home));

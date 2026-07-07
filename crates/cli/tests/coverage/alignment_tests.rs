@@ -322,7 +322,7 @@ fn request_affinity_key_reads_messages_content_blocks() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("anthropic.messages", &request).as_deref(),
         Some("Analyze the python binding with detail.")
     );
 }
@@ -340,7 +340,7 @@ fn request_affinity_key_reads_chat_completion_string_messages() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("openai.chat_completions", &request).as_deref(),
         Some("Review the Rust CLI gateway alignment code.")
     );
 }
@@ -360,7 +360,7 @@ fn request_affinity_key_preserves_leading_tagged_context_text() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("anthropic.messages", &request).as_deref(),
         Some(
             "<runtime-context> Trace run 7. </runtime-context> <system-reminder> Today is 2026-05-19. </system-reminder> Review the gateway correlation logic."
         )
@@ -383,7 +383,7 @@ fn request_affinity_key_keeps_task_after_large_prefix() {
         }),
     };
 
-    let key = request_affinity_key(&request).unwrap();
+    let key = request_affinity_key("anthropic.messages", &request).unwrap();
     assert!(key.starts_with("<runtime-context>volatile context"));
     assert!(
         key.ends_with(task),
@@ -406,7 +406,7 @@ fn request_affinity_key_preserves_fully_tagged_prompt_text() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("anthropic.messages", &request).as_deref(),
         Some("<task>Review the gateway correlation logic.</task>")
     );
 }
@@ -434,7 +434,7 @@ fn request_affinity_key_prefers_latest_task_message_over_root_history() {
     };
 
     assert_eq!(
-        request_affinity_key(&request).as_deref(),
+        request_affinity_key("openai.chat_completions", &request).as_deref(),
         Some("Thoroughly explore the crates/ffi directory.")
     );
 }
@@ -465,11 +465,11 @@ fn request_affinity_key_reads_responses_input_items_and_prompt() {
     };
 
     assert_eq!(
-        request_affinity_key(&responses_request).as_deref(),
+        request_affinity_key("openai.responses", &responses_request).as_deref(),
         Some("Analyze the Node binding architecture.")
     );
     assert_eq!(
-        request_affinity_key(&prompt_request).as_deref(),
+        request_affinity_key("openai.responses", &prompt_request).as_deref(),
         Some("Summarize the Go binding architecture.")
     );
 }
@@ -481,7 +481,10 @@ fn request_affinity_key_ignores_count_token_style_payloads() {
         content: json!("// source text without a chat user task"),
     };
 
-    assert_eq!(request_affinity_key(&request), None);
+    assert_eq!(
+        request_affinity_key("anthropic.count_tokens", &request),
+        None
+    );
 }
 
 #[test]
@@ -515,9 +518,18 @@ fn request_affinity_key_ignores_tool_results_and_sidecar_json() {
         }),
     };
 
-    assert_eq!(request_affinity_key(&tool_result), None);
-    assert_eq!(request_affinity_key(&sidecar_json), None);
-    assert_eq!(request_affinity_key(&sidecar_json_array), None);
+    assert_eq!(
+        request_affinity_key("anthropic.messages", &tool_result),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("openai.responses", &sidecar_json),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("openai.responses", &sidecar_json_array),
+        None
+    );
 }
 
 #[test]
@@ -614,6 +626,14 @@ fn json_helpers_and_metadata_merge_cover_edge_shapes() {
         json_value_at(&payload, &[&["object"][..]]),
         Some(json!({ "nested": true }))
     );
+    assert_eq!(
+        json_string_at(
+            &payload,
+            &[&["object"][..], &["empty"][..], &["string"][..]]
+        )
+        .as_deref(),
+        Some("value")
+    );
 
     let mut inserted = Map::new();
     insert_optional(&mut inserted, "present", Some("value"));
@@ -637,6 +657,195 @@ fn json_helpers_and_metadata_merge_cover_edge_shapes() {
         merge_metadata(json!("left"), json!("right")),
         json!({ "metadata": "left", "extra_metadata": "right" })
     );
+}
+
+#[test]
+fn request_affinity_key_is_route_gated_not_content_gated() {
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                { "role": "user", "content": "Review the Rust CLI gateway alignment code." }
+            ]
+        }),
+    };
+
+    // The same task text that produces a key on the chat/messages routes is ignored on routes
+    // whose extractors opt out of affinity keys entirely, and on unknown provider names.
+    assert!(request_affinity_key("openai.chat_completions", &request).is_some());
+    assert!(request_affinity_key("anthropic.messages", &request).is_some());
+    assert_eq!(request_affinity_key("openai.models", &request), None);
+    assert_eq!(
+        request_affinity_key("anthropic.count_tokens", &request),
+        None
+    );
+    assert_eq!(request_affinity_key("unknown.provider", &request), None);
+}
+
+#[test]
+fn request_affinity_key_returns_none_when_route_task_fields_are_missing() {
+    let responses_shape = LlmRequest {
+        headers: Map::new(),
+        content: json!({ "input": "Review the Rust CLI gateway alignment code." }),
+    };
+    let messages_shape = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                { "role": "user", "content": "Review the Rust CLI gateway alignment code." }
+            ]
+        }),
+    };
+    let assistant_only = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                { "role": "assistant", "content": "I will review the gateway alignment code." }
+            ]
+        }),
+    };
+
+    // Chat/messages extractors read `messages`; the responses extractor reads `input`/`prompt`.
+    // A body shaped for the other route yields no key instead of borrowing its fields.
+    assert!(request_affinity_key("openai.responses", &responses_shape).is_some());
+    assert_eq!(
+        request_affinity_key("openai.chat_completions", &responses_shape),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("anthropic.messages", &responses_shape),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("openai.responses", &messages_shape),
+        None
+    );
+    assert_eq!(
+        request_affinity_key("anthropic.messages", &assistant_only),
+        None
+    );
+}
+
+#[test]
+fn request_affinity_key_enforces_min_and_max_task_text_length() {
+    let request_with_text = |text: String| LlmRequest {
+        headers: Map::new(),
+        content: json!({ "messages": [{ "role": "user", "content": text }] }),
+    };
+
+    let below_min = request_with_text("a".repeat(REQUEST_AFFINITY_KEY_MIN_CHARS - 1));
+    let at_min = request_with_text("a".repeat(REQUEST_AFFINITY_KEY_MIN_CHARS));
+    let above_max = request_with_text("a".repeat(REQUEST_AFFINITY_KEY_MAX_CHARS + 100));
+
+    assert_eq!(request_affinity_key("anthropic.messages", &below_min), None);
+    assert_eq!(
+        request_affinity_key("anthropic.messages", &at_min).map(|key| key.chars().count()),
+        Some(REQUEST_AFFINITY_KEY_MIN_CHARS)
+    );
+    assert_eq!(
+        request_affinity_key("anthropic.messages", &above_max).map(|key| key.chars().count()),
+        Some(REQUEST_AFFINITY_KEY_MAX_CHARS)
+    );
+}
+
+#[test]
+fn gateway_turn_input_builds_claude_prompt_for_anthropic_messages_only() {
+    // Shorter than the affinity-key minimum on purpose: turn input has no length gate.
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({
+            "messages": [
+                { "role": "user", "content": "Fix the CLI tests." }
+            ]
+        }),
+    };
+
+    assert_eq!(
+        gateway_turn_input(AgentKind::ClaudeCode, "anthropic.messages", &request),
+        Some(json!({ "prompt": "Fix the CLI tests." }))
+    );
+
+    // Only Claude installed mode can race the UserPromptSubmit hook, so every other agent kind
+    // and route stays None.
+    for agent_kind in [AgentKind::Codex, AgentKind::Hermes, AgentKind::Gateway] {
+        assert_eq!(
+            gateway_turn_input(agent_kind, "anthropic.messages", &request),
+            None
+        );
+    }
+    for provider in [
+        "openai.responses",
+        "openai.chat_completions",
+        "openai.models",
+        "anthropic.count_tokens",
+    ] {
+        assert_eq!(
+            gateway_turn_input(AgentKind::ClaudeCode, provider, &request),
+            None
+        );
+    }
+
+    let no_messages = LlmRequest {
+        headers: Map::new(),
+        content: json!({ "input": "Fix the CLI tests." }),
+    };
+    assert_eq!(
+        gateway_turn_input(AgentKind::ClaudeCode, "anthropic.messages", &no_messages),
+        None
+    );
+}
+
+#[test]
+fn gateway_session_id_ignores_body_ids_on_header_only_routes() {
+    // Body fallbacks that succeed on the OpenAI Responses/Chat Completions routes must be
+    // ignored on the header-only routes.
+    let body = json!({
+        "session_id": "body-session",
+        "prompt_cache_key": "codex-thread",
+        "client_metadata": { "x-codex-installation-id": "install-1" }
+    });
+
+    for route in [
+        GatewayRouteKind::AnthropicMessages,
+        GatewayRouteKind::AnthropicCountTokens,
+        GatewayRouteKind::OpenAiModels,
+    ] {
+        assert_eq!(
+            gateway_session_id(&HeaderMap::new(), &body, route),
+            None,
+            "route {route:?} must not read body session ids"
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-claude-code-session-id",
+            HeaderValue::from_static("claude-thread"),
+        );
+        assert_eq!(
+            gateway_session_id(&headers, &body, route).as_deref(),
+            Some("claude-thread")
+        );
+
+        headers.insert(
+            "x-nemo-relay-session-id",
+            HeaderValue::from_static("explicit-thread"),
+        );
+        assert_eq!(
+            gateway_session_id(&headers, &body, route).as_deref(),
+            Some("explicit-thread")
+        );
+    }
+}
+
+#[test]
+fn gateway_route_names_round_trip_through_provider_lookup() {
+    for route in GatewayRouteKind::ALL {
+        assert_eq!(
+            GatewayRouteKind::from_provider_name(route.name()),
+            Some(route)
+        );
+    }
+    assert_eq!(GatewayRouteKind::from_provider_name("openai.unknown"), None);
 }
 
 fn event_metadata(event: &NormalizedEvent) -> &Value {

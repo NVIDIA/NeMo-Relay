@@ -51,7 +51,7 @@ def sync_tool_exec(args):
     return {"sync_tool": args["x"] + 1}
 
 def sync_tool_intercept(name, args, next):
-    return {"name": name, "value": args["x"] + 2}
+    return ToolOutcome({"name": name, "value": args["x"] + 2})
 
 def sync_llm_exec(request):
     return {"model": request.content["model"], "mode": "sync"}
@@ -60,7 +60,7 @@ def sync_llm_intercept(name, request, next):
     return {"name": name, "model": request.content["model"], "mode": "sync"}
 
 def request_echo(name, request, annotated):
-    return (request, annotated)
+    return Outcome(request, annotated)
 
 def request_bad_annotated(name, request, annotated):
     return (request, {"bad": True})
@@ -93,6 +93,18 @@ class RaisingResponseCodec:
         raise RuntimeError("decode boom")
 "#,
         );
+        module
+            .setattr(
+                "Outcome",
+                py.get_type::<crate::py_types::PyLLMRequestInterceptOutcome>(),
+            )
+            .unwrap();
+        module
+            .setattr(
+                "ToolOutcome",
+                py.get_type::<crate::py_types::PyToolExecutionInterceptOutcome>(),
+            )
+            .unwrap();
 
         let tool_exec_py: Py<PyAny> = module.getattr("sync_tool_exec").unwrap().unbind();
         let tool_intercept_py: Py<PyAny> = module.getattr("sync_tool_intercept").unwrap().unbind();
@@ -114,7 +126,7 @@ class RaisingResponseCodec:
                 tool_intercept("tool", json!({"x": 3}), tool_next)
                     .await
                     .unwrap(),
-                json!({"name": "tool", "value": 5})
+                json!({"name": "tool", "value": 5}).into()
             );
 
             let llm_exec = wrap_py_llm_exec_fn(llm_exec_py);
@@ -142,9 +154,11 @@ class RaisingResponseCodec:
             "model": "codec-model"
         }))
         .unwrap();
-        let (_request, echoed_ann) =
-            request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
-        assert_eq!(echoed_ann.unwrap().last_user_message(), Some("annotated"));
+        let outcome = request_intercept("llm", make_request(), Some(annotated.clone())).unwrap();
+        assert_eq!(
+            outcome.annotated_request.unwrap().last_user_message(),
+            Some("annotated")
+        );
 
         let bad_request_intercept = wrap_py_llm_request_intercept_fn(
             module.getattr("request_bad_annotated").unwrap().unbind(),
@@ -153,7 +167,7 @@ class RaisingResponseCodec:
             bad_request_intercept("llm", make_request(), Some(annotated))
                 .unwrap_err()
                 .to_string()
-                .contains("result[1] is not AnnotatedLLMRequest")
+                .contains("must return LLMRequestInterceptOutcome")
         );
 
         let short_request_intercept = wrap_py_llm_request_intercept_fn(
@@ -163,7 +177,7 @@ class RaisingResponseCodec:
             short_request_intercept("llm", make_request(), None)
                 .unwrap_err()
                 .to_string()
-                .contains("result[1] extraction failed")
+                .contains("must return LLMRequestInterceptOutcome")
         );
 
         let mut collector = wrap_py_collector_fn(module.getattr("collector_ok").unwrap().unbind());

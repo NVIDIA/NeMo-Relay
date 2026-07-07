@@ -9,7 +9,6 @@ SPDX-License-Identifier: Apache-2.0
 [![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
 [![PyPI](https://img.shields.io/pypi/v/nemo-relay?color=4B8BBE&logo=pypi)](https://pypi.org/project/nemo-relay/)
 [![npm node](https://img.shields.io/npm/v/nemo-relay-node?label=nemo-relay-node&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-node)
-[![npm wasm](https://img.shields.io/npm/v/nemo-relay-wasm?label=nemo-relay-wasm&color=CC3534&logo=npm)](https://www.npmjs.com/package/nemo-relay-wasm)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay?label=nemo-relay&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-adaptive?label=nemo-relay-adaptive&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-adaptive)
 [![Crates.io](https://img.shields.io/crates/v/nemo-relay-cli?label=nemo-relay-cli&color=B7410E&logo=rust)](https://crates.io/crates/nemo-relay-cli)
@@ -27,38 +26,55 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Why Use It?
 
-- 🧭 **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
+- **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
   Agent through a local NeMo Relay gateway without changing the agent
   itself.
-- 🛠️ **Configure hooks interactively**: Use the setup wizard to write project or
+- **Configure hooks interactively**: Use the setup wizard to write project or
   user config and install the hook files needed by supported agents.
-- 📡 **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
+- **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
   streams, or OpenInference spans from one shared config model.
-- 🩺 **Diagnose the machine**: Check config layers, agent binaries, hook status,
-  observability outputs, and shell completions with `nemo-relay doctor`.
+- **Diagnose setup readiness**: Check config layers, `plugins.toml` discovery,
+  agent binaries, persistent host-plugin installs, hook status, observability
+  outputs, and shell completions with `nemo-relay doctor`.
 
 ## What You Get
 
-- ✅ **`nemo-relay` binary**: The executable installed by the `nemo-relay-cli`
+- **`nemo-relay` binary**: The executable installed by the `nemo-relay-cli`
   Cargo package.
-- ✅ **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
+- **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
   then runs doctor once config is present.
-- ✅ **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
+- **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
   `nemo-relay hermes` start observed agent runs.
-- ✅ **Config-driven launch**: `nemo-relay run` resolves config, environment, and
+- **Config-driven launch**: `nemo-relay run` resolves config, environment, and
   CLI overrides for deterministic non-interactive use.
-- ✅ **Hook forwarding server**: A local gateway accepts agent hook events and
+- **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
 
-## Installation
+## Installation Options
 
-Install the CLI:
+Cargo:
 
 ```bash
 cargo install nemo-relay-cli
 ```
 
-That command installs the binary as:
+Unix curl:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+For version pinning, custom installation directories, verification,
+troubleshooting, and CLI usage, refer to the
+[NeMo Relay installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation).
+
+After installation, verify the binary with:
 
 ```bash
 nemo-relay --version
@@ -110,6 +126,11 @@ plugin config with:
 ```bash
 nemo-relay plugins edit
 ```
+
+The top-level editor menu contains one entry per supported built-in, followed by
+the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
+plugins with a manifest-declared JSON Schema provide structured field controls.
+Other dynamic plugins use a raw JSON object editor.
 
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or

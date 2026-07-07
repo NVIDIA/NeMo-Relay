@@ -30,12 +30,6 @@ crates/node/junit.xml
 integrations/openclaw/dist/
 integrations/openclaw/.test-dist/
 
-# WebAssembly
-crates/wasm/pkg/
-crates/wasm/pkg-test/
-crates/wasm/package-lock.json
-crates/wasm/junit.xml
-
 # Shared libraries
 *.dylib
 *.dll
@@ -84,8 +78,10 @@ docs/reference/api/**/_source/
 **/release-notes.md
 CHANGELOG.md
 
-crates/wasm/coverage/
 .scannerwork/
 
 # VSCode
 /.vscode
+
+# Relay
+/.nemo-relay

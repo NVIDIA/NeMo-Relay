@@ -18,7 +18,7 @@ typedef char* (*NemoRelayToolConditionalFn)(void* user_data, const char* name, c
 typedef void* (*NemoRelayLlmRequestCb)(void* user_data, const void* request);
 typedef char* (*NemoRelayLlmResponseFn)(void* user_data, const char* response_json);
 typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const void* request);
-typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const void* request, const char* annotated_json, void** out_request, char** out_annotated_json);
+typedef int32_t (*NemoRelayLlmRequestInterceptCb)(void* user_data, const char* name, const void* request, const char* annotated_json, char** out_outcome_json);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
@@ -56,7 +56,7 @@ extern void* goLlmRequestTrampoline(void*, const void*);
 extern char* goLlmResponseTrampoline(void*, const char*);
 extern char* goLlmConditionalTrampoline(void*, const void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
-extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, void**, char**);
+extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, char**);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
 */
 import "C"

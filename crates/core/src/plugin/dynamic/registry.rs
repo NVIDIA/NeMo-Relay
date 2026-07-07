@@ -170,6 +170,20 @@ impl DynamicPluginRegistry {
         Ok(())
     }
 
+    /// Replaces the resolved worker environment and its validation state.
+    pub fn update_environment(
+        &mut self,
+        plugin_id: &str,
+        environment_ref: Option<String>,
+        environment: DynamicPluginCheckState,
+    ) -> Result<()> {
+        let record = self.lookup_mut(plugin_id)?;
+        record.source.environment_ref = environment_ref;
+        record.status.validation.environment = environment;
+        record.status.validation.checked_at = Some(super::current_timestamp());
+        Ok(())
+    }
+
     /// Replaces the current host-policy outcome without mutating desired state.
     pub fn update_policy_status(
         &mut self,
@@ -246,67 +260,69 @@ fn validate_record_shape(record: &DynamicPluginRecord) -> Result<()> {
     }
 
     match record.metadata.kind {
-        super::DynamicPluginKind::RustDynamic => {
-            match &record.compatibility {
-                super::DynamicPluginCompatibility::RustDynamic(compatibility) => {
-                    if compatibility.relay.trim().is_empty() {
-                        return Err(PluginError::InvalidConfig(
-                            "dynamic plugin record must declare compat.relay".into(),
-                        ));
-                    }
-                    if compatibility.native_api.trim().is_empty() {
-                        return Err(PluginError::InvalidConfig(
-                            "dynamic rust_dynamic record has invalid compatibility shape".into(),
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(PluginError::InvalidConfig(
-                        "dynamic rust_dynamic record has invalid compatibility shape".into(),
-                    ));
-                }
-            }
-            match &record.load {
-                super::DynamicPluginLoadContract::RustDynamic(load)
-                    if !load.library.trim().is_empty() && !load.symbol.trim().is_empty() => {}
-                _ => {
-                    return Err(PluginError::InvalidConfig(
-                        "dynamic rust_dynamic record has invalid load shape".into(),
-                    ));
-                }
-            }
-        }
-        super::DynamicPluginKind::Worker => {
-            match &record.compatibility {
-                super::DynamicPluginCompatibility::Worker(compatibility) => {
-                    if compatibility.relay.trim().is_empty() {
-                        return Err(PluginError::InvalidConfig(
-                            "dynamic plugin record must declare compat.relay".into(),
-                        ));
-                    }
-                    if compatibility.worker_protocol.trim().is_empty() {
-                        return Err(PluginError::InvalidConfig(
-                            "dynamic worker record has invalid compatibility shape".into(),
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(PluginError::InvalidConfig(
-                        "dynamic worker record has invalid compatibility shape".into(),
-                    ));
-                }
-            }
-            match &record.load {
-                super::DynamicPluginLoadContract::Worker(load)
-                    if !load.entrypoint.trim().is_empty() => {}
-                _ => {
-                    return Err(PluginError::InvalidConfig(
-                        "dynamic worker record has invalid load shape".into(),
-                    ));
-                }
-            }
-        }
+        super::DynamicPluginKind::RustDynamic => validate_rust_dynamic_record(record),
+        super::DynamicPluginKind::Worker => validate_worker_record(record),
     }
+}
 
-    Ok(())
+fn validate_rust_dynamic_record(record: &DynamicPluginRecord) -> Result<()> {
+    let super::DynamicPluginCompatibility::RustDynamic(compatibility) = &record.compatibility
+    else {
+        return Err(PluginError::InvalidConfig(
+            "dynamic rust_dynamic record has invalid compatibility shape".into(),
+        ));
+    };
+    validate_relay_compatibility(&compatibility.relay)?;
+    if compatibility.native_api.trim().is_empty() {
+        return Err(PluginError::InvalidConfig(
+            "dynamic rust_dynamic record has invalid compatibility shape".into(),
+        ));
+    }
+    let valid_load = matches!(
+        &record.load,
+        super::DynamicPluginLoadContract::RustDynamic(load)
+            if !load.library.trim().is_empty() && !load.symbol.trim().is_empty()
+    );
+    if valid_load {
+        Ok(())
+    } else {
+        Err(PluginError::InvalidConfig(
+            "dynamic rust_dynamic record has invalid load shape".into(),
+        ))
+    }
+}
+
+fn validate_worker_record(record: &DynamicPluginRecord) -> Result<()> {
+    let super::DynamicPluginCompatibility::Worker(compatibility) = &record.compatibility else {
+        return Err(PluginError::InvalidConfig(
+            "dynamic worker record has invalid compatibility shape".into(),
+        ));
+    };
+    validate_relay_compatibility(&compatibility.relay)?;
+    if compatibility.worker_protocol.trim().is_empty() {
+        return Err(PluginError::InvalidConfig(
+            "dynamic worker record has invalid compatibility shape".into(),
+        ));
+    }
+    let valid_load = matches!(
+        &record.load,
+        super::DynamicPluginLoadContract::Worker(load) if !load.entrypoint.trim().is_empty()
+    );
+    if valid_load {
+        Ok(())
+    } else {
+        Err(PluginError::InvalidConfig(
+            "dynamic worker record has invalid load shape".into(),
+        ))
+    }
+}
+
+fn validate_relay_compatibility(relay: &str) -> Result<()> {
+    if relay.trim().is_empty() {
+        Err(PluginError::InvalidConfig(
+            "dynamic plugin record must declare compat.relay".into(),
+        ))
+    } else {
+        Ok(())
+    }
 }

@@ -93,14 +93,13 @@ sha256 = {digest}
 {signature_line}
 
 [load]
-runtime = "python"
-entrypoint = {entrypoint}
+runtime = "command"
+entrypoint = "plugin.py"
 "#,
             capabilities = capabilities,
             signature_line = signature_line,
             digest = toml_basic_string(&digest),
             plugin_id = toml_basic_string(plugin_id),
-            entrypoint = toml_basic_string(&format!("{plugin_id}.plugin:register")),
         ),
     )
     .unwrap();
@@ -148,6 +147,7 @@ fn cli_help_exits_successfully() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("Coding-agent gateway"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("plugin-config"));
 }
 
 #[test]
@@ -1485,6 +1485,32 @@ command = "hermes --yolo chat"
 }
 
 #[test]
+fn cli_run_dry_run_rejects_missing_explicit_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-config.toml");
+
+    let output = Command::new(gateway_bin())
+        .args([
+            "run",
+            "--config",
+            missing.to_str().unwrap(),
+            "--agent",
+            "codex",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("does not exist"), "{stderr}");
+    assert!(
+        stderr.contains(missing.to_string_lossy().as_ref()),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
@@ -1512,6 +1538,27 @@ command = "codex --full-auto"
 "#,
     )
     .unwrap();
+    let plugin_config = temp.path().join("override-plugins.toml");
+    std::fs::write(
+        &plugin_config,
+        r#"
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+output_directory = "logs"
+filename = "events.jsonl"
+mode = "append"
+"#,
+    )
+    .unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&nested)
@@ -1522,6 +1569,7 @@ command = "codex --full-auto"
         .env("NEMO_RELAY_ANTHROPIC_BASE_URL", "http://env-anthropic")
         .env("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES", "444")
         .env("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", "555")
+        .env("NEMO_RELAY_PLUGIN_CONFIG_PATH", &plugin_config)
         .args(["run", "--agent", "codex", "--dry-run"])
         .output()
         .unwrap();
@@ -1535,6 +1583,8 @@ command = "codex --full-auto"
     assert!(!stdout.contains("atif_dir"));
     assert!(!stdout.contains("openinference_endpoint"));
     assert!(stdout.contains("argv = codex"));
+    let expected_atof_path = std::path::Path::new("logs").join("events.jsonl");
+    assert!(stdout.contains(&format!("ATOF {}", expected_atof_path.display())));
 }
 
 #[test]
@@ -1609,8 +1659,6 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "coverage",
             "--session-metadata",
             r#"{"team":"cli"}"#,
-            "--plugin-config",
-            r#"{"components":[]}"#,
             "--gateway-mode",
             "passthrough",
             "--fail-closed",

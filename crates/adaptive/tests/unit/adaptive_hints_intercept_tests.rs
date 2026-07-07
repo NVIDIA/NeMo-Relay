@@ -194,7 +194,7 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
         stream: None,
         extra: serde_json::Map::new(),
     };
-    let (request, returned_annotated) = req_fn(
+    let outcome = req_fn(
         "model",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -203,8 +203,12 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
         Some(annotated.clone()),
     )
     .unwrap();
+    let request = outcome.request;
+    let returned_annotated = outcome.annotated_request;
 
-    let body_hints = &request.content["nvext"]["agent_hints"];
+    assert_eq!(request.content, serde_json::json!({}));
+    let returned_annotated = returned_annotated.expect("annotation should be preserved");
+    let body_hints = &returned_annotated.extra["nvext"]["agent_hints"];
     assert_eq!(body_hints["osl"], serde_json::json!(150));
     assert_eq!(body_hints["iat"], serde_json::json!(200));
     assert_eq!(body_hints["latency_sensitivity"], serde_json::json!(5.0));
@@ -215,7 +219,11 @@ fn test_adaptive_hints_intercept_injects_prediction_hints_and_manual_override() 
         request.headers.get(AGENT_HINTS_HEADER_KEY).unwrap(),
         body_hints
     );
-    assert_eq!(returned_annotated, Some(annotated));
+    let mut expected_annotated = annotated;
+    expected_annotated
+        .extra
+        .insert("nvext".into(), returned_annotated.extra["nvext"].clone());
+    assert_eq!(returned_annotated, expected_annotated);
 
     pop_scope(
         nemo_relay::api::scope::PopScopeParams::builder()
@@ -256,7 +264,7 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
     }));
     let req_fn =
         AdaptiveHintsIntercept::new(hot_cache, "fallback-agent".to_string()).into_request_fn();
-    let (request, annotated) = req_fn(
+    let outcome = req_fn(
         "model",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -265,6 +273,8 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
         None,
     )
     .unwrap();
+    let request = outcome.request;
+    let annotated = outcome.annotated_request;
     assert_eq!(
         request.headers.get(AGENT_HINTS_HEADER_KEY),
         Some(&serde_json::to_value(&defaults).unwrap())
@@ -293,7 +303,7 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
     });
     let poisoned_req_fn =
         AdaptiveHintsIntercept::new(poisoned_cache, "fallback-agent".to_string()).into_request_fn();
-    let (poisoned_request, _) = poisoned_req_fn(
+    let poisoned_outcome = poisoned_req_fn(
         "model",
         LlmRequest {
             headers: serde_json::Map::new(),
@@ -302,6 +312,7 @@ fn test_adaptive_hints_intercept_uses_defaults_and_ignores_poisoned_cache() {
         None,
     )
     .unwrap();
+    let poisoned_request = poisoned_outcome.request;
     assert!(
         poisoned_request
             .headers
@@ -422,7 +433,7 @@ fn test_apply_manual_latency_override_and_inject_agent_hints_cover_manual_paths(
         headers: serde_json::Map::new(),
         content: serde_json::json!("scalar"),
     };
-    inject_agent_hints(&mut non_object_request, &manual_only);
+    inject_agent_hints(&mut non_object_request, &mut None, &manual_only);
     assert_eq!(
         non_object_request.headers.get(AGENT_HINTS_HEADER_KEY),
         Some(&serde_json::to_value(&manual_only).unwrap())

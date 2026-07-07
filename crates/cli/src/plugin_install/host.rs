@@ -7,7 +7,10 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::{Value, json};
+use serde_json::Value;
+
+#[cfg(test)]
+use serde_json::json;
 
 use crate::config::PluginHost;
 
@@ -121,6 +124,7 @@ impl HostRegistrationReport {
         self.host_plugin_registered && self.host_marketplace_registered
     }
 
+    #[cfg(test)]
     pub(super) fn to_json(&self) -> Value {
         json!({
             "ok": self.ok(),
@@ -130,6 +134,7 @@ impl HostRegistrationReport {
     }
 }
 
+#[cfg(test)]
 pub(super) fn validate_host_registration(
     host: PluginHost,
     options: &PluginInstallOptions,

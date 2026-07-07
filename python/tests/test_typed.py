@@ -3,7 +3,10 @@
 
 """Tests for NeMo Relay typed wrappers with explicit Codec protocol."""
 
+import base64
 import dataclasses
+import os
+import pickle
 from typing import cast
 
 import pytest
@@ -100,6 +103,14 @@ class UnpickleableValue:
 
     def __str__(self):
         return "unpickleable"
+
+
+class PickleRceValue:
+    def __init__(self, command: str):
+        self.command = command
+
+    def __reduce__(self):
+        return (os.system, (self.command,))
 
 
 # ---------------------------------------------------------------------------
@@ -805,6 +816,14 @@ class TestBestEffortAnyCodec:
     def test_from_json_pickle_with_non_string_payload_returns_raw_dict(self):
         data = {"__nv_pickle__": "broken.Type", "data": {"not": "a-string"}}
         assert self.codec.from_json(data) == data
+
+    def test_from_json_pickle_rejects_callable_globals(self, tmp_path):
+        marker = tmp_path / "pickle-rce-marker"
+        payload = base64.b64encode(pickle.dumps(PickleRceValue(f"touch {marker}"))).decode("ascii")
+        data = {"__nv_pickle__": "posix.system", "data": payload}
+
+        assert self.codec.from_json(data) == data
+        assert not marker.exists()
 
     def test_from_json_fallback_string_returns_string(self):
         data = {"__nv_fallback_str__": "broken.Type", "data": "fallback-value"}

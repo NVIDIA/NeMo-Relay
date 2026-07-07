@@ -135,7 +135,7 @@ def bind_scope_and_translate(api_module, runtime, request):
     handle = api_module.push_scope("adaptive-runtime-cov", api_module.ScopeType.Agent)
     try:
         runtime.bind_scope(handle)
-        return api_module.llm_request_intercepts("anthropic", request).content
+        return api_module.llm_request_intercepts("anthropic", request).request.content
     finally:
         api_module.pop_scope(handle)
 "#

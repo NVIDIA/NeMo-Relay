@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::config::CodingAgent;
+use crate::config::{PluginsEditCommand, PluginsScopeArgs};
 use crate::error::CliError;
 use crate::installer::{hermes_hooks, hook_forward_command, merge_hermes_config};
 
@@ -29,6 +30,35 @@ impl ConfigScope {
             Self::Global => "global    ~/.config/nemo-relay/config.toml",
             Self::Both => "both      project overrides global",
         }
+    }
+}
+
+/// Maps the base setup scope to the plugin editor target for the guided continuation.
+///
+/// `Project` and `Both` configure the project `plugins.toml`; `Global` configures the user
+/// `plugins.toml`. Returns the existing `PluginsEditCommand` so the in-process editor behaves
+/// exactly like the equivalent `nemo-relay plugins edit` invocation.
+pub(super) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditCommand {
+    let scope = match scope {
+        ConfigScope::Project | ConfigScope::Both => PluginsScopeArgs {
+            user: false,
+            project: true,
+            global: false,
+        },
+        ConfigScope::Global => PluginsScopeArgs {
+            user: true,
+            project: false,
+            global: false,
+        },
+    };
+    PluginsEditCommand { scope }
+}
+
+/// Returns the exact command a user runs to resume plugin setup after skipping the continuation.
+pub(super) fn plugins_resume_command(scope: ConfigScope) -> &'static str {
+    match scope {
+        ConfigScope::Project | ConfigScope::Both => "nemo-relay plugins edit --project",
+        ConfigScope::Global => "nemo-relay plugins edit",
     }
 }
 
@@ -113,9 +143,9 @@ pub(super) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
 ///
 /// When `merge_scope` is `Some(agent)`, an existing `config.toml` at the target path is parsed
 /// and only the single `[agents.<agent>]` block owned by THIS wizard run is replaced. Other
-/// `[agents.*]` blocks and hand-edited shared sections such as `[plugins]` are preserved when
-/// omitted from the wizard output. When `merge_scope` is `None`, the file is overwritten outright
-/// with the wizard's full output (the user explicitly chose which agents to include).
+/// `[agents.*]` blocks are preserved when omitted from the wizard output. When `merge_scope` is
+/// `None`, the file is overwritten outright with the wizard's full output (the user explicitly
+/// chose which agents to include).
 ///
 /// Returns the list of paths written. `home` and `cwd` are explicit so tests can drive this with
 /// tempdirs.
@@ -175,20 +205,12 @@ pub(super) fn write_or_merge(
         .parse()
         .map_err(|err| CliError::Config(format!("could not parse existing config: {err}")))?;
     let agent_key = agent_key_and_command(agent).0;
-    // `plugins` is not wizard-owned (users may hand-edit it). Preserve on omission.
-    merge_section(&mut existing, doc, "plugins");
+    // Remove the legacy plugin configuration block so the merged config remains loadable after
+    // plugin configuration moved to plugins.toml.
+    existing.remove("plugins");
     merge_agents_entry(&mut existing, doc, agent_key);
     std::fs::write(path, existing.to_string())?;
     Ok(())
-}
-
-// Copies a top-level section from `src` into `dst`, replacing any existing entry under the same
-// key. If `src` does not contain the section, the existing entry in `dst` is left as-is.
-// Use for shared/hand-edited sections the wizard does not own.
-pub(super) fn merge_section(dst: &mut DocumentMut, src: &DocumentMut, key: &str) {
-    if let Some(item) = src.get(key) {
-        dst[key] = item.clone();
-    }
 }
 
 // Replaces the single `[agents.<agent>]` block in `dst` with the one from `src`. If `src` does

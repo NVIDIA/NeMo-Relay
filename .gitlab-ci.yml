@@ -66,7 +66,7 @@ collect:github-artifacts:
       fi
       export GH_TOKEN="${NEMO_RELAY_CI_GITHUB_TOKEN}"
 
-      mkdir -p collected/wheels collected/wasm collected/node downloaded
+      mkdir -p collected/wheels collected/node downloaded
 
       tag="${CI_COMMIT_TAG:-}"
       if [ -z "$tag" ]; then
@@ -130,11 +130,10 @@ collect:github-artifacts:
       fi
 
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
-      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name wasm-bundler --dir downloaded/wasm
+      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'plugin-wheel' --dir downloaded/wheels
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name npm-consolidated --dir downloaded/node
 
       find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
-      find downloaded/wasm -type f -name '*.tgz' -exec cp {} collected/wasm/ \;
       node_zip="$(find downloaded/node -type f -name consolidated.zip -print -quit)"
       if [ -z "$node_zip" ]; then
         echo "Error: collected GitHub npm-consolidated artifact did not contain consolidated.zip." >&2
@@ -144,10 +143,6 @@ collect:github-artifacts:
 
       if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
         echo "Error: collected GitHub wheel artifacts did not contain any .whl files." >&2
-        exit 1
-      fi
-      if ! ls collected/wasm/*.tgz >/dev/null 2>&1; then
-        echo "Error: collected GitHub WASM artifact did not contain any .tgz files." >&2
         exit 1
       fi
       if [ ! -f collected/node/consolidated.zip ]; then
@@ -169,7 +164,6 @@ collect:github-artifacts:
     expire_in: 7 days
     paths:
       - collected/wheels/*.whl
-      - collected/wasm/*.tgz
       - collected/node/consolidated.zip
       - collected/github-run.json
 
@@ -314,11 +308,6 @@ publish:artifactory:npm:
         echo "Error: no collected consolidated Node package artifact found." >&2
         exit 1
       fi
-      if ! ls collected/wasm/*.tgz >/dev/null 2>&1; then
-        echo "Error: no collected WASM package artifacts found." >&2
-        exit 1
-      fi
-
       mkdir -p collected/node/consolidated
       unzip -q collected/node/consolidated.zip -d collected/node/consolidated
       if [ ! -d collected/node/consolidated/package ]; then
@@ -333,6 +322,3 @@ publish:artifactory:npm:
       npm config set "${registry_key}:_auth" "$npm_auth"
 
       npm publish --tag dev collected/node/consolidated/package
-      for package_path in collected/wasm/*.tgz; do
-        npm publish --tag dev "$package_path"
-      done
