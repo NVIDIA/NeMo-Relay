@@ -44,6 +44,10 @@ use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::Usage;
 use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginActivationSpec as CoreDynamicPluginActivationSpec, DynamicPluginKind,
+    PluginHostActivation as CorePluginHostActivation,
+};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report as active_plugin_report_impl,
@@ -51,10 +55,6 @@ use nemo_relay::plugin::{
     deregister_plugin as deregister_plugin_impl, initialize_plugins as initialize_plugins_impl,
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
     validate_plugin_config as validate_plugin_config_impl,
-};
-use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec as CoreDynamicPluginActivationSpec, DynamicPluginKind,
-    PluginHostActivation as CorePluginHostActivation,
 };
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::acg::{
@@ -3781,8 +3781,129 @@ impl From<NodeDynamicPluginActivationSpec> for CoreDynamicPluginActivationSpec {
 /// collection performs the same cleanup as a defensive fallback.
 #[napi]
 pub struct DynamicPluginActivation {
-    inner: Arc<StdMutex<Option<CorePluginHostActivation>>>,
+    close_state: Arc<DynamicPluginCloseState>,
     report: Json,
+}
+
+type DynamicPluginTeardownResult = std::result::Result<(), String>;
+
+enum DynamicPluginCloseStatus {
+    Active(Option<CorePluginHostActivation>),
+    Closing,
+    Closed,
+}
+
+struct DynamicPluginCloseState {
+    status: StdMutex<DynamicPluginCloseStatus>,
+    completion: tokio::sync::watch::Sender<Option<DynamicPluginTeardownResult>>,
+}
+
+impl DynamicPluginCloseState {
+    fn new(activation: CorePluginHostActivation) -> Self {
+        let (completion, _) = tokio::sync::watch::channel(None);
+        Self {
+            status: StdMutex::new(DynamicPluginCloseStatus::Active(Some(activation))),
+            completion,
+        }
+    }
+
+    fn active(&self) -> bool {
+        let status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &*status {
+            DynamicPluginCloseStatus::Active(activation) => activation.is_some(),
+            DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => false,
+        }
+    }
+
+    fn begin_close(self: &Arc<Self>, log_finalizer_error: bool) {
+        let activation = {
+            let mut status = self
+                .status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match &mut *status {
+                DynamicPluginCloseStatus::Active(activation) => {
+                    let activation = activation.take();
+                    *status = DynamicPluginCloseStatus::Closing;
+                    activation
+                }
+                DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => None,
+            }
+        };
+        let Some(activation) = activation else {
+            return;
+        };
+
+        // Keep the activation outside the spawned closure so a thread-spawn
+        // failure cannot drop it and synchronously run teardown on the JS thread.
+        let activation = Arc::new(StdMutex::new(Some(activation)));
+        let worker_activation = Arc::clone(&activation);
+        let close_state = Arc::clone(self);
+        let spawn = std::thread::Builder::new()
+            .name("nemo-relay-node-plugin-teardown".into())
+            .spawn(move || {
+                let activation = worker_activation
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                let result = match activation {
+                    Some(activation) => {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            activation.clear()
+                        }))
+                        .map_err(|_| "dynamic plugin teardown task panicked".to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string()))
+                    }
+                    None => Err("dynamic plugin teardown task lost its activation".to_string()),
+                };
+                if log_finalizer_error && let Err(error) = &result {
+                    eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
+                }
+                close_state.finish(result);
+            });
+
+        if let Err(error) = spawn {
+            // Cleanup must never fall back to the JS thread. Retain the
+            // activation for process lifetime if no teardown thread can start.
+            if let Some(activation) = activation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                std::mem::forget(activation);
+            }
+            let error = format!("failed to start dynamic plugin teardown task: {error}");
+            if log_finalizer_error {
+                eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
+            }
+            self.finish(Err(error));
+        }
+    }
+
+    fn finish(&self, result: DynamicPluginTeardownResult) {
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = DynamicPluginCloseStatus::Closed;
+        self.completion.send_replace(Some(result));
+    }
+
+    async fn wait_for_close(&self) -> DynamicPluginTeardownResult {
+        let mut completion = self.completion.subscribe();
+        loop {
+            if let Some(result) = completion.borrow().clone() {
+                return result;
+            }
+            if completion.changed().await.is_err() {
+                return Err(
+                    "dynamic plugin teardown result channel closed unexpectedly".to_string()
+                );
+            }
+        }
+    }
 }
 
 #[napi]
@@ -3796,14 +3917,7 @@ impl DynamicPluginActivation {
     /// Return whether this object still owns the dynamic plugin host.
     #[napi(getter)]
     pub fn active(&self) -> napi::Result<bool> {
-        self.inner
-            .lock()
-            .map(|activation| activation.is_some())
-            .map_err(|error| {
-                napi::Error::from_reason(format!(
-                    "dynamic plugin activation lock poisoned: {error}"
-                ))
-            })
+        Ok(self.close_state.active())
     }
 
     /// Clear plugin callbacks before unloading libraries and workers.
@@ -3812,28 +3926,14 @@ impl DynamicPluginActivation {
     /// close the same activation.
     #[napi(ts_return_type = "Promise<void>")]
     pub fn close(&self, env: Env) -> napi::Result<JsObject> {
-        let inner = Arc::clone(&self.inner);
+        let close_state = Arc::clone(&self.close_state);
+        close_state.begin_close(false);
         env.execute_tokio_future(
             async move {
-                let activation = inner
-                    .lock()
-                    .map_err(|error| {
-                        napi::Error::from_reason(format!(
-                            "dynamic plugin activation lock poisoned: {error}"
-                        ))
-                    })?
-                    .take();
-                if let Some(activation) = activation {
-                    tokio::task::spawn_blocking(move || activation.clear())
-                        .await
-                        .map_err(|error| {
-                            napi::Error::from_reason(format!(
-                                "dynamic plugin teardown task failed: {error}"
-                            ))
-                        })?
-                        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
-                }
-                Ok(())
+                close_state
+                    .wait_for_close()
+                    .await
+                    .map_err(napi::Error::from_reason)
             },
             |env, _| env.get_undefined(),
         )
@@ -3842,15 +3942,7 @@ impl DynamicPluginActivation {
 
 impl Drop for DynamicPluginActivation {
     fn drop(&mut self) {
-        let activation = match self.inner.lock() {
-            Ok(mut activation) => activation.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
-        };
-        if let Some(activation) = activation
-            && let Err(error) = activation.clear()
-        {
-            eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
-        }
+        self.close_state.begin_close(true);
     }
 }
 
@@ -3865,9 +3957,10 @@ pub async fn activate_dynamic_plugins(
 ) -> napi::Result<DynamicPluginActivation> {
     let config: PluginConfig = serde_json::from_value(config)
         .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
-    let specs: Vec<NodeDynamicPluginActivationSpec> = serde_json::from_value(specs).map_err(|error| {
-        napi::Error::from_reason(format!("invalid dynamic plugin specs: {error}"))
-    })?;
+    let specs: Vec<NodeDynamicPluginActivationSpec> =
+        serde_json::from_value(specs).map_err(|error| {
+            napi::Error::from_reason(format!("invalid dynamic plugin specs: {error}"))
+        })?;
     let specs = specs.into_iter().map(Into::into).collect::<Vec<_>>();
     let (activation, report) = CorePluginHostActivation::activate(config, specs)
         .await
@@ -3875,7 +3968,7 @@ pub async fn activate_dynamic_plugins(
     let report = serde_json::to_value(report)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     Ok(DynamicPluginActivation {
-        inner: Arc::new(StdMutex::new(Some(activation))),
+        close_state: Arc::new(DynamicPluginCloseState::new(activation)),
         report,
     })
 }

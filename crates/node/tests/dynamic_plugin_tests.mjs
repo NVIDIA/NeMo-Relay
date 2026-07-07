@@ -95,8 +95,8 @@ symbol = "nemo_relay_fixture_native_plugin"
   return manifestRef;
 }
 
-function writeWorkerManifest(entrypoint) {
-  const directory = path.join(tempRoot, 'worker');
+function writeWorkerManifest(entrypoint, name = 'worker') {
+  const directory = path.join(tempRoot, name);
   mkdirSync(directory, { recursive: true });
   const manifestRef = path.join(directory, 'relay-plugin.toml');
   writeFileSync(
@@ -123,6 +123,14 @@ entrypoint = ${tomlString(entrypoint)}
 `,
   );
   return manifestRef;
+}
+
+function writeWorkerWrapper(entrypoint, pidFile, name) {
+  const wrapper = path.join(tempRoot, `${name}.sh`);
+  writeFileSync(wrapper, `#!/bin/sh\nprintf '%s' "$$" > ${tomlString(pidFile)}\nexec ${tomlString(entrypoint)}\n`, {
+    mode: 0o755,
+  });
+  return wrapper;
 }
 
 function activationSpec(pluginId, kind, manifestRef, config = {}) {
@@ -244,6 +252,46 @@ describe('dynamic plugin host', () => {
     assert.equal(llmAfterClose.worker_plugin_llm_execution, undefined);
   });
 
+  it(
+    'keeps every concurrent close pending until the shared teardown completes',
+    { skip: process.platform === 'win32' },
+    async () => {
+      const workerBinary = path.join(fixtureTarget, 'debug', workerBinaryName());
+      const pidFile = path.join(tempRoot, 'concurrent-close-worker.pid');
+      const wrapper = writeWorkerWrapper(workerBinary, pidFile, 'concurrent-close-worker');
+      const manifestRef = writeWorkerManifest(wrapper, 'concurrent-close-worker');
+      const activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+        activationSpec('fixture_worker', 'worker', manifestRef),
+      ]);
+      const workerPid = Number(readFileSync(pidFile, 'utf8'));
+      process.kill(workerPid, 'SIGSTOP');
+
+      const firstClose = activation.close();
+      const secondClose = activation.close();
+      let earlyResult;
+      try {
+        earlyResult = await Promise.race([
+          firstClose.then(() => 'first'),
+          secondClose.then(() => 'second'),
+          new Promise((resolve) => setTimeout(() => resolve('pending'), 200)),
+        ]);
+      } finally {
+        try {
+          process.kill(workerPid, 'SIGCONT');
+        } catch (error) {
+          if (error.code !== 'ESRCH') {
+            throw error;
+          }
+        }
+        await Promise.all([firstClose, secondClose]);
+      }
+
+      assert.equal(earlyResult, 'pending');
+      assert.equal(activation.active, false);
+      await activation.close();
+    },
+  );
+
   it('preserves manifest and validation diagnostics in rejected promises', async () => {
     const missingManifest = path.join(tempRoot, 'missing', 'relay-plugin.toml');
     await assert.rejects(
@@ -320,4 +368,69 @@ describe('dynamic plugin host', () => {
       timeout: 30_000,
     });
   });
+
+  it(
+    'never waits for worker teardown on the JavaScript thread during garbage collection',
+    { skip: process.platform === 'win32' },
+    () => {
+      const workerBinary = path.join(fixtureTarget, 'debug', workerBinaryName());
+      const pidFile = path.join(tempRoot, 'finalizer-worker.pid');
+      const wrapper = writeWorkerWrapper(workerBinary, pidFile, 'finalizer-worker');
+      const manifestRef = writeWorkerManifest(wrapper, 'finalizer-worker');
+      const pluginModule = path.join(nodeDir, 'plugin.js');
+      const script = `
+        import { spawn } from 'node:child_process';
+        import { readFileSync } from 'node:fs';
+        import { performance } from 'node:perf_hooks';
+        import { createRequire } from 'node:module';
+        const require = createRequire(${JSON.stringify(path.join(nodeDir, 'package.json'))});
+        const plugin = require(${JSON.stringify(pluginModule)});
+        const config = { version: 1, components: [] };
+        const specs = [${JSON.stringify(activationSpec('fixture_worker', 'worker', manifestRef))}];
+        let activation = await plugin.activateDynamicPlugins(config, specs);
+        const weak = new WeakRef(activation);
+        activation = null;
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const workerPid = Number(readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
+        process.kill(workerPid, 'SIGSTOP');
+        const resumer = spawn(
+          '/bin/sh',
+          ['-c', 'sleep 0.8; kill -CONT "$1"', 'resume-worker', String(workerPid)],
+          { detached: true, stdio: 'ignore' },
+        );
+        resumer.unref();
+
+        const startedAt = performance.now();
+        global.gc();
+        const elapsed = performance.now() - startedAt;
+        if (weak.deref() !== undefined) {
+          throw new Error('dynamic activation was not garbage collected');
+        }
+        if (elapsed >= 400) {
+          throw new Error(\`dynamic activation finalizer blocked the JavaScript thread for \${elapsed}ms\`);
+        }
+
+        let replacement;
+        let lastError;
+        for (let index = 0; index < 500; index += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          try {
+            replacement = await plugin.activateDynamicPlugins(config, specs);
+            break;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        if (!replacement) {
+          throw lastError ?? new Error('dynamic activation finalizer did not release ownership');
+        }
+        await replacement.close();
+      `;
+      execFileSync(process.execPath, ['--expose-gc', '--input-type=module', '--eval', script], {
+        stdio: 'inherit',
+        timeout: 30_000,
+      });
+    },
+  );
 });
