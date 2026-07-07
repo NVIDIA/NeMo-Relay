@@ -14,6 +14,8 @@ use nemo_relay_plugin::{
 };
 use serde_json::json;
 
+use crate::api::runtime::{NemoRelayContextState, global_context};
+
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
 impl ThreadScopeStackRestore {
@@ -26,6 +28,27 @@ impl Drop for ThreadScopeStackRestore {
     fn drop(&mut self) {
         if let Some(binding) = self.0.take() {
             restore_thread_scope_stack(binding);
+        }
+    }
+}
+
+struct GlobalContextRestore(Option<NemoRelayContextState>);
+
+impl GlobalContextRestore {
+    fn replace_with_empty() -> Self {
+        let context = global_context();
+        let previous =
+            std::mem::take(&mut *context.write().unwrap_or_else(|error| error.into_inner()));
+        Self(Some(previous))
+    }
+}
+
+impl Drop for GlobalContextRestore {
+    fn drop(&mut self) {
+        if let Some(previous) = self.0.take() {
+            *global_context()
+                .write()
+                .unwrap_or_else(|error| error.into_inner()) = previous;
         }
     }
 }
@@ -300,8 +323,7 @@ fn native_scope_stack_abi_covers_lifecycle_and_validation() {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     crate::shared_runtime::reset_runtime_owner_for_tests();
-    *crate::api::runtime::global_context().write().unwrap() =
-        crate::api::runtime::NemoRelayContextState::new();
+    let _global_context_restore = GlobalContextRestore::replace_with_empty();
     let _restore = ThreadScopeStackRestore::capture();
     assert_eq!(
         unsafe { native_scope_stack_create(ptr::null_mut()) },
