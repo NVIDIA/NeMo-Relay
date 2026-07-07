@@ -1963,6 +1963,15 @@ fn test_exporter_tool_projection_keeps_data_less_and_empty_marks_visible() {
         None,
         None,
     ));
+    let mut scalar_mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("plugin.scalar_checkpoint")
+            .data(json!("checkpoint complete"))
+            .build(),
+        None,
+        None,
+    ));
     let mut root_end = event_builder(root_uuid, EventType::End)
         .name("neutral-agent")
         .scope_type(ScopeType::Agent)
@@ -1973,18 +1982,20 @@ fn test_exporter_tool_projection_keeps_data_less_and_empty_marks_visible() {
         base + chrono::Duration::milliseconds(1),
     );
     set_event_timestamp(&mut empty_mark, base + chrono::Duration::milliseconds(2));
-    set_event_timestamp(&mut root_end, base + chrono::Duration::milliseconds(3));
+    set_event_timestamp(&mut scalar_mark, base + chrono::Duration::milliseconds(3));
+    set_event_timestamp(&mut root_end, base + chrono::Duration::milliseconds(4));
 
     exporter.state.lock().unwrap().events.extend([
         root_start,
         data_less_mark,
         empty_mark,
+        scalar_mark,
         root_end,
     ]);
 
     let trajectory = exporter.export().unwrap();
     assert_atif_v17_shape(&trajectory);
-    assert_eq!(trajectory.steps.len(), 2);
+    assert_eq!(trajectory.steps.len(), 3);
 
     let data_less_tool = &trajectory.steps[0].tool_calls.as_ref().unwrap()[0];
     assert_eq!(data_less_tool.function_name, "plugin.checkpoint");
@@ -1999,6 +2010,19 @@ fn test_exporter_tool_projection_keeps_data_less_and_empty_marks_visible() {
     let empty_extra: AtifStepExtra =
         serde_json::from_value(trajectory.steps[1].extra.clone().unwrap()).unwrap();
     assert_eq!(empty_extra.event_payload, Some(json!({})));
+
+    let scalar_tool = &trajectory.steps[2].tool_calls.as_ref().unwrap()[0];
+    assert_eq!(scalar_tool.function_name, "plugin.scalar_checkpoint");
+    assert_eq!(
+        scalar_tool.arguments,
+        json!({"value": "checkpoint complete"})
+    );
+    let scalar_extra: AtifStepExtra =
+        serde_json::from_value(trajectory.steps[2].extra.clone().unwrap()).unwrap();
+    assert_eq!(
+        scalar_extra.event_payload,
+        Some(json!("checkpoint complete"))
+    );
 }
 
 #[test]

@@ -2685,6 +2685,7 @@ impl StepConversionState {
             framework: Some("nemo_relay".to_string()),
         };
         let source_call_id = format!("mark:{}", mark.uuid());
+        let arguments = normalize_mark_tool_arguments(data);
         let mut observation_extra = event_extra(mark);
         if let (Some(data), Json::Object(extra)) = (data, &mut observation_extra) {
             extra.insert("event_payload".to_string(), data.clone());
@@ -2718,10 +2719,8 @@ impl StepConversionState {
                 function_name: mark.name().to_string(),
                 // ATIF requires tool-call arguments to be a JSON object. Keep
                 // the original payload absence in `extra.event_payload` while
-                // using an empty object for the schema-required arguments.
-                arguments: data
-                    .cloned()
-                    .unwrap_or_else(|| Json::Object(serde_json::Map::new())),
+                // using a schema-valid object for the projected arguments.
+                arguments,
                 extra: Some(event_extra(mark)),
             }]),
             observation: Some(AtifObservation {
@@ -3496,6 +3495,18 @@ fn events_to_steps(events: &[&Event], mark_projection: MarkProjection) -> Vec<At
 
 fn is_empty_mark_payload(data: &Json) -> bool {
     data.is_null() || data.as_object().is_some_and(|object| object.is_empty())
+}
+
+fn normalize_mark_tool_arguments(data: Option<&Json>) -> Json {
+    match data {
+        None | Some(Json::Null) => Json::Object(serde_json::Map::new()),
+        Some(Json::Object(_)) => data.cloned().expect("mark data is present"),
+        Some(value) => {
+            let mut object = serde_json::Map::new();
+            object.insert("value".to_string(), value.clone());
+            Json::Object(object)
+        }
+    }
 }
 
 // A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent
