@@ -180,8 +180,9 @@ func (config ObservabilityOtlpConfig) MarshalJSON() ([]byte, error) {
 
 // ObservabilityComponentSpec wraps one observability config as a top-level plugin component.
 type ObservabilityComponentSpec struct {
-	Enabled bool                `json:"enabled,omitempty"`
-	Config  ObservabilityConfig `json:"config"`
+	Enabled    bool                `json:"enabled,omitempty"`
+	Config     ObservabilityConfig `json:"config"`
+	enabledSet bool
 }
 
 // NewObservabilityConfig returns a default observability config with version 1.
@@ -231,18 +232,50 @@ func NewObservabilityOtlpConfig() ObservabilityOtlpConfig {
 // NewObservabilityComponentSpec wraps observability config as an enabled top-level component.
 func NewObservabilityComponentSpec(config ObservabilityConfig) ObservabilityComponentSpec {
 	return ObservabilityComponentSpec{
-		Enabled: true,
-		Config:  config,
+		Enabled:    true,
+		Config:     config,
+		enabledSet: true,
 	}
+}
+
+// SetEnabled explicitly sets whether this observability component is enabled.
+func (spec *ObservabilityComponentSpec) SetEnabled(enabled bool) {
+	spec.Enabled = enabled
+	spec.enabledSet = true
+}
+
+// WithEnabled returns a copy with an explicitly present enabled value.
+func (spec ObservabilityComponentSpec) WithEnabled(enabled bool) ObservabilityComponentSpec {
+	spec.SetEnabled(enabled)
+	return spec
+}
+
+// MarshalJSON preserves omitted-default and explicit-false enabled semantics.
+func (spec ObservabilityComponentSpec) MarshalJSON() ([]byte, error) {
+	return marshalComponentWrapper(spec.Enabled, spec.enabledSet, spec.Config)
+}
+
+// UnmarshalJSON records whether enabled was explicitly present.
+func (spec *ObservabilityComponentSpec) UnmarshalJSON(payload []byte) error {
+	enabled, enabledSet, config, err := unmarshalComponentWrapper[ObservabilityConfig](payload)
+	if err != nil {
+		return err
+	}
+	*spec = ObservabilityComponentSpec{Enabled: enabled, Config: config, enabledSet: enabledSet}
+	return nil
 }
 
 // PluginComponent converts the observability component wrapper into the shared plugin shape.
 func (spec ObservabilityComponentSpec) PluginComponent() PluginComponentSpec {
-	return PluginComponentSpec{
+	component := PluginComponentSpec{
 		Kind:    ObservabilityPluginKind,
 		Enabled: spec.Enabled,
 		Config:  mustConfigMap(spec.Config),
 	}
+	if spec.enabledSet || spec.Enabled {
+		component.SetEnabled(spec.Enabled)
+	}
+	return component
 }
 
 // ObservabilityComponent converts observability config directly into a shared plugin component.

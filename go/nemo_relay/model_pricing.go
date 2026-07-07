@@ -134,8 +134,9 @@ func (schedule PromptTokenThresholdRateSchedule) MarshalJSON() ([]byte, error) {
 
 // PricingComponentSpec wraps one model pricing config as a top-level plugin component.
 type PricingComponentSpec struct {
-	Enabled bool          `json:"enabled,omitempty"`
-	Config  PricingConfig `json:"config"`
+	Enabled    bool          `json:"enabled,omitempty"`
+	Config     PricingConfig `json:"config"`
+	enabledSet bool
 }
 
 // NewPricingConfig returns an empty model pricing config.
@@ -209,18 +210,50 @@ func NewPromptTokenThresholdRateSchedule(tiers ...TokenRateTier) PromptTokenThre
 // NewPricingComponentSpec wraps model pricing config as an enabled top-level component.
 func NewPricingComponentSpec(config PricingConfig) PricingComponentSpec {
 	return PricingComponentSpec{
-		Enabled: true,
-		Config:  config,
+		Enabled:    true,
+		Config:     config,
+		enabledSet: true,
 	}
+}
+
+// SetEnabled explicitly sets whether this model pricing component is enabled.
+func (spec *PricingComponentSpec) SetEnabled(enabled bool) {
+	spec.Enabled = enabled
+	spec.enabledSet = true
+}
+
+// WithEnabled returns a copy with an explicitly present enabled value.
+func (spec PricingComponentSpec) WithEnabled(enabled bool) PricingComponentSpec {
+	spec.SetEnabled(enabled)
+	return spec
+}
+
+// MarshalJSON preserves omitted-default and explicit-false enabled semantics.
+func (spec PricingComponentSpec) MarshalJSON() ([]byte, error) {
+	return marshalComponentWrapper(spec.Enabled, spec.enabledSet, spec.Config)
+}
+
+// UnmarshalJSON records whether enabled was explicitly present.
+func (spec *PricingComponentSpec) UnmarshalJSON(payload []byte) error {
+	enabled, enabledSet, config, err := unmarshalComponentWrapper[PricingConfig](payload)
+	if err != nil {
+		return err
+	}
+	*spec = PricingComponentSpec{Enabled: enabled, Config: config, enabledSet: enabledSet}
+	return nil
 }
 
 // PluginComponent converts the model pricing component wrapper into the shared plugin shape.
 func (spec PricingComponentSpec) PluginComponent() PluginComponentSpec {
-	return PluginComponentSpec{
+	component := PluginComponentSpec{
 		Kind:    PricingPluginKind,
 		Enabled: spec.Enabled,
 		Config:  mustConfigMap(spec.Config),
 	}
+	if spec.enabledSet || spec.Enabled {
+		component.SetEnabled(spec.Enabled)
+	}
+	return component
 }
 
 // PricingComponent converts model pricing config directly into a shared plugin component.

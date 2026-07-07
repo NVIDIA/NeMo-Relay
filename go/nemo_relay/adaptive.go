@@ -68,8 +68,9 @@ type AcgConfig struct {
 
 // AdaptiveComponentSpec wraps one adaptive config as a top-level plugin component.
 type AdaptiveComponentSpec struct {
-	Enabled bool           `json:"enabled,omitempty"`
-	Config  AdaptiveConfig `json:"config"`
+	Enabled    bool           `json:"enabled,omitempty"`
+	Config     AdaptiveConfig `json:"config"`
+	enabledSet bool
 }
 
 // NewAdaptiveConfig returns a default adaptive config with version 1.
@@ -141,18 +142,50 @@ func NewAcgConfig() AcgConfig {
 // NewAdaptiveComponentSpec wraps adaptive config as an enabled top-level component.
 func NewAdaptiveComponentSpec(config AdaptiveConfig) AdaptiveComponentSpec {
 	return AdaptiveComponentSpec{
-		Enabled: true,
-		Config:  config,
+		Enabled:    true,
+		Config:     config,
+		enabledSet: true,
 	}
+}
+
+// SetEnabled explicitly sets whether this adaptive component is enabled.
+func (spec *AdaptiveComponentSpec) SetEnabled(enabled bool) {
+	spec.Enabled = enabled
+	spec.enabledSet = true
+}
+
+// WithEnabled returns a copy with an explicitly present enabled value.
+func (spec AdaptiveComponentSpec) WithEnabled(enabled bool) AdaptiveComponentSpec {
+	spec.SetEnabled(enabled)
+	return spec
+}
+
+// MarshalJSON preserves omitted-default and explicit-false enabled semantics.
+func (spec AdaptiveComponentSpec) MarshalJSON() ([]byte, error) {
+	return marshalComponentWrapper(spec.Enabled, spec.enabledSet, spec.Config)
+}
+
+// UnmarshalJSON records whether enabled was explicitly present.
+func (spec *AdaptiveComponentSpec) UnmarshalJSON(payload []byte) error {
+	enabled, enabledSet, config, err := unmarshalComponentWrapper[AdaptiveConfig](payload)
+	if err != nil {
+		return err
+	}
+	*spec = AdaptiveComponentSpec{Enabled: enabled, Config: config, enabledSet: enabledSet}
+	return nil
 }
 
 // PluginComponent converts the adaptive component wrapper into the shared plugin shape.
 func (spec AdaptiveComponentSpec) PluginComponent() PluginComponentSpec {
-	return PluginComponentSpec{
+	component := PluginComponentSpec{
 		Kind:    AdaptivePluginKind,
 		Enabled: spec.Enabled,
 		Config:  mustConfigMap(spec.Config),
 	}
+	if spec.enabledSet || spec.Enabled {
+		component.SetEnabled(spec.Enabled)
+	}
+	return component
 }
 
 // AdaptiveComponent converts adaptive config directly into a shared plugin component.

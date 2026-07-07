@@ -108,12 +108,20 @@ func TestActivateDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
-func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
+func TestActivateDynamicPluginsPreservesLegacyOmittedDefaults(t *testing.T) {
 	withPluginActivationStubs(t)
+
+	emptyPayload, err := json.Marshal(PluginConfig{})
+	if err != nil {
+		t.Fatalf("marshal empty plugin config: %v", err)
+	}
+	if string(emptyPayload) != "{}" {
+		t.Fatalf("empty plugin config JSON = %s, want {}", emptyPayload)
+	}
 
 	token := new(byte)
 	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
-		const wantConfig = `{"version":0,"components":[{"kind":"fixture.disabled","enabled":false}]}`
+		const wantConfig = `{"components":[{"kind":"fixture.default"}]}`
 		if configJSON != wantConfig {
 			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
 		}
@@ -126,9 +134,8 @@ func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
 	freePluginActivation = func(unsafe.Pointer) {}
 
 	activation, _, err := ActivateDynamicPlugins(PluginConfig{
-		Version: 0,
 		Components: []PluginComponentSpec{
-			{Kind: "fixture.disabled", Enabled: false},
+			{Kind: "fixture.default"},
 		},
 	}, nil)
 	if err != nil {
@@ -138,6 +145,148 @@ func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 	runtime.KeepAlive(token)
+}
+
+func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
+	withPluginActivationStubs(t)
+
+	token := new(byte)
+	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
+		const wantConfig = `{"version":0,"components":[{"kind":"fixture.disabled","enabled":false}]}`
+		if configJSON != wantConfig {
+			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
+		}
+		if specsJSON != "[]" {
+			t.Fatalf("dynamic plugin specs JSON = %s, want []", specsJSON)
+		}
+		var roundTrip PluginConfig
+		if err := json.Unmarshal([]byte(configJSON), &roundTrip); err != nil {
+			t.Fatalf("unmarshal explicit plugin config: %v", err)
+		}
+		roundTripPayload, err := json.Marshal(roundTrip)
+		if err != nil {
+			t.Fatalf("remarshal explicit plugin config: %v", err)
+		}
+		if string(roundTripPayload) != wantConfig {
+			t.Fatalf("round-trip config JSON = %s, want %s", roundTripPayload, wantConfig)
+		}
+		return unsafe.Pointer(token), `{"diagnostics":[]}`, nil
+	}
+	clearPluginActivation = func(unsafe.Pointer) error { return nil }
+	freePluginActivation = func(unsafe.Pointer) {}
+
+	component := (PluginComponentSpec{Kind: "fixture.disabled"}).WithEnabled(false)
+	config := PluginConfig{Components: []PluginComponentSpec{component}}
+	config.SetVersion(0)
+	activation, _, err := ActivateDynamicPlugins(config, nil)
+	if err != nil {
+		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+	}
+	if err := activation.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	runtime.KeepAlive(token)
+}
+
+func TestPluginConfigUnmarshalOmissionsResetPresenceAndValues(t *testing.T) {
+	staleComponent := NewPluginComponent("fixture.stale")
+	staleComponent.Config = map[string]any{"stale": true}
+	config := NewPluginConfig()
+	config.Version = 7
+	config.Components = []PluginComponentSpec{staleComponent}
+	config.Policy = &ConfigPolicy{UnknownField: UnsupportedBehaviorError}
+
+	const payload = `{"components":[{"kind":"fixture.fresh"}]}`
+	if err := json.Unmarshal([]byte(payload), &config); err != nil {
+		t.Fatalf("unmarshal config with omitted defaults: %v", err)
+	}
+	if config.Version != 0 || config.versionSet {
+		t.Fatalf("omitted version retained stale state: %#v", config)
+	}
+	if config.Policy != nil {
+		t.Fatalf("omitted policy retained stale state: %#v", config.Policy)
+	}
+	if len(config.Components) != 1 {
+		t.Fatalf("components = %#v, want one", config.Components)
+	}
+	component := config.Components[0]
+	if component.Kind != "fixture.fresh" || component.Enabled || component.enabledSet || component.Config != nil {
+		t.Fatalf("omitted enabled/config retained stale state: %#v", component)
+	}
+
+	roundTrip, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("remarshal config with omitted defaults: %v", err)
+	}
+	if string(roundTrip) != payload {
+		t.Fatalf("round-trip config JSON = %s, want %s", roundTrip, payload)
+	}
+}
+
+func TestComponentWrapperEnabledPresenceSurvivesConversion(t *testing.T) {
+	adaptive := NewAdaptiveComponentSpec(NewAdaptiveConfig())
+	adaptive.Enabled = false
+	explicitDisabled := []PluginComponentSpec{
+		adaptive.PluginComponent(),
+		NewObservabilityComponentSpec(NewObservabilityConfig()).WithEnabled(false).PluginComponent(),
+		NewPricingComponentSpec(NewPricingConfig()).WithEnabled(false).PluginComponent(),
+		NewPiiRedactionComponentSpec(NewPiiRedactionConfig()).WithEnabled(false).PluginComponent(),
+	}
+	legacyDefaults := []PluginComponentSpec{
+		(AdaptiveComponentSpec{Config: NewAdaptiveConfig()}).PluginComponent(),
+		(ObservabilityComponentSpec{Config: NewObservabilityConfig()}).PluginComponent(),
+		(PricingComponentSpec{Config: NewPricingConfig()}).PluginComponent(),
+		(PiiRedactionComponentSpec{Config: NewPiiRedactionConfig()}).PluginComponent(),
+	}
+
+	assertEnabledPresence := func(component PluginComponentSpec, wantPresent bool) {
+		t.Helper()
+		payload, err := json.Marshal(component)
+		if err != nil {
+			t.Fatalf("marshal %s component: %v", component.Kind, err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &fields); err != nil {
+			t.Fatalf("unmarshal %s component JSON: %v", component.Kind, err)
+		}
+		enabled, present := fields["enabled"]
+		if present != wantPresent {
+			t.Fatalf("%s enabled presence = %t, want %t: %s", component.Kind, present, wantPresent, payload)
+		}
+		if wantPresent && string(enabled) != "false" {
+			t.Fatalf("%s enabled JSON = %s, want false", component.Kind, enabled)
+		}
+	}
+
+	for _, component := range explicitDisabled {
+		assertEnabledPresence(component, true)
+	}
+	for _, component := range legacyDefaults {
+		assertEnabledPresence(component, false)
+	}
+
+	wrapperPayload, err := json.Marshal(
+		NewAdaptiveComponentSpec(NewAdaptiveConfig()).WithEnabled(false),
+	)
+	if err != nil {
+		t.Fatalf("marshal explicit adaptive wrapper: %v", err)
+	}
+	decodedWrapper := NewAdaptiveComponentSpec(NewAdaptiveConfig())
+	if err := json.Unmarshal(wrapperPayload, &decodedWrapper); err != nil {
+		t.Fatalf("unmarshal explicit adaptive wrapper: %v", err)
+	}
+	if decodedWrapper.Enabled || !decodedWrapper.enabledSet {
+		t.Fatalf("explicit wrapper enabled state was not preserved: %#v", decodedWrapper)
+	}
+	assertEnabledPresence(decodedWrapper.PluginComponent(), true)
+
+	if err := json.Unmarshal([]byte(`{"config":{}}`), &decodedWrapper); err != nil {
+		t.Fatalf("unmarshal adaptive wrapper with omitted enabled: %v", err)
+	}
+	if decodedWrapper.Enabled || decodedWrapper.enabledSet {
+		t.Fatalf("omitted wrapper enabled retained stale state: %#v", decodedWrapper)
+	}
+	assertEnabledPresence(decodedWrapper.PluginComponent(), false)
 }
 
 func TestActivateDynamicPluginsNormalizesNilSpecs(t *testing.T) {
@@ -208,8 +357,8 @@ func TestPluginActivationCloseFreesAfterClearFailure(t *testing.T) {
 	if err := activation.Close(); !errors.Is(err, wantErr) {
 		t.Fatalf("Close() error = %v, want %v", err, wantErr)
 	}
-	if err := activation.Close(); err != nil {
-		t.Fatalf("repeated Close() error = %v", err)
+	if err := activation.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("repeated Close() error = %v, want %v", err, wantErr)
 	}
 	if strings.Join(calls, ",") != "clear,free" {
 		t.Fatalf("cleanup calls = %v", calls)
@@ -217,11 +366,12 @@ func TestPluginActivationCloseFreesAfterClearFailure(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
-func TestPluginActivationCopiesShareCloseState(t *testing.T) {
+func TestPluginActivationCopiesShareCloseStateAndError(t *testing.T) {
 	withPluginActivationStubs(t)
 
 	token := new(byte)
 	ptr := unsafe.Pointer(token)
+	wantErr := errors.New("teardown failed")
 	var callsMu sync.Mutex
 	var calls []string
 	clearPluginActivation = func(got unsafe.Pointer) error {
@@ -231,7 +381,7 @@ func TestPluginActivationCopiesShareCloseState(t *testing.T) {
 		callsMu.Lock()
 		calls = append(calls, "clear")
 		callsMu.Unlock()
-		return nil
+		return wantErr
 	}
 	freePluginActivation = func(got unsafe.Pointer) {
 		callsMu.Lock()
@@ -245,21 +395,24 @@ func TestPluginActivationCopiesShareCloseState(t *testing.T) {
 
 	activation := newPluginActivation(ptr)
 	copyValue := *activation
-	errors := make(chan error, 2)
+	closeErrors := make(chan error, 2)
 	var closeCalls sync.WaitGroup
 	for _, handle := range []*PluginActivation{activation, &copyValue} {
 		closeCalls.Add(1)
 		go func(handle *PluginActivation) {
 			defer closeCalls.Done()
-			errors <- handle.Close()
+			closeErrors <- handle.Close()
 		}(handle)
 	}
 	closeCalls.Wait()
-	close(errors)
-	for err := range errors {
-		if err != nil {
-			t.Fatalf("Close() error = %v", err)
+	close(closeErrors)
+	for err := range closeErrors {
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Close() error = %v, want %v", err, wantErr)
 		}
+	}
+	if err := activation.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("repeated Close() error = %v, want %v", err, wantErr)
 	}
 
 	callsMu.Lock()
