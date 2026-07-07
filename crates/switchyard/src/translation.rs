@@ -36,14 +36,21 @@ pub(crate) fn encode_request(
     headers: Map<String, Json>,
 ) -> Result<LlmRequest> {
     ensure_portable_request(annotated)?;
+    let mut portable = annotated.clone();
+    if protocol != WireProtocol::OpenaiChat {
+        // `stream_options.include_usage` is an OpenAI Chat transport hint, not
+        // model input. Relay normalizes usage independently, so cross-protocol
+        // dispatch can omit it without losing request semantics.
+        portable.extra.remove("stream_options");
+    }
     let template = LlmRequest {
         headers,
         content: json!({}),
     };
     let mut encoded = match protocol {
-        WireProtocol::OpenaiChat => OpenAIChatCodec.encode(annotated, &template),
-        WireProtocol::OpenaiResponses => OpenAIResponsesCodec.encode(annotated, &template),
-        WireProtocol::AnthropicMessages => AnthropicMessagesCodec.encode(annotated, &template),
+        WireProtocol::OpenaiChat => OpenAIChatCodec.encode(&portable, &template),
+        WireProtocol::OpenaiResponses => OpenAIResponsesCodec.encode(&portable, &template),
+        WireProtocol::AnthropicMessages => AnthropicMessagesCodec.encode(&portable, &template),
     }?;
     if protocol == WireProtocol::AnthropicMessages
         && let Some(stream) = annotated.stream
@@ -319,12 +326,23 @@ fn encode_content_parts(content: &mut Json, protocol: WireProtocol) {
 }
 
 fn ensure_portable_request(request: &AnnotatedLlmRequest) -> Result<()> {
-    if request.reasoning.is_some() || request.include.is_some() || !request.extra.is_empty() {
+    let unsupported_extra = request
+        .extra
+        .iter()
+        .any(|(key, value)| key != "stream_options" || !portable_stream_options(value));
+    if request.reasoning.is_some() || request.include.is_some() || unsupported_extra {
         return Err(FlowError::InvalidArgument(
             "request uses provider-specific fields that cannot be translated safely".into(),
         ));
     }
     Ok(())
+}
+
+fn portable_stream_options(value: &Json) -> bool {
+    let Some(options) = value.as_object() else {
+        return false;
+    };
+    options.len() == 1 && options.get("include_usage").is_some_and(Json::is_boolean)
 }
 
 pub(crate) fn validate_portable_request(
@@ -882,6 +900,58 @@ mod tests {
                 assert_eq!(roundtrip.params, source_annotated.params);
                 assert_eq!(roundtrip.stream, Some(true));
             }
+        }
+    }
+
+    #[test]
+    fn openai_stream_usage_hint_is_portable_but_not_forwarded_cross_protocol() {
+        let source = LlmRequest {
+            headers: Map::new(),
+            content: json!({
+                "model": "source-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true,
+                "stream_options": {"include_usage": true}
+            }),
+        };
+        validate_portable_request(WireProtocol::OpenaiChat, &source).unwrap();
+        let annotated = decode_request(WireProtocol::OpenaiChat, &source).unwrap();
+
+        let same_protocol =
+            encode_request(WireProtocol::OpenaiChat, &annotated, Map::new()).unwrap();
+        assert_eq!(
+            same_protocol.content["stream_options"]["include_usage"],
+            true
+        );
+        for target in [
+            WireProtocol::OpenaiResponses,
+            WireProtocol::AnthropicMessages,
+        ] {
+            let encoded = encode_request(target, &annotated, Map::new()).unwrap();
+            assert!(encoded.content.get("stream_options").is_none());
+        }
+    }
+
+    #[test]
+    fn unknown_or_malformed_request_extensions_still_fail_open() {
+        for extension in [
+            json!({"provider_knob": true}),
+            json!({"stream_options": {"include_usage": true, "vendor": true}}),
+            json!({"stream_options": "yes"}),
+        ] {
+            let mut body = json!({
+                "model": "source-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": true
+            });
+            body.as_object_mut()
+                .unwrap()
+                .extend(extension.as_object().unwrap().clone());
+            let request = LlmRequest {
+                headers: Map::new(),
+                content: body,
+            };
+            assert!(validate_portable_request(WireProtocol::OpenaiChat, &request).is_err());
         }
     }
 

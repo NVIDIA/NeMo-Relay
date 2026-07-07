@@ -1067,6 +1067,7 @@ impl SwitchyardRuntime {
             "switchyard.routing.decision",
             json!({
                 "decision_id": decision.decision_id,
+                "profile_id": request.decision_profile.profile_id,
                 "router": decision.router.name,
                 "router_version": decision.router.version,
                 "routing_attempt": attempt,
@@ -1077,6 +1078,7 @@ impl SwitchyardRuntime {
                 "target_endpoint": decision.route.target_endpoint,
                 "confidence": decision.confidence,
                 "reason_code": decision.reason_code,
+                "reason_summary": decision.reason_summary,
                 "latency_ms": latency_ms,
                 "observe_only": observe_only,
                 "rollout_mode": self.config.mode.label(),
@@ -1421,7 +1423,11 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::{Json as AxumJson, Router, extract::State, routing::post};
+    use nemo_relay::api::event::Event;
     use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
+    use nemo_relay::api::subscriber::{
+        deregister_subscriber, flush_subscribers, register_subscriber,
+    };
     use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
 
     use super::*;
@@ -1638,6 +1644,59 @@ mod tests {
         drifted = decision();
         drifted.route.backend_id = "unknown".into();
         assert!(runtime.validate_decision(&drifted).is_err());
+    }
+
+    #[test]
+    fn routing_decision_mark_has_canonical_shape_and_mirrored_identity() {
+        let subscriber_name = format!("switchyard-mark-shape-{}", uuid::Uuid::now_v7());
+        let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+        let captured = Arc::clone(&events);
+        register_subscriber(
+            &subscriber_name,
+            Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+        )
+        .unwrap();
+
+        let runtime =
+            SwitchyardRuntime::new(config("http://127.0.0.1:1/v1/routing/decision".into()))
+                .unwrap();
+        let routing_request = runtime
+            .routing_request(WireProtocol::OpenaiChat, &chat_request(), 1, None)
+            .unwrap();
+        runtime.emit_decision(&routing_request, &decision(), 1, false, 17);
+        flush_subscribers().unwrap();
+        deregister_subscriber(&subscriber_name).unwrap();
+
+        let event = events
+            .lock()
+            .unwrap()
+            .iter()
+            .map(Event::to_json_value)
+            .find(|event| {
+                event["name"] == "switchyard.routing.decision"
+                    && event["metadata"]["session_id"] == routing_request.identity.session_id
+                    && event["metadata"]["request_id"] == routing_request.identity.request_id
+            })
+            .expect("decision mark should be captured");
+        assert_eq!(event["kind"], "mark");
+        assert_eq!(event["category"], "custom");
+        assert_eq!(
+            event["category_profile"]["subtype"],
+            "switchyard.routing.decision"
+        );
+        assert_eq!(event["data_schema"]["name"], ROUTING_MARK_SCHEMA);
+        assert_eq!(event["data_schema"]["version"], "1");
+        assert_eq!(event["data"]["profile_id"], "cascade");
+        assert_eq!(event["data"]["selected_model"], "selected");
+        assert_eq!(event["data"]["latency_ms"], 17);
+        assert_eq!(
+            event["metadata"]["session_id"],
+            routing_request.identity.session_id
+        );
+        assert_eq!(
+            event["metadata"]["request_id"],
+            routing_request.identity.request_id
+        );
     }
 
     #[test]

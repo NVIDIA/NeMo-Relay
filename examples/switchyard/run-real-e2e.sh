@@ -5,55 +5,34 @@
 set -euo pipefail
 
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$relay_root/examples/switchyard/e2e-common.sh"
 switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-relay-cumulative}"
 work_dir="$(mktemp -d)"
 upstream_log="$work_dir/upstream.jsonl"
-token="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
-pids=()
+token="$(e2e_random_token)"
 
 cleanup() {
   local status=$?
-  for pid in "${pids[@]}"; do
-    kill "$pid" 2>/dev/null || true
-  done
-  for pid in "${pids[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
+  e2e_stop_processes
   if [[ $status -eq 0 ]]; then
     rm -rf "$work_dir"
   else
     echo "E2E logs preserved in $work_dir" >&2
-    for log in "$work_dir"/*.log; do
-      [[ -f "$log" ]] || continue
-      echo "--- $log" >&2
-      tail -100 "$log" >&2
-    done
+    e2e_tail_logs "$work_dir"
   fi
 }
 trap cleanup EXIT
 
-wait_for() {
-  local url="$1"
-  for _ in $(seq 1 120); do
-    if curl --fail --silent "$url" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "timed out waiting for $url" >&2
-  return 1
-}
-
 python3 "$relay_root/examples/switchyard/fake_upstream.py" \
   --port 4101 --log "$upstream_log" >"$work_dir/upstream.log" 2>&1 &
-pids+=("$!")
+e2e_add_pid "$!"
 
 (
   cd "$switchyard_root"
   SWITCHYARD_ATOF_BEARER_TOKEN="$token" cargo run -p switchyard-server -- \
     --config "$relay_root/examples/switchyard/real-e2e-profiles.yaml" --port 4000
 ) >"$work_dir/switchyard.log" 2>&1 &
-pids+=("$!")
+e2e_add_pid "$!"
 
 (
   cd "$work_dir"
@@ -62,10 +41,10 @@ pids+=("$!")
     --plugin-config-path "$relay_root/examples/switchyard/real-e2e-plugins.toml" \
     --bind 127.0.0.1:4041
 ) >"$work_dir/relay.log" 2>&1 &
-pids+=("$!")
+e2e_add_pid "$!"
 
-wait_for http://127.0.0.1:4000/health
-wait_for http://127.0.0.1:4041/healthz
+e2e_wait_for http://127.0.0.1:4000/health
+e2e_wait_for http://127.0.0.1:4041/healthz
 
 request() {
   local request_id="$1"
