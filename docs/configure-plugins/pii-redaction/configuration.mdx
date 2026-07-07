@@ -66,8 +66,9 @@ The top-level PII redaction object contains:
 |---|---|
 | `version` | PII redaction config schema version. Defaults to `1`. |
 | `mode` | Backend mode. Current values are `builtin` and `local_model`. |
-| `input` | Enables managed LLM request sanitization. |
-| `output` | Enables managed LLM response sanitization. |
+| `input` | Enables managed LLM request sanitization and non-tool/LLM scope-start field sanitization. |
+| `output` | Enables managed LLM response sanitization and non-tool/LLM scope-end field sanitization. |
+| `mark` | Enables mark `data`, `category_profile`, and `metadata` sanitization. Defaults to `true`. |
 | `tool_input` | Enables sanitization of emitted tool-request observability payloads. |
 | `tool_output` | Enables sanitization of emitted tool-response observability payloads. |
 | `priority` | Guardrail priority. Lower values run earlier. |
@@ -87,6 +88,7 @@ The following table compares the available PII redaction backends:
 | Built-in component kind and config validation | Supported | Supported |
 | Managed LLM `input` | Supported | Not implemented |
 | Managed LLM `output` | Supported | Not implemented |
+| Mark and generic scope event fields | Supported | Not implemented |
 | Managed `tool_input` | Supported | Not implemented |
 | Managed `tool_output` | Supported | Not implemented |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
@@ -131,6 +133,7 @@ mode = "builtin"
 codec = "openai_chat"
 input = true
 output = true
+mark = true
 tool_input = true
 tool_output = true
 
@@ -158,6 +161,12 @@ This example configures the built-in backend for:
 - LLM response redaction from the normalized response path `/message`
 - tool argument redaction at `/api_key`
 - tool result redaction at `/result/secret`
+- mark and non-tool/LLM scope event redaction across `data`,
+  `category_profile`, and `metadata`
+
+`mark` is enabled when omitted. Set `mark = false` only when marks are known to
+contain no sensitive observability fields or another sanitizer owns that
+boundary.
 
 ### CLI Editor Support
 
@@ -168,6 +177,7 @@ Use the editor when you want to:
 
 - Toggle the component on or off
 - Choose `builtin` or `local_model`
+- Enable or opt out of mark sanitization
 - Set the LLM `codec`
 - Edit `builtin` action settings such as `action`, `target_paths`,
   `pattern`, `detector`, `replacement`, and masking fields
@@ -277,6 +287,10 @@ The plugin uses different payload boundaries for tools and LLMs:
 - LLMs use the selected built-in codec. Prefer normalized Relay paths such as:
   - `/messages/0/content` for request message content
   - `/message` for the normalized assistant response text
+- Marks and non-tool/LLM scopes sanitize `data`, `category_profile`, and
+  `metadata` as separate JSON values. A target path is evaluated independently
+  inside each value; it does not start with `/data`, `/category_profile`, or
+  `/metadata`.
 
 The current implementation also preserves provider-shaped response-path
 compatibility for the supported codecs, but normalized LLM paths are the
@@ -327,14 +341,23 @@ string leaf in the selected payload boundary.
 
 ## Observability Semantics
 
-The built-in plugin uses sanitize guardrails.
+The built-in plugin uses sanitize guardrails and event sanitizers.
 
 That means:
 
-- The real provider response value remains unchanged.
-- The plugin sanitizes emitted NeMo Relay start and end event payloads.
-- The plugin populates `annotated_response` from the sanitized end-event payload
-  when a response codec is available.
+- the real provider response value is unchanged
+- the emitted NeMo Relay start, end, or mark event observability fields are
+  sanitized
+- `annotated_response` is populated from the sanitized end-event payload when a
+  response codec is provided
+- subscribers, ATOF, ATIF, OpenTelemetry, and OpenInference receive the
+  sanitized event; raw values removed by the plugin do not bypass through an
+  exporter
+
+For tool and LLM scope events, the generic scope sanitizer leaves the shared
+fields unchanged because the specialized tool or LLM sanitizer already owns
+that lifecycle boundary. This prevents repeated hashing or masking. Generic
+scope categories use `input` for starts and `output` for ends.
 
 ## Local Model Mode
 

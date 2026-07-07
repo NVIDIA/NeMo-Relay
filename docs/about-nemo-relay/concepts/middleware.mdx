@@ -8,7 +8,8 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This page explains the runtime behavior that runs around managed tool and LLM calls.
+This page explains the runtime behavior that runs around managed tool and LLM
+calls and sanitizes emitted mark and scope events.
 
 ## What Middleware Is
 
@@ -105,6 +106,22 @@ Use them when the event stream should hide or reduce sensitive request data.
 Sanitize-response guardrails rewrite the payload recorded on emitted end events.
 
 Use them when the event stream should hide or reduce sensitive response data.
+
+### Sanitize Mark and Scope Events
+
+Event sanitizers cover observability fields that are outside the specialized
+tool and LLM payload APIs. Separate registries apply to marks, scope starts,
+and scope ends. They can rewrite `data`, `category_profile`, and `metadata`
+while receiving the complete event as immutable context.
+
+Scope event sanitizers run for every category. On tool and LLM scope events,
+they run after the specialized request or response sanitizer. Mark sanitizers
+cover explicit marks and marks materialized by middleware, plugins, and
+streaming lifecycle helpers.
+
+Register event sanitizers globally, on an owning scope, or through a plugin
+context. For the callback contract and binding APIs, refer to
+[Event Sanitizers](/reference/event-sanitizers).
 
 Sanitize guardrails are observability-oriented. They do not rewrite the real
 arguments passed to the callback or the real value returned to the caller.
@@ -261,6 +278,9 @@ Use these comparisons to pick the middleware surface that matches the behavior y
   boundary.
 - Use a **sanitize guardrail** when only subscribers and exporters should see
   rewritten data.
+- Use a **mark or scope event sanitizer** when the sensitive fields are in
+  `data`, `category_profile`, or `metadata` rather than the managed tool or LLM
+  request/response payload.
 - Use a **stream execution intercept** when you need streaming-specific
   behavior applied across the lifecycle of a long-lived or chunked response,
   such as per-chunk transformation, incremental authorization, logging or

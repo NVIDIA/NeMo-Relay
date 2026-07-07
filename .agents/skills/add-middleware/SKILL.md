@@ -24,7 +24,7 @@ middleware behavior to a new pipeline stage.
 
 Decide these before editing code:
 
-- Is this for tools, LLMs, or both?
+- Is this for tools, LLMs, marks, scope events, or a combination?
 - Is it a conditional guardrail, sanitize guardrail, request intercept, or
   execution intercept?
 - Does it run on request input, inner callable execution, stream chunks, or
@@ -33,6 +33,8 @@ Decide these before editing code:
 - Does it need both global and scope-local registration?
 - What should subscribers observe in `event.input` and `event.output` after this
   middleware runs?
+- If this is an event sanitizer, which of `data`, `category_profile`, and
+  `metadata` may change, and is the event used only as immutable context?
 
 ## Pipeline Order
 
@@ -44,6 +46,9 @@ See `docs/about/concepts/middleware.md` for the full diagrams.
 - **LLM execute**:
   conditional guardrails -> request intercepts -> sanitize request (for events)
   | execution intercept chain(callable) -> sanitize response
+- **Mark and scope events**:
+  specialized tool/LLM sanitizer (when applicable) -> mark or scope event
+  sanitizer -> subscriber dispatch
 
 ## Core Steps
 
@@ -88,6 +93,7 @@ Follow the `add-binding-feature` skill for the cross-binding implementation chec
 - [ ] Callback error propagation
 - [ ] Scope-local registration, inheritance, and cleanup on pop
 - [ ] Event input/output semantics after middleware mutation
+- [ ] Mark and scope event field semantics, including immutable identity fields
 - [ ] Parity coverage in every affected binding
 
 ## Key References

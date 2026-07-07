@@ -40,7 +40,8 @@ primary supported surfaces.
 - **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
   shared Rust runtime.
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
-  blocking, sanitization, and execution wrapping.
+  blocking, sanitization, and execution wrapping, including mark and scope
+  event sanitizers at global, scope-local, and plugin-context levels.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
 - **Convenience subpackages**: Short imports for scopes, tools, LLM calls,

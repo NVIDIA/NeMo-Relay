@@ -1,0 +1,181 @@
+---
+title: "Event Sanitizers"
+description: "Sanitize mark and scope event fields before subscribers and exporters receive them."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Event sanitizers rewrite observability fields on mark and scope events before
+the events reach subscribers or exporters. Use them for event data that is not
+covered by the tool and LLM request or response sanitizer APIs.
+
+## Sanitizer Surfaces
+
+NeMo Relay provides three registries:
+
+| Registry | Events |
+|---|---|
+| Mark sanitizer | Every mark, including explicit, pending, plugin-runtime, and streaming marks |
+| Scope-start sanitizer | Every scope category with `scope_category = "start"` |
+| Scope-end sanitizer | Every scope category with `scope_category = "end"` |
+
+Scope sanitizers run for all categories, including `tool` and `llm`. For tool
+and LLM events, they run after the specialized request or response sanitizers.
+This ordering lets a general event policy inspect the already-sanitized event
+fields without changing the real request or response.
+
+## Callback Contract
+
+The callback receives:
+
+- The complete event as immutable context.
+- An `EventSanitizeFields` value containing `data`, `category_profile`, and
+  `metadata`.
+
+Return the three observability fields that should be applied. Event identity,
+parentage, timestamps, kind, scope category, semantic category, attributes,
+input/output lifecycle meaning, and schemas cannot be changed through this
+API. Set a field to `null` or `None` to remove it. Preserve fields that your
+policy does not change.
+
+Registries are priority ordered. Lower priorities run first, and each callback
+receives the fields returned by the preceding callback. Invalid callback
+results fail open and preserve the current fields. Binding-specific callback
+error inspection remains available where the binding exposes it.
+
+## Registration Lifetimes
+
+Event sanitizers use the same ownership model as other middleware:
+
+- Global registrations remain active until explicitly deregistered.
+- Scope-local registrations are inherited by descendants and are removed when
+  the owning scope closes.
+- Plugin-context registrations are qualified to the component instance and
+  roll back if activation fails or the plugin configuration is cleared.
+
+## Register a Global Mark Sanitizer
+
+The following examples replace mark data and remove mark metadata while
+preserving the category profile.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+from nemo_relay import guardrails
+
+def sanitize_mark(event, fields: nemo_relay.EventSanitizeFields):
+    return {
+        "data": {"checkpoint": event.name},
+        "category_profile": fields["category_profile"],
+        "metadata": None,
+    }
+
+guardrails.register_mark_sanitize("safe-marks", 100, sanitize_mark)
+try:
+    nemo_relay.scope.event("planning", data={"secret": "value"})
+finally:
+    guardrails.deregister_mark_sanitize("safe-marks")
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const relay = require("nemo-relay-node");
+
+relay.registerMarkSanitizeGuardrail("safe-marks", 100, (event, fields) => ({
+  data: { checkpoint: event.name },
+  categoryProfile: fields.categoryProfile,
+  metadata: null,
+}));
+
+try {
+  relay.event("planning", null, { secret: "value" });
+} finally {
+  relay.deregisterMarkSanitizeGuardrail("safe-marks");
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::registry::{
+    deregister_mark_sanitize_guardrail, register_mark_sanitize_guardrail,
+};
+use serde_json::json;
+use std::sync::Arc;
+
+register_mark_sanitize_guardrail(
+    "safe-marks",
+    100,
+    Arc::new(|event, mut fields| {
+        fields.data = Some(json!({"checkpoint": event.name()}));
+        fields.metadata = None;
+        fields
+    }),
+)?;
+
+// Emit marks while the registration is active.
+
+deregister_mark_sanitize_guardrail("safe-marks")?;
+```
+</Tab>
+</Tabs>
+
+## API Names
+
+Use the matching start and end APIs when the policy applies to duration-bearing
+scope events.
+
+| Level | Python | Node.js | Rust |
+|---|---|---|---|
+| Global mark | `guardrails.register_mark_sanitize` | `registerMarkSanitizeGuardrail` | `register_mark_sanitize_guardrail` |
+| Global start | `guardrails.register_scope_sanitize_start` | `registerScopeSanitizeStartGuardrail` | `register_scope_sanitize_start_guardrail` |
+| Global end | `guardrails.register_scope_sanitize_end` | `registerScopeSanitizeEndGuardrail` | `register_scope_sanitize_end_guardrail` |
+| Scope-local mark | `scope_local.register_mark_sanitize` | `scopeRegisterMarkSanitizeGuardrail` | `scope_register_mark_sanitize_guardrail` |
+| Scope-local start | `scope_local.register_scope_sanitize_start` | `scopeRegisterScopeSanitizeStartGuardrail` | `scope_register_scope_sanitize_start_guardrail` |
+| Scope-local end | `scope_local.register_scope_sanitize_end` | `scopeRegisterScopeSanitizeEndGuardrail` | `scope_register_scope_sanitize_end_guardrail` |
+
+Each registration API has a corresponding `deregister` API. Python
+scope-local helpers accept a scope handle. Node.js and Rust scope-local helpers
+accept the owning scope UUID.
+
+Plugin contexts expose the same three surfaces as
+`register_mark_sanitize_guardrail`,
+`register_scope_sanitize_start_guardrail`, and
+`register_scope_sanitize_end_guardrail`, using each binding's naming
+convention.
+
+## Dynamic Plugins
+
+Rust native plugins receive the three methods on their typed plugin context.
+Python `grpc-v1` workers receive the same methods on `PluginContext`; callbacks
+may be synchronous or asynchronous. The worker protocol remains `grpc-v1` and
+adds these stable registration surface values:
+
+- `MARK_SANITIZE_GUARDRAIL = 30`
+- `SCOPE_SANITIZE_START_GUARDRAIL = 31`
+- `SCOPE_SANITIZE_END_GUARDRAIL = 32`
+
+Dynamic plugins should declare only the surfaces they install and should use
+the plugin context so failed activation rolls back every registration.
+
+## Experimental C and Go Bindings
+
+The source-first C API uses `NemoRelayEventSanitizeCb` and exports global,
+scope-local, and plugin-context registration functions for all three surfaces.
+Global names begin with `nemo_relay_register_`; scope-local names begin with
+`nemo_relay_scope_register_`.
+
+The Go binding exposes `EventSanitizeFields`, `EventSanitizeFunc`, global
+`Register*SanitizeGuardrail` helpers, scope-local
+`ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
+`PluginContext`. The `guardrails` package provides shorter aliases.
+
+## Related Topics
+
+- [Middleware](/about-nemo-relay/concepts/middleware)
+- [Events](/about-nemo-relay/concepts/events)
+- [Register Plugin Behavior](/build-plugins/language-binding/register-behavior)
+- [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)

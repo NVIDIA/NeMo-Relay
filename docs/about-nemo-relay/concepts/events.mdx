@@ -103,6 +103,12 @@ exporters. Consumers should prefer typed event fields, binding helpers, and
 annotated request or response data before falling back to raw payload
 re-reading.
 
+Before that handoff, event sanitizers can replace `data`, `category_profile`,
+and `metadata`. The runtime keeps identity, lifecycle, category, timestamp,
+and parent fields immutable. Refer to
+[Event Sanitizers](/reference/event-sanitizers) for registration levels and
+ordering.
+
 Events preserve runtime facts. They do not decide which scope owns a call, how
 replay or cost policy is applied, how redaction policy is configured, how
 streams are blocked, or how exporter-specific semantic projection works. Those

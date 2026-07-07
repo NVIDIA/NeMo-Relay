@@ -50,8 +50,8 @@ live OTLP spans.
 
 - ATIF exports the full event buffer collected so far.
 - Consecutive tool observations can be merged into one system observation step.
-- Trajectories reflect sanitized event payloads, not raw secrets that
-  sanitize guardrails removed before event emission.
+- Trajectories reflect sanitized event payloads, not raw secrets that tool,
+  LLM, mark, or scope event sanitizers removed before event emission.
 - Response codecs can improve LLM end annotations, but they do not change the
   caller-visible LLM response.
 

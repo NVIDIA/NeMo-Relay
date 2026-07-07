@@ -41,7 +41,9 @@ should install it from npm rather than depend on the Rust crate directly.
   napi-rs native extension.
 - **Managed tool and LLM execution**: Helpers that emit lifecycle events and
   run middleware in a consistent order.
-- **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries.
+- **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries,
+  plus mark and scope event sanitizers for `data`, `categoryProfile`, and
+  `metadata`.
 - **Observability exporters**: Subscriber and exporter support for common
   runtime telemetry flows.
 - **Additional entry points**: `nemo-relay-node/typed`,

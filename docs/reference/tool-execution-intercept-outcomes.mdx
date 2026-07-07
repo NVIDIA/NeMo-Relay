@@ -29,10 +29,12 @@ does not expose downstream pending marks. Relay retains those marks, combines
 them in effective middleware order, and materializes them only after the final
 outcome succeeds.
 
-There is no mark-specific registration path. Use the existing global,
-scope-local, or plugin-context tool execution registration APIs and return the
-canonical outcome from every registered callback. Relay rejects legacy raw
-intercept returns at public and dynamic-plugin boundaries.
+Use the existing global, scope-local, or plugin-context tool execution
+registration APIs to produce pending marks, and return the canonical outcome
+from every registered callback. Use a
+[mark event sanitizer](/reference/event-sanitizers) when the emitted pending
+mark's `data`, `category_profile`, or `metadata` must be sanitized. Legacy raw
+intercept returns are rejected at public and dynamic-plugin boundaries.
 
 ## Managed Lifecycle
 
@@ -44,7 +46,8 @@ mark a timestamp after the tool end event.
 
 If execution or an intercept fails, Relay emits the error end event and
 discards accumulated pending marks. Pending marks are never included in the
-application-visible tool result or passed to sanitize-response guardrails.
+application-visible tool result or passed to tool sanitize-response
+guardrails. They pass through the mark sanitizer registry when materialized.
 
 ## Binding Contract
 

@@ -41,7 +41,8 @@ runtime semantics as the Rust and Node.js surfaces.
 - **Scope, tool, and LLM helpers**: Managed boundaries that emit lifecycle
   events and run middleware in a consistent order.
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM requests,
-  responses, and execution.
+  responses, and execution, plus mark and scope event sanitizers for `data`,
+  `category_profile`, and `metadata`.
 - **Subscribers and exporters**: Event consumers for observability and
   diagnostics.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
