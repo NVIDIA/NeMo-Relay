@@ -21,13 +21,14 @@ use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::callbacks::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
-    LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::subscriber_dispatcher;
 use crate::api::scope::{CreateScopeHandleParams, EndScopeHandleParams, ScopeHandle, ScopeType};
+use crate::api::shared::sanitize_event;
 use crate::api::tool::ToolHandle;
 use crate::api::tool::{
     CreateToolHandleParams, EndToolHandleParams, ToolExecutionInterceptOutcome,
@@ -49,6 +50,12 @@ use uuid::Uuid;
 /// process. It contains global middleware registries, lifecycle subscribers,
 /// and arbitrary extension slots used by bindings or integrations.
 pub struct NemoRelayContextState {
+    /// Global mark event field sanitizers.
+    pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    /// Global scope-start event field sanitizers.
+    pub(crate) scope_sanitize_start_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    /// Global scope-end event field sanitizers.
+    pub(crate) scope_sanitize_end_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Global tool request sanitizers applied to emitted tool-start payloads.
     pub(crate) tool_sanitize_request_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Global tool response sanitizers applied to emitted tool-end payloads.
@@ -86,6 +93,9 @@ impl NemoRelayContextState {
     /// extensions.
     pub fn new() -> Self {
         Self {
+            mark_sanitize_guardrails: SortedRegistry::new(),
+            scope_sanitize_start_guardrails: SortedRegistry::new(),
+            scope_sanitize_end_guardrails: SortedRegistry::new(),
             tool_sanitize_request_guardrails: SortedRegistry::new(),
             tool_sanitize_response_guardrails: SortedRegistry::new(),
             tool_conditional_execution_guardrails: SortedRegistry::new(),
@@ -571,6 +581,7 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
+        let event = sanitize_event(event);
         Self::emit_event(&event, subscribers);
         handle
     }
@@ -594,7 +605,31 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
+        let event = sanitize_event(event);
         Self::emit_event(&event, subscribers);
+    }
+
+    /// Snapshot event sanitizer entries in priority order.
+    pub(crate) fn event_sanitize_entries(
+        global: &SortedRegistry<Guardrail<EventSanitizeFn>>,
+        scope_locals: &[&SortedRegistry<Guardrail<EventSanitizeFn>>],
+    ) -> Vec<Guardrail<EventSanitizeFn>> {
+        merge_guardrail_entries(global, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Apply an event sanitizer snapshot to the mutable observability fields.
+    pub(crate) fn event_sanitize_snapshot_chain(
+        mut event: Event,
+        entries: &[Guardrail<EventSanitizeFn>],
+    ) -> Event {
+        for entry in entries {
+            let fields = (entry.payload)(&event, event.sanitize_fields());
+            event.apply_sanitize_fields(fields);
+        }
+        event
     }
 
     /// Snapshot tool request sanitizers in priority order.

@@ -34,7 +34,7 @@ use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::{Event, PendingMarkSpec};
+pub use nemo_relay_types::api::event::{Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
 pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
@@ -118,6 +118,8 @@ pub trait WorkerPlugin: Send + Sync + 'static {
 }
 
 type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
+type EventSanitizeFn =
+    Arc<dyn Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> Json + Send + Sync>;
 type ToolConditionalFn = Arc<dyn Fn(&str, &Json) -> Result<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(&str, Json) -> Result<Json> + Send + Sync>;
@@ -140,6 +142,7 @@ type LlmStreamExecutionFn =
 struct WorkerHandlers {
     registrations: Vec<Registration>,
     subscribers: HashMap<String, SubscriberFn>,
+    event_sanitizers: HashMap<String, EventSanitizeFn>,
     tool_sanitize_requests: HashMap<String, ToolSanitizeFn>,
     tool_sanitize_responses: HashMap<String, ToolSanitizeFn>,
     tool_conditionals: HashMap<String, ToolConditionalFn>,
@@ -190,6 +193,68 @@ impl PluginContext {
         self.handlers
             .subscribers
             .insert(name.into(), Arc::new(callback));
+    }
+
+    fn register_event_sanitizer<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        surface: RegistrationSurface,
+        callback: F,
+    ) where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.push_registration(name, surface, priority, false);
+        self.handlers
+            .event_sanitizers
+            .insert(name.into(), Arc::new(callback));
+    }
+
+    /// Registers a mark event sanitizer.
+    pub fn register_mark_sanitize_guardrail<F>(&mut self, name: &str, priority: i32, callback: F)
+    where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            RegistrationSurface::MarkSanitizeGuardrail,
+            callback,
+        );
+    }
+
+    /// Registers a scope-start event sanitizer.
+    pub fn register_scope_sanitize_start_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            RegistrationSurface::ScopeSanitizeStartGuardrail,
+            callback,
+        );
+    }
+
+    /// Registers a scope-end event sanitizer.
+    pub fn register_scope_sanitize_end_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            RegistrationSurface::ScopeSanitizeEndGuardrail,
+            callback,
+        );
     }
 
     /// Registers a tool sanitize-request guardrail.
@@ -1334,6 +1399,18 @@ impl WorkerService {
                 with_thread_scope(&scope, || handler(&event));
                 Ok(empty_response())
             }
+            RegistrationSurface::MarkSanitizeGuardrail
+            | RegistrationSurface::ScopeSanitizeStartGuardrail
+            | RegistrationSurface::ScopeSanitizeEndGuardrail => {
+                let event = event_payload(request.payload)?;
+                let fields = event.sanitize_fields();
+                let handler = self.event_sanitizer(&request.registration_name)?;
+                let fields = with_thread_scope(&scope, || handler(&event, fields));
+                Ok(json_response(
+                    serde_json::to_value(fields)
+                        .expect("event sanitize fields are JSON serializable"),
+                ))
+            }
             RegistrationSurface::ToolSanitizeRequestGuardrail => {
                 let payload = tool_payload(request.payload)?;
                 let handler = self.tool_sanitize_request(&request.registration_name)?;
@@ -1440,6 +1517,18 @@ impl WorkerService {
             .cloned()
             .ok_or_else(|| {
                 WorkerSdkError::InvalidInput(format!("subscriber '{name}' not registered"))
+            })
+    }
+
+    fn event_sanitizer(&self, name: &str) -> Result<EventSanitizeFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .event_sanitizers
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!("event sanitizer '{name}' not registered"))
             })
     }
 
@@ -1919,6 +2008,9 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
         RegistrationSurface::LlmRequestIntercept,
         RegistrationSurface::LlmExecutionIntercept,
         RegistrationSurface::LlmStreamExecutionIntercept,
+        RegistrationSurface::MarkSanitizeGuardrail,
+        RegistrationSurface::ScopeSanitizeStartGuardrail,
+        RegistrationSurface::ScopeSanitizeEndGuardrail,
     ]
 }
 

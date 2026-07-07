@@ -10,9 +10,9 @@ use serde_json::{Map, json};
 use uuid::{Uuid, Version};
 
 use crate::api::event::{
-    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventNormalizationExt, MarkEvent,
-    ScopeCategory, ScopeEvent, attributes_from_handle, llm_attributes_to_strings,
-    scope_attributes_to_strings, tool_attributes_to_strings,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, EventNormalizationExt,
+    EventSanitizeFields, MarkEvent, ScopeCategory, ScopeEvent, attributes_from_handle,
+    llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
 use crate::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeHandle, ScopeType};
@@ -947,4 +947,46 @@ fn event_scope_accessors_return_none_for_unprofiled_and_wrong_phase_payloads() {
     ));
     assert_eq!(end_without_data.input(), None);
     assert_eq!(end_without_data.output(), None);
+}
+
+#[test]
+fn event_sanitize_fields_snapshot_and_apply_cover_scope_and_mark_variants() {
+    let profile = CategoryProfile::builder().subtype("raw").build();
+    let mut scope = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("scope")
+            .data(json!({"secret": "raw"}))
+            .metadata(json!({"meta": "raw"}))
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::custom(),
+        Some(profile),
+    ));
+    assert_eq!(scope.sanitize_fields().data, Some(json!({"secret": "raw"})));
+    scope.apply_sanitize_fields(EventSanitizeFields {
+        data: Some(json!({"secret": "clean"})),
+        category_profile: None,
+        metadata: None,
+    });
+    assert_eq!(scope.data(), Some(&json!({"secret": "clean"})));
+    assert!(scope.category_profile().is_none());
+    assert!(scope.metadata().is_none());
+
+    let original_uuid = Uuid::now_v7();
+    let mut mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("mark")
+            .uuid(original_uuid)
+            .build(),
+        None,
+        None,
+    ));
+    mark.apply_sanitize_fields(
+        EventSanitizeFields::builder()
+            .metadata(json!({"added": true}))
+            .build(),
+    );
+    assert_eq!(mark.uuid(), original_uuid);
+    assert_eq!(mark.metadata(), Some(&json!({"added": true})));
 }

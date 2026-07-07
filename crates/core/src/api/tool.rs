@@ -11,7 +11,7 @@ use crate::api::runtime::{EventSubscriberFn, ToolExecutionNextFn};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid,
+    ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid, sanitize_event,
     snapshot_event_subscribers,
 };
 use crate::error::{FlowError, Result};
@@ -252,6 +252,7 @@ fn tool_call_with_subscriber_snapshot(
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
         (handle, event)
     };
+    let event = sanitize_event(event);
     NemoRelayContextState::emit_event(&event, &subscribers);
     Ok((handle, subscribers))
 }
@@ -353,7 +354,9 @@ fn tool_call_end_with_pending_marks(
                 mark.category_profile,
             ))
         })
+        .map(sanitize_event)
         .collect::<Vec<_>>();
+    let event = sanitize_event(event);
     NemoRelayContextState::emit_event(&event, subscribers);
     for mark in marks {
         NemoRelayContextState::emit_event(&mark, subscribers);
@@ -374,6 +377,7 @@ fn emit_tool_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_tool_handle(handle, handle.data.clone(), metadata)
     };
+    let event = sanitize_event(event);
     NemoRelayContextState::emit_event(&event, lifecycle_subscribers);
     Ok(())
 }

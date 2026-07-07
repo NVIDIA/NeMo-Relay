@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -24,6 +24,12 @@ use crate::registry::SortedRegistry;
 /// registries when the runtime resolves the effective middleware chain for a
 /// tool or LLM call executed inside that scope.
 pub(crate) struct ScopeLocalRegistries {
+    /// Mark event field sanitizers.
+    pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    /// Scope-start event field sanitizers.
+    pub(crate) scope_sanitize_start_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
+    /// Scope-end event field sanitizers.
+    pub(crate) scope_sanitize_end_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Tool request sanitizers applied to emitted tool-start payloads.
     pub(crate) tool_sanitize_request_guardrails: SortedRegistry<Guardrail<ToolSanitizeFn>>,
     /// Tool response sanitizers applied to emitted tool-end payloads.
@@ -59,6 +65,9 @@ impl ScopeLocalRegistries {
     /// intercepts, or subscribers.
     pub(crate) fn new() -> Self {
         Self {
+            mark_sanitize_guardrails: SortedRegistry::new(),
+            scope_sanitize_start_guardrails: SortedRegistry::new(),
+            scope_sanitize_end_guardrails: SortedRegistry::new(),
             tool_sanitize_request_guardrails: SortedRegistry::new(),
             tool_sanitize_response_guardrails: SortedRegistry::new(),
             tool_conditional_execution_guardrails: SortedRegistry::new(),

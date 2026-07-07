@@ -26,12 +26,13 @@ use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_tool_conditional_execution_guardrail,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_mark_sanitize_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
@@ -670,6 +671,17 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
     )
     .unwrap();
+    register_mark_sanitize_guardrail(
+        "tool_pending_mark_sanitizer",
+        1,
+        Arc::new(|_, mut fields| {
+            let mut metadata = fields.metadata.unwrap_or_else(|| json!({}));
+            metadata["sanitized"] = json!(true);
+            fields.metadata = Some(metadata);
+            fields
+        }),
+    )
+    .unwrap();
 
     let mut plugin_ctx = PluginRegistrationContext::new();
     plugin_ctx
@@ -759,6 +771,8 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         .iter()
         .position(|event| event.name() == "tool.mark.outer")
         .unwrap();
+    assert_eq!(captured[inner_index].metadata().unwrap()["sanitized"], true);
+    assert_eq!(captured[outer_index].metadata().unwrap()["sanitized"], true);
     assert!(start_index < end_index);
     assert!(end_index < inner_index);
     assert!(inner_index < outer_index);
@@ -786,6 +800,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
     deregister_tool_execution_intercept("passthrough_between_outcomes").unwrap();
     let mut registrations = plugin_ctx.into_registrations();
     rollback_registrations(&mut registrations);
+    deregister_mark_sanitize_guardrail("tool_pending_mark_sanitizer").unwrap();
     deregister_subscriber("tool_outcome_mark_observer").unwrap();
 }
 
@@ -3104,6 +3119,15 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
     )
     .unwrap();
+    register_mark_sanitize_guardrail(
+        "llm_pending_mark_sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            fields.metadata = Some(json!({"sanitized_mark": event.name()}));
+            fields
+        }),
+    )
+    .unwrap();
 
     register_llm_request_intercept(
         "pending_managed",
@@ -3191,8 +3215,17 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
     assert_eq!(mark.timestamp(), second_mark.timestamp());
     assert!(end.timestamp() >= mark.timestamp());
     assert_eq!(mark.data().unwrap()["saved_tokens"], 12);
+    assert_eq!(
+        mark.metadata().unwrap()["sanitized_mark"],
+        "request.optimized"
+    );
+    assert_eq!(
+        second_mark.metadata().unwrap()["sanitized_mark"],
+        "request.optimized.second"
+    );
 
     deregister_llm_request_intercept("pending_managed").unwrap();
+    deregister_mark_sanitize_guardrail("llm_pending_mark_sanitizer").unwrap();
     deregister_subscriber("pending_mark_observer").unwrap();
 }
 

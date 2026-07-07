@@ -7,7 +7,9 @@ use crate::api::runtime::global_context;
 use crate::api::runtime::{
     current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
-use crate::api::shared::{ensure_runtime_owner, resolve_parent_uuid, snapshot_event_subscribers};
+use crate::api::shared::{
+    ensure_runtime_owner, resolve_parent_uuid, sanitize_event, snapshot_event_subscribers,
+};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use chrono::{DateTime, Utc};
@@ -229,6 +231,7 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
         let event = state.build_scope_start_event(&handle, params.input);
         (handle, event, subscribers)
     };
+    let event = sanitize_event(event);
     task_scope_push(handle.clone());
     NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(handle)
@@ -287,6 +290,7 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
         );
         (scope, event, subscribers)
     };
+    let event = sanitize_event(event);
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
     NemoRelayContextState::emit_event(&event, &subscribers);
@@ -342,6 +346,7 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
         ));
         (event, subscribers)
     };
+    let event = sanitize_event(event);
     NemoRelayContextState::emit_event(&event, &subscribers);
     Ok(())
 }

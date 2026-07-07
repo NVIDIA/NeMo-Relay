@@ -198,7 +198,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 16);
+    assert_eq!(registrations.len(), 19);
     assert_eq!(
         registrations
             .iter()
@@ -453,6 +453,31 @@ async fn worker_service_invokes_every_registration_surface() {
         events.lock().expect("events lock").as_slice(),
         ["subscriber-event"]
     );
+
+    let mark_fields = invoke_json(
+        &mut client,
+        event_invoke_surface("mark-sanitize", RegistrationSurface::MarkSanitizeGuardrail),
+    )
+    .await;
+    assert_eq!(mark_fields["data"]["phase"], "mark");
+    let start_fields = invoke_json(
+        &mut client,
+        event_invoke_surface(
+            "scope-start-sanitize",
+            RegistrationSurface::ScopeSanitizeStartGuardrail,
+        ),
+    )
+    .await;
+    assert_eq!(start_fields["metadata"]["phase"], "scope_start");
+    let end_fields = invoke_json(
+        &mut client,
+        event_invoke_surface(
+            "scope-end-sanitize",
+            RegistrationSurface::ScopeSanitizeEndGuardrail,
+        ),
+    )
+    .await;
+    assert_eq!(end_fields["metadata"]["phase"], "scope_end");
 
     assert_json_field(
         invoke_json(
@@ -976,6 +1001,27 @@ async fn worker_service_reports_missing_handlers_and_malformed_payloads() {
     for (request, expected) in [
         (event_invoke("missing-subscriber"), "subscriber"),
         (
+            event_invoke_surface(
+                "missing-mark-sanitize",
+                RegistrationSurface::MarkSanitizeGuardrail,
+            ),
+            "event sanitizer",
+        ),
+        (
+            event_invoke_surface(
+                "missing-scope-start-sanitize",
+                RegistrationSurface::ScopeSanitizeStartGuardrail,
+            ),
+            "event sanitizer",
+        ),
+        (
+            event_invoke_surface(
+                "missing-scope-end-sanitize",
+                RegistrationSurface::ScopeSanitizeEndGuardrail,
+            ),
+            "event sanitizer",
+        ),
+        (
             tool_invoke(
                 "missing-tool-sanitize-request",
                 RegistrationSurface::ToolSanitizeRequestGuardrail,
@@ -1084,6 +1130,17 @@ async fn worker_service_reports_missing_handlers_and_malformed_payloads() {
             }))
             .await
             .expect("missing event payload returns structured error")
+            .into_inner(),
+        "expected event payload",
+    );
+    assert_worker_error(
+        client
+            .invoke(Request::new(InvokeRequest {
+                payload: None,
+                ..event_invoke_surface("mark-sanitize", RegistrationSurface::MarkSanitizeGuardrail)
+            }))
+            .await
+            .expect("missing sanitizer event payload returns structured error")
             .into_inner(),
         "expected event payload",
     );
@@ -1502,6 +1559,18 @@ impl WorkerPlugin for SurfacePlugin {
                 .lock()
                 .expect("events lock")
                 .push(event.name().into());
+        });
+        ctx.register_mark_sanitize_guardrail("mark-sanitize", 1, |event, mut fields| {
+            fields.data = Some(json!({"name": event.name(), "phase": "mark"}));
+            fields
+        });
+        ctx.register_scope_sanitize_start_guardrail("scope-start-sanitize", 1, |_, mut fields| {
+            fields.metadata = Some(json!({"phase": "scope_start"}));
+            fields
+        });
+        ctx.register_scope_sanitize_end_guardrail("scope-end-sanitize", 1, |_, mut fields| {
+            fields.metadata = Some(json!({"phase": "scope_end"}));
+            fields
         });
         ctx.register_tool_sanitize_request_guardrail("tool-sanitize", 1, |_, value| {
             set_json_field(value, "phase", "tool_sanitize_request")
@@ -2104,8 +2173,15 @@ fn invalid_json_env(schema: &str) -> JsonEnvelope {
 }
 
 fn event_invoke(registration_name: &str) -> InvokeRequest {
+    event_invoke_surface(registration_name, RegistrationSurface::Subscriber)
+}
+
+fn event_invoke_surface(registration_name: &str, surface: RegistrationSurface) -> InvokeRequest {
     let event = Event::Mark(MarkEvent::new(
-        BaseEvent::builder().name("subscriber-event").build(),
+        BaseEvent::builder()
+            .name("subscriber-event")
+            .data(json!({"raw": true}))
+            .build(),
         None,
         None,
     ));
@@ -2113,7 +2189,7 @@ fn event_invoke(registration_name: &str) -> InvokeRequest {
         activation_id: ACTIVATION_ID.into(),
         invocation_id: "invoke-1".into(),
         registration_name: registration_name.into(),
-        surface: RegistrationSurface::Subscriber as i32,
+        surface: surface as i32,
         continuation_id: "next-1".into(),
         scope: Some(scope_context()),
         auth_token: AUTH_TOKEN.into(),

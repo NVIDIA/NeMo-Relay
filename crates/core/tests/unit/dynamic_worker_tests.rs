@@ -376,7 +376,7 @@ async fn callback_helpers_cover_worker_response_edges() {
                     error: None,
                 })),
             },
-            "llm_json_invalid" => InvokeResponse {
+            "llm_json_invalid" | "event_fields_invalid" => InvokeResponse {
                 result: Some(InvokeResult::Json(JsonResult {
                     value: Some(json_envelope(JSON_SCHEMA, &json!(null)).expect("json envelope")),
                     error: None,
@@ -435,6 +435,19 @@ async fn callback_helpers_cover_worker_response_edges() {
         .invoke_subscriber("subscriber_unexpected", &event)
         .expect_err("unexpected subscriber result should fail");
     assert!(error.to_string().contains("subscriber returned unexpected"));
+
+    let error = callback
+        .invoke_event_sanitize(
+            "event_fields_invalid",
+            RegistrationSurface::MarkSanitizeGuardrail,
+            &event,
+        )
+        .expect_err("invalid event sanitizer fields should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("worker returned invalid event sanitize fields")
+    );
 
     let error = callback
         .invoke_llm_request_json(

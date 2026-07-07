@@ -10,8 +10,8 @@ pub mod state;
 pub mod subscriber_dispatcher;
 
 pub use callbacks::{
-    EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    EventSanitizeFn, EventSubscriberFn, LlmCollectorFn, LlmConditionalFn, LlmExecutionFn,
+    LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn,
     ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };

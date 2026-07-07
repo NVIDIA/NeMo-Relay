@@ -5,8 +5,8 @@ use std::ffi::c_void;
 use std::ptr;
 
 use nemo_relay_plugin::{
-    CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json, LlmJsonStream,
-    LlmRequest, LlmRequestInterceptOutcome, NemoRelayNativeHostApiV1,
+    CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
+    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NemoRelayNativeHostApiV1,
     NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayStatus,
     NemoRelayNativeToolNextFn, NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime,
     ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
@@ -47,6 +47,19 @@ impl NativePlugin for FixtureNativePlugin {
             let runtime = runtime.clone();
             move |event| subscriber_mark(&runtime, event)
         })?;
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
+            mark_event_fields(fields, "native_plugin_mark")
+        })?;
+        ctx.register_scope_sanitize_start_guardrail(
+            "fixture_scope_start_sanitize",
+            0,
+            |_, fields| mark_event_fields(fields, "native_plugin_scope_start"),
+        )?;
+        ctx.register_scope_sanitize_end_guardrail(
+            "fixture_scope_end_sanitize",
+            0,
+            |_, fields| mark_event_fields(fields, "native_plugin_scope_end"),
+        )?;
 
         ctx.register_tool_sanitize_request_guardrail(
             "fixture_tool_sanitize_request",
@@ -176,6 +189,13 @@ impl NativePlugin for FixtureNativePlugin {
 
         Ok(())
     }
+}
+
+fn mark_event_fields(mut fields: EventSanitizeFields, marker: &str) -> EventSanitizeFields {
+    let mut metadata = fields.metadata.unwrap_or_else(|| json!({}));
+    metadata[marker] = json!(true);
+    fields.metadata = Some(metadata);
+    fields
 }
 
 fn subscriber_mark(runtime: &PluginRuntime, event: &Event) {

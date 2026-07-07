@@ -102,11 +102,37 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         None,
         Some(outer_uuid),
     );
+    assert_eq!(
+        find_event(&captured_events, "fixture.worker.mark", None)
+            .metadata()
+            .unwrap()["worker_plugin_mark"],
+        true
+    );
     assert_parent(
         &captured_events,
         "fixture.worker.scope",
         Some(ScopeCategory::Start),
         Some(outer_uuid),
+    );
+    assert_eq!(
+        find_event(
+            &captured_events,
+            "fixture.worker.scope",
+            Some(ScopeCategory::Start),
+        )
+        .metadata()
+        .unwrap()["worker_plugin_scope_start"],
+        true
+    );
+    assert_eq!(
+        find_event(
+            &captured_events,
+            "fixture.worker.scope",
+            Some(ScopeCategory::End),
+        )
+        .metadata()
+        .unwrap()["worker_plugin_scope_end"],
+        true
     );
     assert_not_parent(
         &captured_events,
@@ -135,6 +161,10 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         tool_start.input().unwrap()["worker_plugin_tool_sanitize_request"],
         true
     );
+    assert_eq!(
+        tool_start.metadata().unwrap()["worker_plugin_scope_start"],
+        true
+    );
     let tool_end = find_event(
         &captured_events,
         "worker-fixture-tool",
@@ -144,9 +174,14 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         tool_end.output().unwrap()["worker_plugin_tool_sanitize_response"],
         true
     );
+    assert_eq!(
+        tool_end.metadata().unwrap()["worker_plugin_scope_end"],
+        true
+    );
     let tool_mark = find_event(&captured_events, "fixture.worker.tool_execution.mark", None);
     assert_eq!(tool_mark.parent_uuid(), Some(tool_start.uuid()));
     assert!(tool_mark.timestamp() > tool_end.timestamp());
+    assert_eq!(tool_mark.metadata().unwrap()["worker_plugin_mark"], true);
 
     let llm_execute_response = llm_call_execute(
         LlmCallExecuteParams::builder()
@@ -193,6 +228,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         "worker_request_intercept"
     );
     assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
+    assert_eq!(pending_mark.metadata().unwrap()["worker_plugin_mark"], true);
     let llm_end = find_event(
         &captured_events,
         "worker-fixture-llm-execute",

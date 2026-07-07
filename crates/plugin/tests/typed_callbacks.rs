@@ -14,10 +14,11 @@ use std::sync::{
 
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory,
-    Json, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSubscriberCb,
-    NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb,
-    NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
+    EventSanitizeFields, Json, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome,
+    LlmStream, LlmStreamNext, NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin,
+    NemoRelayNativeEventSanitizeCb, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
+    NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
     NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
     NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
@@ -35,6 +36,22 @@ struct RegisteredSubscriber {
     cb: NemoRelayNativeEventSubscriberCb,
     user_data: usize,
     free_fn: NemoRelayNativeFreeFn,
+}
+
+struct RegisteredEventSanitize {
+    name: String,
+    priority: i32,
+    cb: NemoRelayNativeEventSanitizeCb,
+    user_data: usize,
+    free_fn: NemoRelayNativeFreeFn,
+}
+
+impl RegisteredEventSanitize {
+    unsafe fn free(self) {
+        if let Some(free_fn) = self.free_fn {
+            unsafe { free_fn(self.user_data as *mut c_void) };
+        }
+    }
 }
 
 impl RegisteredSubscriber {
@@ -209,6 +226,7 @@ macro_rules! impl_captured_registration {
 
 impl_captured_registration!(
     RegisteredSubscriber,
+    RegisteredEventSanitize,
     RegisteredToolJson,
     RegisteredToolConditional,
     RegisteredToolExecution,
@@ -265,6 +283,7 @@ static SCOPE_STACK_FREES: AtomicUsize = AtomicUsize::new(0);
 static SCOPE_STACK_BINDING_FREES: AtomicUsize = AtomicUsize::new(0);
 static SCOPE_STACK_BINDING_RESTORES: AtomicUsize = AtomicUsize::new(0);
 static SUBSCRIBER_REGISTRATION: Mutex<Option<RegisteredSubscriber>> = Mutex::new(None);
+static EVENT_SANITIZE_REGISTRATION: Mutex<Option<RegisteredEventSanitize>> = Mutex::new(None);
 static TOOL_JSON_REGISTRATION: Mutex<Option<RegisteredToolJson>> = Mutex::new(None);
 static TOOL_CONDITIONAL_REGISTRATION: Mutex<Option<RegisteredToolConditional>> = Mutex::new(None);
 static TOOL_EXECUTION_REGISTRATION: Mutex<Option<RegisteredToolExecution>> = Mutex::new(None);
@@ -297,12 +316,13 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 272);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 296);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
-                152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264,
+                152, 160, 168, 176, 184, 192, 200, 208, 216, 224, 232, 240, 248, 256, 264, 272,
+                280, 288,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
@@ -316,12 +336,12 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 136);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 148);
         assert_eq!(
             host_api_offsets(),
             [
                 0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80,
-                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132,
+                84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
             ]
         );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
@@ -333,7 +353,7 @@ fn native_abi_v1_struct_sizes_are_self_describing() {
     }
 }
 
-fn host_api_offsets() -> [usize; 34] {
+fn host_api_offsets() -> [usize; 37] {
     [
         offset_of!(NemoRelayNativeHostApiV1, abi_version),
         offset_of!(NemoRelayNativeHostApiV1, struct_size),
@@ -402,6 +422,18 @@ fn host_api_offsets() -> [usize; 34] {
         offset_of!(NemoRelayNativeHostApiV1, scope_stack_binding_free),
         offset_of!(NemoRelayNativeHostApiV1, scope_stack_active),
         offset_of!(NemoRelayNativeHostApiV1, scope_stack_with_current),
+        offset_of!(
+            NemoRelayNativeHostApiV1,
+            plugin_context_register_mark_sanitize_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV1,
+            plugin_context_register_scope_sanitize_start_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV1,
+            plugin_context_register_scope_sanitize_end_guardrail
+        ),
     ]
 }
 
@@ -550,6 +582,15 @@ unsafe extern "C" fn passthrough_tool_json_cb(
     _name: *const NemoRelayNativeString,
     _payload_json: *const NemoRelayNativeString,
     _out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_event_sanitize_cb(
+    _user_data: *mut c_void,
+    _event_json: *const NemoRelayNativeString,
+    _fields_json: *const NemoRelayNativeString,
+    _out_fields_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
 }
@@ -1038,6 +1079,35 @@ unsafe extern "C" fn capture_scope_handle_free(handle: *mut NemoRelayNativeScope
         SCOPE_HANDLE_FREES.fetch_add(1, Ordering::SeqCst);
     }
 }
+
+unsafe extern "C" fn capture_event_sanitize(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    priority: i32,
+    cb: NemoRelayNativeEventSanitizeCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> NemoRelayStatus {
+    let status = *REGISTRATION_STATUS.lock().unwrap();
+    if status == NemoRelayStatus::Ok {
+        let host = test_host();
+        let name = match required_host_string(&host, name) {
+            Ok(name) => name,
+            Err(status) => return status,
+        };
+        replace_registration(
+            &EVENT_SANITIZE_REGISTRATION,
+            RegisteredEventSanitize {
+                name,
+                priority,
+                cb,
+                user_data: user_data as usize,
+                free_fn,
+            },
+        );
+    }
+    status
+}
 unsafe extern "C" fn capture_scope_stack_free(stack: *mut NemoRelayNativeScopeStack) {
     if !stack.is_null() {
         unsafe { drop(Box::from_raw(stack.cast::<u8>())) };
@@ -1092,6 +1162,9 @@ fn test_host() -> NemoRelayNativeHostApiV1 {
         scope_stack_binding_free: capture_scope_stack_binding_free,
         scope_stack_active: true_scope_stack_active,
         scope_stack_with_current: capture_scope_stack_with_current,
+        plugin_context_register_mark_sanitize_guardrail: capture_event_sanitize,
+        plugin_context_register_scope_sanitize_start_guardrail: capture_event_sanitize,
+        plugin_context_register_scope_sanitize_end_guardrail: capture_event_sanitize,
     }
 }
 
@@ -1105,6 +1178,7 @@ fn begin_test() -> MutexGuard<'static, ()> {
 
 fn reset_state() {
     clear_registration(&SUBSCRIBER_REGISTRATION);
+    clear_registration(&EVENT_SANITIZE_REGISTRATION);
     clear_registration(&TOOL_JSON_REGISTRATION);
     clear_registration(&TOOL_CONDITIONAL_REGISTRATION);
     clear_registration(&TOOL_EXECUTION_REGISTRATION);
@@ -1294,6 +1368,14 @@ fn take_subscriber_registration() -> RegisteredSubscriber {
         .unwrap()
         .take()
         .expect("subscriber callback should be registered")
+}
+
+fn take_event_sanitize_registration() -> RegisteredEventSanitize {
+    EVENT_SANITIZE_REGISTRATION
+        .lock()
+        .unwrap()
+        .take()
+        .expect("event sanitize callback should be registered")
 }
 
 fn take_tool_conditional_registration() -> RegisteredToolConditional {
@@ -2043,6 +2125,81 @@ fn typed_tool_sanitize_guardrails_transform_payloads() {
 }
 
 #[test]
+fn typed_event_sanitize_guardrails_transform_fields_for_every_surface() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_mark_sanitize_guardrail("mark-sanitize", 4, |event, mut fields| {
+        assert_eq!(event.name(), "checkpoint");
+        fields.data = Some(json!({"clean": true}));
+        fields.category_profile = None;
+        fields.metadata = Some(json!({"source": "native"}));
+        fields
+    })
+    .unwrap();
+
+    let registration = take_event_sanitize_registration();
+    assert_eq!(registration.name, "mark-sanitize");
+    assert_eq!(registration.priority, 4);
+    let event = json_host_string(
+        &host,
+        json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "name": "checkpoint",
+            "data": {"secret": "raw"}
+        }),
+    );
+    let fields = json_host_string(
+        &host,
+        serde_json::to_value(EventSanitizeFields {
+            data: Some(json!({"secret": "raw"})),
+            category_profile: Some(CategoryProfile::builder().subtype("raw").build()),
+            metadata: None,
+        })
+        .unwrap(),
+    );
+    let mut out = ptr::null_mut();
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            event,
+            fields,
+            &mut out,
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::Ok);
+    let output: EventSanitizeFields =
+        serde_json::from_value(read_json_and_free(&host, out)).unwrap();
+    assert_eq!(output.data, Some(json!({"clean": true})));
+    assert!(output.category_profile.is_none());
+    assert_eq!(output.metadata, Some(json!({"source": "native"})));
+    unsafe {
+        (host.string_free)(event);
+        (host.string_free)(fields);
+        registration.free();
+    }
+
+    let mut ctx = test_context(&host);
+    ctx.register_scope_sanitize_start_guardrail("scope-start-sanitize", 5, |_, fields| fields)
+        .unwrap();
+    let registration = take_event_sanitize_registration();
+    assert_eq!(registration.name, "scope-start-sanitize");
+    assert_eq!(registration.priority, 5);
+    unsafe { registration.free() };
+
+    let mut ctx = test_context(&host);
+    ctx.register_scope_sanitize_end_guardrail("scope-end-sanitize", 6, |_, fields| fields)
+        .unwrap();
+    let registration = take_event_sanitize_registration();
+    assert_eq!(registration.name, "scope-end-sanitize");
+    assert_eq!(registration.priority, 6);
+    unsafe { registration.free() };
+}
+
+#[test]
 fn typed_json_callbacks_report_output_allocation_failures() {
     let _guard = begin_test();
     let host = test_host();
@@ -2070,6 +2227,84 @@ fn typed_json_callbacks_report_output_allocation_failures() {
     unsafe {
         (host.string_free)(name);
         (host.string_free)(payload);
+        registration.free();
+    }
+
+    let mut ctx = test_context(&host);
+    ctx.register_mark_sanitize_guardrail("mark-sanitize", 0, |_, fields| fields)
+        .unwrap();
+    let registration = take_event_sanitize_registration();
+    let event = json_host_string(
+        &host,
+        json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "name": "checkpoint"
+        }),
+    );
+    let fields = json_host_string(&host, json!({}));
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = Some(0);
+    let status = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            event,
+            fields,
+            &mut out,
+        )
+    };
+    *STRING_NEW_REMAINING_SUCCESSES.lock().unwrap() = None;
+    assert_eq!(status, NemoRelayStatus::Internal);
+    assert!(out.is_null());
+    unsafe {
+        (host.string_free)(event);
+        (host.string_free)(fields);
+        registration.free();
+    }
+}
+
+#[test]
+fn typed_event_sanitize_callback_catches_panics() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+    ctx.register_mark_sanitize_guardrail("mark-sanitize", 0, |_, _| {
+        panic!("event sanitizer panic")
+    })
+    .unwrap();
+    let registration = take_event_sanitize_registration();
+    let event = json_host_string(
+        &host,
+        json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "name": "checkpoint"
+        }),
+    );
+    let fields = json_host_string(&host, json!({}));
+    let mut out = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                event,
+                fields,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::Internal
+    );
+    assert!(out.is_null());
+    assert_eq!(
+        LAST_ERROR.lock().unwrap().as_deref(),
+        Some("event sanitize callback panicked")
+    );
+    unsafe {
+        (host.string_free)(event);
+        (host.string_free)(fields);
         registration.free();
     }
 }
@@ -2386,6 +2621,43 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     );
     unsafe {
         (host.string_free)(event);
+        registration.free();
+    }
+
+    let mut ctx = test_context(&host);
+    ctx.register_mark_sanitize_guardrail("mark-sanitize", 0, |_, fields| fields)
+        .unwrap();
+    let registration = take_event_sanitize_registration();
+    let event = json_host_string(
+        &host,
+        json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "name": "checkpoint"
+        }),
+    );
+    let fields = json_host_string(&host, json!({}));
+    let mut out = ptr::null_mut();
+    assert_eq!(
+        unsafe { (registration.cb)(ptr::null_mut(), event, fields, &mut out) },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                event,
+                fields,
+                ptr::null_mut(),
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    unsafe {
+        (host.string_free)(event);
+        (host.string_free)(fields);
         registration.free();
     }
 
@@ -2730,6 +3002,58 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
     );
     unsafe {
         (host.string_free)(event);
+        registration.free();
+    }
+
+    let mut ctx = test_context(&host);
+    ctx.register_mark_sanitize_guardrail("mark-sanitize", 0, |_, fields| fields)
+        .unwrap();
+    let registration = take_event_sanitize_registration();
+    let invalid_event = host_string(&host, "{not json");
+    let fields = json_host_string(&host, json!({}));
+    let stale_out = host_string(&host, r#"{"stale":true}"#);
+    let mut out = stale_out;
+    assert_eq!(
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                invalid_event,
+                fields,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(out.is_null());
+    let event = json_host_string(
+        &host,
+        json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "name": "checkpoint"
+        }),
+    );
+    let invalid_fields = host_string(&host, "{not json");
+    assert_eq!(
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                event,
+                invalid_fields,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(out.is_null());
+    unsafe {
+        (host.string_free)(stale_out);
+        (host.string_free)(invalid_event);
+        (host.string_free)(fields);
+        (host.string_free)(event);
+        (host.string_free)(invalid_fields);
         registration.free();
     }
 
@@ -4527,6 +4851,70 @@ fn raw_registration_propagates_name_allocation_status() {
 
     assert_eq!(status, NemoRelayStatus::Internal);
     assert!(TOOL_JSON_REGISTRATION.lock().unwrap().is_none());
+}
+
+#[test]
+fn raw_event_sanitize_registrations_cover_every_surface() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+
+    assert_eq!(
+        unsafe {
+            ctx.register_mark_sanitize_guardrail_raw(
+                "raw-mark",
+                1,
+                passthrough_event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let registration = take_event_sanitize_registration();
+    assert_eq!(
+        (registration.name.as_str(), registration.priority),
+        ("raw-mark", 1)
+    );
+    unsafe { registration.free() };
+
+    assert_eq!(
+        unsafe {
+            ctx.register_scope_sanitize_start_guardrail_raw(
+                "raw-scope-start",
+                2,
+                passthrough_event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let registration = take_event_sanitize_registration();
+    assert_eq!(
+        (registration.name.as_str(), registration.priority),
+        ("raw-scope-start", 2)
+    );
+    unsafe { registration.free() };
+
+    assert_eq!(
+        unsafe {
+            ctx.register_scope_sanitize_end_guardrail_raw(
+                "raw-scope-end",
+                3,
+                passthrough_event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let registration = take_event_sanitize_registration();
+    assert_eq!(
+        (registration.name.as_str(), registration.priority),
+        ("raw-scope-end", 3)
+    );
+    unsafe { registration.free() };
 }
 
 #[test]

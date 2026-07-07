@@ -364,6 +364,24 @@ pub struct MarkEvent {
     pub category_profile: Option<CategoryProfile>,
 }
 
+/// Observability fields that event sanitizers may rewrite.
+///
+/// Event identity and lifecycle fields are intentionally excluded so sanitizer
+/// callbacks cannot alter correlation, ordering, or category semantics.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[builder(field_defaults(setter(into, strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
+pub struct EventSanitizeFields {
+    /// Application-defined event payload.
+    #[builder(default)]
+    pub data: Option<Json>,
+    /// Category-specific typed fields.
+    #[builder(default)]
+    pub category_profile: Option<CategoryProfile>,
+    /// Tracing and correlation metadata.
+    #[builder(default)]
+    pub metadata: Option<Json>,
+}
+
 /// Mark requested by middleware for materialization by a lifecycle owner.
 ///
 /// The runtime assigns the parent UUID, event UUID, and timestamp when it
@@ -535,6 +553,25 @@ impl Event {
         self.base().data.as_ref()
     }
 
+    /// Snapshot the observability fields that sanitizers may rewrite.
+    pub fn sanitize_fields(&self) -> EventSanitizeFields {
+        EventSanitizeFields {
+            data: self.base().data.clone(),
+            category_profile: self.category_profile().cloned(),
+            metadata: self.base().metadata.clone(),
+        }
+    }
+
+    /// Replace the observability fields controlled by event sanitizers.
+    pub fn apply_sanitize_fields(&mut self, fields: EventSanitizeFields) {
+        self.base_mut().data = fields.data;
+        self.base_mut().metadata = fields.metadata;
+        match self {
+            Self::Scope(event) => event.category_profile = fields.category_profile,
+            Self::Mark(event) => event.category_profile = fields.category_profile,
+        }
+    }
+
     /// Return the optional data schema.
     ///
     /// # Returns
@@ -664,6 +701,13 @@ impl Event {
         match self {
             Self::Scope(event) => &event.base,
             Self::Mark(event) => &event.base,
+        }
+    }
+
+    fn base_mut(&mut self) -> &mut BaseEvent {
+        match self {
+            Self::Scope(event) => &mut event.base,
+            Self::Mark(event) => &mut event.base,
         }
     }
 }

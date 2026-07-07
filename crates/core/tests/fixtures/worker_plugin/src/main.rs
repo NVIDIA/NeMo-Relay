@@ -6,7 +6,7 @@ use nemo_relay_worker::{
     ToolExecutionInterceptOutcome, WorkerSdkError, serve_plugin,
 };
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, Json, LlmRequest, PendingMarkSpec,
+    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest, PendingMarkSpec,
 };
 use serde_json::json;
 
@@ -61,6 +61,19 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         let runtime = ctx
             .runtime()
             .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
+            mark_event_fields(fields, "worker_plugin_mark")
+        });
+        ctx.register_scope_sanitize_start_guardrail(
+            "fixture_scope_start_sanitize",
+            0,
+            |_, fields| mark_event_fields(fields, "worker_plugin_scope_start"),
+        );
+        ctx.register_scope_sanitize_end_guardrail(
+            "fixture_scope_end_sanitize",
+            0,
+            |_, fields| mark_event_fields(fields, "worker_plugin_scope_end"),
+        );
         register_fixture_subscriber(ctx, runtime.clone());
         register_fixture_tool_hooks(
             ctx,
@@ -79,6 +92,13 @@ impl WorkerPlugin for FixtureWorkerPlugin {
 
 fn fixture_flag(config: &Json, key: &str) -> bool {
     config.get(key).and_then(Json::as_bool).unwrap_or(false)
+}
+
+fn mark_event_fields(mut fields: EventSanitizeFields, marker: &str) -> EventSanitizeFields {
+    let mut metadata = fields.metadata.unwrap_or_else(|| json!({}));
+    metadata[marker] = json!(true);
+    fields.metadata = Some(metadata);
+    fields
 }
 
 fn register_fixture_subscriber(ctx: &mut PluginContext, runtime: nemo_relay_worker::PluginRuntime) {

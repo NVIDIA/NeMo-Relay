@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
-    CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+    CategoryProfile, Event, EventCategory, EventSanitizeFields, PendingMarkSpec, ScopeCategory,
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
@@ -198,6 +198,14 @@ pub type NemoRelayNativeLlmStreamNextFn = unsafe extern "C" fn(
 pub type NemoRelayNativeEventSubscriberCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     event_json: *const NemoRelayNativeString,
+) -> NemoRelayStatus;
+
+/// Native event observability-field sanitizer callback.
+pub type NemoRelayNativeEventSanitizeCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    event_json: *const NemoRelayNativeString,
+    fields_json: *const NemoRelayNativeString,
+    out_fields_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus;
 
 /// Native JSON transform callback for tool request/response sanitizers and tool request intercepts.
@@ -495,6 +503,36 @@ pub struct NemoRelayNativeHostApiV1 {
         cb: NemoRelayNativeWithScopeStackCb,
         user_data: *mut c_void,
     ) -> NemoRelayStatus,
+    /// Registers a mark event sanitizer through the plugin context.
+    pub plugin_context_register_mark_sanitize_guardrail: unsafe extern "C" fn(
+        ctx: *mut NemoRelayNativePluginContext,
+        name: *const NemoRelayNativeString,
+        priority: i32,
+        cb: NemoRelayNativeEventSanitizeCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    )
+        -> NemoRelayStatus,
+    /// Registers a scope-start event sanitizer through the plugin context.
+    pub plugin_context_register_scope_sanitize_start_guardrail:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeEventSanitizeCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
+    /// Registers a scope-end event sanitizer through the plugin context.
+    pub plugin_context_register_scope_sanitize_end_guardrail:
+        unsafe extern "C" fn(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeEventSanitizeCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
 }
 
 // The host API table is immutable after construction. Function pointers and
@@ -1243,6 +1281,97 @@ impl<'a> PluginContext<'a> {
         finish_typed_registration::<F>(self.host, status, user_data, "subscriber")
     }
 
+    fn register_event_sanitizer<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+        register: unsafe extern "C" fn(
+            *mut NemoRelayNativePluginContext,
+            *const NemoRelayNativeString,
+            i32,
+            NemoRelayNativeEventSanitizeCb,
+            *mut c_void,
+            NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus,
+        label: &str,
+    ) -> Result<()>
+    where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        let user_data = typed_callback_user_data(self.host, callback);
+        let status = self.with_name(name, |_, name| unsafe {
+            register(
+                self.raw,
+                name,
+                priority,
+                typed_event_sanitize_trampoline::<F>,
+                user_data,
+                Some(drop_typed_callback::<F>),
+            )
+        });
+        finish_typed_registration::<F>(self.host, status, user_data, label)
+    }
+
+    /// Registers a typed mark event sanitizer.
+    pub fn register_mark_sanitize_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            callback,
+            self.host.plugin_context_register_mark_sanitize_guardrail,
+            "mark sanitize guardrail",
+        )
+    }
+
+    /// Registers a typed scope-start event sanitizer.
+    pub fn register_scope_sanitize_start_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            callback,
+            self.host
+                .plugin_context_register_scope_sanitize_start_guardrail,
+            "scope-start sanitize guardrail",
+        )
+    }
+
+    /// Registers a typed scope-end event sanitizer.
+    pub fn register_scope_sanitize_end_guardrail<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+    {
+        self.register_event_sanitizer(
+            name,
+            priority,
+            callback,
+            self.host
+                .plugin_context_register_scope_sanitize_end_guardrail,
+            "scope-end sanitize guardrail",
+        )
+    }
+
     /// Registers a typed tool sanitize-request guardrail.
     pub fn register_tool_sanitize_request_guardrail<F>(
         &mut self,
@@ -1566,6 +1695,69 @@ impl<'a> PluginContext<'a> {
     ) -> NemoRelayStatus {
         self.with_name(name, |host, name| unsafe {
             (host.plugin_context_register_subscriber)(self.raw, name, cb, user_data, free_fn)
+        })
+    }
+
+    /// Registers a raw mark event sanitizer callback.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid for every host
+    /// callback invocation until the host deregisters the callback or calls
+    /// `free_fn`. `free_fn` must match the allocation behind `user_data`.
+    pub unsafe fn register_mark_sanitize_guardrail_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeEventSanitizeCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        self.with_name(name, |host, name| unsafe {
+            (host.plugin_context_register_mark_sanitize_guardrail)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers a raw scope-start event sanitizer callback.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid for every host
+    /// callback invocation until the host deregisters the callback or calls
+    /// `free_fn`. `free_fn` must match the allocation behind `user_data`.
+    pub unsafe fn register_scope_sanitize_start_guardrail_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeEventSanitizeCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        self.with_name(name, |host, name| unsafe {
+            (host.plugin_context_register_scope_sanitize_start_guardrail)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
+        })
+    }
+
+    /// Registers a raw scope-end event sanitizer callback.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid for every host
+    /// callback invocation until the host deregisters the callback or calls
+    /// `free_fn`. `free_fn` must match the allocation behind `user_data`.
+    pub unsafe fn register_scope_sanitize_end_guardrail_raw(
+        &mut self,
+        name: &str,
+        priority: i32,
+        cb: NemoRelayNativeEventSanitizeCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        self.with_name(name, |host, name| unsafe {
+            (host.plugin_context_register_scope_sanitize_end_guardrail)(
+                self.raw, name, priority, cb, user_data, free_fn,
+            )
         })
     }
 
@@ -1899,6 +2091,34 @@ where
         Ok(Ok(())) => NemoRelayStatus::Ok,
         Ok(Err(status)) => status,
         Err(_) => callback_panic(&state.host, "subscriber callback"),
+    }
+}
+
+unsafe extern "C" fn typed_event_sanitize_trampoline<F>(
+    user_data: *mut c_void,
+    event_json: *const NemoRelayNativeString,
+    fields_json: *const NemoRelayNativeString,
+    out_fields_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus
+where
+    F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
+{
+    if user_data.is_null() || out_fields_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_fields_json = ptr::null_mut() };
+    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let event: Event = read_json_value(&state.host, event_json, "event")?;
+        let fields: EventSanitizeFields =
+            read_json_value(&state.host, fields_json, "event sanitize fields")?;
+        let output = (state.callback)(&event, fields);
+        Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_fields_json))
+    }));
+    match result {
+        Ok(Ok(status)) => status,
+        Ok(Err(status)) => status,
+        Err(_) => callback_panic(&state.host, "event sanitize callback"),
     }
 }
 

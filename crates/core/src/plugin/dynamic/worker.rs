@@ -51,7 +51,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tower::service_fn;
 
-use crate::api::event::Event;
+use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::LlmRequest;
 use crate::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
@@ -812,6 +812,29 @@ impl WorkerPluginInstance {
                         }),
                     )?;
                 }
+                RegistrationSurface::MarkSanitizeGuardrail
+                | RegistrationSurface::ScopeSanitizeStartGuardrail
+                | RegistrationSurface::ScopeSanitizeEndGuardrail => {
+                    let instance = Arc::new(self.clone_for_callback());
+                    let callback_name = name.clone();
+                    let callback = Arc::new(move |event: &Event, fields: EventSanitizeFields| {
+                        instance
+                            .invoke_event_sanitize(&callback_name, surface, event)
+                            .unwrap_or(fields)
+                    });
+                    match surface {
+                        RegistrationSurface::MarkSanitizeGuardrail => {
+                            ctx.register_mark_sanitize_guardrail(&name, priority, callback)?
+                        }
+                        RegistrationSurface::ScopeSanitizeStartGuardrail => {
+                            ctx.register_scope_sanitize_start_guardrail(&name, priority, callback)?
+                        }
+                        RegistrationSurface::ScopeSanitizeEndGuardrail => {
+                            ctx.register_scope_sanitize_end_guardrail(&name, priority, callback)?
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 RegistrationSurface::ToolSanitizeRequestGuardrail => {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
@@ -1141,6 +1164,26 @@ impl WorkerPluginCallback {
                 "worker subscriber returned unexpected result".into(),
             )),
         }
+    }
+
+    fn invoke_event_sanitize(
+        &self,
+        registration_name: &str,
+        surface: RegistrationSurface,
+        event: &Event,
+    ) -> FlowResult<EventSanitizeFields> {
+        let request = self.base_request(
+            registration_name,
+            surface,
+            None,
+            Some(invoke_request_payload_event(event)),
+        );
+        let value = json_from_invoke_response(self.invoke_blocking(request)?)?;
+        serde_json::from_value(value).map_err(|err| {
+            FlowError::Internal(format!(
+                "worker returned invalid event sanitize fields: {err}"
+            ))
+        })
     }
 
     fn invoke_tool_json(

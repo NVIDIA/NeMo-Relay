@@ -38,6 +38,9 @@ fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::LlmRequestIntercept as i32, 23);
     assert_eq!(RegistrationSurface::LlmExecutionIntercept as i32, 24);
     assert_eq!(RegistrationSurface::LlmStreamExecutionIntercept as i32, 25);
+    assert_eq!(RegistrationSurface::MarkSanitizeGuardrail as i32, 30);
+    assert_eq!(RegistrationSurface::ScopeSanitizeStartGuardrail as i32, 31);
+    assert_eq!(RegistrationSurface::ScopeSanitizeEndGuardrail as i32, 32);
 }
 
 #[test]

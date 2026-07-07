@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use crate::api::event::{Event, ScopeCategory};
 use crate::api::llm::LlmRequest;
-use crate::api::runtime::EventSubscriberFn;
 use crate::api::runtime::global_context;
+use crate::api::runtime::{EventSubscriberFn, NemoRelayContextState, ScopeStackHandle};
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
 use crate::api::scope::ScopeType;
@@ -38,6 +39,56 @@ pub(crate) fn snapshot_event_subscribers(
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?;
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
+}
+
+/// Apply the event sanitizer chain visible on the current scope stack.
+pub(crate) fn sanitize_event(event: Event) -> Event {
+    sanitize_event_with_scope_stack(event, &current_scope_stack())
+}
+
+/// Apply the event sanitizer chain visible on a captured scope stack.
+pub(crate) fn sanitize_event_with_scope_stack(
+    event: Event,
+    scope_stack: &ScopeStackHandle,
+) -> Event {
+    let entries = {
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let context = global_context();
+        let state = match context.read() {
+            Ok(state) => state,
+            Err(_) => return event,
+        };
+        match &event {
+            Event::Mark(_) => {
+                let locals = scope_guard.collect_scope_local_registries(|registries| {
+                    &registries.mark_sanitize_guardrails
+                });
+                NemoRelayContextState::event_sanitize_entries(
+                    &state.mark_sanitize_guardrails,
+                    &locals,
+                )
+            }
+            Event::Scope(scope) if scope.scope_category == ScopeCategory::Start => {
+                let locals = scope_guard.collect_scope_local_registries(|registries| {
+                    &registries.scope_sanitize_start_guardrails
+                });
+                NemoRelayContextState::event_sanitize_entries(
+                    &state.scope_sanitize_start_guardrails,
+                    &locals,
+                )
+            }
+            Event::Scope(_) => {
+                let locals = scope_guard.collect_scope_local_registries(|registries| {
+                    &registries.scope_sanitize_end_guardrails
+                });
+                NemoRelayContextState::event_sanitize_entries(
+                    &state.scope_sanitize_end_guardrails,
+                    &locals,
+                )
+            }
+        }
+    };
+    NemoRelayContextState::event_sanitize_snapshot_chain(event, &entries)
 }
 
 pub(crate) fn ensure_runtime_owner() -> Result<()> {

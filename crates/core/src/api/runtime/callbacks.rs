@@ -14,12 +14,19 @@ use std::sync::Arc;
 
 use tokio_stream::Stream;
 
-use crate::api::event::Event;
+use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::Result;
 use crate::json::Json;
+
+/// Sanitize mutable observability fields on a fully constructed event.
+///
+/// The callback receives the current event as immutable context and the fields
+/// it may replace. Later callbacks observe fields returned by earlier entries.
+pub type EventSanitizeFn =
+    Arc<dyn Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync>;
 
 /// Sanitize a tool request payload before the runtime records it.
 ///

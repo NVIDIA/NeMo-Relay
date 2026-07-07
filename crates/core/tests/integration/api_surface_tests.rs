@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::StreamExt;
-use nemo_relay::api::event::{Event, ScopeCategory};
+use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_call_end,
@@ -20,18 +20,22 @@ use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
+    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     scope_deregister_llm_conditional_execution_guardrail, scope_deregister_llm_execution_intercept,
     scope_deregister_llm_request_intercept, scope_deregister_llm_sanitize_request_guardrail,
     scope_deregister_llm_sanitize_response_guardrail,
-    scope_deregister_llm_stream_execution_intercept,
+    scope_deregister_llm_stream_execution_intercept, scope_deregister_mark_sanitize_guardrail,
+    scope_deregister_scope_sanitize_end_guardrail, scope_deregister_scope_sanitize_start_guardrail,
     scope_deregister_tool_conditional_execution_guardrail,
     scope_deregister_tool_execution_intercept, scope_deregister_tool_request_intercept,
     scope_deregister_tool_sanitize_request_guardrail,
@@ -39,6 +43,8 @@ use nemo_relay::api::registry::{
     scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
     scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
     scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
+    scope_register_mark_sanitize_guardrail, scope_register_scope_sanitize_end_guardrail,
+    scope_register_scope_sanitize_start_guardrail,
     scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
     scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
@@ -69,6 +75,209 @@ fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
+}
+
+#[test]
+fn event_sanitizers_rewrite_only_observability_fields_in_priority_order() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    let events = capture_events("event-sanitizer-fields");
+
+    register_scope_sanitize_start_guardrail(
+        "scope-start-late",
+        20,
+        Arc::new(|event, mut fields| {
+            assert_eq!(event.data().unwrap()["order"], json!(["early"]));
+            fields.data = Some(json!({"order": ["early", "late"]}));
+            fields
+        }),
+    )
+    .unwrap();
+    register_scope_sanitize_start_guardrail(
+        "scope-start-early",
+        10,
+        Arc::new(|_, mut fields| {
+            fields.data = Some(json!({"order": ["early"]}));
+            fields.metadata = Some(json!({"redacted": true}));
+            fields.category_profile = Some(CategoryProfile::builder().subtype("sanitized").build());
+            fields
+        }),
+    )
+    .unwrap();
+
+    let handle = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("sanitized-scope")
+            .scope_type(ScopeType::Custom)
+            .input(json!({"secret": "raw"}))
+            .metadata(json!({"secret": "raw"}))
+            .build(),
+    )
+    .unwrap();
+    let snapshot = captured_events_snapshot(&events);
+    let start = snapshot
+        .iter()
+        .find(|event| event.name() == "sanitized-scope")
+        .unwrap();
+    assert_eq!(start.data().unwrap(), &json!({"order": ["early", "late"]}));
+    assert_eq!(start.metadata().unwrap(), &json!({"redacted": true}));
+    assert_eq!(
+        start.category_profile().unwrap().subtype.as_deref(),
+        Some("sanitized")
+    );
+    assert_eq!(start.uuid(), handle.uuid);
+    assert_eq!(start.category().unwrap().as_str(), "custom");
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&handle.uuid)
+            .build(),
+    )
+    .unwrap();
+    deregister_scope_sanitize_start_guardrail("scope-start-early").unwrap();
+    deregister_scope_sanitize_start_guardrail("scope-start-late").unwrap();
+    deregister_subscriber("event-sanitizer-fields").unwrap();
+}
+
+#[test]
+fn mark_and_scope_local_sanitizers_cover_marks_and_tool_scopes() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    let events = capture_events("event-sanitizer-kinds");
+    register_mark_sanitize_guardrail(
+        "mark-global",
+        20,
+        Arc::new(|_, mut fields| {
+            fields.data = Some(json!({"mark": "global"}));
+            fields
+        }),
+    )
+    .unwrap();
+    register_scope_sanitize_end_guardrail(
+        "scope-end-global",
+        20,
+        Arc::new(|_, mut fields| {
+            fields.metadata = Some(json!({"scope_end": true}));
+            fields
+        }),
+    )
+    .unwrap();
+
+    let owner = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("owner")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_mark_sanitize_guardrail(
+        &owner.uuid,
+        "mark-local",
+        10,
+        Arc::new(|_, mut fields| {
+            fields.data = Some(json!({"mark": "local"}));
+            fields
+        }),
+    )
+    .unwrap();
+    scope_register_scope_sanitize_start_guardrail(
+        &owner.uuid,
+        "scope-start-local",
+        10,
+        Arc::new(|_, mut fields| {
+            fields.metadata = Some(json!({"scope_start": true}));
+            fields
+        }),
+    )
+    .unwrap();
+    scope_register_scope_sanitize_end_guardrail(
+        &owner.uuid,
+        "scope-end-local",
+        10,
+        Arc::new(|_, mut fields| {
+            fields.data = Some(json!({"scope_end": "local"}));
+            fields
+        }),
+    )
+    .unwrap();
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("sanitized-mark")
+            .data(json!({"secret": "raw"}))
+            .build(),
+    )
+    .unwrap();
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("sanitized-empty-mark")
+            .build(),
+    )
+    .unwrap();
+    let tool = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("sanitized-tool")
+            .args(json!({"input": true}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&tool)
+            .result(json!({"output": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let snapshot = captured_events_snapshot(&events);
+    let mark = snapshot
+        .iter()
+        .find(|event| event.name() == "sanitized-mark")
+        .unwrap();
+    assert_eq!(mark.data().unwrap(), &json!({"mark": "global"}));
+    let empty_mark = snapshot
+        .iter()
+        .find(|event| event.name() == "sanitized-empty-mark")
+        .unwrap();
+    assert_eq!(empty_mark.data().unwrap(), &json!({"mark": "global"}));
+    let tool_start = snapshot
+        .iter()
+        .find(|event| {
+            event.name() == "sanitized-tool" && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    assert_eq!(tool_start.category().unwrap().as_str(), "tool");
+    assert_eq!(
+        tool_start.metadata().unwrap(),
+        &json!({"scope_start": true})
+    );
+    let tool_end = snapshot
+        .iter()
+        .find(|event| {
+            event.name() == "sanitized-tool" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(tool_end.data().unwrap(), &json!({"scope_end": "local"}));
+    assert_eq!(tool_end.metadata().unwrap(), &json!({"scope_end": true}));
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&owner.uuid)
+            .build(),
+    )
+    .unwrap();
+    let snapshot = captured_events_snapshot(&events);
+    let owner_end = snapshot
+        .iter()
+        .find(|event| event.name() == "owner" && event.scope_category() == Some(ScopeCategory::End))
+        .unwrap();
+    assert_eq!(owner_end.data().unwrap(), &json!({"scope_end": "local"}));
+    assert_eq!(owner_end.metadata().unwrap(), &json!({"scope_end": true}));
+    deregister_mark_sanitize_guardrail("mark-global").unwrap();
+    deregister_scope_sanitize_end_guardrail("scope-end-global").unwrap();
+    deregister_subscriber("event-sanitizer-kinds").unwrap();
 }
 
 fn setup_isolated_thread() {
@@ -353,6 +562,29 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
     reset_global();
     setup_isolated_thread();
 
+    register_mark_sanitize_guardrail("mark-sanitize", 1, Arc::new(|_, fields| fields)).unwrap();
+    expect_already_exists(
+        register_mark_sanitize_guardrail("mark-sanitize", 1, Arc::new(|_, fields| fields))
+            .unwrap_err(),
+        "mark-sanitize",
+    );
+    assert!(deregister_mark_sanitize_guardrail("mark-sanitize").unwrap());
+    assert!(!deregister_mark_sanitize_guardrail("mark-sanitize").unwrap());
+
+    register_scope_sanitize_start_guardrail(
+        "scope-start-sanitize",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
+    assert!(deregister_scope_sanitize_start_guardrail("scope-start-sanitize").unwrap());
+    assert!(!deregister_scope_sanitize_start_guardrail("scope-start-sanitize").unwrap());
+
+    register_scope_sanitize_end_guardrail("scope-end-sanitize", 1, Arc::new(|_, fields| fields))
+        .unwrap();
+    assert!(deregister_scope_sanitize_end_guardrail("scope-end-sanitize").unwrap());
+    assert!(!deregister_scope_sanitize_end_guardrail("scope-end-sanitize").unwrap());
+
     register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
@@ -510,6 +742,56 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     )
     .unwrap();
 
+    scope_register_mark_sanitize_guardrail(
+        &scope.uuid,
+        "mark-sanitize",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
+    expect_already_exists(
+        scope_register_mark_sanitize_guardrail(
+            &scope.uuid,
+            "mark-sanitize",
+            1,
+            Arc::new(|_, fields| fields),
+        )
+        .unwrap_err(),
+        "mark-sanitize",
+    );
+    assert!(scope_deregister_mark_sanitize_guardrail(&scope.uuid, "mark-sanitize").unwrap());
+    assert!(!scope_deregister_mark_sanitize_guardrail(&scope.uuid, "mark-sanitize").unwrap());
+
+    scope_register_scope_sanitize_start_guardrail(
+        &scope.uuid,
+        "scope-start-sanitize",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
+    assert!(
+        scope_deregister_scope_sanitize_start_guardrail(&scope.uuid, "scope-start-sanitize")
+            .unwrap()
+    );
+    assert!(
+        !scope_deregister_scope_sanitize_start_guardrail(&scope.uuid, "scope-start-sanitize")
+            .unwrap()
+    );
+
+    scope_register_scope_sanitize_end_guardrail(
+        &scope.uuid,
+        "scope-end-sanitize",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
+    assert!(
+        scope_deregister_scope_sanitize_end_guardrail(&scope.uuid, "scope-end-sanitize").unwrap()
+    );
+    assert!(
+        !scope_deregister_scope_sanitize_end_guardrail(&scope.uuid, "scope-end-sanitize").unwrap()
+    );
+
     scope_register_tool_sanitize_request_guardrail(
         &scope.uuid,
         "tool-sanitize-request",
@@ -665,6 +947,36 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
     .unwrap();
 
     expect_not_found(
+        scope_register_mark_sanitize_guardrail(
+            &scope.uuid,
+            "missing-mark-sanitize",
+            1,
+            Arc::new(|_, fields| fields),
+        )
+        .unwrap_err(),
+        "scope",
+    );
+    expect_not_found(
+        scope_register_scope_sanitize_start_guardrail(
+            &scope.uuid,
+            "missing-scope-start-sanitize",
+            1,
+            Arc::new(|_, fields| fields),
+        )
+        .unwrap_err(),
+        "scope",
+    );
+    expect_not_found(
+        scope_register_scope_sanitize_end_guardrail(
+            &scope.uuid,
+            "missing-scope-end-sanitize",
+            1,
+            Arc::new(|_, fields| fields),
+        )
+        .unwrap_err(),
+        "scope",
+    );
+    expect_not_found(
         scope_register_tool_sanitize_request_guardrail(
             &scope.uuid,
             "missing-tool-sanitize",
@@ -733,6 +1045,30 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         }),
     )
     .unwrap();
+    register_scope_sanitize_start_guardrail(
+        "tool-generic-sanitize-start",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "tool-api" {
+                assert_eq!(event.input().unwrap()["sanitized_request"], true);
+                fields.metadata = Some(json!({"generic_start": true}));
+            }
+            fields
+        }),
+    )
+    .unwrap();
+    register_scope_sanitize_end_guardrail(
+        "tool-generic-sanitize-end",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "tool-api" {
+                assert_eq!(event.output().unwrap()["sanitized_response"], true);
+                fields.metadata = Some(json!({"generic_end": true}));
+            }
+            fields
+        }),
+    )
+    .unwrap();
 
     let handle = tool_call(
         nemo_relay::api::tool::ToolCallParams::builder()
@@ -764,6 +1100,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         json!(true)
     );
     assert_eq!(captured[0].tool_call_id(), Some("tool-call-id"));
+    assert_eq!(captured[0].metadata().unwrap()["generic_start"], true);
     assert_eq!(captured[1].kind(), "scope");
     assert_eq!(captured[1].scope_category(), Some(ScopeCategory::End));
     assert_eq!(captured[1].category().unwrap().as_str(), "tool");
@@ -772,8 +1109,11 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
         json!(true)
     );
     assert_eq!(captured[1].tool_call_id(), Some("tool-call-id"));
+    assert_eq!(captured[1].metadata().unwrap()["generic_end"], true);
     deregister_tool_sanitize_request_guardrail("tool-sanitize-request").unwrap();
     deregister_tool_sanitize_response_guardrail("tool-sanitize-response").unwrap();
+    deregister_scope_sanitize_start_guardrail("tool-generic-sanitize-start").unwrap();
+    deregister_scope_sanitize_end_guardrail("tool-generic-sanitize-end").unwrap();
 
     register_tool_request_intercept(
         "tool-request",
@@ -1037,6 +1377,16 @@ async fn test_llm_stream_chunk_marks_track_successful_chunks() {
     setup_isolated_thread();
 
     let events = capture_events("llm-stream-chunk-mark-events");
+    register_mark_sanitize_guardrail(
+        "stream-mark-sanitize",
+        1,
+        Arc::new(|event, mut fields| {
+            assert_eq!(event.name(), "llm.chunk");
+            fields.metadata = Some(json!({"sanitized": true}));
+            fields
+        }),
+    )
+    .unwrap();
     let raw_chunks = vec![
         json!({
             "object": "chat.completion.chunk",
@@ -1094,6 +1444,7 @@ async fn test_llm_stream_chunk_marks_track_successful_chunks() {
         assert_eq!(mark.parent_uuid(), Some(llm_uuid));
         assert_eq!(mark.category(), None);
         assert_eq!(mark.scope_type(), None);
+        assert_eq!(mark.metadata().unwrap(), &json!({"sanitized": true}));
     }
     assert_eq!(
         captured[1].data().unwrap(),
@@ -1109,6 +1460,7 @@ async fn test_llm_stream_chunk_marks_track_successful_chunks() {
         &json!({"chunk_index": 1, "provider": "unknown"})
     );
 
+    deregister_mark_sanitize_guardrail("stream-mark-sanitize").unwrap();
     deregister_subscriber("llm-stream-chunk-mark-events").unwrap();
 }
 

@@ -23,17 +23,20 @@ use crate::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
+    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
 use crate::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -313,6 +316,89 @@ impl PluginRegistrationContext {
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
                             "subscriber deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a mark event sanitizer and records its rollback closure.
+    pub fn register_mark_sanitize_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_mark_sanitize_guardrail(&qualified_name, priority, callback)
+            .map_err(|err| PluginError::RegistrationFailed(format!("mark sanitizer: {err}")))?;
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_mark_sanitize_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "mark sanitizer deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a scope-start event sanitizer and records its rollback closure.
+    pub fn register_scope_sanitize_start_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_scope_sanitize_start_guardrail(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("scope-start sanitizer: {err}")),
+        )?;
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_scope_sanitize_start_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "scope-start sanitizer deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a scope-end event sanitizer and records its rollback closure.
+    pub fn register_scope_sanitize_end_guardrail(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventSanitizeFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_scope_sanitize_end_guardrail(&qualified_name, priority, callback).map_err(
+            |err| PluginError::RegistrationFailed(format!("scope-end sanitizer: {err}")),
+        )?;
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_scope_sanitize_end_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "scope-end sanitizer deregistration failed: {err}"
                         ))
                     })
             }),

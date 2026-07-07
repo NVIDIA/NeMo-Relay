@@ -5,7 +5,7 @@
 //! intercepts, and subscribers.
 
 use crate::api::runtime::{
-    LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    EventSanitizeFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
     ToolInterceptFn, ToolSanitizeFn,
 };
@@ -468,6 +468,31 @@ macro_rules! scope_execution_registry_api {
 }
 
 global_guardrail_registry_api!(
+    /// Register a global mark event sanitizer.
+    register_mark_sanitize_guardrail,
+    /// Deregister a global mark event sanitizer.
+    deregister_mark_sanitize_guardrail,
+    mark_sanitize_guardrails,
+    EventSanitizeFn
+);
+global_guardrail_registry_api!(
+    /// Register a global scope-start event sanitizer.
+    register_scope_sanitize_start_guardrail,
+    /// Deregister a global scope-start event sanitizer.
+    deregister_scope_sanitize_start_guardrail,
+    scope_sanitize_start_guardrails,
+    EventSanitizeFn
+);
+global_guardrail_registry_api!(
+    /// Register a global scope-end event sanitizer.
+    register_scope_sanitize_end_guardrail,
+    /// Deregister a global scope-end event sanitizer.
+    deregister_scope_sanitize_end_guardrail,
+    scope_sanitize_end_guardrails,
+    EventSanitizeFn
+);
+
+global_guardrail_registry_api!(
     /// Register a global tool sanitize-request guardrail.
     /// The guardrail rewrites only the tool input recorded on emitted start
     /// events.
@@ -577,6 +602,31 @@ global_execution_registry_api!(
     deregister_llm_stream_execution_intercept,
     llm_stream_execution_intercepts,
     LlmStreamExecutionFn
+);
+
+scope_guardrail_registry_api!(
+    /// Register a scope-local mark event sanitizer.
+    scope_register_mark_sanitize_guardrail,
+    /// Deregister a scope-local mark event sanitizer.
+    scope_deregister_mark_sanitize_guardrail,
+    mark_sanitize_guardrails,
+    EventSanitizeFn
+);
+scope_guardrail_registry_api!(
+    /// Register a scope-local scope-start event sanitizer.
+    scope_register_scope_sanitize_start_guardrail,
+    /// Deregister a scope-local scope-start event sanitizer.
+    scope_deregister_scope_sanitize_start_guardrail,
+    scope_sanitize_start_guardrails,
+    EventSanitizeFn
+);
+scope_guardrail_registry_api!(
+    /// Register a scope-local scope-end event sanitizer.
+    scope_register_scope_sanitize_end_guardrail,
+    /// Deregister a scope-local scope-end event sanitizer.
+    scope_deregister_scope_sanitize_end_guardrail,
+    scope_sanitize_end_guardrails,
+    EventSanitizeFn
 );
 
 scope_guardrail_registry_api!(

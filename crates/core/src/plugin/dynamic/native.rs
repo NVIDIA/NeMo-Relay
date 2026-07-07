@@ -15,15 +15,15 @@ use std::task::{Context, Poll};
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn,
-    NemoRelayNativeHostApiV1, NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb,
-    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCb,
-    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginEntry,
-    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
-    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
-    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
-    NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NemoRelayNativeEventSanitizeCb,
+    NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
+    NemoRelayNativeJsonCb, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
+    NemoRelayNativeLlmRequestCb, NemoRelayNativeLlmRequestInterceptCb,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginEntry, NemoRelayNativePluginV1, NemoRelayNativeScopeHandle,
+    NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType,
+    NemoRelayNativeString, NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb,
+    NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
@@ -31,13 +31,13 @@ use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 
-use crate::api::event::Event;
+use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
+    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -597,6 +597,12 @@ fn native_host_api() -> *const NemoRelayNativeHostApiV1 {
         scope_stack_binding_free: native_scope_stack_binding_free,
         scope_stack_active: native_scope_stack_active,
         scope_stack_with_current: native_scope_stack_with_current,
+        plugin_context_register_mark_sanitize_guardrail:
+            native_plugin_context_register_mark_sanitize_guardrail,
+        plugin_context_register_scope_sanitize_start_guardrail:
+            native_plugin_context_register_scope_sanitize_start_guardrail,
+        plugin_context_register_scope_sanitize_end_guardrail:
+            native_plugin_context_register_scope_sanitize_end_guardrail,
     }) as *const _
 }
 
@@ -1401,6 +1407,52 @@ unsafe extern "C" fn native_plugin_context_register_llm_stream_execution_interce
     }
 }
 
+macro_rules! native_event_sanitize_context_register {
+    ($fn_name:ident, $ctx_method:ident) => {
+        unsafe extern "C" fn $fn_name(
+            ctx: *mut NemoRelayNativePluginContext,
+            name: *const NemoRelayNativeString,
+            priority: i32,
+            cb: NemoRelayNativeEventSanitizeCb,
+            user_data: *mut c_void,
+            free_fn: NemoRelayNativeFreeFn,
+        ) -> NemoRelayStatus {
+            clear_native_last_error();
+            let host_ctx = match host_ctx_mut(ctx) {
+                Ok(ctx) => ctx,
+                Err(status) => return status,
+            };
+            let instance = host_ctx.instance.clone();
+            let ctx = unsafe { &mut *host_ctx.ctx };
+            let name = match read_name(name) {
+                Ok(name) => name,
+                Err(status) => return status,
+            };
+            match ctx.$ctx_method(
+                &name,
+                priority,
+                wrap_event_sanitize_fn(instance, cb, user_data, free_fn),
+            ) {
+                Ok(()) => NemoRelayStatus::Ok,
+                Err(err) => status_from_plugin_error(err),
+            }
+        }
+    };
+}
+
+native_event_sanitize_context_register!(
+    native_plugin_context_register_mark_sanitize_guardrail,
+    register_mark_sanitize_guardrail
+);
+native_event_sanitize_context_register!(
+    native_plugin_context_register_scope_sanitize_start_guardrail,
+    register_scope_sanitize_start_guardrail
+);
+native_event_sanitize_context_register!(
+    native_plugin_context_register_scope_sanitize_end_guardrail,
+    register_scope_sanitize_end_guardrail
+);
+
 fn wrap_event_subscriber(
     instance: Arc<NativePluginInstance>,
     cb: NemoRelayNativeEventSubscriberCb,
@@ -1418,6 +1470,62 @@ fn wrap_event_subscriber(
             unsafe { native_string_free(event_string) };
         }
     })
+}
+
+fn wrap_event_sanitize_fn(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeEventSanitizeCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> EventSanitizeFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |event, fields| {
+        let fallback = fields.clone();
+        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or(fallback)
+    })
+}
+
+fn call_event_sanitize_callback(
+    cb: NemoRelayNativeEventSanitizeCb,
+    user_data: *mut c_void,
+    event: &Event,
+    fields: &EventSanitizeFields,
+) -> FlowResult<EventSanitizeFields> {
+    clear_native_last_error();
+    let event_json = serde_json::to_value(event)
+        .map_err(|err| FlowError::Internal(format!("failed to encode native event: {err}")))?;
+    let fields_json = serde_json::to_value(fields).map_err(|err| {
+        FlowError::Internal(format!("failed to encode native event fields: {err}"))
+    })?;
+    let event = native_string_from_json(&event_json)
+        .ok_or_else(|| FlowError::Internal("failed to allocate native event".into()))?;
+    let fields = match native_string_from_json(&fields_json) {
+        Some(fields) => fields,
+        None => {
+            unsafe { native_string_free(event) };
+            return Err(FlowError::Internal(
+                "failed to allocate native event fields".into(),
+            ));
+        }
+    };
+    let mut out = ptr::null_mut();
+    let status = unsafe { cb(user_data, event, fields, &mut out) };
+    unsafe {
+        native_string_free(event);
+        native_string_free(fields);
+    }
+    if status != NemoRelayStatus::Ok {
+        if !out.is_null() {
+            unsafe { native_string_free(out) };
+        }
+        return Err(flow_error_from_status(
+            status,
+            "native event sanitizer failed",
+        ));
+    }
+    let value = take_json_from_native_string(out, "native event sanitizer returned null")?;
+    serde_json::from_value(value)
+        .map_err(|err| FlowError::Internal(format!("invalid event sanitize fields: {err}")))
 }
 
 fn wrap_tool_json_fn(

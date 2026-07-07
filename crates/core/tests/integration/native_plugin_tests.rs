@@ -162,11 +162,37 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     let first_events = events.lock().unwrap().clone();
     find_event(&first_events, "fixture.native.subscriber.mark", None);
     assert_parent(&first_events, "fixture.native.mark", None, Some(outer_uuid));
+    assert_eq!(
+        find_event(&first_events, "fixture.native.mark", None)
+            .metadata()
+            .unwrap()["native_plugin_mark"],
+        true
+    );
     assert_parent(
         &first_events,
         "fixture.native.scope",
         Some(ScopeCategory::Start),
         Some(outer_uuid),
+    );
+    assert_eq!(
+        find_event(
+            &first_events,
+            "fixture.native.scope",
+            Some(ScopeCategory::Start),
+        )
+        .metadata()
+        .unwrap()["native_plugin_scope_start"],
+        true
+    );
+    assert_eq!(
+        find_event(
+            &first_events,
+            "fixture.native.scope",
+            Some(ScopeCategory::End),
+        )
+        .metadata()
+        .unwrap()["native_plugin_scope_end"],
+        true
     );
     assert_not_parent(
         &first_events,
@@ -189,6 +215,10 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         tool_start.input().unwrap()["native_plugin_tool_sanitize_request"],
         true
     );
+    assert_eq!(
+        tool_start.metadata().unwrap()["native_plugin_scope_start"],
+        true
+    );
     let tool_end = find_event(
         &first_events,
         "native-fixture-tool",
@@ -196,6 +226,10 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     );
     assert_eq!(
         tool_end.output().unwrap()["native_plugin_tool_sanitize_response"],
+        true
+    );
+    assert_eq!(
+        tool_end.metadata().unwrap()["native_plugin_scope_end"],
         true
     );
     assert!(tool_end.output().unwrap().get("pending_marks").is_none());
@@ -213,6 +247,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     );
     assert_eq!(tool_mark.data().unwrap()["source"], "native_tool_execution");
     assert_eq!(tool_mark.metadata().unwrap()["fixture"], true);
+    assert_eq!(tool_mark.metadata().unwrap()["native_plugin_mark"], true);
     assert!(tool_mark.timestamp() > tool_end.timestamp());
     let tool_end_index = first_events
         .iter()

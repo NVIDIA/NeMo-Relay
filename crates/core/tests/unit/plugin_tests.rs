@@ -983,6 +983,20 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("plugin::");
+    ctx.register_mark_sanitize_guardrail("mark_sanitize", 1, Arc::new(|_, fields| fields))
+        .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope_sanitize_start",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope_sanitize_end",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool_sanitize_request",
         1,
@@ -1057,6 +1071,24 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
+    ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields))
+        .unwrap();
+    expect_registration_failed(
+        ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields)),
+        "mark sanitizer:",
+    );
+    ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields))
+        .unwrap();
+    expect_registration_failed(
+        ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields)),
+        "scope-start sanitizer:",
+    );
+    ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields))
+        .unwrap();
+    expect_registration_failed(
+        ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields)),
+        "scope-end sanitizer:",
+    );
     ctx.register_llm_request_intercept(
         "llm-request",
         1,
@@ -1246,6 +1278,20 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
+    ctx.register_mark_sanitize_guardrail("mark-sanitize", 1, Arc::new(|_, fields| fields))
+        .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope-sanitize-start",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope-sanitize-end",
+        1,
+        Arc::new(|_, fields| fields),
+    )
+    .unwrap();
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
     ctx.register_llm_request_intercept(
@@ -1319,6 +1365,9 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
 
     let mut registrations = ctx.into_registrations();
     let expected_messages = [
+        "mark sanitizer deregistration failed:",
+        "scope-start sanitizer deregistration failed:",
+        "scope-end sanitizer deregistration failed:",
         "subscriber deregistration failed:",
         "llm request intercept deregistration failed:",
         "tool sanitize request guardrail deregistration failed:",
