@@ -296,6 +296,12 @@ unsafe extern "C" fn count_scope_callback(user_data: *mut c_void) -> NemoRelaySt
 
 #[test]
 fn native_scope_stack_abi_covers_lifecycle_and_validation() {
+    let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *crate::api::runtime::global_context().write().unwrap() =
+        crate::api::runtime::NemoRelayContextState::new();
     let _restore = ThreadScopeStackRestore::capture();
     assert_eq!(
         unsafe { native_scope_stack_create(ptr::null_mut()) },
