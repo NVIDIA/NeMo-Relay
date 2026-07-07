@@ -41,7 +41,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for dependency in cargo curl docker hermes jq python3; do
+for dependency in cargo curl docker hermes jq python3 tar; do
   command -v "$dependency" >/dev/null || {
     echo "missing required command: $dependency" >&2
     exit 1
@@ -300,11 +300,104 @@ summary = {
     "phoenix_url": f"http://127.0.0.1:{phoenix_port}",
 }
 (root / "trajectory-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+readme = f"""# Hermes / Ollama / Switchyard Cascade trajectory
+
+This bundle captures one fixed three-query Hermes session routed through NeMo
+Relay and the Switchyard Decision API. The verified representative route is:
+
+1. `llama3.2:latest` (weak) — cold Cascade default
+2. `qwen3.6:35b` (strong) — critical-signal Cascade override
+3. `llama3.2:latest` (weak) — clean-state classifier decision
+
+Session ID: `{session_id}`
+
+## Important fixture note
+
+The `CUDA out of memory` text in `trajectory-signal-02-complex.atof.jsonl` is an
+intentional, synthetic ATOF tool-result fixture. The machine did not run out of
+memory. Fixture events carry `metadata.trajectory_fixture = true` and a fixture
+label so they cannot be confused with organic Hermes events.
+
+The fixtures are necessary for this demonstration because the current
+Switchyard Cascade Decision API classifies from its accumulated ATOF snapshot,
+not directly from `current_request.body`. The critical fixture exercises the
+real strong override. The clean-tests fixture removes the prior critical signal
+from the one-result window and exercises the weak classifier path.
+
+## File map
+
+| Files | Contents | Test coverage |
+| --- | --- | --- |
+| `trajectory-summary.json` | Machine-readable queries, selected models, reasons, counts, and Phoenix URL | Confirms expected and actual representative routes match |
+| `trajectory.atof.jsonl` | Complete Relay ATOF stream for all three queries and the labeled fixtures | Identity propagation, lifecycle events, routing marks, and accumulator input |
+| `trajectory-01-simple.atof.jsonl` | ATOF emitted by the first Hermes invocation | Cold-start weak default |
+| `trajectory-02-complex.atof.jsonl` | ATOF emitted by the complex Hermes invocation | Dispatch through the selected strong backend |
+| `trajectory-03-simple-followup.atof.jsonl` | ATOF emitted by the final Hermes invocation | Return to the weak backend |
+| `trajectory-signal-*.atof.jsonl` | Canonical, labeled tool start/end fixtures | Strong critical-error override and weak clean-state classification |
+| `*.atof-ingest.json` | Switchyard ingestion reports for query segments and fixtures | Successful or idempotent ATOF accumulation |
+| `trajectory-01-simple.atif.json` | ATIF representation of query 1 | Weak-model trajectory structure |
+| `trajectory-02-complex.atif.json` | ATIF representation of query 2 | Strong-model trajectory structure |
+| `trajectory-03-simple-followup.atif.json` | ATIF representation of query 3 | Weak follow-up trajectory structure |
+| `trajectory.otel.json` | OTLP JSON batches written by the OpenTelemetry Collector | Relay spans exported to the collector and forwarded to Phoenix |
+| `query-*.log` | Hermes/Relay stdout and stderr for each invocation | Human-readable harness responses and execution diagnostics |
+| `query-event-ranges.tsv` | Query label and ATOF line-count boundaries | Separates representative user-query decisions from extra Hermes calls |
+
+## Routing-mark assertions
+
+The smoke validates every `switchyard.routing.*` mark in the cumulative ATOF
+stream. Each mark must have:
+
+- `category: "custom"`
+- `category_profile.subtype` equal to the mark name
+- `data_schema.name: "switchyard.routing_mark"`
+- `data_schema.version: "1"`
+- the expected session identity in metadata
+
+Decision marks must also include a decision ID, router, attempt, backend, tier,
+model, latency, and rollout mode. This run produced {len(marks)} routing marks
+across {len(events)} total ATOF events.
+
+## Phoenix and OTLP
+
+During the smoke, Relay sends OTLP/HTTP to a local OpenTelemetry Collector. The
+collector writes `trajectory.otel.json` and forwards the same spans to Phoenix.
+The run produced {len(otel_batches)} OTLP export batches. When the smoke is run
+with `SWITCHYARD_KEEP_PHOENIX=1`, open the `phoenix_url` from
+`trajectory-summary.json` before stopping the printed Phoenix container.
+
+## Reproduce
+
+Install both `llama3.2:latest` and `qwen3.6:35b` in Ollama, ensure the cumulative
+Switchyard checkout is available, then run:
+
+```bash
+SWITCHYARD_KEEP_PHOENIX=1 examples/switchyard/run-hermes-ollama-smoke.sh
+```
+
+The script validates the route, mark shape, ATIF contents, and OTLP output before
+creating this bundle.
+"""
+(root / "TRAJECTORY_README.md").write_text(readme)
 print(json.dumps(summary, indent=2))
 PY
 
+(
+  cd "$artifact_dir"
+  tar -czf trajectory-bundle.tar.gz \
+    TRAJECTORY_README.md \
+    trajectory-summary.json \
+    trajectory.atof.jsonl \
+    trajectory.otel.json \
+    trajectory-*.atif.json \
+    trajectory-*.atof.jsonl \
+    trajectory-*.atof-ingest.json \
+    query-*.log \
+    query-event-ranges.tsv
+)
+
 echo "Hermes/Ollama Cascade trajectory passed: llama3.2 -> qwen3.6:35b -> llama3.2"
 echo "Artifacts: $artifact_dir"
+echo "Bundle: $artifact_dir/trajectory-bundle.tar.gz"
 if [[ "$keep_phoenix" == "1" ]]; then
   echo "Phoenix: http://127.0.0.1:$phoenix_port (container $phoenix_container left running)"
 else
