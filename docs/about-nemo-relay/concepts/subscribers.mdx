@@ -1,6 +1,6 @@
 ---
 title: "Subscribers"
-description: ""
+description: "Understand NeMo Relay subscribers, delivery behavior, scope visibility, and exporter roles."
 position: 5
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -46,7 +46,7 @@ Scope-local subscribers are owned by one active scope and disappear when that
 scope closes.
 
 Deregistering a subscriber affects future emissions. Events that were already
-emitted carry a subscriber snapshot, so queued callbacks from that snapshot may
+emitted carry a subscriber snapshot, so queued callbacks from that snapshot can
 still run after deregistration.
 
 ### Plugin-Installed Subscribers
@@ -117,7 +117,7 @@ flowchart
 ```
 
 The important boundary is that subscribers do not define the event schema. They
-receive the runtime event and may serialize it through the binding helper when
+receive the runtime event and can serialize it through the binding helper when
 they need a stable JSON payload. Exporter subscribers, such as the ATOF JSONL
 exporter, consume the same event stream and serialize the same canonical event
 shape for their target backend.
@@ -158,13 +158,13 @@ of the canonical event stream.
 
 ### Agent Trajectory Interchange Format (ATIF) Exporter
 
-The [Agent Trajectory Interchange Format (ATIF) exporter](/observability-plugin/atif)
+The [Agent Trajectory Interchange Format (ATIF) exporter](/configure-plugins/observability/atif)
 collects lifecycle events and emits trajectory artifacts for offline analysis,
 replay, or debugging.
 
 ### Agent Trajectory Observability Format (ATOF) JSONL Exporter
 
-The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/observability-plugin/atof)
+The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/configure-plugins/observability/atof)
 writes the canonical event stream to a native filesystem path as one raw ATOF
 event per line.
 
@@ -179,9 +179,9 @@ The OpenInference subscriber maps runtime events into OTLP traces using
 OpenInference semantics for model-centric observability.
 
 Detailed setup, configuration, and API shape for these subscribers belongs in
-[Observability](/observability-plugin/about).
+[Observability](/configure-plugins/observability/about).
 For configuration-driven setup, use the built-in
-[`observability` plugin](/observability-plugin/configuration)
+[`observability` plugin](/configure-plugins/observability/configuration)
 to install ATOF, ATIF, OpenTelemetry, and OpenInference subscribers from one
 plugin component.
 

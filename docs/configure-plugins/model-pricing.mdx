@@ -1,0 +1,94 @@
+---
+title: "Model Pricing"
+description: "Configure file and inline pricing catalogs for managed LLM cost estimates."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the built-in `pricing` component to configure model pricing catalogs for
+cost estimates on managed LLM responses. Relay leaves cost absent when no
+configured source matches the provider, model, and token usage.
+
+## Configuration
+
+Add the `pricing` component to `plugins.toml`. The following configuration
+loads a JSON catalog and defines an inline catalog. Relay searches sources in
+the listed order, so place overrides before their fallbacks:
+
+```toml
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "file"
+path = "./pricing.json"
+
+[[components.config.sources]]
+type = "inline"
+
+[components.config.sources.catalog]
+version = 1
+
+[[components.config.sources.catalog.entries]]
+provider = "openai"
+model_id = "gpt-4o-mini"
+aliases = ["openai/openai/gpt-4o-mini"]
+currency = "USD"
+unit = "per_token"
+pricing_as_of = "2026-06-06"
+pricing_source = "internal-pricing-snapshot"
+
+[components.config.sources.catalog.entries.rates]
+input_per_million = 0.15
+output_per_million = 0.60
+cache_read_per_million = 0.075
+
+[components.config.sources.catalog.entries.prompt_cache]
+read_accounting = "included_in_prompt_tokens"
+```
+
+Use `type = "file"` with a JSON catalog path or `type = "inline"` with the
+catalog in `plugins.toml`. Relay checks sources and catalog entries in listed
+order, and it uses the first entry that matches the provider and model.
+
+When Relay merges system, project, and user configuration files, it prepends
+higher-priority `sources` instead of replacing lower-priority sources. The
+effective order is user, project, then system. This lets a narrower user catalog
+override a project or enterprise catalog while preserving those catalogs as
+fallbacks.
+
+## Manage Catalog Sources with the CLI
+
+Run the following commands to validate a catalog and add it to project
+configuration:
+
+```bash
+nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing init --project
+nemo-relay model-pricing add-source /path/to/pricing.json --project
+```
+
+Use `--user` for the user configuration file or `--global` for
+`/etc/nemo-relay/plugins.toml`. `add-source` places a new source ahead of
+existing sources by default. Use `--append` to keep it as a fallback.
+
+## Verify the Active Configuration
+
+Run the following command to resolve a model against the configured catalogs:
+
+```bash
+nemo-relay model-pricing resolve gpt-4o-mini \
+  --provider openai \
+  --prompt-tokens 1000 \
+  --completion-tokens 500
+```
+
+Use `nemo-relay doctor` to validate configured model pricing sources with the
+rest of the gateway configuration. Refer to [Add Model Pricing for Cost
+Estimates](/nemo-relay-cli/basic-usage#add-model-pricing-for-cost-estimates)
+for the catalog schema, source precedence, and complete CLI workflow.

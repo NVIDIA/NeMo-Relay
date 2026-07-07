@@ -1,6 +1,6 @@
 ---
 title: "Support and FAQs"
-description: ""
+description: "Find answers about NeMo Relay bindings, middleware, observability, plugins, and troubleshooting."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -200,7 +200,7 @@ subscriber payloads consistent.
 
 Use manual lifecycle APIs only when the framework owns the invocation internally
 and you only have start and finish hooks. In that case, preserve the start
-handle, emit the matching end event, and handle error paths deliberately. See
+handle, emit the matching end event, and handle error paths deliberately. Refer to
 [Invocation API Selection](/instrument-applications/code-examples#invocation-api-selection)
 and [Preferred Integration Order](/integrate-into-frameworks/code-examples#preferred-integration-order).
 
@@ -311,7 +311,7 @@ configuration and source code, and emit summarized metadata when full request or
 response bodies are not needed.
 
 Refer to [Middleware](/about-nemo-relay/concepts/middleware#guardrails) and
-[Observability](/observability-plugin/about).
+[Observability](/configure-plugins/observability/about).
 
 ## Observability And Export
 
@@ -325,7 +325,7 @@ operational tracing, trajectory export, or analytics.
 
 Refer to [Subscribers](/about-nemo-relay/concepts/subscribers),
 [Events](/about-nemo-relay/concepts/events), and
-[Observability](/observability-plugin/about).
+[Observability](/configure-plugins/observability/about).
 
 ### Which Exporter Should I Use?
 
@@ -335,10 +335,10 @@ OpenInference when your tracing stack expects OpenInference-style agent and LLM
 semantics. Use Agent Trajectory Interchange Format (ATIF) when you need
 trajectory artifacts for analysis, replay, or evaluation workflows.
 
-Refer to [Exporter Selection](/observability-plugin/about#exporter-selection),
-[OpenTelemetry](/observability-plugin/opentelemetry),
-[OpenInference](/observability-plugin/openinference), and
-[Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif).
+Refer to [Exporter Selection](/configure-plugins/observability/about#exporter-selection),
+[OpenTelemetry](/configure-plugins/observability/opentelemetry),
+[OpenInference](/configure-plugins/observability/openinference), and
+[Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif).
 
 ### Can I Use NeMo Relay Just For Observability Without Adaptive Tuning Or Middleware?
 
@@ -374,8 +374,8 @@ path, or experiment. Build a plugin when the behavior should be reused across
 applications, activated through configuration, validated before startup, or
 reported through structured activation diagnostics.
 
-Refer to [Define a Plugin](/build-plugins/basic-guide) and
-[Register Plugin Behavior](/build-plugins/register-behavior).
+Refer to [Language Binding Plugins](/build-plugins/language-binding/about) and
+[Register Plugin Behavior](/build-plugins/language-binding/register-behavior).
 
 ### How Is Adaptive Tuning Enabled?
 
@@ -384,10 +384,10 @@ telemetry and in-memory state so the runtime can observe representative
 workflows before changing behavior. Enable active behavior one area at a time,
 such as adaptive hints, tool parallelism, or cache-governor behavior.
 
-Refer to [Adaptive](/adaptive-plugin/about),
-[Adaptive Configuration](/adaptive-plugin/configuration),
-[Adaptive Cache Governor (ACG)](/adaptive-plugin/acg), and
-[Adaptive Hints](/adaptive-plugin/adaptive-hints).
+Refer to [Adaptive](/configure-plugins/adaptive/about),
+[Adaptive Configuration](/configure-plugins/adaptive/configuration),
+[Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg), and
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints).
 
 ## Framework Integration And APIs
 

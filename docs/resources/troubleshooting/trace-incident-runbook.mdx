@@ -1,6 +1,6 @@
 ---
 title: "Trace Incident Runbook"
-description: ""
+description: "Diagnose missing, partial, duplicate, or mis-scoped NeMo Relay traces."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -122,8 +122,8 @@ already been emitted. Verify these conditions:
 - Shutdown, teardown, or request completion calls flush owned exporters before
   the process exits or the container stops.
 
-Use [Observability](/observability-plugin/about),
-[Observability Configuration](/observability-plugin/configuration), and
+Use [Observability](/configure-plugins/observability/about),
+[Observability Configuration](/configure-plugins/observability/configuration), and
 [Subscribers](/about-nemo-relay/concepts/subscribers) to verify the registration
 lifecycle.
 
@@ -159,10 +159,10 @@ For OpenTelemetry or OpenInference export, confirm these settings:
 - The application flushes and shuts down the subscriber during graceful
   termination.
 
-Refer to [Agent Trajectory Observability Format (ATOF)](/observability-plugin/atof),
-[Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif),
-[OpenTelemetry](/observability-plugin/opentelemetry), and
-[OpenInference](/observability-plugin/openinference).
+Refer to [Agent Trajectory Observability Format (ATOF)](/configure-plugins/observability/atof),
+[Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif),
+[OpenTelemetry](/configure-plugins/observability/opentelemetry), and
+[OpenInference](/configure-plugins/observability/openinference).
 
 ## Check For Duplicate Event Sources
 

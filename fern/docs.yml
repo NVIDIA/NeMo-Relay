@@ -20,6 +20,36 @@ announcement:
 redirects:
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes
+- source: /nemo/relay/build-plugins/plugin-configuration-files
+  destination: /nemo/relay/configure-plugins/plugin-configuration-files
+- source: /nemo/relay/observability-plugin/about
+  destination: /nemo/relay/configure-plugins/observability/about
+- source: /nemo/relay/observability-plugin/configuration
+  destination: /nemo/relay/configure-plugins/observability/configuration
+- source: /nemo/relay/observability-plugin/atif
+  destination: /nemo/relay/configure-plugins/observability/atif
+- source: /nemo/relay/observability-plugin/atof
+  destination: /nemo/relay/configure-plugins/observability/atof
+- source: /nemo/relay/observability-plugin/openinference
+  destination: /nemo/relay/configure-plugins/observability/openinference
+- source: /nemo/relay/observability-plugin/opentelemetry
+  destination: /nemo/relay/configure-plugins/observability/opentelemetry
+- source: /nemo/relay/adaptive-plugin/about
+  destination: /nemo/relay/configure-plugins/adaptive/about
+- source: /nemo/relay/adaptive-plugin/configuration
+  destination: /nemo/relay/configure-plugins/adaptive/configuration
+- source: /nemo/relay/adaptive-plugin/acg
+  destination: /nemo/relay/configure-plugins/adaptive/acg
+- source: /nemo/relay/adaptive-plugin/adaptive-hints
+  destination: /nemo/relay/configure-plugins/adaptive/adaptive-hints
+- source: /nemo/relay/nemo-guardrails-plugin/about
+  destination: /nemo/relay/configure-plugins/nemo-guardrails/about
+- source: /nemo/relay/nemo-guardrails-plugin/configuration
+  destination: /nemo/relay/configure-plugins/nemo-guardrails/configuration
+- source: /nemo/relay/pii-redaction-plugin/about
+  destination: /nemo/relay/configure-plugins/pii-redaction/about
+- source: /nemo/relay/pii-redaction-plugin/configuration
+  destination: /nemo/relay/configure-plugins/pii-redaction/configuration
 
 experimental:
   mdx-components:

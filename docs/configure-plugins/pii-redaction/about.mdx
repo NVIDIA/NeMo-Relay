@@ -1,0 +1,124 @@
+---
+title: "PII Redaction Plugin"
+sidebar-title: "About"
+description: "Configure built-in PII redaction for emitted NeMo Relay observability payloads."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use the PII redaction plugin when you want first-party privacy controls for
+managed NeMo Relay LLM and tool observability surfaces through the shared
+plugin system.
+
+The built-in plugin component uses `kind = "pii_redaction"` and is available as
+a first-party NeMo Relay plugin.
+
+The CLI and primary language bindings register this component. Direct Rust
+applications must call
+`nemo_relay_pii_redaction::component::register_pii_redaction_component()`
+before they validate or initialize a `pii_redaction` component.
+
+The plugin supports these backend modes:
+
+- `builtin`
+  - Uses a native Rust backend for deterministic payload sanitization.
+- `local_model`
+  - Reserves a future local-model backend lane for more stochastic detection behavior.
+
+## Use This Plugin When
+
+Start here when you need to:
+
+- Remove sensitive fields from emitted tool or LLM payloads.
+- Replace sensitive text with a deterministic marker such as `[REDACTED]`.
+- Hash matching values before observability exporters or subscribers receive
+  them.
+- Keep privacy behavior inside the same plugin config surface used by other
+  first-party NeMo Relay components.
+- Use built-in detector presets for common values such as emails, phone
+  numbers, URLs, API keys, and IP addresses without writing custom regexes.
+
+## Plugin Versus Middleware
+
+`pii_redaction` is built on top of NeMo Relay's existing sanitize-guardrail
+middleware.
+
+That means this plugin does **not** introduce a separate runtime mechanism.
+Instead, it packages a common privacy policy behind a first-party config
+surface.
+
+Use the plugin when you want:
+
+- A reusable privacy policy that many applications or teams can share
+- Declarative config through `plugins.toml` or `nemo-relay plugins edit`
+- Built-in actions, detector presets, and codec-aware LLM handling
+- A supported, documented NeMo Relay surface instead of hand-registered callbacks
+
+Use raw sanitize-guardrail middleware when you want:
+
+- Custom redaction logic authored directly in application code
+- Dynamic behavior based on runtime state, external lookups, or one-off heuristics
+- Experiments that are too app-specific to become a first-party plugin contract
+
+The difference between middleware and `pii_redaction` is that middleware is the
+**mechanism** and `pii_redaction` is the **packaged policy**.
+
+## Current Scope
+
+The built-in plugin currently exposes four managed sanitize surfaces:
+
+- `input`
+- `output`
+- `tool_input`
+- `tool_output`
+
+The current built-in backend supports five actions:
+
+- `remove`
+- `redact`
+- `regex_replace`
+- `hash`
+- `mask`
+
+The current backend boundary is intentional:
+
+- Managed tool surfaces are sanitized as JSON payloads with exact JSON-pointer
+  targeting.
+- Managed LLM surfaces use the selected built-in codec so redaction can target
+  normalized Relay request and response shapes such as `/messages/0/content`
+  and `/message`.
+
+## Observability Boundary
+
+This plugin installs sanitize guardrails, not execution intercepts.
+
+That means:
+
+- The plugin changes emitted observability payloads.
+- The real provider request and response values remain unchanged.
+- Subscribers and exporters receive sanitized payloads after the plugin runs.
+
+For managed LLM requests, codec decode and re-encode can canonicalize the
+emitted provider-shaped start event. For example, Relay can record an OpenAI
+Responses request in the codec's canonical `input` array form rather than the
+original shorthand form.
+
+## Current Boundaries
+
+This plugin is intentionally scoped to a deterministic built-in backend plus a
+future local-model extension point.
+
+In particular:
+
+- `local_model` is an extension point, not a complete backend implementation
+  today.
+- The plugin does not mutate the real callback arguments or return values.
+- The plugin does not add a subtree or prefix selector language beyond exact
+  JSON-pointer matching.
+
+## Pages
+
+- [PII Redaction Configuration](/configure-plugins/pii-redaction/configuration)
+  documents the built-in component shape, action semantics, supported codecs,
+  and example configs.
