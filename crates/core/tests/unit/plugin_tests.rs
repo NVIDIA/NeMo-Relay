@@ -1130,18 +1130,21 @@ fn test_initialize_plugins_transaction_finishes_after_caller_cancellation() {
         release.notify_one();
         registered.notified().await;
 
-        for _ in 0..100 {
-            if active_plugin_report().is_some_and(|report| {
-                report
-                    .diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.code == "blocking.warning")
-            }) {
-                return;
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if active_plugin_report().is_some_and(|report| {
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == "blocking.warning")
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-        panic!("owned initialization transaction did not finish after caller cancellation");
+        })
+        .await
+        .expect("owned initialization transaction did not finish after caller cancellation");
     });
 
     reset_global();
