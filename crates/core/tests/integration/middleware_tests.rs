@@ -58,7 +58,7 @@ use nemo_relay::error::FlowError;
 #[cfg(all(feature = "otel", feature = "openinference"))]
 use nemo_relay::observability::MarkProjection;
 #[cfg(all(feature = "otel", feature = "openinference"))]
-use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
+use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 #[cfg(all(feature = "otel", feature = "openinference"))]
 use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 #[cfg(all(feature = "otel", feature = "openinference"))]
@@ -924,6 +924,17 @@ async fn test_managed_tool_pending_marks_project_through_all_exporters() {
     assert_eq!(mark_step.llm_call_count, Some(0));
     let projected_call = &mark_step.tool_calls.as_ref().unwrap()[0];
     assert_eq!(projected_call.arguments, json!({"saved_tokens": 12}));
+    let step_extra: AtifStepExtra =
+        serde_json::from_value(mark_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(step_extra.event_category.as_deref(), Some("custom"));
+    assert_eq!(
+        step_extra.event_category_profile,
+        Some(json!({"subtype": "example.compaction"}))
+    );
+    assert_eq!(
+        projected_call.extra.as_ref().unwrap()["metadata"],
+        json!({"source": "test"})
+    );
     assert_eq!(
         mark_step.observation.as_ref().unwrap().results[0]
             .source_call_id
@@ -947,6 +958,18 @@ async fn test_managed_tool_pending_marks_project_through_all_exporters() {
         attribute.key.as_str() == "nemo_relay.mark.projection"
             && attribute.value.to_string() == "tool"
     }));
+    for (key, value) in [
+        ("nemo_relay.mark.category", "custom"),
+        (
+            "nemo_relay.mark.category_profile_json",
+            "{\"subtype\":\"example.compaction\"}",
+        ),
+        ("nemo_relay.mark.metadata_json", "{\"source\":\"test\"}"),
+    ] {
+        assert!(otel_mark.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == key && attribute.value.to_string() == value
+        }));
+    }
 
     openinference.force_flush().unwrap();
     let openinference_spans = openinference_exporter.get_finished_spans().unwrap();
@@ -966,6 +989,18 @@ async fn test_managed_tool_pending_marks_project_through_all_exporters() {
     assert!(openinference_mark.attributes.iter().any(|attribute| {
         attribute.key.as_str() == "openinference.span.kind" && attribute.value.to_string() == "TOOL"
     }));
+    for (key, value) in [
+        ("nemo_relay.mark.category", "custom"),
+        (
+            "nemo_relay.mark.category_profile_json",
+            "{\"subtype\":\"example.compaction\"}",
+        ),
+        ("nemo_relay.mark.metadata_json", "{\"source\":\"test\"}"),
+    ] {
+        assert!(openinference_mark.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == key && attribute.value.to_string() == value
+        }));
+    }
 
     deregister_tool_execution_intercept("managed_tool_projection_intercept").unwrap();
     deregister_subscriber("managed_tool_projection_events").unwrap();
