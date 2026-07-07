@@ -108,6 +108,38 @@ func TestActivateDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
+func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
+	withPluginActivationStubs(t)
+
+	token := new(byte)
+	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
+		const wantConfig = `{"version":0,"components":[{"kind":"fixture.disabled","enabled":false}]}`
+		if configJSON != wantConfig {
+			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
+		}
+		if specsJSON != "[]" {
+			t.Fatalf("dynamic plugin specs JSON = %s, want []", specsJSON)
+		}
+		return unsafe.Pointer(token), `{"diagnostics":[]}`, nil
+	}
+	clearPluginActivation = func(unsafe.Pointer) error { return nil }
+	freePluginActivation = func(unsafe.Pointer) {}
+
+	activation, _, err := ActivateDynamicPlugins(PluginConfig{
+		Version: 0,
+		Components: []PluginComponentSpec{
+			{Kind: "fixture.disabled", Enabled: false},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+	}
+	if err := activation.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	runtime.KeepAlive(token)
+}
+
 func TestActivateDynamicPluginsNormalizesNilSpecs(t *testing.T) {
 	withPluginActivationStubs(t)
 
@@ -171,7 +203,7 @@ func TestPluginActivationCloseFreesAfterClearFailure(t *testing.T) {
 		return wantErr
 	}
 	freePluginActivation = func(unsafe.Pointer) { calls = append(calls, "free") }
-	activation := &PluginActivation{ptr: ptr}
+	activation := newPluginActivation(ptr)
 
 	if err := activation.Close(); !errors.Is(err, wantErr) {
 		t.Fatalf("Close() error = %v, want %v", err, wantErr)
@@ -183,6 +215,144 @@ func TestPluginActivationCloseFreesAfterClearFailure(t *testing.T) {
 		t.Fatalf("cleanup calls = %v", calls)
 	}
 	runtime.KeepAlive(token)
+}
+
+func TestPluginActivationCopiesShareCloseState(t *testing.T) {
+	withPluginActivationStubs(t)
+
+	token := new(byte)
+	ptr := unsafe.Pointer(token)
+	var callsMu sync.Mutex
+	var calls []string
+	clearPluginActivation = func(got unsafe.Pointer) error {
+		if got != ptr {
+			return fmt.Errorf("clear pointer = %p, want %p", got, ptr)
+		}
+		callsMu.Lock()
+		calls = append(calls, "clear")
+		callsMu.Unlock()
+		return nil
+	}
+	freePluginActivation = func(got unsafe.Pointer) {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		if got != ptr {
+			calls = append(calls, "free-wrong-pointer")
+			return
+		}
+		calls = append(calls, "free")
+	}
+
+	activation := newPluginActivation(ptr)
+	copyValue := *activation
+	errors := make(chan error, 2)
+	var closeCalls sync.WaitGroup
+	for _, handle := range []*PluginActivation{activation, &copyValue} {
+		closeCalls.Add(1)
+		go func(handle *PluginActivation) {
+			defer closeCalls.Done()
+			errors <- handle.Close()
+		}(handle)
+	}
+	closeCalls.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}
+
+	callsMu.Lock()
+	gotCalls := strings.Join(calls, ",")
+	callsMu.Unlock()
+	if gotCalls != "clear,free" {
+		t.Fatalf("cleanup calls = %s, want clear,free", gotCalls)
+	}
+	runtime.KeepAlive(token)
+}
+
+func TestPluginActivationCopyPreventsEarlyFinalization(t *testing.T) {
+	withPluginActivationStubs(t)
+
+	token := new(byte)
+	ptr := unsafe.Pointer(token)
+	var callsMu sync.Mutex
+	var calls []string
+	clearPluginActivation = func(unsafe.Pointer) error {
+		callsMu.Lock()
+		calls = append(calls, "clear")
+		callsMu.Unlock()
+		return nil
+	}
+	freePluginActivation = func(unsafe.Pointer) {
+		callsMu.Lock()
+		calls = append(calls, "free")
+		callsMu.Unlock()
+	}
+
+	wrapperCollected := make(chan struct{})
+	copyValue := copiedPluginActivationWithGCSentinel(ptr, wrapperCollected)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runtime.GC()
+		runtime.Gosched()
+		select {
+		case <-wrapperCollected:
+			goto wrapperWasCollected
+		default:
+			if time.Now().After(deadline) {
+				t.Fatal("unreachable activation wrapper was not collected")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+wrapperWasCollected:
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+		runtime.Gosched()
+		time.Sleep(10 * time.Millisecond)
+	}
+	callsMu.Lock()
+	gotCalls := strings.Join(calls, ",")
+	callsMu.Unlock()
+	if gotCalls != "" {
+		t.Fatalf("cleanup ran while a copied activation was reachable: %s", gotCalls)
+	}
+
+	if err := copyValue.Close(); err != nil {
+		t.Fatalf("copied activation Close() error = %v", err)
+	}
+	callsMu.Lock()
+	gotCalls = strings.Join(calls, ",")
+	callsMu.Unlock()
+	if gotCalls != "clear,free" {
+		t.Fatalf("cleanup calls = %s, want clear,free", gotCalls)
+	}
+	runtime.KeepAlive(copyValue)
+	runtime.KeepAlive(token)
+}
+
+type pluginActivationGCSentinel struct {
+	activation *PluginActivation
+	padding    [64]byte
+}
+
+//go:noinline
+func copiedPluginActivationWithGCSentinel(
+	ptr unsafe.Pointer,
+	wrapperCollected chan<- struct{},
+) PluginActivation {
+	activation := newPluginActivation(ptr)
+	copyValue := *activation
+	sentinel := &pluginActivationGCSentinel{activation: activation}
+	runtime.SetFinalizer(sentinel, func(sentinel *pluginActivationGCSentinel) {
+		runtime.KeepAlive(sentinel.activation)
+		close(wrapperCollected)
+	})
+	runtime.KeepAlive(activation)
+	runtime.KeepAlive(sentinel)
+	return copyValue
 }
 
 func TestActivateDynamicPluginsSurfacesSerializationAndActivationErrors(t *testing.T) {

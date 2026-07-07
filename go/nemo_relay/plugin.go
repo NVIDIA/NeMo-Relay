@@ -220,13 +220,13 @@ type ConfigReport struct {
 // PluginComponentSpec is one top-level plugin component.
 type PluginComponentSpec struct {
 	Kind    string         `json:"kind"`
-	Enabled bool           `json:"enabled,omitempty"`
+	Enabled bool           `json:"enabled"`
 	Config  map[string]any `json:"config,omitempty"`
 }
 
 // PluginConfig is the canonical plugin configuration document.
 type PluginConfig struct {
-	Version    uint32                `json:"version,omitempty"`
+	Version    uint32                `json:"version"`
 	Components []PluginComponentSpec `json:"components,omitempty"`
 	Policy     *ConfigPolicy         `json:"policy,omitempty"`
 }
@@ -253,9 +253,13 @@ type DynamicPluginActivationSpec struct {
 }
 
 // PluginActivation owns the runtime registrations, native libraries, and
-// workers created by ActivateDynamicPlugins. A PluginActivation must not be
-// copied after first use.
+// workers created by ActivateDynamicPlugins. Copies share one activation
+// lifetime and may be closed safely from any copy.
 type PluginActivation struct {
+	state *pluginActivationState
+}
+
+type pluginActivationState struct {
 	mu  sync.Mutex
 	ptr unsafe.Pointer
 }
@@ -374,33 +378,42 @@ func ActivateDynamicPlugins(
 	if err != nil {
 		return nil, ConfigReport{}, err
 	}
-	activation := &PluginActivation{ptr: ptr}
+	activation := newPluginActivation(ptr)
 	var report ConfigReport
 	if err := jsonUnmarshal([]byte(rawReport), &report); err != nil {
 		_ = activation.Close()
 		return nil, ConfigReport{}, err
 	}
-	runtime.SetFinalizer(activation, func(activation *PluginActivation) {
-		_ = activation.Close()
-	})
 	return activation, report, nil
+}
+
+func newPluginActivation(ptr unsafe.Pointer) *PluginActivation {
+	state := &pluginActivationState{ptr: ptr}
+	runtime.SetFinalizer(state, func(state *pluginActivationState) {
+		_ = state.close()
+	})
+	return &PluginActivation{state: state}
 }
 
 // Close removes callbacks and subscribers before unloading plugin libraries
 // and workers. It is safe to call Close repeatedly or on a nil activation.
 func (activation *PluginActivation) Close() error {
-	if activation == nil {
+	if activation == nil || activation.state == nil {
 		return nil
 	}
-	activation.mu.Lock()
-	defer activation.mu.Unlock()
-	if activation.ptr == nil {
+	return activation.state.close()
+}
+
+func (state *pluginActivationState) close() error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.ptr == nil {
 		return nil
 	}
 
-	runtime.SetFinalizer(activation, nil)
-	ptr := activation.ptr
-	activation.ptr = nil
+	runtime.SetFinalizer(state, nil)
+	ptr := state.ptr
+	state.ptr = nil
 	err := clearPluginActivation(ptr)
 	freePluginActivation(ptr)
 	return err
