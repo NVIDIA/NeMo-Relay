@@ -21,14 +21,14 @@ recent_message_count = 8
 authorization = "SWITCHYARD_AUTHORIZATION"
 
 [components.config.default_targets]
-openai_chat = "claude-sonnet-4-6"
+openai_chat = "sonnet-chat"
 openai_responses = "sonnet-responses"
-anthropic_messages = "sonnet-anthropic"
+anthropic_messages = "claude-sonnet-4-6"
 
 [components.config.targets.claude-sonnet-4-6]
 model = "azure/anthropic/claude-sonnet-4-6"
-protocol = "openai_chat"
-endpoint = "/v1/chat/completions"
+protocol = "anthropic_messages"
+endpoint = "/v1/messages"
 base_url = "https://inference-api.nvidia.com"
 
 [components.config.targets.claude-sonnet-4-6.header_env]
@@ -36,8 +36,8 @@ authorization = "INFERENCEHUB_AUTHORIZATION"
 
 [components.config.targets.claude-opus-4-6]
 model = "azure/anthropic/claude-opus-4-6"
-protocol = "openai_chat"
-endpoint = "/v1/chat/completions"
+protocol = "anthropic_messages"
+endpoint = "/v1/messages"
 base_url = "https://inference-api.nvidia.com"
 
 [components.config.targets.claude-opus-4-6.header_env]
@@ -52,13 +52,13 @@ base_url = "https://inference-api.nvidia.com"
 [components.config.targets.sonnet-responses.header_env]
 authorization = "INFERENCEHUB_AUTHORIZATION"
 
-[components.config.targets.sonnet-anthropic]
+[components.config.targets.sonnet-chat]
 model = "azure/anthropic/claude-sonnet-4-6"
-protocol = "anthropic_messages"
-endpoint = "/v1/messages"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
 base_url = "https://inference-api.nvidia.com"
 
-[components.config.targets.sonnet-anthropic.header_env]
+[components.config.targets.sonnet-chat.header_env]
 authorization = "INFERENCEHUB_AUTHORIZATION"
 
 [[components]]

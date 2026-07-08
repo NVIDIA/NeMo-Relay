@@ -4,12 +4,12 @@
 targets:
   claude-sonnet-4-6:
     model: azure/anthropic/claude-sonnet-4-6
-    format: openai
+    format: anthropic
     base_url: https://inference-api.nvidia.com/v1
     api_key: ${NV_INFERENCEHUB_KEY}
   claude-opus-4-6:
     model: azure/anthropic/claude-opus-4-6
-    format: openai
+    format: anthropic
     base_url: https://inference-api.nvidia.com/v1
     api_key: ${NV_INFERENCEHUB_KEY}
 
