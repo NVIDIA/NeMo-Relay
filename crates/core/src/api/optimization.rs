@@ -242,11 +242,16 @@ pub(crate) fn finalize_optimization_summary(
         }
     }
 
-    let effective_model = response
-        .as_ref()
-        .and_then(|response| response.model.as_ref())
-        .map(|model| LlmOptimizationModel::new(model.clone()))
-        .or(contributed_effective_model)
+    // An applied routing contribution names the model Relay actually
+    // dispatched. Prefer it over provider response aliases or deployment
+    // names; fall back to response/request attribution when no router applies.
+    let effective_model = contributed_effective_model
+        .or_else(|| {
+            response
+                .as_ref()
+                .and_then(|response| response.model.as_ref())
+                .map(|model| LlmOptimizationModel::new(model.clone()))
+        })
         .or_else(|| requested_model.map(LlmOptimizationModel::new));
     if baseline_model.is_none() {
         baseline_model = effective_model.clone();
@@ -449,6 +454,33 @@ mod tests {
         assert_eq!(summary.baseline_cost.as_ref().unwrap().total, Some(0.0024));
         assert_eq!(summary.actual_cost.as_ref().unwrap().total, Some(0.001));
         assert!((summary.estimated_cost_saved.unwrap() - 0.0014).abs() < 1e-12);
+    }
+
+    #[test]
+    fn applied_route_is_the_authoritative_effective_model() {
+        let recorder = LlmOptimizationRecorder::default();
+        assert!(recorder.record(contribution()));
+        let mut response = AnnotatedLlmResponse {
+            // Providers may return an alias or deployment name rather than
+            // the exact model Relay selected and sent upstream.
+            model: Some("provider-response-alias".to_string()),
+            usage: Some(Usage {
+                prompt_tokens: Some(800),
+                completion_tokens: Some(100),
+                total_tokens: Some(900),
+                ..Usage::default()
+            }),
+            ..AnnotatedLlmResponse::default()
+        };
+        let summary = finalize_optimization_summary(
+            &recorder,
+            Some(&mut response),
+            Some("original-request-model"),
+            &resolver(),
+        )
+        .unwrap();
+        assert_eq!(summary.baseline_model.as_ref().unwrap().model, "baseline");
+        assert_eq!(summary.effective_model.as_ref().unwrap().model, "effective");
     }
 
     #[test]
