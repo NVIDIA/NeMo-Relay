@@ -34,7 +34,7 @@ redirects:
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/pricing/:slug*
   destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing/:slug*
-  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
+  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
 
 # Plugin configuration documentation
 - source: /nemo/relay/build-plugins/plugin-configuration-files
