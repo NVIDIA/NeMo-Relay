@@ -35,7 +35,9 @@ Full raw LLM response payload for response-level fidelity.
 
 ### `event_payload: Option<Json>`
 
-Full raw point-in-time event payload for mark/system steps.
+Legacy event payload field retained for source compatibility.
+
+The ATIF exporter does not translate point-in-time mark events into trajectory steps, so exporter-produced steps leave this field unset.
 
 ### `tool_ancestry: Vec<AtifAncestry>`
 

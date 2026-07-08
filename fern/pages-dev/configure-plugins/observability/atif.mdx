@@ -43,6 +43,11 @@ This configuration writes a trajectory file such as
 `logs/trajectory-<scope-uuid>.json` for each top-level Agent scope or supported
 coding-agent turn scope.
 
+ATIF contains agent interaction steps, tool calls, and observations. Relay mark
+events are point-in-time telemetry rather than trajectory steps, so the ATIF
+exporter omits them. Use ATOF to retain the canonical mark event stream, or an
+OTLP exporter when marks must remain correlated with trace data.
+
 ## Fields
 
 The following table describes the top-level ATIF settings:

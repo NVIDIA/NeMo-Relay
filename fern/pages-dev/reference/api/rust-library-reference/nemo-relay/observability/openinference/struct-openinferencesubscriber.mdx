@@ -33,6 +33,18 @@ Builds a subscriber backed by a new OTLP tracer provider.
 
 Builds a subscriber from an already-configured tracer provider.
 
+#### `from_tracer_provider_with_mark_projection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n) -&gt; Self"}} /></pre>
+
+Builds a subscriber from a tracer provider with an explicit mark projection.
+
+#### `from_tracer_provider_with_mark_projection_and_exclusions`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection_and_exclusions&lt;I, S&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n    mark_exclude_names: I,\n) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Builds a subscriber with explicit mark projection and exclusion names.
+
 #### `subscriber`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>

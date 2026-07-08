@@ -48,7 +48,7 @@ The returned callback can be registered with [`register_subscriber`](/reference/
 
 ##### Returns
 
-An [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn) that appends each observed event to this exporter's internal buffer.
+An [`EventSubscriberFn`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn) that appends compatible lifecycle events to this exporter's internal buffer. Point-in-time marks are ignored.
 
 #### `export`
 

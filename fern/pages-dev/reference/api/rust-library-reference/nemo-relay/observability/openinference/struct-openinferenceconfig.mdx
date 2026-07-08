@@ -81,6 +81,18 @@ Sets the service version resource attribute.
 
 Sets the instrumentation scope name used for emitted spans.
 
+#### `with_mark_projection`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_mark_projection(self, mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>) -&gt; Self"}} /></pre>
+
+Selects how point-in-time marks are represented in exported traces.
+
+#### `with_mark_exclude_names`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_mark_exclude_names&lt;I, S&gt;(self, names: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Excludes named marks from tool projection while preserving their native event representation. The default excludes high-volume `llm.chunk` marks.
+
 ## Trait Implementations
 
 ### `impl Clone for OpenInferenceConfig`

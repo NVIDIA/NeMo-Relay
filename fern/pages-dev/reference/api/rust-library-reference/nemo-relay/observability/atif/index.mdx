@@ -26,7 +26,7 @@ The core conversion from NeMo Relay events to ATIF steps follows these rules:
 - LLM End | `agent` step | Response content, tool_calls promoted
 - Tool Start | *(skipped)* | tool_calls come from LLM End instead
 - Tool End | agent observation | Correlated by `source_call_id`
-- Mark (with data) | `system` step | Custom event data preserved
+- Mark | *(skipped)* | Point-in-time telemetry is not a step
 - Scope Start/End | *(skipped)* | Structural events, not trajectory
 
 The exporter serializes the full collected event stream into a single ATIF trajectory.
