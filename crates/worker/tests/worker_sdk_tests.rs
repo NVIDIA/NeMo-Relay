@@ -278,7 +278,10 @@ async fn worker_service_rejects_duplicate_registration_names_on_one_surface() {
         .error
         .expect("duplicate registration should return an error");
     assert_eq!(error.code, "worker.error");
-    assert!(error.message.contains("duplicate registration 'duplicate'"));
+    assert_eq!(
+        error.message,
+        "invalid input: duplicate registration 'duplicate' for surface MARK_SANITIZE_GUARDRAIL"
+    );
 
     handle.abort();
 }

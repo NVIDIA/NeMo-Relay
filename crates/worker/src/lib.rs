@@ -1315,9 +1315,11 @@ fn validate_unique_registrations(registrations: &[Registration]) -> Result<()> {
     let mut seen = HashSet::new();
     for registration in registrations {
         if !seen.insert((registration.surface, registration.local_name.as_str())) {
+            let surface = RegistrationSurface::try_from(registration.surface)
+                .map_or("UNKNOWN", |surface| surface.as_str_name());
             return Err(WorkerSdkError::InvalidInput(format!(
                 "duplicate registration '{}' for surface {}",
-                registration.local_name, registration.surface
+                registration.local_name, surface
             )));
         }
     }
