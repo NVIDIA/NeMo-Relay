@@ -53,6 +53,7 @@ pub(crate) fn default_mark_exclude_names() -> Vec<String> {
 ///
 /// Agent hook adapters may preserve the canonical event name in metadata while
 /// using a generic mark name, so both representations are matched.
+#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn mark_name_is_excluded(
     event: &crate::api::event::Event,
     excluded_names: &[String],
@@ -72,6 +73,7 @@ pub(crate) fn mark_name_is_excluded(
 ///
 /// Exclusions only affect tool projection; all other modes retain their
 /// configured exporter-native behavior.
+#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn effective_mark_projection(
     event: &crate::api::event::Event,
     projection: MarkProjection,
