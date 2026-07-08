@@ -1,0 +1,41 @@
+---
+title: "Module plugin_component"
+sidebar-title: "plugin_component"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component"
+description: "Built-in observability plugin component."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Built-in observability plugin component.
+
+This module packages NeMo Relay's first-party observability exporters behind the shared plugin configuration system. Each exporter section is opt-in: omitted sections and sections with `enabled = false` validate but do not register subscribers or construct exporters.
+
+The plugin intentionally infers subscriber names from the component namespace so configuration remains portable across bindings. Agent Trajectory Observability Format (ATOF), OpenTelemetry, and OpenInference each register one global subscriber when enabled. Agent Trajectory Interchange Format (ATIF) uses a global dispatcher that detects top-level agent or turn scopes and creates one scope-local exporter for each trajectory run. Coding-agent turns that need bounded traces carry role metadata; their declared scope type is preserved in the exported event stream.
+
+## Structs
+
+- [AtifSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig): Per-trajectory ATIF exporter config.
+- [AtofEndpointSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofendpointsectionconfig): Streaming destination for raw ATOF events.
+- [AtofSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofsectionconfig): Filesystem-backed ATOF JSONL exporter config.
+- [ComponentSpec](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-componentspec): Top-level observability component wrapper.
+- [HttpStorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-httpstorageconfig): HTTP endpoint settings for ATIF trajectory upload.
+- [ObservabilityConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-observabilityconfig): Canonical config document for the observability plugin component.
+- [OtlpSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-otlpsectionconfig): Shared OTLP exporter config for OpenTelemetry and OpenInference.
+- [S3StorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-s3storageconfig): S3-compatible storage settings for ATIF trajectory upload.
+
+## Enums
+
+- [AtifStorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/enum-atifstorageconfig): Remote storage destination for ATIF trajectory files.
+
+## Constants
+
+- [OBSERVABILITY_PLUGIN_KIND](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/constant-observability-plugin-kind): The plugin kind registered by the core crate.
+
+## Functions
+
+- [deregister_observability_component](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/fn-deregister-observability-component): Deregisters the observability component kind from the core plugin registry.
+- [register_observability_component](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/fn-register-observability-component): Registers the observability component kind in the core plugin registry.

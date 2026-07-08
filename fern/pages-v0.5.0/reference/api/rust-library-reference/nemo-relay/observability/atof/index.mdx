@@ -1,0 +1,31 @@
+---
+title: "Module atof"
+sidebar-title: "atof"
+description: "Agent Trajectory Observability Format (ATOF) JSONL exporter support for NeMo Flow."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Agent Trajectory Observability Format (ATOF) JSONL exporter support for NeMo Flow.
+
+The [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter) registers as an event subscriber and writes each canonical NeMo Relay Agent Trajectory Observability Format (ATOF) event as one JSON object per JSONL line.
+
+## Structs
+
+- [AtofEndpointConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofendpointconfig): Streaming destination for raw ATOF events.
+- [AtofExporter](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter): Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
+- [AtofExporterConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporterconfig): Configuration for [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter).
+
+## Enums
+
+- [AtofEndpointFieldNamePolicy](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofendpointfieldnamepolicy): Field name transformation policy used before sending events to an endpoint.
+- [AtofEndpointTransport](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofendpointtransport): Streaming transport used by an ATOF endpoint.
+- [AtofExporterError](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofexportererror): Errors produced while configuring or operating the ATOF JSONL exporter.
+- [AtofExporterMode](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofexportermode): File write behavior for [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter).
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/observability/atof/type-result): Result type for the ATOF JSONL exporter.

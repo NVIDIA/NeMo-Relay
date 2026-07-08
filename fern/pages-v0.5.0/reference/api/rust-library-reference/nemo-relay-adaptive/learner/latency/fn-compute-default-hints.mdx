@@ -1,0 +1,23 @@
+---
+title: "Function compute_default_hints"
+sidebar-title: "compute_default_hints"
+description: "Compute default agent hints from the root trie prediction."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn compute_default_hints(\n    trie_root: &amp;<a href=\"../../trie/data_models/struct-predictiontrienode\">PredictionTrieNode</a>,\n    sensitivity_scale: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../types/metadata/struct-agenthints\">AgentHints</a>&gt;"}} /></pre>
+
+Compute default agent hints from the root trie prediction.
+
+## Parameters
+
+- `trie_root`: Root node of the learned prediction trie.
+- `sensitivity_scale`: Scheduling scale used to derive the priority hint.
+
+## Returns
+
+`Some(AgentHints)` when the trie contains an any-index prediction at the root and `None` otherwise.

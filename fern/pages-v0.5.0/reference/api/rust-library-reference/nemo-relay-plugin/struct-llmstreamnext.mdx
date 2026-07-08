@@ -1,0 +1,28 @@
+---
+title: "Struct LlmStream Next"
+sidebar-title: "LlmStreamNext"
+description: "Typed continuation passed to LLM stream execution intercepts."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct LlmStreamNext<'a> { /* private fields */ }
+```
+
+Typed continuation passed to LLM stream execution intercepts.
+
+## Implementations
+
+### `impl LlmStreamNext<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmstreamnext\">LlmStreamNext</a>&lt;'_&gt;"}} /></pre>
+
+#### `call`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn call(&amp;self, request: <a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-llmstream\">LlmStream</a>&gt;"}} /></pre>
+
+Continues the LLM stream execution chain with a replacement request.

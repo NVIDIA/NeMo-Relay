@@ -1,0 +1,38 @@
+---
+title: "Function llm_call_end"
+sidebar-title: "llm_call_end"
+description: "Finish a manual LLM lifecycle span."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm_call_end(params: <a href=\"struct-llmcallendparams\">LlmCallEndParams</a>&lt;'_&gt;) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Finish a manual LLM lifecycle span.
+
+This emits an LLM-end event for a handle previously returned by [`llm_call`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-call).
+
+## Parameters
+
+- `handle`: LLM handle to close.
+- `response`: Raw provider response associated with the end event.
+- `data`: Optional application payload retained for compatibility. The emitted end event data is the sanitized `response` unless it sanitizes to JSON null, in which case this payload is used.
+- `metadata`: Optional JSON metadata recorded on the end event.
+- `annotated_response`: Optional normalized response annotation produced by a response codec. When omitted and `response_codec` is supplied, the annotation is decoded from the sanitized end-event payload.
+- `response_codec`: Optional response codec used to produce a normalized response annotation from the sanitized end-event payload.
+- `timestamp`: Optional timestamp recorded on the emitted end event. When `None`, the runtime uses the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the end event has been emitted.
+
+## Errors
+
+Returns an error when the runtime owner check fails, internal state cannot be read safely, or response codec decoding fails.
+
+## Notes
+
+Sanitize-response guardrails affect only the emitted end-event payload, not the caller-owned `response` value.

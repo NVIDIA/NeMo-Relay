@@ -1,0 +1,14 @@
+---
+title: "Function wrap_codec_fn"
+sidebar-title: "wrap_codec_fn"
+description: "Wrap a pair of C codec callbacks into an `Arc<dyn LlmCodec>`."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn wrap_codec_fn(\n    decode_cb: <a href=\"type-nemorelaycodecdecodecb\">NemoRelayCodecDecodeCb</a>,\n    encode_cb: <a href=\"type-nemorelaycodecencodecb\">NemoRelayCodecEncodeCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../../nemo-relay/codec/traits/trait-llmcodec\">LlmCodec</a>&gt;"}} /></pre>
+
+Wrap a pair of C codec callbacks into an `Arc<dyn LlmCodec>`.

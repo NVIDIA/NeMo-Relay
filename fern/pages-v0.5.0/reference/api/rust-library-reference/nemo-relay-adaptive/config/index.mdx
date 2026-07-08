@@ -1,0 +1,22 @@
+---
+title: "Module config"
+sidebar-title: "config"
+description: "Canonical adaptive config and diagnostics types."
+position: 27
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Canonical adaptive config and diagnostics types.
+
+## Structs
+
+- [AcgComponentConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-acgcomponentconfig): Typed helper for the built-in Adaptive Cache Governor (ACG) component.
+- [AdaptiveConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-adaptiveconfig): Canonical config document for the adaptive plugin component.
+- [AdaptiveHintsComponentConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-adaptivehintscomponentconfig): Typed helper for adaptive hints settings.
+- [BackendSpec](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-backendspec): Dynamic backend selection. `config` is backend-specific.
+- [StateConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-stateconfig): Shared state configuration consumed by adaptive features that need persistence.
+- [TelemetryComponentConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-telemetrycomponentconfig): Typed helper for telemetry settings.
+- [ToolParallelismComponentConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-toolparallelismcomponentconfig): Typed helper for tool parallelism settings.

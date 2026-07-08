@@ -1,0 +1,43 @@
+---
+title: "Function llm_call_execute"
+sidebar-title: "llm_call_execute"
+description: "Execute an LLM call through the managed middleware pipeline."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn llm_call_execute(params: <a href=\"struct-llmcallexecuteparams\">LlmCallExecuteParams</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+
+Execute an LLM call through the managed middleware pipeline.
+
+This runs conditional-execution guardrails, request intercepts, and sanitize-request guardrails, emits the LLM-start event, then runs execution intercepts, the provider callback when it is not replaced, and sanitize-response guardrails in the runtime-defined order.
+
+## Parameters
+
+- `name`: Logical provider or model family name recorded on emitted events.
+- `request`: Raw [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) passed into the managed pipeline.
+- `func`: Provider callback or execution continuation.
+- `parent`: Optional explicit parent scope for the emitted LLM span.
+- `attributes`: LLM attribute bitflags applied to the managed span.
+- `data`: Optional application payload stored on the managed LLM handle. It may be used on failure end events that have no output payload.
+- `metadata`: Optional JSON metadata recorded on emitted events.
+- `model_name`: Optional normalized model name for observability output.
+- `codec`: Optional request codec used to produce annotated request data for intercepts and events.
+- `response_codec`: Optional response codec used to attach annotated response data to the end event.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the raw JSON response returned by the callback or an execution intercept.
+
+## Errors
+
+Returns [`FlowError::GuardrailRejected`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when conditional-execution guardrails block the call, or any error raised by request intercepts, execution intercepts, codecs, or the callback itself.
+
+## Notes
+
+The LLM-start event is emitted before execution intercepts run. When execution fails after that point, the runtime still emits an LLM-end event without an output payload.
+
+Response codecs enrich observability output only and do not change the value returned to the caller.

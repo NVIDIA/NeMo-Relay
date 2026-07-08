@@ -1,0 +1,416 @@
+---
+title: "nemo_relay_plugin"
+sidebar-title: "nemo-relay-plugin"
+description: "Author out-of-process NeMo Relay worker plugins in Python."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/plugin/src/nemo_relay_plugin/_api.py`.
+
+Module `nemo_relay_plugin`.
+
+Author out-of-process NeMo Relay worker plugins in Python.
+
+## Classes
+
+### `WorkerSdkError(Exception)`
+
+Report a worker SDK, host-call, or protocol error to plugin code.
+
+### `DiagnosticLevel(str, Enum)`
+
+Identify the severity of a plugin configuration diagnostic.
+
+### `ConfigDiagnostic`
+
+Describe one problem found while validating plugin configuration.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Any]
+```
+
+Convert the diagnostic to its Relay JSON representation.
+
+### `PendingMarkSpec`
+
+Describe a mark Relay emits under a managed lifecycle scope.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert this pending mark to its canonical JSON object.
+
+### `LlmRequestInterceptOutcome`
+
+Canonical result returned by a Python worker LLM request intercept.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert this outcome to the canonical worker-envelope payload.
+
+### `ToolExecutionInterceptOutcome`
+
+Canonical result returned by a Python worker tool execution intercept.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert this outcome to the canonical worker-envelope payload.
+
+### `ScopeType(str, Enum)`
+
+Identify the semantic category of a Relay execution scope.
+
+### `WorkerPlugin`
+
+Define the validation and registration contract for a worker plugin.
+
+#### Methods
+
+##### `validate`
+
+```python
+def validate(config: Json) -> list[ConfigDiagnostic | dict[str, Any]] | Awaitable[list[ConfigDiagnostic | dict[str, Any]]]
+```
+
+Validate one component configuration before registration.
+
+##### `register`
+
+```python
+def register(ctx: PluginContext, config: Json) -> None | Awaitable[None]
+```
+
+Register plugin callbacks for one component configuration.
+
+### `PluginContext`
+
+Register component-scoped callbacks and access the Relay host runtime.
+
+#### Methods
+
+##### `PluginContext`
+
+```python
+def PluginContext(runtime: PluginRuntime | None = None) -> None
+```
+
+Create an instance.
+
+##### `runtime`
+
+```python
+def runtime() -> PluginRuntime
+```
+
+Return the host runtime handle for event and scope operations.
+
+##### `register_subscriber`
+
+```python
+def register_subscriber(name: str, callback: SubscriberCallback) -> None
+```
+
+Register a callback that receives Relay events.
+
+##### `register_tool_sanitize_request_guardrail`
+
+```python
+def register_tool_sanitize_request_guardrail(name: str, callback: ToolSanitizeCallback, *, priority: int = 0) -> None
+```
+
+Register a guardrail that sanitizes tool input for observability.
+
+##### `register_tool_sanitize_response_guardrail`
+
+```python
+def register_tool_sanitize_response_guardrail(name: str, callback: ToolSanitizeCallback, *, priority: int = 0) -> None
+```
+
+Register a guardrail that sanitizes tool output for observability.
+
+##### `register_tool_conditional_execution_guardrail`
+
+```python
+def register_tool_conditional_execution_guardrail(name: str, callback: ToolConditionalCallback, *, priority: int = 0) -> None
+```
+
+Register a guardrail that can block tool execution.
+
+##### `register_tool_request_intercept`
+
+```python
+def register_tool_request_intercept(name: str, callback: ToolRequestCallback, *, priority: int = 0, break_chain: bool = False) -> None
+```
+
+Register an intercept that rewrites tool arguments.
+
+##### `register_tool_execution_intercept`
+
+```python
+def register_tool_execution_intercept(name: str, callback: ToolExecutionCallback, *, priority: int = 0) -> None
+```
+
+Register middleware around real tool execution.
+
+##### `register_llm_sanitize_request_guardrail`
+
+```python
+def register_llm_sanitize_request_guardrail(name: str, callback: LlmSanitizeRequestCallback, *, priority: int = 0) -> None
+```
+
+Register a guardrail that sanitizes an LLM request for observability.
+
+##### `register_llm_sanitize_response_guardrail`
+
+```python
+def register_llm_sanitize_response_guardrail(name: str, callback: LlmSanitizeResponseCallback, *, priority: int = 0) -> None
+```
+
+Register a guardrail that sanitizes an LLM response for observability.
+
+##### `register_llm_conditional_execution_guardrail`
+
+```python
+def register_llm_conditional_execution_guardrail(name: str, callback: LlmConditionalCallback, *, priority: int = 0) -> None
+```
+
+Register a guardrail that can block LLM execution.
+
+##### `register_llm_request_intercept`
+
+```python
+def register_llm_request_intercept(name: str, callback: LlmRequestCallback, *, priority: int = 0, break_chain: bool = False) -> None
+```
+
+Register an intercept that rewrites an LLM request.
+
+##### `register_llm_execution_intercept`
+
+```python
+def register_llm_execution_intercept(name: str, callback: LlmExecutionCallback, *, priority: int = 0) -> None
+```
+
+Register middleware around real LLM execution.
+
+##### `register_llm_stream_execution_intercept`
+
+```python
+def register_llm_stream_execution_intercept(name: str, callback: LlmStreamExecutionCallback, *, priority: int = 0) -> None
+```
+
+Register middleware around real streaming LLM execution.
+
+### `PluginRuntime`
+
+Call event, scope, and continuation operations on the Relay host.
+
+#### Methods
+
+##### `PluginRuntime`
+
+```python
+def PluginRuntime(*, activation_id: str, auth_token: str, host_stub: Any) -> None
+```
+
+Create an instance.
+
+##### `emit_mark`
+
+```python
+async def emit_mark(name: str, data: Json | None = None, metadata: Json | None = None, *, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
+```
+
+Emit a mark event through the Relay host runtime.
+
+##### `create_scope_stack`
+
+```python
+async def create_scope_stack() -> str
+```
+
+Create an isolated, host-owned scope stack.
+
+##### `drop_scope_stack`
+
+```python
+async def drop_scope_stack(scope_stack_id: str) -> None
+```
+
+Drop an isolated, host-owned scope stack.
+
+##### `push_scope`
+
+```python
+async def push_scope(name: str, *, scope_type: ScopeType = ScopeType.CUSTOM, data: Json | None = None, metadata: Json | None = None, input: Json | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> str
+```
+
+Start a scope on a Relay host-owned stack.
+
+##### `pop_scope`
+
+```python
+async def pop_scope(scope_handle_id: str, *, output: Json | None = None, metadata: Json | None = None) -> None
+```
+
+End a host scope by its handle identifier.
+
+##### `bind_scope_stack`
+
+```python
+def bind_scope_stack(scope_stack_id: str | None, *, parent_scope_id: str | None = None) -> Iterator[None]
+```
+
+Temporarily bind host calls to a worker-selected scope stack.
+
+##### `clear_scope_stack`
+
+```python
+def clear_scope_stack() -> Iterator[None]
+```
+
+Temporarily clear worker scope-stack correlation.
+
+##### `current_scope_stack_id`
+
+```python
+def current_scope_stack_id() -> str | None
+```
+
+Return the locally bound scope stack identifier.
+
+##### `current_parent_scope_id`
+
+```python
+def current_parent_scope_id() -> str | None
+```
+
+Return the locally bound parent scope identifier.
+
+### `ToolNext`
+
+Continue the remaining tool execution chain.
+
+#### Methods
+
+##### `ToolNext`
+
+```python
+def ToolNext(runtime: PluginRuntime, continuation_id: str) -> None
+```
+
+Create an instance.
+
+##### `call`
+
+```python
+async def call(value: Json) -> Json
+```
+
+Call the remaining tool execution chain with replacement arguments.
+
+### `LlmNext`
+
+Continue the remaining unary LLM execution chain.
+
+#### Methods
+
+##### `LlmNext`
+
+```python
+def LlmNext(runtime: PluginRuntime, continuation_id: str) -> None
+```
+
+Create an instance.
+
+##### `call`
+
+```python
+async def call(request: LlmRequest) -> Json
+```
+
+Call the remaining LLM execution chain with a replacement request.
+
+### `LlmStreamNext`
+
+Continue the remaining streaming LLM execution chain.
+
+#### Methods
+
+##### `LlmStreamNext`
+
+```python
+def LlmStreamNext(runtime: PluginRuntime, continuation_id: str) -> None
+```
+
+Create an instance.
+
+##### `call`
+
+```python
+def call(request: LlmRequest) -> AsyncIterator[Json]
+```
+
+Call the remaining LLM stream chain with a replacement request.
+
+## Functions
+
+### `serve_plugin`
+
+```python
+async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None
+```
+
+Run a local `grpc-v1` worker until the Relay host shuts it down.
+
+## Type Aliases And Constants
+
+- `ANNOTATED_LLM_REQUEST_SCHEMA`
+- `AnnotatedLlmRequest`
+- `EVENT_SCHEMA`
+- `Event`
+- `JSON_SCHEMA`
+- `Json`
+- `LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA`
+- `LLM_REQUEST_SCHEMA`
+- `LlmConditionalCallback`
+- `LlmExecutionCallback`
+- `LlmRequest`
+- `LlmRequestCallback`
+- `LlmSanitizeRequestCallback`
+- `LlmSanitizeResponseCallback`
+- `LlmStreamExecutionCallback`
+- `PLUGIN_DIAGNOSTICS_SCHEMA`
+- `SubscriberCallback`
+- `TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA`
+- `ToolConditionalCallback`
+- `ToolExecutionCallback`
+- `ToolRequestCallback`
+- `ToolSanitizeCallback`
+- `WORKER_PROTOCOL`
+- `grpc`
+- `pb`
+- `pb_grpc`
+

@@ -1,0 +1,145 @@
+---
+title: "Enum Nemo Relay Status"
+sidebar-title: "NemoRelayStatus"
+description: "Status codes returned by all FFI functions."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+#[repr(i32)]pub enum NemoRelayStatus {
+    Ok = 0,
+    AlreadyExists = 1,
+    NotFound = 2,
+    ScopeStackEmpty = 3,
+    GuardrailRejected = 4,
+    Internal = 5,
+    NullPointer = 6,
+    InvalidJson = 7,
+    InvalidUtf8 = 8,
+    InvalidArg = 9,
+}
+```
+
+Status codes returned by all FFI functions.
+
+Every `extern "C"` function in this library returns an `NemoRelayStatus`. On non-`Ok` returns, call [`nemo_relay_last_error`](/reference/api/rust-library-reference/nemo-relay-ffi/error/fn-nemo-relay-last-error) on the same thread to retrieve a human-readable error message.
+
+## Variants
+
+### `Ok = 0`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Ok = 0"}} /></pre>
+
+Operation completed successfully.
+
+### `AlreadyExists = 1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AlreadyExists = 1"}} /></pre>
+
+A resource with the given name already exists.
+
+### `NotFound = 2`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "NotFound = 2"}} /></pre>
+
+The requested resource was not found.
+
+### `ScopeStackEmpty = 3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeStackEmpty = 3"}} /></pre>
+
+The scope stack is empty (no active scope).
+
+### `GuardrailRejected = 4`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "GuardrailRejected = 4"}} /></pre>
+
+A guardrail rejected the operation.
+
+### `Internal = 5`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Internal = 5"}} /></pre>
+
+An internal runtime error occurred.
+
+### `NullPointer = 6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "NullPointer = 6"}} /></pre>
+
+A required pointer argument was null.
+
+### `InvalidJson = 7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidJson = 7"}} /></pre>
+
+A JSON string argument could not be parsed.
+
+### `InvalidUtf8 = 8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidUtf8 = 8"}} /></pre>
+
+A C string argument contained invalid UTF-8.
+
+### `InvalidArg = 9`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidArg = 9"}} /></pre>
+
+A function argument had an invalid value (e.g. malformed UUID).
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl From<&FlowError> for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;&amp;<a href=\"../../nemo-relay/error/enum-flowerror\">FlowError</a>&gt; for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(e: &amp;<a href=\"../../nemo-relay/error/enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
+
+### `impl PartialEq for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+### `impl Eq for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+### `impl StructuralPartialEq for NemoRelayStatus`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>

@@ -1,0 +1,36 @@
+---
+title: "Type Alias Tool Execution Fn"
+sidebar-title: "ToolExecutionFn"
+description: "Wrap or replace tool execution."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type ToolExecutionFn = <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, <a href=\"../../../json/type-json\">Json</a>, <a href=\"type-toolexecutionnextfn\">ToolExecutionNextFn</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"../../tool/struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;;"}} /></pre>
+
+Wrap or replace tool execution.
+
+A tool execution intercept receives the tool name, the current argument payload, and the continuation representing the rest of the chain.
+
+## Parameters
+
+- First argument: Tool name associated with the execution.
+- Second argument: Current JSON argument payload.
+- Third argument: Continuation for the remaining execution chain.
+
+## Returns
+
+A future resolving to the canonical tool execution outcome, containing the tool result and any pending lifecycle marks produced by this intercept.
+
+## Errors
+
+The future resolves to an error when the intercept or remaining execution chain fails.
+
+## Aliased Type
+
+```rust
+pub struct ToolExecutionFn { /* private fields */ }
+```

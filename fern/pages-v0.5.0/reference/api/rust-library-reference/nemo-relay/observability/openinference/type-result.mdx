@@ -1,0 +1,32 @@
+---
+title: "Type Alias Result"
+sidebar-title: "Result"
+description: "Result type for the OpenInference subscriber crate."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type Result&lt;T&gt; = <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;T, <a href=\"enum-openinferenceerror\">OpenInferenceError</a>&gt;;"}} /></pre>
+
+Result type for the OpenInference subscriber crate.
+
+## Aliased Type
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Result&lt;T&gt; &#123;\n    Ok(T),\n    Err(<a href=\"enum-openinferenceerror\">OpenInferenceError</a>),\n&#125;"}} /></pre>
+
+## Variants
+
+### `Ok(T)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Ok(T)"}} /></pre>
+
+Contains the success value
+
+### `Err(OpenInferenceError)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Err(<a href=\"enum-openinferenceerror\">OpenInferenceError</a>)"}} /></pre>
+
+Contains the error value

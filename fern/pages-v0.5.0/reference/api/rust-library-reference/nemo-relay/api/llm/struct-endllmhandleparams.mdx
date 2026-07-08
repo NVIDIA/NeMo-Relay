@@ -1,0 +1,62 @@
+---
+title: "Struct EndLlm Handle Params"
+sidebar-title: "EndLlmHandleParams"
+description: "Builder parameters for `NemoRelayContextState::build_llm_end_event`."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EndLlmHandleParams&lt;'a&gt; &#123;\n    pub handle: &amp;'a <a href=\"struct-llmhandle\">LlmHandle</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub annotated_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>
+
+Builder parameters for [`NemoRelayContextState::build_llm_end_event`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+
+## Fields
+
+### `handle: &'a LlmHandle`
+
+LLM handle to serialize into the emitted end event.
+
+### `data: Option<Json>`
+
+Optional data payload merged over the handle data.
+
+### `metadata: Option<Json>`
+
+Optional metadata payload merged over the handle metadata.
+
+### `annotated_response: Option<Arc<AnnotatedLlmResponse>>`
+
+Optional normalized response annotation produced by a response codec.
+
+### `timestamp: Option<DateTime<Utc>>`
+
+Optional timestamp recorded on the emitted end event. When omitted, the runtime records the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Implementations
+
+### `impl<'a> EndLlmHandleParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-endllmhandleparams\">EndLlmHandleParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `builder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; EndLlmHandleParamsBuilder&lt;'a, (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+
+Create a builder for building `EndLlmHandleParams`. On the builder, call `.handle(...)`, `.data(...)`(optional), `.metadata(...)`(optional), `.annotated_response(...)`(optional), `.timestamp(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `EndLlmHandleParams`.
+
+## Trait Implementations
+
+### `impl<'a> Clone for EndLlmHandleParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-endllmhandleparams\">EndLlmHandleParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-endllmhandleparams\">EndLlmHandleParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

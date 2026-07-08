@@ -1,0 +1,182 @@
+---
+title: "Codecs"
+description: ""
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page explains how codecs fit into the shared NeMo Relay runtime contract.
+
+## Overview
+
+A codec is a boundary translator. It converts one runtime-facing data shape into
+another without changing who owns execution.
+
+NeMo Relay uses codecs when runtime behavior needs stable, JSON-compatible, or
+annotated data but the application or provider surface starts from a different
+shape.
+
+## Key Features
+
+Codecs let NeMo Relay preserve one execution model across different boundaries:
+
+- Application-owned typed values
+- Framework-owned callback payloads
+- Provider-native LLM request and response shapes
+- Exporter or subscriber consumers that need normalized data
+
+Without codecs, request-side middleware and observability would need to reason
+about every framework or provider shape directly.
+
+## Two Main Codec Roles
+
+NeMo Relay documentation uses the word `codec` in two ways: typed value codecs
+and provider codecs. They are related, but they differ in the ways described
+below.
+
+### Typed Value Codecs
+
+Typed value codecs translate application-facing values to and from JSON-friendly
+shapes at the public wrapper boundary.
+
+Typed value codecs are suitable for:
+
+- Application code wants native objects
+- Framework callbacks expect typed values
+- Runtime events and JSON-based middleware still need stable serialized payloads
+
+### Provider Codecs
+
+Provider codecs translate provider-native LLM payloads in the request and
+response halves of a provider call. First, request codecs decode provider
+requests into annotated request data for request intercepts and request-side
+middleware, then encode edits back into the provider shape when execution
+continues. Later, after the provider returns, response codecs decode provider
+responses into annotated response data for LLM end events, subscribers,
+exporters, and diagnostics.
+
+Provider codecs are suitable for:
+
+- Provider payloads differ structurally
+- Request intercepts need normalized request meaning
+- Response annotations such as usage, model names, or tool calls should be
+  exposed in one stable shape for downstream consumers
+
+Response decoding improves observability and downstream consistency. It does not
+automatically change the value returned to the application unless a separate
+typed value boundary also does so.
+
+## Normalized Data Consumption
+
+Normalized codec output is applicable to several runtime layers:
+
+- Request intercepts or request-side middleware that need stable request meaning
+- Lifecycle events that should expose consistent semantic payloads
+- Subscribers that inspect runtime activity in process
+- Exporters that write raw ATOF events or project them into ATIF,
+  OpenTelemetry, or OpenInference
+
+Codecs do not replace scopes, middleware, subscribers, or plugins. They make
+those layers easier to apply consistently across heterogeneous inputs.
+
+## Extraction Strategy Boundaries
+
+NeMo Relay keeps extraction responsibilities separated so refactors can reuse
+normalization logic without changing runtime ownership or public binding APIs.
+
+### Provider Schema Extraction
+
+Provider schema extraction is codec-owned. Built-in provider surfaces, such as
+OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages, each own the
+logic that recognizes their request and response shapes and maps them into
+`AnnotatedLlmRequest` or `AnnotatedLlmResponse`.
+
+When a managed LLM event already has an annotation, subscribers and exporters
+consume that annotation. When an event has only raw provider JSON, best-effort
+normalization may detect a built-in provider surface and decode it. This
+fallback is fail-open: unrecognized, ambiguous, missing, sparse, or invalid
+payloads remain observable as raw lifecycle data. A recognized provider hint can
+disambiguate an otherwise identical request shape, such as an Anthropic Messages
+request without a top-level `system` field, but no provider annotation is
+invented without either a matching provider surface or a recognized hint.
+
+Provider extraction covers model names, messages, generation parameters, tool
+definitions, tool calls, finish reasons, usage, cost, provider-specific fields,
+and replayable request or response JSON when the source payload contains enough
+information. Provider codecs should preserve unknown fields and treat request
+encoding as a merge over the original provider payload.
+
+The response-extraction interface is the existing response codec contract:
+`LlmResponseCodec::decode_response` returns `AnnotatedLlmResponse`. Built-in
+codecs populate that normalized response with model, finish reason, tool-call,
+usage, cost, provider-specific, and preserved `extra` fields. Cost parsing and
+estimation helpers are codec implementation details behind that interface, not a
+separate provider-response API.
+
+### Provider Request Extraction
+
+Provider request extraction is gateway-owned. It uses the selected gateway route,
+such as OpenAI Responses, OpenAI Chat Completions, OpenAI Models, Anthropic
+Messages, or Anthropic Count Tokens, to extract request facts that are not codec
+schema annotations.
+
+Route-specific request extractors resolve gateway session IDs, request-affinity
+keys, and fallback turn input for provider calls that arrive before the matching
+agent prompt hook. This keeps correlation and ownership hints near gateway
+alignment, while provider codecs stay focused on decoding request and response
+schemas.
+
+Provider request extraction can also pass a narrow provider hint into codec
+normalization. For example, the recognized `anthropic` and `anthropic.messages`
+hints let Anthropic Messages requests without a top-level `system` field decode
+through the Anthropic provider surface instead of being treated as shape-only
+OpenAI Chat payloads.
+
+### Agent Payload Extraction
+
+Agent payload extraction is separate from provider codecs. Coding agents,
+harnesses, and framework hooks can expose session IDs, event names, subagent
+relationships, tool IDs, tool names, tool arguments, tool results, LLM hints,
+and status fields through host-specific payload shapes. These facts help NeMo
+Relay attach lifecycle events to the right scope, but they do not decode
+provider schemas or build request-affinity keys from provider requests.
+
+Agent extraction may be partial. Missing identifiers use compatibility
+fallbacks at the adapter boundary, such as synthetic session IDs, synthetic tool
+call IDs, an explicit `unknown_tool` name, or a generic subagent ID. Lossy,
+summary-only, or truncated payloads should keep their original payload and
+metadata available for debugging instead of pretending to be reconstruction
+grade provider data.
+
+### Exporter Projection
+
+Exporter projection is the final step. ATIF, OpenTelemetry, and OpenInference
+may project the same normalized facts into different output schemas, but generic
+extraction should stay outside exporter-specific formatting where possible.
+ATIF-specific trajectory shaping, OpenTelemetry attributes, and OpenInference
+semantic attributes remain exporter-local.
+
+## Codec Decision Limitations
+
+Codecs do not decide:
+
+- Ownership boundaries
+- Middleware ordering
+- Whether execution is allowed to continue
+- Which exporter is active
+
+Those responsibilities belong to scopes, middleware, plugins, and exporter or
+subscriber registration.
+
+## Read Next
+
+- Use [Using Codecs](/integrate-into-frameworks/using-codecs) for typed value
+  codecs at framework-facing boundaries.
+- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for
+  provider-native request and response normalization.
+- Use [Provider Response
+  Codecs](/integrate-into-frameworks/provider-response-codecs) when the main
+  need is response-side annotations for subscribers or exporters.
+- Refer to the [Glossary](/resources/glossary) for the stable terminology used
+  across codecs, providers, and observability surfaces.

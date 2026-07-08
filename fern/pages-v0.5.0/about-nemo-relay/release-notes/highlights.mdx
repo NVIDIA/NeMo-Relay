@@ -1,0 +1,73 @@
+---
+title: "Highlights"
+description: ""
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page summarizes the notable capabilities in the current release
+documentation set.
+
+## NVIDIA NeMo Relay 0.5
+
+NVIDIA NeMo Relay 0.5 adds dynamic plugin SDKs and controls, verified CLI
+installation and diagnostics, clearer runtime contracts, and improved lineage
+for managed LLM requests.
+
+### Compatibility and Migration
+
+- Move plugin configuration from `config.toml` into `plugins.toml`. The
+  `--plugin-config` CLI option and hook-forwarding input have been removed.
+- Update every registered LLM request and tool execution intercept to return
+  its canonical outcome. The outcomes can include ordered pending marks while
+  Relay retains lifecycle ownership.
+- Rebuild development native plugins and `grpc-v1` workers against 0.5 because
+  the native ABI and worker outcome contracts are now finalized.
+- Migrate away from the removed experimental `nemo-relay-wasm` package, Cursor
+  CLI support, and patch-based integrations.
+
+### Dynamic Plugins and Configuration
+
+- Added dynamic plugin discovery from `plugins.toml`, host policy and
+  attestation gates, and lifecycle commands for inspecting, validating,
+  enabling, and disabling plugins.
+- Added the Rust SDK for trusted in-process `rust_dynamic` plugins and the
+  `grpc-v1` worker protocol with Rust and Python worker SDKs.
+- Added schema-aware dynamic-plugin configuration, validation, secret-aware
+  editing, and merged TOML preview in the CLI.
+- Added Python worker-environment management and worker invocation
+  cancellation.
+
+### CLI Installation and Diagnostics
+
+- Added verified Unix and Windows installers that select the release asset,
+  verify its SHA-256 checksum, and support version pinning.
+- Expanded `nemo-relay doctor` with agent-host readiness checks, persistent
+  host-plugin diagnostics, and discovered `plugins.toml` source and validation
+  reporting.
+- Added gateway status reporting for bind, exporter, and remote ATIF storage
+  destinations.
+
+### Runtime and Observability
+
+- Added canonical LLM request and tool execution outcomes across Rust, Python,
+  Node.js, Go, C FFI, native plugins, and worker plugins.
+- Added ordered pending marks to managed LLM and tool lifecycles without adding
+  control data to application-visible requests or tool results.
+- Added automatic Dynamo session and parent-session headers to managed LLM
+  requests, plus bounded CLI turn scopes for trace correlation.
+- Documented stable normalized token and cost semantics, including provider
+  mapping and exporter projection behavior.
+- Hardened ATOF HTTP output and ensured gateway shutdown flushes queued events.
+
+### Documentation and Tooling
+
+- Added public contract references for LLM request and tool execution intercept
+  outcomes.
+- Expanded dynamic plugin, configuration, runtime-contract, installation, and
+  integration examples.
+- Updated package, build, test, and release guidance for the primary Rust, Python, and Node.js surfaces, plus experimental Go and raw C FFI notes.
+
+The complete changelog and release artifacts can be viewed on
+[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).

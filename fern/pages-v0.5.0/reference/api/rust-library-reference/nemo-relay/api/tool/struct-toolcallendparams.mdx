@@ -1,0 +1,48 @@
+---
+title: "Struct Tool Call EndParams"
+sidebar-title: "ToolCallEndParams"
+description: "Builder parameters for `tool_call_end`."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ToolCallEndParams&lt;'a&gt; &#123;\n    pub handle: &amp;'a <a href=\"struct-toolhandle\">ToolHandle</a>,\n    pub result: <a href=\"../../json/type-json\">Json</a>,\n    pub data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;,\n    pub timestamp: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;&gt;,\n&#125;"}} /></pre>
+
+Builder parameters for [`tool_call_end`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-end).
+
+## Fields
+
+### `handle: &'a ToolHandle`
+
+Tool handle to close.
+
+### `result: Json`
+
+Raw tool result associated with the end event.
+
+### `data: Option<Json>`
+
+Optional application payload retained for compatibility; Agent Trajectory Observability Format (ATOF) data is the result.
+
+### `metadata: Option<Json>`
+
+Optional JSON metadata recorded on the end event.
+
+### `timestamp: Option<DateTime<Utc>>`
+
+Optional timestamp recorded on the emitted end event. When omitted, the runtime records the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Implementations
+
+### `impl<'a> ToolCallEndParams<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-toolcallendparams\">ToolCallEndParams</a>&lt;'a&gt;"}} /></pre>
+
+#### `builder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn builder() -&gt; ToolCallEndParamsBuilder&lt;'a, (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>)&gt;"}} /></pre>
+
+Create a builder for building `ToolCallEndParams`. On the builder, call `.handle(...)`, `.result(...)`, `.data(...)`(optional), `.metadata(...)`(optional), `.timestamp(...)`(optional) to set the values of the fields. Finally, call `.build()` to create the instance of `ToolCallEndParams`.

@@ -1,0 +1,71 @@
+---
+title: "Enum Atif Storage Config"
+sidebar-title: "AtifStorageConfig"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/enum-atifstorageconfig"
+description: "Remote storage destination for ATIF trajectory files."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum AtifStorageConfig &#123;\n    Http(<a href=\"struct-httpstorageconfig\">HttpStorageConfig</a>),\n    S3(<a href=\"struct-s3storageconfig\">S3StorageConfig</a>),\n&#125;"}} /></pre>
+
+Remote storage destination for ATIF trajectory files.
+
+When [`AtifSectionConfig::storage`](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig) is non-empty, the ATIF dispatcher uploads each completed trajectory to every configured backend instead of writing it to the local filesystem. The shape is tagged with a `type` discriminator so additional backends (for example, Azure Blob Storage) can be added without breaking existing configs.
+
+## Variants
+
+### `Http(HttpStorageConfig)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Http(<a href=\"struct-httpstorageconfig\">HttpStorageConfig</a>)"}} /></pre>
+
+HTTP endpoint storage.
+
+### `S3(S3StorageConfig)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "S3(<a href=\"struct-s3storageconfig\">S3StorageConfig</a>)"}} /></pre>
+
+S3-compatible object storage.
+
+Non-secret connection settings (`region`, `endpoint_url`, `allow_http`) and the static `access_key_id` may be set directly. The secret credential fields (`secret_access_key_var`, `session_token_var`) must reference the *name* of an environment variable that holds the secret, so multiple S3 destinations can coexist in one config without writing secrets into checked-in files. Any field left unset falls back to the matching `AWS_*` environment variable (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, `AWS_ENDPOINT_URL`, `AWS_ALLOW_HTTP`).
+
+## Trait Implementations
+
+### `impl Clone for AtifStorageConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-atifstorageconfig\">AtifStorageConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-atifstorageconfig\">AtifStorageConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for AtifStorageConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-atifstorageconfig\">AtifStorageConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for AtifStorageConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"enum-atifstorageconfig\">AtifStorageConfig</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl Serialize for AtifStorageConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"enum-atifstorageconfig\">AtifStorageConfig</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

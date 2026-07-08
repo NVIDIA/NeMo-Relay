@@ -1,0 +1,164 @@
+---
+title: "Plugin Installation"
+description: "Install and manage NeMo Relay host plugins for Claude Code and Codex."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Install a host plugin when you want Claude Code or Codex to load NeMo Relay
+through its normal plugin system instead of through a `nemo-relay` wrapper
+command.
+
+The installed plugin emits agent, subagent, tool, prompt, compaction, and stop
+lifecycle signals. Model-provider routing sends LLM traffic through the local
+NeMo Relay gateway. Hooks alone cannot capture complete LLM request and
+response spans.
+
+## Requirements
+
+Install `nemo-relay` and ensure that it is available on `PATH` or `%PATH%`.
+The plugin installer does not download a second Relay binary, install a daemon,
+or require a plugin-local executable.
+
+The selected host CLI must also be available:
+
+- `claude` for Claude Code plugin installation.
+- `codex` for Codex plugin installation.
+
+## Install Host Plugin
+
+Run the command for the host plugin that you want to install:
+
+```bash
+nemo-relay install claude-code
+```
+
+```bash
+nemo-relay install codex
+```
+
+Install every supported host detected on the machine:
+
+```bash
+nemo-relay install all
+```
+
+`install all` selects only hosts whose CLI is present. It fails if neither
+Claude Code nor Codex is detected.
+
+Use `--dry-run` to inspect the generated marketplace paths and host commands
+without writing files or changing host configuration:
+
+```bash
+nemo-relay install codex --dry-run
+```
+
+Use `--install-dir` when you need a non-default marketplace location. The
+default directory is platform-specific:
+
+| Platform | Default Plugin Install Directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/nemo-relay/plugins` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/nemo-relay/plugins` |
+| Windows | `%LOCALAPPDATA%\nemo-relay\plugins` |
+
+## What Install Changes
+
+`nemo-relay install` writes a local marketplace named `nemo-relay-local`, then
+registers the generated `nemo-relay-plugin` package with the selected host.
+
+For Claude Code, install registers the local Claude marketplace, installs
+`nemo-relay-plugin@nemo-relay-local` at user scope, and enables provider routing
+through the local NeMo Relay sidecar. During installation, NeMo Relay preserves
+existing Claude authentication and model settings and backs them up only when
+it adds the Relay provider route.
+
+For Codex, install registers the local Codex marketplace, installs
+`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, merges generated hook
+entries, and configures the `nemo-relay-openai` provider alias at
+`http://127.0.0.1:47632`.
+
+Codex plugin mode is hook-supervised on-demand startup only. It does not install a
+Codex wrapper, user-level daemon, launch agent, system user service,
+scheduled task, login item, or persistent supervisor. The sidecar starts when an
+installed Codex hook runs, reuses an already healthy sidecar when one exists,
+and exits after its idle timeout.
+
+<Warning>
+The plugin captures the first provider request only when Codex fires an
+installed hook before that request. If a Codex version calls the provider
+before any hook, the plugin cannot guarantee first-request capture under
+hook-only lazy startup.
+</Warning>
+
+## Diagnose
+
+Run the command for the installed host that you want to diagnose:
+
+```bash
+nemo-relay doctor --plugin claude-code
+```
+
+```bash
+nemo-relay doctor --plugin codex
+```
+
+```bash
+nemo-relay doctor --plugin all
+```
+
+`nemo-relay doctor` includes every persistent host-plugin installation found in
+the default platform install directory. It checks the generated marketplace and
+plugin files, Relay binary and hook support, host registration, provider
+routing, hooks, and lazy-sidecar assumptions. A stopped Codex lazy sidecar is
+informational; hooks start it on first use.
+
+Use the focused plugin doctor when diagnosing one host or an installation that
+uses a custom directory:
+
+```bash
+nemo-relay doctor --plugin codex --install-dir /path/to/plugins
+```
+
+If an installed host plugin is incomplete, doctor reports the failed check and
+suggests `nemo-relay install <host> --force`. Hosts without a persistent plugin
+installation remain informational, so transparent-run setup does not require a
+host plugin.
+
+## Uninstall
+
+Run the command for the installed host plugin that you want to remove:
+
+```bash
+nemo-relay uninstall claude-code
+```
+
+```bash
+nemo-relay uninstall codex
+```
+
+```bash
+nemo-relay uninstall all
+```
+
+Uninstall removes the generated host plugin registration and marketplace entry,
+restores Claude Code provider routing from the Relay backup, and removes
+generated Codex hook/provider configuration, while preserving unrelated user
+configuration.
+
+## Source Marketplace Discovery
+
+This repository also contains source marketplace manifests for development and
+validation:
+
+- `.claude-plugin/marketplace.json`
+- `.agents/plugins/marketplace.json`
+
+Those manifests are useful when validating host plugin metadata from a source
+checkout. For end-user setup, use `nemo-relay install <host>`. It generates the
+local marketplace, registers the host plugin, and performs the required
+provider and hook setup. Avoid keeping both a source-installed
+plugin and a generated install active for the same host because both can forward
+the same hook payload.

@@ -1,0 +1,213 @@
+---
+title: "Claude Code"
+description: ""
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide to observe Claude Code sessions with NeMo Relay. Claude Code is
+the supported integration target. The Claude application, Claude web, and Claude
+desktop sessions are unsupported unless they expose the same local hook and
+gateway controls as Claude Code.
+
+## Transparent Run
+
+Use the wrapper for no-install local observability:
+
+```bash
+nemo-relay claude
+```
+
+Pass Claude Code arguments after `--`:
+
+```bash
+nemo-relay claude -- "summarize this repository"
+```
+
+This shortcut is equivalent to `nemo-relay run -- claude`. The wrapper starts a
+gateway on a dynamic `127.0.0.1` port, creates a temporary Claude plugin
+directory with NeMo Relay hooks, passes that plugin with `--plugin-dir`, and
+sets `ANTHROPIC_BASE_URL` to the gateway URL for the launched process.
+
+Inspect what would be launched without starting Claude Code:
+
+```bash
+nemo-relay run \
+  --dry-run \
+  --print \
+  -- claude
+```
+
+## Persistent Plugin Install
+
+Use persistent plugin installation when Claude Code should load NeMo Relay from
+its normal plugin marketplace instead of through `nemo-relay claude`:
+
+```bash
+nemo-relay install claude-code
+```
+
+The installer creates a local marketplace, installs
+`nemo-relay-plugin@nemo-relay-local` at user scope, and enables Claude Code
+provider routing through the local NeMo Relay sidecar. It uses the existing
+`nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
+
+Check or remove the installed plugin with:
+
+```bash
+nemo-relay doctor --plugin claude-code
+nemo-relay uninstall claude-code
+```
+
+Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
+directories, rollback behavior, and source marketplace notes.
+
+## Shared Config
+
+Create `.nemo-relay/config.toml` for project defaults or
+`~/.config/nemo-relay/config.toml` for user defaults:
+
+```toml
+[agents.claude]
+command = "claude"
+```
+
+Then configure observability with `nemo-relay plugins edit --project` or
+`.nemo-relay/plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = ".nemo-relay/atif"
+
+[components.config.openinference]
+enabled = true
+endpoint = "http://127.0.0.1:4318/v1/traces"
+```
+
+Run `nemo-relay run --agent claude` to use the configured command and plugin
+config. User config takes priority over project and system config.
+
+## Standalone Gateway
+
+Use the long-running gateway only when you want Claude Code running outside the
+wrapper (e.g., already configured by an IDE):
+
+```bash
+nemo-relay --bind 127.0.0.1:4040
+```
+
+Launch Claude Code from another terminal with the gateway environment:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:4040
+claude
+```
+
+The gateway forwards Anthropic `/v1/messages`, `/v1/messages/count_tokens`, and
+model routes without rewriting provider JSON. Hook events (tool calls, session
+markers) are only captured when running through `nemo-relay claude` or
+`nemo-relay run --agent claude`, which inject ephemeral hooks into the launched
+process.
+
+## Captured Events
+
+Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
+`SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `Notification`, and `PreCompact` for scope, tool, and
+mark events. `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and
+`Stop` are retained as private LLM correlation hints and are not emitted as
+standalone NeMo Relay events.
+
+Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
+`tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
+`agent_id` as the subagent identifier and preserve `agent_type` in metadata.
+
+Claude Code traces are turn-oriented. A multi-turn conversation can produce one
+root `claude-code-turn` agent span or trajectory per user turn. That is expected
+when each span has a real `UserPromptSubmit` payload and assistant output. NeMo
+Relay excludes the known Claude Code startup/preflight probe and late
+uncorrelatable lifecycle hooks from exported user traces so they do not appear
+as synthetic `null`, `user: test`, `idle_timeout`, or lifecycle-only turns.
+Suppressed startup probes are still logged by the gateway as internal pre-turn
+probe bypasses for debugging.
+
+## Smoke Test
+
+Run a small Claude Code prompt that starts a session and uses one simple tool.
+Then check that hook forwarding reaches the gateway:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+printf '{"session_id":"smoke-claude","hook_event_name":"SessionStart"}' \
+  | NEMO_RELAY_GATEWAY_URL=http://127.0.0.1:4040 nemo-relay hook-forward claude --fail-closed
+```
+
+The response should be valid Claude Code hook JSON. For most lifecycle events it
+is an allow/continue response. A full observability smoke fixture should produce
+expected OpenInference spans, raw ATOF events, and ATIF trajectories for at
+least one user turn, one LLM call, and one simple tool call.
+
+## Verify Export
+
+End the Claude Code session and confirm that session-end closed the NeMo Relay
+agent scope and wrote Agent Trajectory Interchange Format (ATIF):
+
+```bash
+ls .nemo-relay/atif
+```
+
+The gateway exports `<session-id>.atif.json` on session end. If no file appears,
+confirm that `SessionEnd` hooks fire, `plugins.toml` enables the ATIF exporter,
+and the gateway process can write to the configured directory.
+
+## Troubleshoot LLM Lifecycle
+
+Missing hooks usually means Claude Code did not load the local hook config or
+the `nemo-relay` binary is not on `PATH`.
+
+Missing LLM spans with present hook spans means Anthropic traffic is not routed
+through the gateway. Verify `ANTHROPIC_BASE_URL` in the Claude Code process
+environment and confirm that requests hit `/v1/messages`.
+
+If LLM spans exist but attach to the session instead of a subagent, pass
+`x-nemo-relay-subagent-id` on gateway requests or include shared
+`conversation_id`, `generation_id`, or `request_id` values in both hook payloads
+and provider requests.
+
+When Relay cannot prove a stronger LLM owner, it keeps the span under the active
+turn and adds correlation metadata instead of guessing. Inspect
+`llm_correlation_status`, `llm_correlation_source`, and
+`llm_correlation_subagent_id` on LLM spans. Common statuses include `explicit`,
+`single_hint`, `request_affinity`, `agent_fallback`, and
+`ambiguous_fallback`. Tool spans expose the same diagnostic pattern with
+`tool_correlation_status`, `tool_correlation_source`, and
+`tool_correlation_subagent_id`.
+
+Late `SubagentStop` hooks can arrive after Claude Code has already closed the
+turn, especially when Claude reports background stop-hook state. If the
+subagent id has no matching `SubagentStart` and there is no active turn, Relay
+logs the missing subagent and suppresses the hook from exported observability so
+it does not create a synthetic null turn. If an unknown subagent end arrives
+while a turn is active, Relay may emit a `subagent_end_without_start` diagnostic
+mark under that turn.
+
+## Hook Limitations
+
+Claude Code hooks are available only when Claude Code loads the NeMo Relay
+plugin, such as through `nemo-relay claude` or `nemo-relay run --agent claude`.
+The standalone gateway can still observe Anthropic LLM traffic, but it cannot
+invent missing tool, prompt, compaction, notification, or subagent hooks.
+
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
+used as private correlation and turn-boundary hints. They are not exported as
+standalone user-visible mark events unless they also produce a scoped turn,
+tool, LLM, or lifecycle observation.

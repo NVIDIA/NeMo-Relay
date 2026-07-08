@@ -1,0 +1,102 @@
+---
+title: "Known Issues"
+description: ""
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page lists current limitations and support notes for the release
+documentation set.
+
+## NVIDIA NeMo Relay 0.5
+
+These notes apply to the NVIDIA NeMo Relay 0.5 release.
+
+- Go and the raw C FFI surface are experimental and source-first. Generated
+  API pages cover Rust, Python, and Node.js; experimental bindings do not have
+  the same generated documentation depth.
+- The NeMo Relay CLI is experimental. Coding-agent observability support varies
+  with host plugin, hook, and provider-routing capabilities. Hooks alone cannot
+  produce complete LLM request and response spans.
+- Complete first-request capture in Codex plugin mode depends on Codex firing
+  an installed hook before the first provider request.
+- Node.js 24 or newer is required for Node.js binding and package workflows.
+- OpenClaw support uses public hook-backed telemetry with partial security and
+  optimization support. Security is limited to pre-tool conditional guardrails,
+  and optimization is limited to adaptive telemetry unless the integration owns
+  a managed execution path.
+- The NeMo Guardrails remote backend depends on the availability, latency, and
+  policy behavior of the configured remote service. Its local backend requires
+  Python 3.11 or newer and `nemoguardrails==0.22.0`.
+- The PII redaction plugin currently provides deterministic local backend
+  support. Local-model backend configuration is reserved for future expansion.
+- Pricing estimates depend on configured model-pricing sources and their
+  freshness. Unknown model pricing and missing token data leave cost absent
+  instead of defaulting to zero.
+- ATOF streaming endpoints and remote ATIF storage depend on reachable,
+  correctly configured destinations. Endpoint failures do not block local file
+  output or other configured endpoints.
+- Native dynamic plugins run in-process and are not sandboxed. `grpc-v1` worker
+  plugins isolate a process but do not provide a security sandbox.
+- `LLMRequest` objects in the Python binding should be treated as immutable.
+  Request middleware that changes content should return a new request object.
+- Native subscriber callbacks are delivered asynchronously. Flush subscribers
+  before relying on callback side effects, captured event lists, files, or
+  exporter output. Deregistering a subscriber affects future emissions, but
+  callbacks from already-queued event snapshots can still run.
+
+### Compatibility and Migration Notes
+
+- Move plugin configuration from `config.toml` to `plugins.toml`. The
+  `--plugin-config` option is unavailable in 0.5.
+- Registered LLM request and tool execution intercepts must return their
+  canonical outcome types. Rebuild development native plugins and `grpc-v1`
+  workers against 0.5.
+- The experimental `nemo-relay-wasm` package is no longer built, published, or
+  supported by this repository.
+- The `nemo-relay cursor` and `hook-forward cursor` entry points are no longer
+  available. Patch-based integrations are also no longer maintained.
+
+### Fixed in NVIDIA NeMo Relay 0.5
+
+- Gateway shutdown flushes queued events before it exits.
+- Dynamic worker invocations support cancellation, and the CLI manages Python
+  dynamic-plugin environments.
+- ATOF file export creates a missing output directory before opening JSONL
+  output.
+- CLI status output reports daemon binding, exporter status, and remote ATIF
+  storage destinations more reliably.
+- Codex host-plugin discovery uses the supported text output from the Codex
+  plugin command.
+
+### Fixed in Prior Releases
+
+#### NVIDIA NeMo Relay 0.4
+
+- ATIF shutdown no longer deadlocks queued subscribers.
+- Sanitized LLM requests are resolved from annotations for observability output.
+- Structured ATIF tool results and Hermes tool-result observations are
+  preserved more reliably.
+- Hermes routed-provider spans, wrapped ATIF fidelity, subagent lineage, and
+  error-path export consistency are covered and corrected.
+- OpenClaw observability output is more consistent for nested subagents, model
+  timing diagnostics, hook-backed provenance, placeholder replay, and
+  hook-only fallback exports.
+- LangChain serialization handles wrapped integration payloads more reliably.
+- Plugin context-manager teardown avoids the previous deadlock path.
+- Node.js `withScope` callbacks receive a real `ScopeHandle`.
+- Deep Agents model responses are annotated for downstream observability.
+
+#### NVIDIA NeMo Relay 0.3
+
+- Managed LLM start events are emitted before execution intercepts.
+- Coding-agent trace scopes are aligned with NeMo Relay agent scope semantics.
+- ATIF tool observations are correlated with their matching tool calls.
+- OpenClaw tool call replay visibility is preserved.
+- LangChain serialization handles wrapped integration payloads more reliably.
+
+#### Earlier Releases
+
+- Enabled TLS support for OTLP HTTP export.
+- Preserved Go scope stacks across OS threads.

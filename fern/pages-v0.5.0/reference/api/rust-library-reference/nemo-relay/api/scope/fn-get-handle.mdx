@@ -1,0 +1,24 @@
+---
+title: "Function get_handle"
+sidebar-title: "get_handle"
+description: "Return the current scope at the top of the active stack."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_handle() -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&gt;"}} /></pre>
+
+Return the current scope at the top of the active stack.
+
+This reads the task-local or thread-local scope stack without mutating it and returns a clone of the current top-most [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle).
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the current [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle) when the runtime owner check succeeds.
+
+## Errors
+
+Returns an error when the current binding has not initialized the shared runtime ownership correctly.

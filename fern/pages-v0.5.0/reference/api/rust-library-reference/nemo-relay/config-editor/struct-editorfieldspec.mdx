@@ -1,0 +1,81 @@
+---
+title: "Struct Editor Field Spec"
+sidebar-title: "EditorFieldSpec"
+slug: "/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editorfieldspec"
+description: "Static editor metadata for one configuration field."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EditorFieldSpec &#123;\n    pub name: &amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    pub label: &amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    pub kind: <a href=\"enum-editorfieldkind\">EditorFieldKind</a>,\n    pub enum_values: &amp;'static [&amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>],\n    pub optional: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub nested_schema: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>() -&gt; &amp;'static <a href=\"struct-editorschema\">EditorSchema</a>&gt;,\n    pub nested_default: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.fn.html\">fn</a>() -&gt; <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n&#125;"}} /></pre>
+
+Static editor metadata for one configuration field.
+
+## Fields
+
+### `name: &'static str`
+
+Serialized field name.
+
+### `label: &'static str`
+
+Human-readable label.
+
+### `kind: EditorFieldKind`
+
+Editor control shape.
+
+### `enum_values: &'static [&'static str]`
+
+Allowed string enum values, when [`EditorFieldKind::Enum`](/reference/api/rust-library-reference/nemo-relay/config_editor/enum-editorfieldkind) is used.
+
+### `optional: bool`
+
+Whether the field is represented as an `Option<T>` in Rust.
+
+### `nested_schema: Option<fn() -> &'static EditorSchema>`
+
+Nested editor schema for section fields.
+
+### `nested_default: Option<fn() -> Value>`
+
+Default value for a nested section.
+
+## Implementations
+
+### `impl EditorFieldSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-editorfieldspec\">EditorFieldSpec</a>"}} /></pre>
+
+#### `schema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn schema(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;'static <a href=\"struct-editorschema\">EditorSchema</a>&gt;"}} /></pre>
+
+Returns the nested schema for this field, if it is a section.
+
+#### `default_value`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn default_value(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Json</a>&gt;"}} /></pre>
+
+Returns the typed default value for this field's nested section.
+
+## Trait Implementations
+
+### `impl Clone for EditorFieldSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-editorfieldspec\">EditorFieldSpec</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-editorfieldspec\">EditorFieldSpec</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for EditorFieldSpec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-editorfieldspec\">EditorFieldSpec</a>"}} /></pre>

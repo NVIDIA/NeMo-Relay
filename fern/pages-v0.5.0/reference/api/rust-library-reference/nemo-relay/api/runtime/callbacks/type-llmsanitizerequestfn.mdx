@@ -1,0 +1,30 @@
+---
+title: "Type Alias LlmSanitize Request Fn"
+sidebar-title: "LlmSanitizeRequestFn"
+description: "Sanitize an LLM request before the runtime records it."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type LlmSanitizeRequestFn = <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"../../llm/struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"../../llm/struct-llmrequest\">LlmRequest</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;;"}} /></pre>
+
+Sanitize an LLM request before the runtime records it.
+
+LLM request sanitizers affect the serialized request payload emitted on start events. They do not mutate the caller-owned [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) unless a separate request intercept does so.
+
+## Parameters
+
+- First argument: LLM request payload to sanitize for observability.
+
+## Returns
+
+Sanitized [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) for the emitted event.
+
+## Aliased Type
+
+```rust
+pub struct LlmSanitizeRequestFn { /* private fields */ }
+```

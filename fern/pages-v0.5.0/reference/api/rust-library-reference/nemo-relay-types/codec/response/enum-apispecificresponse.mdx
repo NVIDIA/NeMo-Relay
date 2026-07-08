@@ -1,0 +1,192 @@
+---
+title: "Enum ApiSpecific Response"
+sidebar-title: "ApiSpecificResponse"
+description: "API-specific response data that cannot be normalized across providers."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum ApiSpecificResponse &#123;\n    OpenAIChat &#123;\n        logprobs: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n        system_fingerprint: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        service_tier: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    OpenAIResponses &#123;\n        output_items: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../type-json\">Json</a>&gt;&gt;,\n        status: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        incomplete_details: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n        previous_response_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        store: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;,\n        service_tier: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        truncation: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n        reasoning: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n        input_tokens_details: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n        output_tokens_details: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n    &#125;,\n    AnthropicMessages &#123;\n        object_type: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        role: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        stop_reason: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        stop_sequence: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        service_tier: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n        container: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../type-json\">Json</a>&gt;,\n        content_blocks: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../../type-json\">Json</a>&gt;&gt;,\n    &#125;,\n    Custom &#123;\n        api_name: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        data: <a href=\"../../type-json\">Json</a>,\n    &#125;,\n&#125;"}} /></pre>
+
+API-specific response data that cannot be normalized across providers.
+
+Each variant captures fields unique to a particular LLM API, stored via internal tagging on the `"api"` key.
+
+## Variants
+
+### `OpenAIChat`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "OpenAIChat"}} /></pre>
+
+OpenAI Chat Completions-specific fields.
+
+#### Fields
+
+### `logprobs: Option<Json>`
+
+Token-level log probabilities (raw JSON, too complex to normalize).
+
+### `system_fingerprint: Option<String>`
+
+System fingerprint for reproducibility.
+
+### `service_tier: Option<String>`
+
+Processing tier used (e.g., "default").
+
+### `OpenAIResponses`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "OpenAIResponses"}} /></pre>
+
+OpenAI Responses API-specific fields.
+
+#### Fields
+
+### `output_items: Option<Vec<Json>>`
+
+Full output items array for direct access.
+
+### `status: Option<String>`
+
+Response status (e.g., "completed", "incomplete").
+
+### `incomplete_details: Option<Json>`
+
+Details about why the response is incomplete.
+
+### `previous_response_id: Option<String>`
+
+Echoed previous response ID for conversation continuation.
+
+### `store: Option<bool>`
+
+Whether this response is marked for server-side storage.
+
+### `service_tier: Option<String>`
+
+Service tier used for the response.
+
+### `truncation: Option<Json>`
+
+Truncation behavior metadata.
+
+### `reasoning: Option<Json>`
+
+Reasoning configuration/result metadata.
+
+### `input_tokens_details: Option<Json>`
+
+Raw input token details payload.
+
+### `output_tokens_details: Option<Json>`
+
+Raw output token details payload.
+
+### `AnthropicMessages`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AnthropicMessages"}} /></pre>
+
+Anthropic Messages API-specific fields.
+
+#### Fields
+
+### `object_type: Option<String>`
+
+Anthropic object type (typically `"message"`).
+
+### `role: Option<String>`
+
+Anthropic response role (typically `"assistant"`).
+
+### `stop_reason: Option<String>`
+
+Raw Anthropic stop_reason.
+
+### `stop_sequence: Option<String>`
+
+Which stop sequence was matched (if any).
+
+### `service_tier: Option<String>`
+
+Anthropic response service tier when present.
+
+### `container: Option<Json>`
+
+Anthropic container payload when present.
+
+### `content_blocks: Option<Vec<Json>>`
+
+Full content blocks array for direct access.
+
+### `Custom`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Custom"}} /></pre>
+
+Custom/unknown API - catch-all for user-implemented codecs.
+
+#### Fields
+
+### `api_name: String`
+
+API identifier.
+
+### `data: Json`
+
+Opaque API-specific data.
+
+## Trait Implementations
+
+### `impl Clone for ApiSpecificResponse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ApiSpecificResponse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for ApiSpecificResponse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl PartialEq for ApiSpecificResponse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for ApiSpecificResponse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl StructuralPartialEq for ApiSpecificResponse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-apispecificresponse\">ApiSpecificResponse</a>"}} /></pre>

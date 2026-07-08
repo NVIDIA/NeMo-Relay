@@ -1,0 +1,45 @@
+---
+title: "Struct Prediction Trie Lookup"
+sidebar-title: "PredictionTrieLookup"
+description: "Looks up predictions in a prediction trie with graceful fallback."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PredictionTrieLookup<'a> { /* private fields */ }
+```
+
+Looks up predictions in a prediction trie with graceful fallback.
+
+Fallback chain:
+
+1. Exact path + exact call_index
+2. Exact path + predictions_any_index
+3. Deepest ancestor + exact call_index
+4. Deepest ancestor + predictions_any_index
+5. ... continue to root ...
+6. None (no predictions available)
+
+## Implementations
+
+### `impl<'a> PredictionTrieLookup<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-predictiontrielookup\">PredictionTrieLookup</a>&lt;'a&gt;"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(root: &amp;'a <a href=\"../data_models/struct-predictiontrienode\">PredictionTrieNode</a>) -&gt; Self"}} /></pre>
+
+Create a new lookup over the given trie root.
+
+#### `find`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn find(\n    &amp;self,\n    path: &amp;[<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>],\n    call_index: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;'a <a href=\"../data_models/struct-llmcallprediction\">LlmCallPrediction</a>&gt;"}} /></pre>
+
+Find the best matching prediction for the given path and call index.
+
+Walks the trie following `path` elements, tracking the deepest node that has a prediction. At each node, prefers `predictions_by_call_index[call_index]` over `predictions_any_index`.

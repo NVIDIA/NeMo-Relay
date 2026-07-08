@@ -1,0 +1,1263 @@
+---
+title: "Runtime"
+description: "Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/index.d.ts`.
+
+Import from `nemo-relay-node`.
+
+Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.
+
+## Interfaces
+
+### `AtofExporterConfig`
+
+Mutable configuration object for `AtofExporter`.
+
+```ts
+export interface AtofExporterConfig {
+  /** Output directory. Defaults to the current working directory. */
+  outputDirectory?: string
+  /** `"append"` (default) or `"overwrite"`. */
+  mode?: string
+  /** Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`. */
+  filename?: string
+  /** Streaming endpoints that receive every raw ATOF event. */
+  endpoints?: Array<AtofEndpointConfig>
+}
+```
+
+### `AtofEndpointConfig`
+
+Mutable configuration object for one ATOF streaming endpoint.
+
+```ts
+export interface AtofEndpointConfig {
+  /** Endpoint URL. */
+  url: string
+  /** `"http_post"` (default), `"websocket"`, or `"ndjson"`. */
+  transport?: string
+  /** Extra endpoint headers as string key/value pairs. */
+  headers?: Json
+  /** Per-endpoint timeout in milliseconds. */
+  timeoutMillis?: number
+  /** Field name policy applied before sending events. */
+  fieldNamePolicy?: string
+}
+```
+
+### `OpenTelemetryConfig`
+
+Mutable configuration object for `OpenTelemetrySubscriber`.
+
+```ts
+export interface OpenTelemetryConfig {
+  /** `"http_binary"` (default) or `"grpc"`. */
+  transport?: string
+  /** OTLP endpoint, such as `http://localhost:4318/v1/traces`. */
+  endpoint?: string
+  /** Extra exporter headers/metadata as string key/value pairs. */
+  headers?: Json
+  /** Extra OpenTelemetry resource attributes as string key/value pairs. */
+  resourceAttributes?: Json
+  /** `service.name` resource attribute. Defaults to `"nemo-relay"`. */
+  serviceName?: string
+  /** Optional `service.namespace` resource attribute. */
+  serviceNamespace?: string
+  /** Optional `service.version` resource attribute. */
+  serviceVersion?: string
+  /** Instrumentation scope name. Defaults to `"nemo-relay-otel"`. */
+  instrumentationScope?: string
+  /** Export timeout in milliseconds. Defaults to `3000`. */
+  timeoutMillis?: number
+}
+```
+
+### `OpenInferenceConfig`
+
+Mutable configuration object for `OpenInferenceSubscriber`.
+
+```ts
+export interface OpenInferenceConfig {
+  /** `"http_binary"` (default) or `"grpc"`. */
+  transport?: string
+  /** OTLP endpoint, such as `http://localhost:4318/v1/traces`. */
+  endpoint?: string
+  /** Extra exporter headers/metadata as string key/value pairs. */
+  headers?: Json
+  /** Extra OpenInference resource attributes as string key/value pairs. */
+  resourceAttributes?: Json
+  /** `service.name` resource attribute. Defaults to `"nemo-relay"`. */
+  serviceName?: string
+  /** Optional `service.namespace` resource attribute. */
+  serviceNamespace?: string
+  /** Optional `service.version` resource attribute. */
+  serviceVersion?: string
+  /** Instrumentation scope name. Defaults to `"nemo-relay-openinference"`. */
+  instrumentationScope?: string
+  /** Export timeout in milliseconds. Defaults to `3000`. */
+  timeoutMillis?: number
+}
+```
+
+## Classes
+
+### `AtifExporter`
+
+An Agent Trajectory Interchange Format (ATIF) exporter that collects lifecycle events and exports them as a structured trajectory.
+
+Create an instance with session and agent metadata, then register it as an event subscriber. When ready, call `exportJson()` to serialize the collected trajectory.
+
+```ts
+export declare class AtifExporter {
+  /**
+   * Create a new ATIF exporter.
+   *
+   * `sessionId` identifies the session. `agentName` and `agentVersion` describe the agent.
+   * Optional `modelName` records the LLM model used.
+   */
+  constructor(sessionId: string, agentName: string, agentVersion: string, modelName?: string | undefined | null)
+  /**
+   * Register this exporter as an event subscriber with the given name.
+   *
+   * Throws if a subscriber with the same `name` already exists.
+   */
+  register(name: string): void
+  /**
+   * Deregister this exporter's event subscriber by name.
+   *
+   * Returns `true` if a subscriber with that name was found and removed.
+   */
+  deregister(name: string): boolean
+  /**
+   * Export the collected trajectory as a JSON string.
+   *
+   * Returns a JSON-serialized `AtifTrajectory`.
+   */
+  exportJson(): string
+  /** Clear all collected events from the exporter. */
+  clear(): void
+}
+```
+
+### `AtofExporter`
+
+Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
+
+```ts
+export declare class AtofExporter {
+  /**
+   * Create a new Agent Trajectory Observability Format (ATOF) JSONL exporter
+   * from a config object.
+   */
+  constructor(config?: AtofExporterConfig | undefined | null)
+  /** Return the JSONL output path. */
+  get path(): string
+  /** Register this exporter globally with the given name. */
+  register(name: string): void
+  /** Deregister a subscriber by name. */
+  deregister(name: string): boolean
+  /** Flush the output file. */
+  forceFlush(): void
+  /** Shut down the exporter by flushing output. */
+  shutdown(): void
+}
+```
+
+### `OpenTelemetrySubscriber`
+
+OpenTelemetry-backed event subscriber.
+
+```ts
+export declare class OpenTelemetrySubscriber {
+  /** Create a new OpenTelemetry subscriber from a config object. */
+  constructor(config?: OpenTelemetryConfig | undefined | null)
+  /** Register this subscriber globally with the given name. */
+  register(name: string): void
+  /** Deregister a subscriber by name. */
+  deregister(name: string): boolean
+  /** Force a flush of finished spans through the exporter. */
+  forceFlush(): void
+  /** Shut down the underlying tracer provider. */
+  shutdown(): void
+}
+```
+
+### `OpenInferenceSubscriber`
+
+OpenInference-backed event subscriber.
+
+```ts
+export declare class OpenInferenceSubscriber {
+  /** Create a new OpenInference subscriber from a config object. */
+  constructor(config?: OpenInferenceConfig | undefined | null)
+  /** Register this subscriber globally with the given name. */
+  register(name: string): void
+  /** Deregister a subscriber by name. */
+  deregister(name: string): boolean
+  /** Force a flush of finished spans through the exporter. */
+  forceFlush(): void
+  /** Shut down the underlying tracer provider. */
+  shutdown(): void
+}
+```
+
+### `AdaptiveRuntime`
+
+Owned adaptive runtime that can register adaptive features outside the plugin system.
+
+```ts
+export declare class AdaptiveRuntime {
+  /**
+   * Create an adaptive runtime wrapper from config.
+   *
+   * The runtime is constructed lazily when `register()` is awaited.
+   */
+  constructor(config: Json)
+  /**
+   * Register all configured adaptive runtime features.
+   *
+   * `register()` and `shutdown()` both temporarily take ownership of the
+   * runtime state, so concurrent calls are mutually exclusive by design.
+   * Once either operation takes the state, another concurrent registration or
+   * shutdown attempt fails with "adaptive runtime already shut down". This
+   * prevents double-registration and shutdown-during-registration races.
+   */
+  register(): Promise<void>
+  /** Deregister all previously registered adaptive runtime features. */
+  deregister(): void
+  /** Shut down the adaptive runtime and consume its Rust runtime state. */
+  shutdown(): Promise<void>
+  /** Block until the telemetry drain has processed pending events. */
+  waitForIdle(): void
+  /** Return the validation report captured during runtime construction. */
+  report(): Json
+  /** Bind the runtime's ACG request rewrite to a scope. */
+  bindScope(scopeHandle: ScopeHandle): void
+  /** Build cache request facts for an annotated LLM request. */
+  buildCacheRequestFacts(options: Json): Json | null
+}
+```
+
+### `LlmStream`
+
+An async iterator over chunks from a streaming LLM response.
+
+Obtained from `llmStreamCallExecute()`. Call `next()` repeatedly to consume response chunks. Returns `null` when the stream is fully consumed.
+
+```ts
+export declare class LlmStream {
+  /**
+   * Retrieve the next chunk from the stream.
+   *
+   * Returns the next JSON chunk, or `null` when the stream is exhausted.
+   * Throws if the underlying stream encountered an error.
+   */
+  next(): Promise<Json | null>
+}
+```
+
+### `ScopeStack`
+
+Handle to an isolated scope stack for per-request/per-task isolation.
+
+```ts
+export declare class ScopeStack {
+  /** Creates a new isolated scope stack with its own root scope. */
+  constructor()
+}
+```
+
+### `ScopeHandle`
+
+A handle to an execution scope in the agent runtime.
+
+Scopes form a hierarchical stack representing the current execution context (e.g., agent -> function -> tool). Use this handle to reference a specific scope when pushing child scopes, emitting events, or making tool/LLM calls.
+
+```ts
+export declare class ScopeHandle {
+  /** The unique identifier for this scope. */
+  get uuid(): string
+  /** The human-readable name of this scope. */
+  get name(): string
+  /** The type of this scope (Agent, Tool, Llm, etc.). */
+  get scopeType(): ScopeType
+  /** Bitfield of scope attributes (e.g., PARALLEL, RELOCATABLE). */
+  get attributes(): number
+  /** The UUID of this scope's parent, or `null` if this is the root scope. */
+  get parentUuid(): string | null
+  /** Optional user-defined data associated with this scope. */
+  get data(): any | null
+  /** Optional metadata associated with this scope. */
+  get metadata(): any | null
+}
+```
+
+### `ToolHandle`
+
+A handle representing an in-progress tool call.
+
+Returned by `toolCall()` and used to signal completion via `toolCallEnd()`.
+
+```ts
+export declare class ToolHandle {
+  /** The unique identifier for this tool call. */
+  get uuid(): string
+  /** The name of the tool being called. */
+  get name(): string
+  /** Bitfield of tool attributes (e.g., LOCAL). */
+  get attributes(): number
+  /** The UUID of the parent scope that initiated this tool call, or `null`. */
+  get parentUuid(): string | null
+}
+```
+
+### `LlmHandle`
+
+A handle representing an in-progress LLM call.
+
+Returned by `llmCall()` and used to signal completion via `llmCallEnd()`.
+
+```ts
+export declare class LlmHandle {
+  /** The unique identifier for this LLM call. */
+  get uuid(): string
+  /** The name of the LLM provider being called. */
+  get name(): string
+  /** Bitfield of LLM attributes (e.g., STATELESS, STREAMING). */
+  get attributes(): number
+  /** The UUID of the parent scope that initiated this LLM call, or `null`. */
+  get parentUuid(): string | null
+}
+```
+
+### `LlmRequest`
+
+An LLM request, encapsulating headers and content.
+
+Construct via `new LlmRequest(headers, content)`.
+
+```ts
+export declare class LlmRequest {
+  /** Create a new LLM request from headers and content. */
+  constructor(headers: any, content: any)
+  /** The metadata headers as a JSON object. */
+  get headers(): any
+  /** The request payload as a JSON value. */
+  get content(): any
+}
+```
+
+### `OpenAIChatCodec`
+
+Built-in codec for the OpenAI Chat Completions API.
+
+Implements both request codec (decode/encode) and response codec (decodeResponse). Construct with `new OpenAIChatCodec()`.
+
+```ts
+export declare class OpenAIChatCodec {
+  constructor()
+  /** Decode an opaque LLM request into structured form. */
+  decode(request: Json): Json
+  /** Encode structured changes back into an opaque LLM request. */
+  encode(annotated: Json, original: Json): Json
+  /** Decode a raw LLM response into structured form. */
+  decodeResponse(response: Json): Json
+}
+```
+
+### `OpenAIResponsesCodec`
+
+Built-in codec for the OpenAI Responses API.
+
+Implements both request codec (decode/encode) and response codec (decodeResponse). Construct with `new OpenAIResponsesCodec()`.
+
+```ts
+export declare class OpenAIResponsesCodec {
+  constructor()
+  /** Decode an opaque LLM request into structured form. */
+  decode(request: Json): Json
+  /** Encode structured changes back into an opaque LLM request. */
+  encode(annotated: Json, original: Json): Json
+  /** Decode a raw LLM response into structured form. */
+  decodeResponse(response: Json): Json
+}
+```
+
+### `AnthropicMessagesCodec`
+
+Built-in codec for the Anthropic Messages API.
+
+Implements both request codec (decode/encode) and response codec (decodeResponse). Construct with `new AnthropicMessagesCodec()`.
+
+```ts
+export declare class AnthropicMessagesCodec {
+  constructor()
+  /** Decode an opaque LLM request into structured form. */
+  decode(request: Json): Json
+  /** Encode structured changes back into an opaque LLM request. */
+  encode(annotated: Json, original: Json): Json
+  /** Decode a raw LLM response into structured form. */
+  decodeResponse(response: Json): Json
+}
+```
+
+## Enums
+
+### `ScopeType`
+
+The type of an execution scope in the agent runtime hierarchy.
+
+```ts
+export const enum ScopeType {
+  /** An autonomous agent scope. */
+  Agent = 0,
+  /** A generic function invocation scope. */
+  Function = 1,
+  /** A tool execution scope. */
+  Tool = 2,
+  /** A large language model call scope. */
+  Llm = 3,
+  /** A retriever (vector search / RAG) scope. */
+  Retriever = 4,
+  /** An embedding model scope. */
+  Embedder = 5,
+  /** A reranker model scope. */
+  Reranker = 6,
+  /** A guardrail evaluation scope. */
+  Guardrail = 7,
+  /** An evaluator / scoring scope. */
+  Evaluator = 8,
+  /** A user-defined custom scope type. */
+  Custom = 9,
+  /** An unknown or unclassified scope type. */
+  Unknown = 10
+}
+```
+
+## Functions
+
+### `pushStreamChunk`
+
+Push a chunk into the stream identified by `streamId`. Called from JavaScript during async generator iteration.
+
+```ts
+export declare function pushStreamChunk(streamId: number, chunk: Json): boolean
+```
+
+### `endStream`
+
+Signal that a stream is complete. Drops the sender so the Rust receiver sees the channel as closed.
+
+```ts
+export declare function endStream(streamId: number): void
+```
+
+### `createScopeStack`
+
+Creates a new isolated scope stack.
+
+```ts
+export declare function createScopeStack(): ScopeStack
+```
+
+### `currentScopeStack`
+
+Returns the current execution context's scope stack handle.
+
+```ts
+export declare function currentScopeStack(): ScopeStack
+```
+
+### `setThreadScopeStack`
+
+Binds a scope stack to the current thread.
+
+```ts
+export declare function setThreadScopeStack(stack: ScopeStack): void
+```
+
+### `scopeStackActive`
+
+Returns whether the current execution context has an explicitly-initialized scope stack.
+
+Returns `true` if `setThreadScopeStack` has been called on the current thread, or the caller is inside a task-local scope. Returns `false` when only the auto-created default is present.
+
+```ts
+export declare function scopeStackActive(): boolean
+```
+
+### `getLastCallbackError`
+
+Returns the most recent callback error that could not be surfaced through a direct exception.
+
+This is primarily used for sanitize/intercept/finalizer callback paths whose core callback signatures cannot return `Result`.
+
+```ts
+export declare function getLastCallbackError(): string | null
+```
+
+### `clearLastCallbackError`
+
+Clears the most recent callback error recorded by the Node binding.
+
+```ts
+export declare function clearLastCallbackError(): void
+```
+
+### `getHandle`
+
+Get the handle for the current top-of-stack execution scope.
+
+Returns the `ScopeHandle` for the innermost active scope on the current task's scope stack. Throws if the scope stack is empty.
+
+```ts
+export declare function getHandle(): ScopeHandle
+```
+
+### `pushScope`
+
+Push a new execution scope onto the scope stack.
+
+Creates a child scope with the given `name` and `scopeType`. If `handle` is provided, the new scope is parented to that scope; otherwise it is parented to the current top scope. Optional `attributes` is a bitfield of scope attribute flags. Optional `data` is a JSON application payload stored on the scope handle. Optional `metadata` is a JSON metadata payload recorded on the scope start event. Optional `input` is a semantic JSON payload exported on the scope start event. Optional `timestamp` is a Unix timestamp in microseconds recorded as the handle start time and start event timestamp. It must be a safe integer number; omit it to use the current runtime time. Returns the handle for the newly created scope.
+
+```ts
+export declare function pushScope(name: string, scopeType: ScopeType, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, input?: Json | undefined | null, timestamp?: number | undefined | null): ScopeHandle
+```
+
+### `popScope`
+
+Pop an execution scope from the scope stack.
+
+Removes the scope identified by `handle` from the stack and emits an end event. Optional `output` is a semantic JSON payload exported on the scope end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp. Optional `metadata` is a JSON metadata payload recorded on the scope end event. Throws if the handle does not match the current top scope.
+
+```ts
+export declare function popScope(handle: ScopeHandle, output?: Json | undefined | null, timestamp?: number | undefined | null, metadata?: Json | undefined | null): void
+```
+
+### `withScope`
+
+Push a scope, run a callback, then pop the scope automatically.
+
+Creates a child scope with the given `name` and `scopeType`, invokes the `callback` with the new scope handle, and guarantees that the scope is popped when the callback completes (whether it returns normally, throws, or returns a rejected Promise). Supports both synchronous and async (Promise-returning) callbacks.
+
+Optional `handle` sets the parent scope; `attributes` is a bitfield of scope attribute flags; `data` is stored on the scope handle; `metadata` is recorded on the start event; and `input` is exported as the semantic start-event payload.
+
+Returns a Promise that resolves with the callback's return value.
+
+```ts
+export declare function withScope(name: string, scopeType: ScopeType, callback: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, input?: Json | undefined | null): Promise<unknown>
+```
+
+### `event`
+
+Emit a custom mark event on the current scope.
+
+Emits a named event with optional `data` and `metadata` payloads. If `handle` is provided, the event is associated with that scope; otherwise it uses the current top scope. Optional `timestamp` is a Unix timestamp in microseconds recorded on the mark event. It must be a safe integer number; omit it to use the current runtime time.
+
+```ts
+export declare function event(name: string, handle?: ScopeHandle | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
+```
+
+### `toolCall`
+
+Begin a manual tool call lifecycle span.
+
+Registers a tool invocation with the given `name` and `args`. Sanitize-request guardrails are applied to the emitted start-event payload; request and execution intercepts run only through `toolCallExecute`. Returns a `ToolHandle` that must be passed to `toolCallEnd()` when the tool finishes. Optional `handle` specifies the parent scope; `attributes` is a bitfield; `data` is stored on the handle; `metadata` is recorded on the start event; and `toolCallId` is recorded in the tool event category profile. Optional `timestamp` is a Unix timestamp in microseconds recorded as the handle start time and start event timestamp. It must be a safe integer number; omit it to use the current runtime time.
+
+```ts
+export declare function toolCall(name: string, args: Json, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, toolCallId?: string | undefined | null, timestamp?: number | undefined | null): ToolHandle
+```
+
+### `toolCallEnd`
+
+End a manual tool call lifecycle span.
+
+Signals that the tool call identified by `handle` has completed with the given `result`. Sanitize-response guardrails are applied to the emitted end-event payload; response intercepts run only through `toolCallExecute`. Optional `data` is used when the sanitized result is JSON null, and optional `metadata` is recorded on the end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp.
+
+```ts
+export declare function toolCallEnd(handle: ToolHandle, result: Json, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
+```
+
+### `toolCallExecute`
+
+Execute a tool call end-to-end with full lifecycle management.
+
+Runs conditional-execution guardrails (on raw args) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Returns the final execution result; sanitize guardrails do not rewrite the caller-visible value.
+
+```ts
+export declare function toolCallExecute(name: string, args: Json, func: (arg: Json) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<unknown>
+```
+
+### `toolCallExecuteAsync`
+
+Execute a tool call end-to-end, supporting both sync and async (Promise-returning) callbacks.
+
+Same lifecycle as `toolCallExecute` (guardrails -> intercepts -> func -> response processing), but transparently handles JS callbacks that return Promises. Uses `napi_is_promise` to detect Promise return values and resolves them before continuing the pipeline.
+
+Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a promise-aware wrapper with access to `Env`.
+
+```ts
+export declare function toolCallExecuteAsync(name: string, args: Json, func: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<unknown>
+```
+
+### `llmCall`
+
+Begin a manual LLM call lifecycle span.
+
+Registers an LLM invocation with the given provider `name` and request payload. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema. Returns an `LlmHandle` that must be passed to `llmCallEnd()` when the response is received. Sanitize-request guardrails are applied to the emitted start-event payload; request and execution intercepts run only through `llmCallExecute`. Optional `handle` specifies the parent scope; `attributes` is a bitfield; `data` is stored on the handle; `metadata` is recorded on the start event; and `modelName` is recorded in the LLM event category profile. Optional `timestamp` is a Unix timestamp in microseconds recorded as the handle start time and start event timestamp. It must be a safe integer number; omit it to use the current runtime time.
+
+```ts
+export declare function llmCall(name: string, request: Json, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, timestamp?: number | undefined | null): LlmHandle
+```
+
+### `llmCallEnd`
+
+End a manual LLM call lifecycle span.
+
+Signals that the LLM call identified by `handle` has completed with the given `response`. Sanitize-response guardrails are applied to the emitted end-event payload; response intercepts run only through `llmCallExecute`. Optional `data` is used when the sanitized response is JSON null, and optional `metadata` is recorded on the end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp.
+
+```ts
+export declare function llmCallEnd(handle: LlmHandle, response: Json, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
+```
+
+### `llmCallExecute`
+
+Execute an LLM call end-to-end with full lifecycle management.
+
+Runs conditional-execution guardrails (on raw request) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema. Returns the final execution response; sanitize guardrails do not rewrite the caller-visible value.
+
+```ts
+export declare function llmCallExecute(name: string, request: Json, func: (arg: Json) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<unknown>
+```
+
+### `llmCallExecuteAsync`
+
+Execute an LLM call end-to-end, supporting both sync and async (Promise-returning) callbacks.
+
+Same lifecycle as `llmCallExecute` (guardrails -> intercepts -> func -> response processing), but transparently handles JS callbacks that return Promises.
+
+```ts
+export declare function llmCallExecuteAsync(name: string, request: Json, func: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<unknown>
+```
+
+### `llmStreamCallExecute`
+
+Execute a streaming LLM call end-to-end with full lifecycle management.
+
+Like `llmCallExecute`, conditional-execution guardrails run first on the raw request. Sanitize-request guardrails only affect the emitted `Start` event payload, and sanitize-response guardrails only affect the aggregated `End` event payload. Returns an `LlmStream` whose `next()` method yields response chunks incrementally. The `func` callback receives the intercepted request as JSON and its response is streamed back. Stream-level intercepts are applied to each chunk. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
+
+The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted and must return a JSON value representing the aggregated response.
+
+```ts
+export declare function llmStreamCallExecute(name: string, request: Json, func: (arg: Json) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<LlmStream>
+```
+
+### `registerToolSanitizeRequestGuardrail`
+
+Register a guardrail that sanitizes tool request arguments before execution.
+
+The `guardrail` callback receives `(toolName, args)` and must return sanitized args. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+
+```ts
+export declare function registerToolSanitizeRequestGuardrail(name: string, priority: number, guardrail: (arg0: string, arg1: Json) => any): void
+```
+
+### `deregisterToolSanitizeRequestGuardrail`
+
+Deregister a tool request sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed.
+
+```ts
+export declare function deregisterToolSanitizeRequestGuardrail(name: string): boolean
+```
+
+### `registerToolSanitizeResponseGuardrail`
+
+Register a guardrail that sanitizes tool response data after execution.
+
+The `guardrail` callback receives `(toolName, result)` and must return sanitized result. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+
+```ts
+export declare function registerToolSanitizeResponseGuardrail(name: string, priority: number, guardrail: (arg0: string, arg1: Json) => any): void
+```
+
+### `deregisterToolSanitizeResponseGuardrail`
+
+Deregister a tool response sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed.
+
+```ts
+export declare function deregisterToolSanitizeResponseGuardrail(name: string): boolean
+```
+
+### `registerToolConditionalExecutionGuardrail`
+
+Register a guardrail that conditionally gates tool execution.
+
+The `guardrail` callback receives `(toolName, args)` and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first.
+
+```ts
+export declare function registerToolConditionalExecutionGuardrail(name: string, priority: number, guardrail: (arg0: string, arg1: Json) => any): void
+```
+
+### `deregisterToolConditionalExecutionGuardrail`
+
+Deregister a tool conditional execution guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed.
+
+```ts
+export declare function deregisterToolConditionalExecutionGuardrail(name: string): boolean
+```
+
+### `registerToolRequestIntercept`
+
+Register an intercept that transforms tool request arguments.
+
+The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+
+```ts
+export declare function registerToolRequestIntercept(name: string, priority: number, breakChain: boolean, callable: (arg0: string, arg1: Json) => any): void
+```
+
+### `deregisterToolRequestIntercept`
+
+Deregister a tool request intercept by name.
+
+Returns `true` if an intercept with that name was found and removed.
+
+```ts
+export declare function deregisterToolRequestIntercept(name: string): boolean
+```
+
+### `registerToolExecutionIntercept`
+
+Register a tool execution intercept following the middleware chain pattern.
+
+The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+
+```ts
+export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
+```
+
+### `deregisterToolExecutionIntercept`
+
+Deregister a tool execution intercept by name.
+
+Returns `true` if an intercept with that name was found and removed.
+
+```ts
+export declare function deregisterToolExecutionIntercept(name: string): boolean
+```
+
+### `registerLlmSanitizeRequestGuardrail`
+
+Register a guardrail that sanitizes LLM request data before execution.
+
+The `guardrail` callback receives the LLM request as JSON and must return the sanitized request. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+
+```ts
+export declare function registerLlmSanitizeRequestGuardrail(name: string, priority: number, guardrail: (arg: Json) => any): void
+```
+
+### `deregisterLlmSanitizeRequestGuardrail`
+
+Deregister an LLM request sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed.
+
+```ts
+export declare function deregisterLlmSanitizeRequestGuardrail(name: string): boolean
+```
+
+### `registerLlmSanitizeResponseGuardrail`
+
+Register a guardrail that sanitizes LLM response data after execution.
+
+The `guardrail` callback receives the LLM response as a JSON value and must return the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+
+```ts
+export declare function registerLlmSanitizeResponseGuardrail(name: string, priority: number, guardrail: (arg: Json) => any): void
+```
+
+### `deregisterLlmSanitizeResponseGuardrail`
+
+Deregister an LLM response sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed.
+
+```ts
+export declare function deregisterLlmSanitizeResponseGuardrail(name: string): boolean
+```
+
+### `registerLlmConditionalExecutionGuardrail`
+
+Register a guardrail that conditionally gates LLM execution.
+
+The `guardrail` callback receives the LLM request as JSON and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first.
+
+```ts
+export declare function registerLlmConditionalExecutionGuardrail(name: string, priority: number, guardrail: (arg: Json) => any): void
+```
+
+### `deregisterLlmConditionalExecutionGuardrail`
+
+Deregister an LLM conditional execution guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed.
+
+```ts
+export declare function deregisterLlmConditionalExecutionGuardrail(name: string): boolean
+```
+
+### `registerLlmRequestIntercept`
+
+Register an intercept that transforms LLM request data.
+
+The `callable` receives the `LlmRequest` (as JSON) and returns a transformed request. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+
+```ts
+export declare function registerLlmRequestIntercept(name: string, priority: number, breakChain: boolean, callable: (args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }): void
+```
+
+### `deregisterLlmRequestIntercept`
+
+Deregister an LLM request intercept by name.
+
+Returns `true` if an intercept with that name was found and removed.
+
+```ts
+export declare function deregisterLlmRequestIntercept(name: string): boolean
+```
+
+### `registerLlmExecutionIntercept`
+
+Register an LLM execution intercept following the middleware chain pattern.
+
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+
+```ts
+export declare function registerLlmExecutionIntercept(name: string, priority: number, callable: (...args: any[]) => any): void
+```
+
+### `deregisterLlmExecutionIntercept`
+
+Deregister an LLM execution intercept by name.
+
+Returns `true` if an intercept with that name was found and removed.
+
+```ts
+export declare function deregisterLlmExecutionIntercept(name: string): boolean
+```
+
+### `registerLlmStreamExecutionIntercept`
+
+Register a streaming LLM execution intercept following the middleware chain pattern.
+
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain.
+
+```ts
+export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (...args: any[]) => any): void
+```
+
+### `deregisterLlmStreamExecutionIntercept`
+
+Deregister an LLM stream execution intercept by name.
+
+Returns `true` if an intercept with that name was found and removed.
+
+```ts
+export declare function deregisterLlmStreamExecutionIntercept(name: string): boolean
+```
+
+### `registerSubscriber`
+
+Register a named event subscriber that receives all lifecycle events.
+
+The `callback` receives each event as the canonical JSON event object. Events are delivered asynchronously and non-blocking. Throws if a subscriber with the same `name` already exists.
+
+```ts
+export declare function registerSubscriber(name: string, callback: (arg: Json) => any): void
+```
+
+### `deregisterSubscriber`
+
+Deregister an event subscriber by name.
+
+Future emissions stop seeing the subscriber. Already queued event snapshots may still run. Returns `true` if a subscriber with that name was found and removed.
+
+```ts
+export declare function deregisterSubscriber(name: string): boolean
+```
+
+### `flushSubscribers`
+
+Wait for native subscriber callbacks queued before this call to finish.
+
+JavaScript subscribers are queued through Node's `ThreadsafeFunction`; callers that need JS callback side effects should await an event-loop tick after this returns.
+
+```ts
+export declare function flushSubscribers(): void
+```
+
+### `scopeRegisterToolSanitizeRequestGuardrail`
+
+Register a scope-local guardrail that sanitizes tool request arguments before execution.
+
+The `guardrail` callback receives `(toolName, args)` and must return sanitized args. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope.
+
+```ts
+export declare function scopeRegisterToolSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (arg0: string, arg1: Json) => any): void
+```
+
+### `scopeDeregisterToolSanitizeRequestGuardrail`
+
+Deregister a scope-local tool request sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterToolSanitizeRequestGuardrail(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterToolSanitizeResponseGuardrail`
+
+Register a scope-local guardrail that sanitizes tool response data after execution.
+
+The `guardrail` callback receives `(toolName, result)` and must return sanitized result. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope.
+
+```ts
+export declare function scopeRegisterToolSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (arg0: string, arg1: Json) => any): void
+```
+
+### `scopeDeregisterToolSanitizeResponseGuardrail`
+
+Deregister a scope-local tool response sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterToolSanitizeResponseGuardrail(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterToolConditionalExecutionGuardrail`
+
+Register a scope-local guardrail that conditionally gates tool execution.
+
+The `guardrail` callback receives `(toolName, args)` and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first.
+
+```ts
+export declare function scopeRegisterToolConditionalExecutionGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (arg0: string, arg1: Json) => any): void
+```
+
+### `scopeDeregisterToolConditionalExecutionGuardrail`
+
+Deregister a scope-local tool conditional execution guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterToolConditionalExecutionGuardrail(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterToolRequestIntercept`
+
+Register a scope-local intercept that transforms tool request arguments.
+
+The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+
+```ts
+export declare function scopeRegisterToolRequestIntercept(scopeUuid: string, name: string, priority: number, breakChain: boolean, callable: (arg0: string, arg1: Json) => any): void
+```
+
+### `scopeDeregisterToolRequestIntercept`
+
+Deregister a scope-local tool request intercept by name.
+
+Returns `true` if an intercept with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterToolRequestIntercept(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterToolExecutionIntercept`
+
+Register a scope-local tool execution intercept following the middleware chain pattern.
+
+The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+
+```ts
+export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
+```
+
+### `scopeDeregisterToolExecutionIntercept`
+
+Deregister a scope-local tool execution intercept by name.
+
+Returns `true` if an intercept with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterToolExecutionIntercept(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterLlmSanitizeRequestGuardrail`
+
+Register a scope-local guardrail that sanitizes LLM request data before execution.
+
+The `guardrail` callback receives the LLM request as JSON and must return the sanitized request. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope.
+
+```ts
+export declare function scopeRegisterLlmSanitizeRequestGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (arg: Json) => any): void
+```
+
+### `scopeDeregisterLlmSanitizeRequestGuardrail`
+
+Deregister a scope-local LLM request sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterLlmSanitizeRequestGuardrail(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterLlmSanitizeResponseGuardrail`
+
+Register a scope-local guardrail that sanitizes LLM response data after execution.
+
+The `guardrail` callback receives the LLM response as a JSON value and must return the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail with the same `name` already exists on the specified scope.
+
+```ts
+export declare function scopeRegisterLlmSanitizeResponseGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (arg: Json) => any): void
+```
+
+### `scopeDeregisterLlmSanitizeResponseGuardrail`
+
+Deregister a scope-local LLM response sanitization guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterLlmSanitizeResponseGuardrail(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterLlmConditionalExecutionGuardrail`
+
+Register a scope-local guardrail that conditionally gates LLM execution.
+
+The `guardrail` callback receives the LLM request as JSON and must return `null` to allow execution or a rejection reason string to block it. Higher `priority` values run first.
+
+```ts
+export declare function scopeRegisterLlmConditionalExecutionGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (arg: Json) => any): void
+```
+
+### `scopeDeregisterLlmConditionalExecutionGuardrail`
+
+Deregister a scope-local LLM conditional execution guardrail by name.
+
+Returns `true` if a guardrail with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterLlmConditionalExecutionGuardrail(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterLlmRequestIntercept`
+
+Register a scope-local intercept that transforms LLM request data.
+
+The `callable` receives the `LlmRequest` (as JSON) and returns a transformed request. If `breakChain` is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+
+```ts
+export declare function scopeRegisterLlmRequestIntercept(scopeUuid: string, name: string, priority: number, breakChain: boolean, callable: (args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }): void
+```
+
+### `scopeDeregisterLlmRequestIntercept`
+
+Deregister a scope-local LLM request intercept by name.
+
+Returns `true` if an intercept with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterLlmRequestIntercept(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterLlmExecutionIntercept`
+
+Register a scope-local LLM execution intercept following the middleware chain pattern.
+
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain.
+
+```ts
+export declare function scopeRegisterLlmExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (...args: any[]) => any): void
+```
+
+### `scopeDeregisterLlmExecutionIntercept`
+
+Deregister a scope-local LLM execution intercept by name.
+
+Returns `true` if an intercept with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterLlmExecutionIntercept(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterLlmStreamExecutionIntercept`
+
+Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
+
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain.
+
+```ts
+export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (...args: any[]) => any): void
+```
+
+### `scopeDeregisterLlmStreamExecutionIntercept`
+
+Deregister a scope-local LLM stream execution intercept by name.
+
+Returns `true` if an intercept with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterLlmStreamExecutionIntercept(scopeUuid: string, name: string): boolean
+```
+
+### `scopeRegisterSubscriber`
+
+Register a scope-local named event subscriber that receives lifecycle events for the specified scope.
+
+The `callback` receives each event as the canonical JSON event object. Events are delivered asynchronously and non-blocking. Throws if a subscriber with the same `name` already exists on the specified scope.
+
+```ts
+export declare function scopeRegisterSubscriber(scopeUuid: string, name: string, callback: (arg: Json) => any): void
+```
+
+### `scopeDeregisterSubscriber`
+
+Deregister a scope-local event subscriber by name.
+
+Returns `true` if a subscriber with that name was found and removed from the specified scope.
+
+```ts
+export declare function scopeDeregisterSubscriber(scopeUuid: string, name: string): boolean
+```
+
+### `toolRequestIntercepts`
+
+Run the registered tool request intercept chain on the given arguments. Returns the transformed arguments.
+
+```ts
+export declare function toolRequestIntercepts(name: string, args: Json): Promise<unknown>
+```
+
+### `toolConditionalExecution`
+
+Run the registered tool conditional execution guardrail chain. Throws if any guardrail rejects.
+
+```ts
+export declare function toolConditionalExecution(name: string, args: Json): Promise<void>
+```
+
+### `llmRequestIntercepts`
+
+Run the registered LLM request intercept chain on the given request. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema. Returns the transformed request as JSON.
+
+```ts
+export declare function llmRequestIntercepts(name: string, request: Json): Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>
+```
+
+### `llmConditionalExecution`
+
+Run the registered LLM conditional execution guardrail chain. Throws if any guardrail rejects. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
+
+```ts
+export declare function llmConditionalExecution(request: Json): Promise<void>
+```
+
+### `validateAdaptiveConfig`
+
+Validate an adaptive config document without constructing a runtime.
+
+```ts
+export declare function validateAdaptiveConfig(config: Json): Json
+```
+
+### `buildCacheTelemetryEvent`
+
+Build one adaptive cache telemetry event from normalized usage.
+
+```ts
+export declare function buildCacheTelemetryEvent(options: Json): Json | null
+```
+
+### `setLatencySensitivity`
+
+Set manual latency sensitivity on the current scope.
+
+```ts
+export declare function setLatencySensitivity(value: number): void
+```
+
+### `validatePluginConfig`
+
+Validate a plugin config document and return a structured diagnostics report.
+
+```ts
+export declare function validatePluginConfig(config: Json): Json
+```
+
+### `registerPlugin`
+
+Register a plugin backed by JavaScript callbacks.
+
+`validate` receives `(pluginConfig)` and should return a diagnostics array. `register` receives `(pluginConfig, context)` and should use the context methods to attach subscribers or intercepts. Both callbacks must be synchronous.
+
+```ts
+export declare function registerPlugin(pluginKind: string, validate: (...args: any[]) => any | undefined | null, register: (...args: any[]) => any): void
+```
+
+### `deregisterPlugin`
+
+Deregister a plugin by kind.
+
+```ts
+export declare function deregisterPlugin(pluginKind: string): boolean
+```
+
+### `initializePlugins`
+
+Initialize the active global plugin components.
+
+```ts
+export declare function initializePlugins(config: Json): Promise<Json>
+```
+
+### `clearPluginConfiguration`
+
+Clear the active global plugin configuration.
+
+```ts
+export declare function clearPluginConfiguration(): void
+```
+
+### `activePluginReport`
+
+Return the last successfully configured plugin report.
+
+```ts
+export declare function activePluginReport(): Json | null
+```
+
+### `listPluginKinds`
+
+List registered plugin kinds.
+
+```ts
+export declare function listPluginKinds(): Array<string>
+```
+

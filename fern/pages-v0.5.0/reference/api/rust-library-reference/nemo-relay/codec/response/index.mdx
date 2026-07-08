@@ -1,0 +1,51 @@
+---
+title: "Module response"
+sidebar-title: "response"
+description: "Re-exported normalized LLM response data types and core pricing helpers."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Re-exported normalized LLM response data types and core pricing helpers.
+
+## Re-exports
+
+- `pub use super::model_pricing::CacheReadAccounting;`
+- `pub use super::model_pricing::ModelPricing;`
+- `pub use super::model_pricing::PricingCatalog;`
+- `pub use super::model_pricing::PricingCatalogError;`
+- `pub use super::model_pricing::PricingConfig;`
+- `pub use super::model_pricing::PricingResolver;`
+- `pub use super::model_pricing::PricingSource;`
+- `pub use super::model_pricing::PricingSourceConfig;`
+- `pub use super::model_pricing::PricingUnit;`
+- `pub use super::model_pricing::PromptCachePricing;`
+- `pub use super::model_pricing::TokenPricingRates;`
+- `pub use super::model_pricing::active_pricing_resolver;`
+- `pub use super::model_pricing::attach_estimated_cost;`
+- `pub use super::model_pricing::attach_estimated_cost_for_provider;`
+- `pub use super::model_pricing::estimate_cost;`
+- `pub use super::model_pricing::estimate_cost_for_provider;`
+- `pub use super::model_pricing::estimate_cost_with_catalog;`
+- `pub use super::model_pricing::estimate_cost_with_provider;`
+- `pub use super::model_pricing::infer_model_provider;`
+- `pub use super::model_pricing::pricing_for_model;`
+- `pub use super::model_pricing::pricing_for_provider;`
+- `pub use super::model_pricing::reset_active_pricing_resolver;`
+- `pub use super::model_pricing::set_active_pricing_resolver;`
+
+## Structs
+
+- [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
+- [CostEstimate](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-costestimate): Normalized LLM response cost.
+- [ResponseToolCall](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-responsetoolcall): A tool call requested by the model in its response.
+- [Usage](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-usage): Token usage statistics from an LLM API response.
+
+## Enums
+
+- [ApiSpecificResponse](/reference/api/rust-library-reference/nemo-relay/codec/response/enum-apispecificresponse): API-specific response data that cannot be normalized across providers.
+- [CostSource](/reference/api/rust-library-reference/nemo-relay/codec/response/enum-costsource): Source of a normalized cost value.
+- [FinishReason](/reference/api/rust-library-reference/nemo-relay/codec/response/enum-finishreason): Normalized reason why the model stopped generating.

@@ -1,0 +1,17 @@
+---
+title: "Function with_scope_stack"
+sidebar-title: "with_scope_stack"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-with-scope-stack"
+description: "Run a synchronous callback with `handle` as the visible scope stack."
+position: 15
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_scope_stack&lt;T&gt;(handle: <a href=\"type-scopestackhandle\">ScopeStackHandle</a>, f: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; T) -&gt; T"}} /></pre>
+
+Run a synchronous callback with `handle` as the visible scope stack.
+
+This override takes precedence over task-local and thread-local stacks for the duration of the callback and is restored even when the callback panics.

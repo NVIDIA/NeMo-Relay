@@ -1,0 +1,64 @@
+---
+title: "Module plugin"
+sidebar-title: "plugin"
+description: "Generic plugin infrastructure for NeMo Relay runtimes."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Generic plugin infrastructure for NeMo Relay runtimes.
+
+This module owns:
+
+- config diagnostics and policy enums used by plugin systems
+- a global plugin registry
+- plugin registration contexts for middleware/subscriber installation
+- rollback bookkeeping for registrations created during plugin setup
+
+## Re-exports
+
+- `pub use dynamic::*;`
+
+## Modules
+
+- [dynamic](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic): Dynamic plugin control-plane and registry model.
+
+## Structs
+
+- [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
+- [ConfigPolicy](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configpolicy): Policy for how unsupported plugin/runtime config is handled.
+- [ConfigReport](/reference/api/rust-library-reference/nemo-relay/plugin/struct-configreport): Structured validation report.
+- [PluginComponentSpec](/reference/api/rust-library-reference/nemo-relay/plugin/struct-plugincomponentspec): One configured plugin component.
+- [PluginConfig](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginconfig): Canonical plugin configuration document.
+- [PluginRegistration](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginregistration): Bookkeeping for one middleware/subscriber registration.
+- [PluginRegistrationContext](/reference/api/rust-library-reference/nemo-relay/plugin/struct-pluginregistrationcontext): Context provided to plugin handlers during runtime registration.
+
+## Enums
+
+- [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay/plugin/enum-diagnosticlevel): Diagnostic severity returned by plugin validation.
+- [PluginError](/reference/api/rust-library-reference/nemo-relay/plugin/enum-pluginerror): Error type for generic plugin operations.
+- [UnsupportedBehavior](/reference/api/rust-library-reference/nemo-relay/plugin/enum-unsupportedbehavior): Per-policy behavior for unsupported configuration.
+
+## Traits
+
+- [Plugin](/reference/api/rust-library-reference/nemo-relay/plugin/trait-plugin): Implemented by custom plugins that register runtime middleware.
+
+## Functions
+
+- [active_plugin_report](/reference/api/rust-library-reference/nemo-relay/plugin/fn-active-plugin-report): Returns the last successfully configured plugin report.
+- [clear_plugin_configuration](/reference/api/rust-library-reference/nemo-relay/plugin/fn-clear-plugin-configuration): Deregisters and clears all configured plugin components.
+- [deregister_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-deregister-plugin): Removes a previously registered plugin.
+- [ensure_builtin_plugins_registered](/reference/api/rust-library-reference/nemo-relay/plugin/fn-ensure-builtin-plugins-registered): Registers core-provided plugin kinds.
+- [initialize_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/fn-initialize-plugins): Validates and activates `config` layered on top of the discovered `plugins.toml` configuration, so a direct integration sees the same file layering as the gateway. `config` wins on conflicts; as a typed document its default `version`/`policy`/`enabled` override the file, while `config` bodies merge field-by-field. Delegates to [`initialize_plugins_exact`].
+- [list_plugin_kinds](/reference/api/rust-library-reference/nemo-relay/plugin/fn-list-plugin-kinds): Lists registered plugin kinds in sorted order.
+- [lookup_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-lookup-plugin): Looks up a registered plugin by kind.
+- [register_plugin](/reference/api/rust-library-reference/nemo-relay/plugin/fn-register-plugin): Registers a plugin by kind.
+- [rollback_registrations](/reference/api/rust-library-reference/nemo-relay/plugin/fn-rollback-registrations): Rolls back registrations in reverse order, ignoring rollback failures.
+- [validate_plugin_config](/reference/api/rust-library-reference/nemo-relay/plugin/fn-validate-plugin-config): Validates a plugin configuration document.
+
+## Type Aliases
+
+- [Result](/reference/api/rust-library-reference/nemo-relay/plugin/type-result): Specialized [`Result`](https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html) type for plugin operations.

@@ -1,0 +1,90 @@
+---
+title: "Module types"
+sidebar-title: "types"
+description: "C-compatible types exposed through the FFI boundary."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+C-compatible types exposed through the FFI boundary.
+
+This module defines opaque handle wrappers, enumerations, accessor functions, and free functions for all types that cross the C FFI boundary. Each opaque struct wraps a corresponding core type and is heap-allocated; the C consumer sees only an opaque pointer. All returned C strings must be freed with [`crate::convert::nemo_relay_string_free`](/reference/api/rust-library-reference/nemo-relay-ffi/convert/fn-nemo-relay-string-free), and all handles must be freed with their corresponding `nemo_relay_*_free` function.
+
+## Structs
+
+- [FfiAdaptiveRuntime](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiadaptiveruntime): Opaque owned adaptive runtime handle.
+- [FfiAtifExporter](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiatifexporter): Opaque ATIF exporter handle.
+- [FfiAtofExporter](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiatofexporter): Opaque ATOF JSONL exporter handle.
+- [FfiCodecHandle](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-fficodechandle): Opaque handle carrying both request and response codec trait objects.
+- [FfiEvent](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffievent): Opaque wrapper around a lifecycle event emitted by the runtime.
+- [FfiLLMHandle](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffillmhandle): Opaque handle representing an active LLM call.
+- [FfiLLMRequest](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffillmrequest): Opaque wrapper around an LLM request (headers, content).
+- [FfiOpenInferenceSubscriber](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiopeninferencesubscriber): Opaque OpenInference subscriber handle.
+- [FfiOpenTelemetrySubscriber](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiopentelemetrysubscriber): Opaque OpenTelemetry subscriber handle.
+- [FfiPluginContext](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiplugincontext): Opaque plugin registration context.
+- [FfiScopeHandle](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiscopehandle): Opaque handle representing an active execution scope.
+- [FfiScopeStack](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiscopestack): Opaque handle to an isolated scope stack for per-request/per-task isolation.
+- [FfiThreadScopeStackBinding](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffithreadscopestackbinding): Opaque handle to a captured thread-local scope stack binding.
+- [FfiToolHandle](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffitoolhandle): Opaque handle representing an active tool call.
+
+## Enums
+
+- [NemoRelayScopeType](/reference/api/rust-library-reference/nemo-relay-ffi/types/enum-nemorelayscopetype): The type of scope in the agent execution hierarchy.
+
+## Functions
+
+- [nemo_relay_adaptive_runtime_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-adaptive-runtime-free): Free an adaptive runtime handle previously returned by `nemo_relay_adaptive_runtime_create`.
+- [nemo_relay_atif_exporter_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-atif-exporter-free): Free an ATIF exporter handle previously returned by `nemo_relay_atif_exporter_create`.
+- [nemo_relay_atof_exporter_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-atof-exporter-free): Free an ATOF JSONL exporter handle previously returned by `nemo_relay_atof_exporter_create`.
+- [nemo_relay_codec_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-codec-free): Free a codec handle previously returned by one of the codec constructor functions (`nemo_relay_openai_chat_codec_new`, etc.).
+- [nemo_relay_event_annotated_request](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-annotated-request): Return the annotated request from an LLM start event as a JSON C string, or null if not available (non-LLM events, or no codec was active). Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_annotated_response](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-annotated-response): Return the annotated response from an LLM end event as a JSON C string, or null if not available (non-LLM events, or no response codec was active). Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_atof_version](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-atof-version): Return the ATOF version as a C string.
+- [nemo_relay_event_attributes](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-attributes): Return the raw attribute bitfield for an event, or 0 if it has none.
+- [nemo_relay_event_attributes_json](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-attributes-json): Return ATOF attributes as a JSON string array.
+- [nemo_relay_event_category](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-category): Return the ATOF category as a C string, or null if absent.
+- [nemo_relay_event_category_profile](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-category-profile): Return the ATOF category profile as a JSON C string, or null if absent.
+- [nemo_relay_event_data](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-data): Return the event data as a JSON C string, or null if no data is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_data_schema](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-data-schema): Return the Agent Trajectory Observability Format (ATOF) data schema as a JSON C string, or null if absent.
+- [nemo_relay_event_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-free): Free an event object.
+- [nemo_relay_event_input](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-input): Return the event input as a JSON C string, or null if no input is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_json](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-json): Return the canonical subscriber event JSON as a C string. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_kind](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-kind): Return the event discriminator as a C string. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_metadata](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-metadata): Return the event metadata as a JSON C string, or null if no metadata is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_model_name](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-model-name): Return the event model name as a C string, or null if no model name is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_name](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-name): Return the name of an event as a C string, or null if unnamed. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_output](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-output): Return the event output as a JSON C string, or null if no output is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_parent_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-parent-uuid): Return the event parent UUID as a C string, or null if no parent UUID is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_scope_category](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-scope-category): Return the ATOF scope category as a C string, or null for mark events.
+- [nemo_relay_event_scope_type](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-scope-type): Return the event scope type as a C string, or null if no scope type is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_timestamp](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-timestamp): Return the event timestamp as an RFC 3339 C string. Caller must free the result.
+- [nemo_relay_event_tool_call_id](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-tool-call-id): Return the event tool call ID as a C string, or null if no tool call ID is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_event_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-event-uuid): Return the UUID of an event as a C string. Caller must free the result.
+- [nemo_relay_llm_handle_attributes](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-handle-attributes): Return the bitfield attributes of an LLM handle. Returns 0 if `ptr` is null.
+- [nemo_relay_llm_handle_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-handle-free): Free an LLM handle previously returned by the runtime.
+- [nemo_relay_llm_handle_name](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-handle-name): Return the name of an LLM handle as a C string. Caller must free the result.
+- [nemo_relay_llm_handle_parent_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-handle-parent-uuid): Return the parent scope UUID of an LLM handle, or null if none. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_llm_handle_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-handle-uuid): Return the UUID of an LLM handle as a C string. Caller must free the result.
+- [nemo_relay_llm_request_content](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-request-content): Return the content of an LLM request as a JSON C string. Caller must free the result.
+- [nemo_relay_llm_request_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-request-free): Free an LLM request object.
+- [nemo_relay_llm_request_headers](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-request-headers): Return the headers of an LLM request as a JSON C string. Caller must free the result.
+- [nemo_relay_llm_request_new](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-request-new): Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest` that must be freed with `nemo_relay_llm_request_free`. Returns null on invalid input.
+- [nemo_relay_openinference_subscriber_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-openinference-subscriber-free): Free an OpenInference subscriber handle previously returned by `nemo_relay_openinference_subscriber_create`.
+- [nemo_relay_otel_subscriber_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-otel-subscriber-free): Free an OpenTelemetry subscriber handle previously returned by `nemo_relay_otel_subscriber_create`.
+- [nemo_relay_scope_handle_attributes](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-attributes): Return the bitfield attributes of a scope handle. Returns 0 if `ptr` is null.
+- [nemo_relay_scope_handle_data](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-data): Return the scope data as a JSON C string, or null if no data is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_scope_handle_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-free): Free a scope handle previously returned by the runtime.
+- [nemo_relay_scope_handle_metadata](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-metadata): Return the scope metadata as a JSON C string, or null if no metadata is set. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_scope_handle_name](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-name): Return the name of a scope handle as a C string. Caller must free the result. Returns null if `ptr` is null.
+- [nemo_relay_scope_handle_parent_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-parent-uuid): Return the parent scope UUID as a C string, or null if there is no parent. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_scope_handle_scope_type](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-scope-type): Return the scope type of a scope handle. Returns `Unknown` if `ptr` is null.
+- [nemo_relay_scope_handle_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-uuid): Return the UUID of a scope handle as a C string. Caller must free the result with `nemo_relay_string_free`. Returns null if `ptr` is null.
+- [nemo_relay_scope_stack_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-stack-free): Free a scope stack handle previously returned by `nemo_relay_scope_stack_create`.
+- [nemo_relay_tool_handle_attributes](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-tool-handle-attributes): Return the bitfield attributes of a tool handle. Returns 0 if `ptr` is null.
+- [nemo_relay_tool_handle_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-tool-handle-free): Free a tool handle previously returned by the runtime.
+- [nemo_relay_tool_handle_name](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-tool-handle-name): Return the name of a tool handle as a C string. Caller must free the result.
+- [nemo_relay_tool_handle_parent_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-tool-handle-parent-uuid): Return the parent scope UUID of a tool handle, or null if none. Caller must free the result with `nemo_relay_string_free`.
+- [nemo_relay_tool_handle_uuid](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-tool-handle-uuid): Return the UUID of a tool handle as a C string. Caller must free the result.

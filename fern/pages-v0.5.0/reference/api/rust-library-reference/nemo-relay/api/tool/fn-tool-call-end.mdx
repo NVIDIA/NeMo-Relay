@@ -1,0 +1,36 @@
+---
+title: "Function tool_call_end"
+sidebar-title: "tool_call_end"
+description: "Finish a manual tool lifecycle span."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn tool_call_end(params: <a href=\"struct-toolcallendparams\">ToolCallEndParams</a>&lt;'_&gt;) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Finish a manual tool lifecycle span.
+
+This emits a tool-end event for a handle previously returned by [`tool_call`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call).
+
+## Parameters
+
+- `handle`: Tool handle to close.
+- `result`: Raw tool result associated with the end event.
+- `data`: Optional application payload retained for compatibility. The emitted end event data is the sanitized `result` unless it sanitizes to JSON null, in which case this payload is used.
+- `metadata`: Optional JSON metadata recorded on the end event.
+- `timestamp`: Optional timestamp recorded on the emitted end event. When `None`, the runtime uses the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the end event has been emitted.
+
+## Errors
+
+Returns an error when the runtime owner check fails or when internal state cannot be read safely.
+
+## Notes
+
+Sanitize-response guardrails affect only the emitted end-event payload, not the caller-owned `result` value.

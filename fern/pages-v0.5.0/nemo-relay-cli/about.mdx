@@ -1,0 +1,73 @@
+---
+title: "About"
+description: ""
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this section when you want the `nemo-relay` binary to observe local coding
+agent sessions through hooks, a passthrough LLM gateway, and NVIDIA NeMo Relay
+observability exporters.
+
+Install the NeMo Relay CLI with the curl-based installer described in
+[Installation](/getting-started/installation). The installer provides the
+`nemo-relay` binary without requiring a Rust toolchain. The CLI can run supported
+coding agents through a managed local gateway, forward agent hook payloads into
+NeMo Relay lifecycle events, route OpenAI-compatible or Anthropic-compatible
+model traffic through the gateway, and diagnose local configuration. The
+`nemo-relay-cli` Cargo package remains available for source-based installation
+and unsupported platforms.
+
+## Start Here When
+
+Use these guides when you need to:
+
+- Observe Claude Code, Codex, or Hermes Agent sessions locally.
+- Configure coding-agent hooks for NeMo Relay lifecycle events.
+- Route model-provider traffic through the local NeMo Relay gateway.
+- Install persistent Claude Code or Codex host plugins without wrapping the
+  agent command.
+- Validate and install model pricing catalog sources for local cost estimates.
+- Export local sessions to Agent Trajectory Interchange Format (ATIF), Agent
+  Trajectory Observability Format (ATOF) JSONL, OpenTelemetry, or
+  OpenInference.
+- Diagnose hook loading, gateway routing, and exporter output.
+
+If you are instrumenting an application or framework directly, use
+[Instrument Applications](/instrument-applications/about) or
+[Integrate into Frameworks](/integrate-into-frameworks/about) instead.
+
+## Agent Harness Support
+
+The NeMo Relay CLI is a supported surface for local coding-agent observability
+and hook-backed security. Optimization remains partial and host-dependent
+because each agent exposes different hooks, provider routes, and execution
+controls.
+
+| Agent | Observability | Security | Optimization | Notes |
+| --- | --- | --- | --- | --- |
+| Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
+| Codex | Yes | Yes | Partial | Hook forwarding and gateway-routed LLM optimization are supported after hooks are reviewed and activated. The missing session-end hook limits full coverage. |
+| Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool guardrails, and Hermes API-request telemetry are supported. Optimization depends on Hermes shell and API-request hook coverage. |
+
+## Guides
+
+Use these guide links to move from CLI setup into agent-specific instructions.
+
+- [Basic Usage](/nemo-relay-cli/basic-usage) explains gateway routes, transparent runs,
+  shared configuration, hook forwarding, and runtime mapping.
+- [Plugin Installation](/nemo-relay-cli/plugin-installation) covers persistent
+  Claude Code and Codex plugin setup through host marketplaces.
+- [Claude Code](/nemo-relay-cli/claude-code) covers transparent Claude Code
+  runs, Anthropic gateway routing, ATIF verification, and unsupported Claude
+  application modes.
+- [Codex](/nemo-relay-cli/codex) covers transparent Codex CLI runs, local
+  GUI/app caveats, model provider routing, and remote-task limits.
+- [Hermes Agent](/nemo-relay-cli/hermes) covers Hermes shell hook installation,
+  dynamic gateway URL handling, session-finalize behavior, and hook consent
+  caveats.
+
+Start with [Basic Usage](/nemo-relay-cli/basic-usage), then use the guide for the coding
+agent that you want to observe.

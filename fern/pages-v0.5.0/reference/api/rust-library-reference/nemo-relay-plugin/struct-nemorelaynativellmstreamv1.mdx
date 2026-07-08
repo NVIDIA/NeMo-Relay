@@ -1,0 +1,46 @@
+---
+title: "Struct Nemo Relay Native LlmStream V1"
+sidebar-title: "NemoRelayNativeLlmStreamV1"
+description: "Native LLM JSON stream handle table."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeLlmStreamV1 &#123;\n    pub struct_size: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n    pub user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    pub next: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-nemorelaynativellmstreampollfn\">NemoRelayNativeLlmStreamPollFn</a>&gt;,\n    pub cancel: <a href=\"type-nemorelaynativellmstreamcancelfn\">NemoRelayNativeLlmStreamCancelFn</a>,\n    pub drop: <a href=\"type-nemorelaynativellmstreamdropfn\">NemoRelayNativeLlmStreamDropFn</a>,\n&#125;"}} /></pre>
+
+Native LLM JSON stream handle table.
+
+## Fields
+
+### `struct_size: usize`
+
+Size of this struct as seen by the producer.
+
+### `user_data: *mut c_void`
+
+Stream state passed back to poll/cancel/drop callbacks.
+
+### `next: Option<NemoRelayNativeLlmStreamPollFn>`
+
+Polls the next stream chunk.
+
+### `cancel: NemoRelayNativeLlmStreamCancelFn`
+
+Cancels an in-flight stream when a consumer stops before stream end.
+
+### `drop: NemoRelayNativeLlmStreamDropFn`
+
+Drops stream state after stream completion, error, or cancellation.
+
+## Trait Implementations
+
+### `impl Default for NemoRelayNativeLlmStreamV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-nemorelaynativellmstreamv1\">NemoRelayNativeLlmStreamV1</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

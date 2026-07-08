@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_scope_stack_active"
+sidebar-title: "nemo_relay_scope_stack_active"
+description: "Returns whether the current execution context has an explicitly-initialized scope stack."
+position: 121
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub extern \"C\" fn nemo_relay_scope_stack_active() -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Returns whether the current execution context has an explicitly-initialized scope stack.
+
+Returns `true` if `nemo_relay_scope_stack_set_thread` has been called on the current OS thread (or the caller is inside a tokio task-local scope). Returns `false` when only the auto-created default is present.
+
+## Notes
+
+This helper does not allocate or install a scope stack. It only reports whether one is already explicit in the current execution context.

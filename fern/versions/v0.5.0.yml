@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+- folder: ../pages-v0.5.0/about-nemo-relay
+  title: About NVIDIA NeMo Relay
+  slug: about-nemo-relay
+  title-source: frontmatter
+- folder: ../pages-v0.5.0/getting-started
+  title: Getting Started
+  slug: getting-started
+  title-source: frontmatter
+- folder: ../pages-v0.5.0/nemo-relay-cli
+  title: NVIDIA NeMo Relay CLI
+  slug: nemo-relay-cli
+  title-source: frontmatter
+- folder: ../pages-v0.5.0/supported-integrations
+  title: Supported Integrations
+  slug: supported-integrations
+  title-source: frontmatter
+- folder: ../pages-v0.5.0/instrument-applications
+  title: Instrument Applications
+  slug: instrument-applications
+  title-source: frontmatter
+- section: Configure Plugins
+  slug: configure-plugins
+  contents:
+  - page: About
+    path: ../pages-v0.5.0/configure-plugins/about.mdx
+    slug: about
+  - folder: ../pages-v0.5.0/configure-plugins/observability
+    title: Observability
+    title-source: frontmatter
+  - folder: ../pages-v0.5.0/configure-plugins/adaptive
+    title: Adaptive
+    title-source: frontmatter
+  - folder: ../pages-v0.5.0/configure-plugins/nemo-guardrails
+    title: NeMo Guardrails
+    title-source: frontmatter
+  - folder: ../pages-v0.5.0/configure-plugins/pii-redaction
+    title: PII Redaction
+    title-source: frontmatter
+  - page: Model Pricing
+    path: ../pages-v0.5.0/configure-plugins/model-pricing.mdx
+    slug: model-pricing
+  - page: Configure Discoverable Plugins
+    path: ../pages-v0.5.0/configure-plugins/discoverable-plugins.mdx
+    slug: discoverable-plugins
+  - page: Plugin Configuration Files
+    path: ../pages-v0.5.0/configure-plugins/plugin-configuration-files.mdx
+    slug: plugin-configuration-files
+- folder: ../pages-v0.5.0/integrate-into-frameworks
+  title: Integrate into Frameworks
+  slug: integrate-into-frameworks
+  title-source: frontmatter
+- section: Build Plugins
+  slug: build-plugins
+  contents:
+  - page: About
+    path: ../pages-v0.5.0/build-plugins/about.mdx
+    slug: about
+  - folder: ../pages-v0.5.0/build-plugins/language-binding
+    title: Language Binding
+    title-source: frontmatter
+  - section: Dynamic Plugins
+    slug: dynamic-plugins
+    contents:
+    - page: Discoverable Plugins
+      path: ../pages-v0.5.0/build-plugins/dynamic-plugins/about.mdx
+      slug: about
+    - folder: ../pages-v0.5.0/build-plugins/dynamic-plugins/native-dynamic
+      title: Native Dynamic
+      title-source: frontmatter
+    - folder: ../pages-v0.5.0/build-plugins/dynamic-plugins/grpc-worker
+      title: gRPC Worker
+      title-source: frontmatter
+- folder: ../pages-v0.5.0/contribute
+  title: Contribute
+  slug: contribute
+  title-source: frontmatter
+- folder: ../pages-v0.5.0/reference
+  title: Reference
+  slug: reference
+  title-source: frontmatter
+- folder: ../pages-v0.5.0/resources
+  title: Resources
+  slug: resources
+  title-source: frontmatter

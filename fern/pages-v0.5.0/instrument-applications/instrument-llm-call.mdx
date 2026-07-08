@@ -1,0 +1,281 @@
+---
+title: "Instrument an LLM Call"
+description: "Instrument managed LLM calls with NeMo Relay scopes, middleware, events, and subscribers."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when you own the model-provider callback and want NeMo Relay to emit lifecycle events, apply LLM middleware, and preserve the active agent scope around the call.
+
+## What You Build
+
+You will wrap one existing LLM provider invocation with the managed LLM execution API. The result is an LLM call that:
+
+- Receives an LLM request object such as `LLMRequest` in Python or `LlmRequest` in Node.js and Rust.
+- Runs LLM request intercepts, guardrails, execution intercepts, and response guardrails.
+- Emits LLM start and LLM end events.
+- Records model metadata for observability and trajectory export.
+- Keeps the LLM span attached to the current agent or request scope.
+- Returns the original provider result to the application.
+
+## Before You Start
+
+Complete one binding Quick Start guide first:
+
+- [Python Quick Start](/getting-started/quick-start/python)
+- [Node.js Quick Start](/getting-started/quick-start/nodejs)
+- [Rust Quick Start](/getting-started/quick-start/rust)
+
+Create a scope for the active request or agent run before adding LLM instrumentation. If you have not done that yet, start with [Adding Scopes and Marks](/instrument-applications/adding-scopes-and-marks).
+
+The request and response payloads must be JSON-compatible. If your provider SDK uses clients, streams, callbacks, or other opaque objects, keep those objects in the provider callback and pass only a serializable request projection into NeMo Relay.
+
+For every managed LLM request, Relay automatically propagates agent lineage to
+Dynamo using `x-dynamo-session-id` and, when a parent agent scope is active,
+`x-dynamo-parent-session-id`. The current and parent IDs come from the most
+recent explicit `Agent` scopes in the active scope stack and ignores the implicit root
+scope. When present, Relay uses the harness session metadata, otherwise, it uses application
+scope names. No plugin or configuration is required.
+
+If you want Relay to add cost estimates, initialize the built-in `pricing`
+plugin before the LLM call and attach a response codec that decodes `model` and
+token `usage` from the provider response. Provider- or framework-reported cost
+is preserved when present. Otherwise Relay estimates cost only when a configured
+model pricing source matches the response model and usage fields. For catalog
+setup and embedded plugin examples, refer to
+[Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs#cost-estimation).
+
+## Integration Pattern
+
+Follow these steps to route the provider invocation through NeMo Relay:
+
+1. Identify the stable provider invocation boundary in your application.
+2. Create or inherit a scope for the current agent run, request, or workflow.
+3. Register a temporary subscriber while validating the integration.
+4. Build an LLM request object with provider headers and content.
+5. Replace the direct provider invocation with the managed LLM execute helper.
+6. Pass the active scope handle and a stable `model_name`.
+7. Attach a response codec when subscribers or exporters need normalized
+   response usage, tool calls, or cost annotations.
+8. Check that the provider result is unchanged and lifecycle events are emitted.
+
+## Minimal Example
+
+The examples below wrap a demo provider callback and print emitted events.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+import nemo_relay
+
+def log_event(event) -> None:
+    print(f"{event.kind} {event.name}")
+
+async def call_provider(request: nemo_relay.LLMRequest):
+    return {
+        "text": "hello",
+        "messages": request.content["messages"],
+    }
+
+async def main() -> None:
+    nemo_relay.subscribers.register("llm-check", log_event)
+
+    try:
+        with nemo_relay.scope.scope("agent-run", nemo_relay.ScopeType.Agent) as handle:
+            request = nemo_relay.LLMRequest(
+                {},
+                {"messages": [{"role": "user", "content": "hello"}]},
+            )
+            result = await nemo_relay.llm.execute(
+                "demo-provider",
+                request,
+                call_provider,
+                handle=handle,
+                model_name="demo-model",
+            )
+            print(result)
+    finally:
+        nemo_relay.subscribers.flush()
+        nemo_relay.subscribers.deregister("llm-check")
+
+asyncio.run(main())
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const {
+  LlmRequest,
+  ScopeType,
+  deregisterSubscriber,
+  flushSubscribers,
+  llmCallExecute,
+  registerSubscriber,
+  withScope,
+} = require("nemo-relay-node");
+
+async function main() {
+  registerSubscriber("llm-check", (event) => {
+    console.log(`${event.kind} ${event.name}`);
+  });
+
+  try {
+    await withScope("agent-run", ScopeType.Agent, async (handle) => {
+      const request = new LlmRequest(
+        {},
+        { messages: [{ role: "user", content: "hello" }] },
+      );
+      const result = await llmCallExecute(
+        "demo-provider",
+        request,
+        async (req) => ({
+          text: "hello",
+          messages: req.content.messages,
+        }),
+        handle,
+        null,
+        null,
+        null,
+        "demo-model",
+      );
+
+      console.log(result);
+    });
+  } finally {
+    flushSubscribers();
+    await new Promise((resolve) => setImmediate(resolve));
+    deregisterSubscriber("llm-check");
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::llm::{llm_call_execute, LlmCallExecuteParams, LlmRequest};
+use nemo_relay::api::scope::{
+    self, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
+};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use serde_json::json;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    register_subscriber(
+        "llm-check",
+        Arc::new(|event| {
+            println!("{} {}", event.kind(), event.name());
+        }),
+    )?;
+
+    let handle = scope::push_scope(
+        PushScopeParams::builder()
+            .name("agent-run")
+            .scope_type(ScopeType::Agent)
+            .attributes(ScopeAttributes::empty())
+            .build(),
+    )?;
+
+    let request = LlmRequest {
+        headers: Default::default(),
+        content: json!({"messages": [{"role": "user", "content": "hello"}]}),
+    };
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("demo-provider")
+            .request(request)
+            .func(Arc::new(|req| {
+                Box::pin(async move {
+                    Ok(json!({
+                        "text": "hello",
+                        "messages": req.content["messages"]
+                    }))
+                })
+            }))
+            .parent(handle.clone())
+            .model_name("demo-model")
+            .build(),
+    )
+    .await?;
+
+    println!("{result}");
+
+    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+    flush_subscribers()?;
+    let _ = deregister_subscriber("llm-check")?;
+    Ok(())
+}
+```
+
+</Tab>
+
+</Tabs>
+
+## Validate the Integration
+
+Check both behavior and instrumentation:
+
+- The provider result matches what the application returned before the wrapper was added.
+- The subscriber prints an agent or request scope event.
+- The subscriber prints LLM start and LLM end events for `demo-provider`.
+- If model pricing is configured, LLM end events include
+  `annotated_response.usage.cost` only when a response codec decoded model and
+  usage fields and a source matched the model.
+
+Native subscriber delivery is asynchronous. Flush subscribers before validating
+printed output. In Node.js, also wait one event-loop tick after
+`flushSubscribers()` so JavaScript callbacks can run.
+- LLM start input contains the request after request intercepts and
+  sanitize-request guardrails.
+- LLM end output contains the provider response after response guardrails.
+- The LLM event includes the normalized `model_name` when you provide one.
+
+If only the business result appears, the callback ran but instrumentation did not run. Confirm that the call goes through `llm.execute`, `llmCallExecute`, or `llm_call_execute`.
+
+## Production Checklist
+
+Before deploying to production, ensure the following checklist is completed:
+
+- Keep provider names stable. Subscribers and exporters use names for filtering and dashboards.
+- Pass `model_name` separately when the model should be easy to filter or export.
+- Keep request and response payloads JSON-compatible.
+- Keep SDK clients and transport objects inside the provider callback.
+- Use request codecs when request intercepts or request-side middleware need
+  normalized provider request semantics.
+- Use response codecs when LLM end events, subscribers, or exporters need
+  normalized provider response annotations.
+- Use response codecs and the `pricing` plugin when exporters need cost
+  estimates from model pricing.
+- Use sanitize guardrails before exporting prompts or model responses in production.
+
+## Common Issues
+
+Check these symptoms first when the workflow does not behave as expected.
+
+- **No LLM events appear**: The application is still calling the provider directly.
+- **The LLM appears outside the agent scope**: Pass the current scope handle into the managed execute helper.
+- **Middleware sees provider-specific shapes**: Add a codec so request intercepts can work with normalized annotated data.
+- **Sensitive prompt data appears in traces**: Add LLM sanitize-request and sanitize-response guardrails before registering production exporters.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Instrument tools with [Instrument a Tool Call](/instrument-applications/instrument-tool-call).
+- Add policy or transformation with [Add Middleware](/instrument-applications/advanced-guide).
+- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) when request
+  intercepts need normalized LLM request data or downstream consumers need
+  normalized response annotations.
+- Export events with [Observability](/configure-plugins/observability/about).

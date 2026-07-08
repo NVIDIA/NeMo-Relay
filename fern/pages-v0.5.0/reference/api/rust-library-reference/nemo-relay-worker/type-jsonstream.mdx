@@ -1,0 +1,20 @@
+---
+title: "Type Alias Json Stream"
+sidebar-title: "JsonStream"
+description: "Boxed JSON stream returned by streaming worker callbacks."
+position: 22
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type JsonStream = <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn Stream&lt;Item = <a href=\"type-result\">Result</a>&lt;<a href=\"type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;&gt;;"}} /></pre>
+
+Boxed JSON stream returned by streaming worker callbacks.
+
+## Aliased Type
+
+```rust
+pub struct JsonStream { /* private fields */ }
+```

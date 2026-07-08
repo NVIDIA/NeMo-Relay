@@ -1,0 +1,20 @@
+---
+title: "Function canonicalize_json"
+sidebar-title: "canonicalize_json"
+description: "Canonicalize a JSON string per RFC 8785 (JCS)."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn canonicalize_json(json_str: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Canonicalize a JSON string per RFC 8785 (JCS).
+
+Parses the input as JSON, then re-serializes using deterministic key ordering and number formatting per the JSON Canonicalization Scheme.
+
+## Errors
+
+Returns [`AcgError::Serialization`] if the input is not valid JSON or if canonicalization fails.

@@ -1,0 +1,257 @@
+---
+title: "Installation"
+description: ""
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this page when you are consuming a published NeMo Relay release from a
+package manager.
+
+If you are working from a source checkout, validating unpublished changes, or
+contributing to the repository, use
+[Development Setup](/contribute/development-setup) instead.
+
+Choose the package by the boundary you want NeMo Relay to own or observe:
+
+- Install the CLI when a local coding-agent harness owns the invocation
+- Install a language binding when your application owns the tool or LLM call
+- Install an integration package when a supported framework or agent harness
+  owns the boundary
+
+After installation, use [Quick Start](/getting-started/quick-start) to choose
+the matching runtime path. If a supported framework or agent harness owns the
+boundary, start from [Supported Integrations](/supported-integrations/about).
+
+## CLI
+
+Install the NeMo Relay CLI when you want the `nemo-relay` executable for
+coding-agent hook and LLM gateway observability.
+
+Install the latest stable release:
+
+<Tabs>
+<Tab title="Unix shell">
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+```
+</Tab>
+
+<Tab title="Windows PowerShell">
+```powershell
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+</Tab>
+
+</Tabs>
+
+These commands intentionally download the installer from `main` and install the
+latest stable CLI release. The version of this documentation page does not
+select the CLI version; set `NEMO_RELAY_VERSION` to install a specific release.
+
+The Unix installer downloads the matching GitHub Release binary to
+`$HOME/.local/bin`. The PowerShell installer downloads `nemo-relay.exe` to
+`%LOCALAPPDATA%\nemo-relay\bin`, adds that directory to the persistent user
+`PATH`, and updates the installing PowerShell process. Newly opened shells
+inherit the persistent `PATH` change. Verify that the command is available:
+
+```bash
+nemo-relay --version
+```
+
+After installation, `nemo-relay` can also install persistent Claude Code and
+Codex host plugins:
+
+```bash
+nemo-relay install claude-code
+nemo-relay install codex
+```
+
+Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for the host
+plugin workflow.
+
+<Note>
+The installers download the published SHA-256 checksum for the selected release
+asset and fail without replacing an existing binary if verification does not
+succeed. They do not invoke `sudo`. The PowerShell installer updates the Windows
+user `PATH`; the Unix installer does not edit shell configuration.
+</Note>
+
+### Supported Platforms
+
+| Operating system | Architecture | Release target |
+| --- | --- | --- |
+| Linux | x86_64 | `x86_64-unknown-linux-musl` |
+| Linux | ARM64 | `aarch64-unknown-linux-musl` |
+| macOS | Apple Silicon | `aarch64-apple-darwin` |
+| Windows | x86_64 | `x86_64-pc-windows-msvc` |
+| Windows | ARM64 | `aarch64-pc-windows-msvc` |
+
+The installer reports the detected operating system and architecture when no
+matching asset exists. Intel macOS is not supported because no matching release
+asset is published.
+
+### Installer Reference
+
+<Tabs>
+<Tab title="Unix shell">
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | NEMO_RELAY_VERSION=0.5.0 sh
+```
+
+Install into another directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh -s -- --install-dir "$HOME/bin"
+```
+
+Add the selected directory to `PATH` before running `nemo-relay` if it is not
+already present.
+
+| Interface | Purpose |
+| --- | --- |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
+| `--install-dir DIR` | Installer destination; defaults to `$HOME/.local/bin` or `%LOCALAPPDATA%\nemo-relay\bin` in Windows POSIX shells |
+| `-h`, `--help` | Display installer usage |
+</Tab>
+
+<Tab title="Windows PowerShell">
+Set the same environment variable before invoking the installer to install a
+specific version:
+
+```powershell
+$env:NEMO_RELAY_VERSION = '0.5.0'
+irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+```
+
+To choose an installation directory, download the script and pass `-InstallDir`:
+
+```powershell
+iwr https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 -OutFile install.ps1
+.\install.ps1 -InstallDir "$HOME\bin"
+```
+
+| Interface | Purpose |
+| --- | --- |
+| `NEMO_RELAY_VERSION` | Optional release tag; accepts a leading `v` and defaults to the latest stable release |
+| `-InstallDir DIR` | Installer destination; defaults to `%LOCALAPPDATA%\nemo-relay\bin` |
+| `-Help` | Display installer usage |
+</Tab>
+
+</Tabs>
+
+On Windows, Git Bash, MSYS, Cygwin, and MINGW shells can use the Unix command.
+They install the matching Windows `.exe` asset into the same
+`%LOCALAPPDATA%\nemo-relay\bin` default directory and invoke PowerShell to
+persist the Windows user `PATH` update.
+
+Rerun the installer to upgrade or replace the existing binary. It verifies the
+new download before replacing the binary in the selected installation directory.
+
+### Alternative Installation Methods
+
+Use the installers on a supported platform when you want a prebuilt release
+asset. Use Cargo on unsupported platforms or when you prefer to build from
+source:
+
+```bash
+cargo install nemo-relay-cli
+```
+
+If you already use `cargo-binstall`, it can download the same published release
+asset through the Cargo interface:
+
+```bash
+cargo binstall nemo-relay-cli
+```
+
+For source installation and unsupported-platform guidance, refer to the
+[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/0.5.0/crates/cli/README.md#installation-options).
+
+## Python
+
+Install the Python package when your application uses NeMo Relay through the
+Python wrapper and owns the tool or LLM call boundary.
+
+```bash
+uv add nemo-relay@0.5.0
+```
+
+Use `uv add` from an application project that has a `pyproject.toml`; it records
+`nemo-relay` as a project dependency. If you are only installing into an active
+virtual environment and do not have project metadata, use `uv pip install
+nemo-relay` instead. You can also use `pip install nemo-relay` if you are not
+managing the environment with `uv`.
+
+## Node.js
+
+Install the Node.js package when your application uses NeMo Relay through the
+JavaScript API and owns the tool or LLM call boundary.
+
+```bash
+npm install nemo-relay-node
+```
+
+## Rust
+
+Add the Rust crates when your application uses NeMo Relay directly from Rust.
+
+```bash
+cargo add nemo-relay@0.5.0
+cargo add nemo-relay-adaptive@0.5.0
+```
+
+- `nemo-relay` provides the core runtime APIs for scopes, middleware, subscribers, plugins, tool calls, and LLM calls.
+- `nemo-relay-adaptive` provides adaptive runtime primitives and Redis-backed learning components when you want adaptive tuning behavior in Rust.
+
+## Integrations
+
+Install integration packages when your application already uses one of the
+supported framework or agent harness surfaces.
+
+### OpenClaw
+
+Install the OpenClaw plugin through OpenClaw so OpenClaw can register and manage
+the package:
+
+```bash
+openclaw plugins install npm:nemo-relay-openclaw@0.5.0
+openclaw gateway restart
+```
+
+Use the package name `nemo-relay-openclaw` for installation. Use the plugin ID
+`nemo-relay` in OpenClaw configuration, inspection, and gateway status commands.
+See the [OpenClaw Plugin Guide](/supported-integrations/openclaw-plugin) for
+configuration and verification steps.
+
+### Hermes Agent
+
+Install the latest NeMo Relay Python package in the environment that runs
+Hermes, then enable the bundled Hermes plugin:
+
+```bash
+pip install nemo-relay
+hermes plugins enable observability/nemo_relay
+```
+
+The plugin ID is `observability/nemo_relay`. See the
+[Hermes NeMo Relay plugin guide](https://github.com/NousResearch/hermes-agent/tree/main/plugins/observability/nemo_relay)
+for configuration and verification steps.
+
+### Python Framework Integrations
+
+Install the Python package with the supported framework extras when your
+application uses LangChain, LangGraph, or Deep Agents.
+
+```bash
+uv add "nemo-relay[langchain,langgraph,deepagents]@0.5.0"
+```
+
+The extras install the NeMo Relay Python package plus the dependencies needed by
+the maintained public integrations. See
+[Supported Integrations](/supported-integrations/about) for guide links and support
+levels.

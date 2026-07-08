@@ -1,0 +1,64 @@
+---
+title: "Release Notes"
+description: "Read NeMo Relay release notes and find the official release history."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page summarizes the current documentation-visible release state. GitHub
+Releases remain the source of truth for complete release history and
+tag-specific notes.
+
+## Current Release
+
+NVIDIA NeMo Relay 0.5 adds dynamic plugin SDKs and lifecycle controls, verified
+CLI installers and readiness diagnostics, stable token and cost field semantics,
+and stronger request and trace lineage behavior.
+
+The most important compatibility notes are:
+
+- Plugin configuration now lives in `plugins.toml`. Move plugin settings out of
+  `config.toml`; the `--plugin-config` CLI option has been removed.
+- Registered LLM request and tool execution intercepts now return canonical
+  outcomes. Rebuild development native plugins and `grpc-v1` workers against
+  0.5.
+- The experimental `nemo-relay-wasm` package, Cursor CLI support, and
+  patch-based integrations have been removed.
+- Go and the raw C FFI remain experimental and source-first. Node.js 24 or
+  newer remains the minimum supported Node.js version.
+
+Use the child pages for release highlights and support notes. For the complete
+PR-by-PR changelog, release artifacts, and tag-specific history, use
+[GitHub Releases](https://github.com/NVIDIA/NeMo-Relay/releases).
+
+## Release Scope
+
+This release includes:
+
+- Dynamic plugin discovery, trust policy and attestation gates, and lifecycle
+  controls through the `nemo-relay` CLI.
+- A Rust native plugin SDK for trusted in-process `rust_dynamic` plugins, plus
+  `grpc-v1` worker support through Rust and Python SDKs.
+- Schema-aware dynamic-plugin configuration and editing through `plugins.toml`.
+- Verified Unix and Windows CLI installers, and expanded `nemo-relay doctor`
+  readiness diagnostics for agent hosts and plugin configuration.
+- Canonical LLM request and tool execution intercept outcomes with ordered
+  pending marks across the runtime and supported bindings.
+- Automatic Dynamo session-lineage headers on managed LLM requests and
+  turn-scoped CLI trace correlation.
+- Stable normalized token and cost semantics for provider response codecs and
+  ATOF, ATIF, OpenInference, and OpenTelemetry projections.
+
+## Feature Documentation
+
+For the major 0.5 additions, start with:
+
+- [Build Plugins](/build-plugins/about)
+- [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+- [Installation](/getting-started/installation)
+- [Plugin Installation and Diagnostics](/nemo-relay-cli/plugin-installation)
+- [LLM Request Intercept Outcomes](/reference/llm-request-intercept-outcomes)
+- [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+- [Instrument an LLM Call](/instrument-applications/instrument-llm-call)
+- [Provider Response Codecs and Model Pricing](/integrate-into-frameworks/provider-response-codecs)

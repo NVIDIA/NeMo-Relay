@@ -1,0 +1,27 @@
+---
+title: "Function nemo_relay_scope_register_llm_sanitize_response_guardrail"
+sidebar-title: "nemo_relay_scope_register_llm_sanitize_response_guardrail"
+description: "Register a scope-local LLM response sanitization guardrail."
+position: 113
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_scope_register_llm_sanitize_response_guardrail(\n    scope_uuid: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    name: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"../callable/type-nemorelayjsoncb\">NemoRelayJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"../callable/type-nemorelayfreefn\">NemoRelayFreeFn</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Register a scope-local LLM response sanitization guardrail.
+
+## Parameters
+
+- `scope_uuid`: UUID of the target scope (null-terminated C string).
+- `name`: Unique guardrail name.
+- `priority`: Execution priority (lower runs first).
+- `cb`: JSON-to-JSON callback.
+- `user_data`: Opaque pointer passed to `cb`.
+- `free_fn`: Optional destructor for `user_data`.
+
+## Safety
+
+`scope_uuid` and `name` must be valid C strings. `cb` must be a valid function pointer.

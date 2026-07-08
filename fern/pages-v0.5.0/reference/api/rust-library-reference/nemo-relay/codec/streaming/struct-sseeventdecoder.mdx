@@ -1,0 +1,60 @@
+---
+title: "Struct SseEvent Decoder"
+sidebar-title: "SseEventDecoder"
+description: "Incremental decoder for `text/event-stream` byte streams that yields one JSON object per complete `data:` payload."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct SseEventDecoder { /* private fields */ }
+```
+
+Incremental decoder for `text/event-stream` byte streams that yields one JSON object per complete `data:` payload.
+
+SSE frames are separated by blank lines (`\n\n`); each frame may contain `event:` and `data:` lines. Anthropic Messages, OpenAI Responses, and OpenAI Chat Completions all emit one JSON object per `data:` line, so the decoder buffers received bytes, splits on frame boundaries, parses the JSON payload, and tags it with the frame's event name when present.
+
+The decoder is byte-stream-friendly: it accumulates partial frames across chunks and emits completed frames only when their terminating blank line arrives. Bytes after the last terminator are retained for the next call.
+
+## Implementations
+
+### `impl SseEventDecoder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates a new decoder with an empty buffer.
+
+#### `push_bytes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_bytes(&amp;mut self, bytes: &amp;[<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u8.html\">u8</a>]) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
+
+Appends `bytes` to the internal buffer and returns every now-complete SSE event.
+
+Bytes are interpreted as UTF-8 with replacement characters for invalid sequences; provider SSE streams are well-formed UTF-8 in practice, but lossy decoding keeps the decoder honest rather than failing on a single corrupt chunk.
+
+Returns `Ok(events)` containing zero or more events whose `data:` payloads parsed successfully. Frames whose `data:` line is non-empty but does not parse as JSON are surfaced as [`FlowError::Internal`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) so the caller can decide whether to abort the stream or skip the frame; frames with no `data:` line at all (e.g. SSE heartbeats) are silently dropped.
+
+#### `finish`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn finish(self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
+
+Drains any remaining buffered frame at end of stream.
+
+Most well-formed SSE streams end with a terminating blank line, in which case this returns `Ok(None)`. Stops with no terminator are surfaced as a final partial frame so observability captures the last bytes the upstream sent before disconnect.
+
+## Trait Implementations
+
+### `impl Default for SseEventDecoder`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>

@@ -1,0 +1,34 @@
+---
+title: "Function pop_scope"
+sidebar-title: "pop_scope"
+description: "Pop the current scope from the active scope stack."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn pop_scope(params: <a href=\"struct-popscopeparams\">PopScopeParams</a>&lt;'_&gt;) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Pop the current scope from the active scope stack.
+
+This emits a scope-end event for the target scope and removes any scope-local registrations owned by that scope.
+
+## Parameters
+
+- `handle_uuid`: UUID of the scope that should be popped.
+- `output`: Optional JSON payload exported as the semantic scope output.
+- `timestamp`: Optional timestamp recorded on the emitted end event. When `None`, the runtime uses the current UTC time, or one microsecond after the handle start time if the current time is not later.
+
+## Returns
+
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) that is `Ok(())` when the scope was popped successfully.
+
+## Errors
+
+Returns [`FlowError::InvalidArgument`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the target scope exists but is not the current top of stack, and [`FlowError::NotFound`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when the UUID is unknown to the active stack.
+
+## Notes
+
+The implicit root scope cannot be removed.

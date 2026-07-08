@@ -1,0 +1,185 @@
+---
+title: "Observability Helpers"
+description: "Observability plugin configuration helpers."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/observability.d.ts`.
+
+Import from `nemo-relay-node/observability`.
+
+Observability plugin configuration helpers.
+
+## Interfaces
+
+### `AtofConfig`
+
+```ts
+export interface AtofConfig {
+  enabled?: boolean;
+  output_directory?: string;
+  filename?: string;
+  mode?: 'append' | 'overwrite' | string;
+  endpoints?: AtofEndpointConfig[];
+}
+```
+
+### `AtofEndpointConfig`
+
+```ts
+export interface AtofEndpointConfig {
+  url: string;
+  transport?: 'http_post' | 'websocket' | 'ndjson' | string;
+  headers?: Record<string, string>;
+  timeout_millis?: number;
+  field_name_policy?: 'preserve' | 'replace_dots' | string;
+}
+```
+
+### `S3StorageConfig`
+
+```ts
+export interface S3StorageConfig {
+  type: 's3';
+  bucket: string;
+  key_prefix?: string;
+  access_key_id?: string;
+  secret_access_key_var?: string;
+  session_token_var?: string;
+  region?: string;
+  endpoint_url?: string;
+  allow_http?: boolean;
+}
+```
+
+### `HttpStorageConfig`
+
+```ts
+export interface HttpStorageConfig {
+  type: 'http';
+  endpoint: string;
+  headers?: Record<string, string>;
+  header_env?: Record<string, string>;
+  timeout_millis?: number;
+}
+```
+
+### `AtifConfig`
+
+```ts
+export interface AtifConfig {
+  enabled?: boolean;
+  agent_name?: string;
+  agent_version?: string;
+  model_name?: string;
+  tool_definitions?: Record<string, Json>[];
+  extra?: Record<string, Json>;
+  output_directory?: string;
+  filename_template?: string;
+  storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
+}
+```
+
+### `OtlpConfig`
+
+```ts
+export interface OtlpConfig {
+  enabled?: boolean;
+  transport?: 'http_binary' | 'grpc' | string;
+  endpoint?: string;
+  headers?: Record<string, string>;
+  resource_attributes?: Record<string, string>;
+  service_name?: string;
+  service_namespace?: string;
+  service_version?: string;
+  instrumentation_scope?: string;
+  timeout_millis?: number;
+}
+```
+
+### `Config`
+
+```ts
+export interface Config {
+  version?: number;
+  atof?: AtofConfig;
+  atif?: AtifConfig;
+  opentelemetry?: OtlpConfig;
+  openinference?: OtlpConfig;
+  policy?: ConfigPolicy;
+}
+```
+
+### `ComponentSpec` interface
+
+```ts
+export interface ComponentSpec {
+  kind: 'observability';
+  enabled?: boolean;
+  config: Config;
+}
+```
+
+## Functions
+
+### `defaultConfig`
+
+Create a default observability component config.
+
+```ts
+export declare function defaultConfig(): Config;
+```
+
+### `atofConfig`
+
+Create filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL settings with defaults applied.
+
+```ts
+export declare function atofConfig(config?: AtofConfig): AtofConfig;
+```
+
+### `atifConfig`
+
+Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied.
+
+```ts
+export declare function atifConfig(config?: AtifConfig): AtifConfig;
+```
+
+### `otlpConfig`
+
+Create OTLP exporter settings for OpenTelemetry or OpenInference.
+
+```ts
+export declare function otlpConfig(config?: OtlpConfig): OtlpConfig;
+```
+
+### `ComponentSpec` function
+
+Wrap observability config as a top-level plugin component.
+
+```ts
+export declare function ComponentSpec(
+  config: Config,
+  options?: {
+    enabled?: boolean;
+```
+
+## Constants
+
+### `OBSERVABILITY_PLUGIN_KIND`
+
+Top-level plugin kind used by the built-in observability component.
+
+```ts
+export declare const OBSERVABILITY_PLUGIN_KIND: 'observability';
+```
+
+## Re-exports
+
+- `ConfigDiagnostic`
+- `ConfigPolicy`
+- `ConfigReport`
+

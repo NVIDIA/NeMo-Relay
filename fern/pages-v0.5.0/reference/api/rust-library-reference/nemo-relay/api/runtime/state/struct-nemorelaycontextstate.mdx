@@ -1,0 +1,316 @@
+---
+title: "Struct Nemo Relay Context State"
+sidebar-title: "NemoRelayContextState"
+description: "Process-global runtime state backing middleware and event emission."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct NemoRelayContextState { /* private fields */ }
+```
+
+Process-global runtime state backing middleware and event emission.
+
+The public API layer stores one shared instance of this type for the process. It contains global middleware registries, lifecycle subscribers, and arbitrary extension slots used by bindings or integrations.
+
+## Implementations
+
+### `impl NemoRelayContextState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-nemorelaycontextstate\">NemoRelayContextState</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Create an empty runtime state with no registered middleware.
+
+##### Returns
+
+A [`NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate) with empty registries, no subscribers, and no extensions.
+
+#### `set_extension`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_extension&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;(\n    &amp;mut self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    value: T,\n)"}} /></pre>
+
+Store an arbitrary runtime extension under `key`.
+
+Extensions let bindings or integrations attach shared state to the process-global runtime without adding new first-class fields.
+
+##### Parameters
+
+- `key`: Stable identifier for the extension slot.
+- `value`: Typed extension value to store.
+
+#### `get_extension`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_extension&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;(&amp;self, key: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;T</a>&gt;"}} /></pre>
+
+Borrow a typed runtime extension by key.
+
+##### Parameters
+
+- `key`: Extension slot name.
+
+##### Returns
+
+`Some(&T)` when an extension exists under `key` with the requested type and `None` otherwise.
+
+#### `get_extension_mut`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_extension_mut&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;(\n    &amp;mut self,\n    key: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut T</a>&gt;"}} /></pre>
+
+Mutably borrow a typed runtime extension by key.
+
+##### Parameters
+
+- `key`: Extension slot name.
+
+##### Returns
+
+`Some(&mut T)` when an extension exists under `key` with the requested type and `None` otherwise.
+
+#### `remove_extension`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove_extension(&amp;mut self, key: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Remove a runtime extension by key.
+
+##### Parameters
+
+- `key`: Extension slot name.
+
+##### Returns
+
+`true` when an extension was removed and `false` when no extension was stored under `key`.
+
+#### `create_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn create_event(&amp;self, params: <a href=\"../../event/struct-markevent\">MarkEvent</a>) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a standalone mark event.
+
+##### Parameters
+
+- `params`: A pre-built [`MarkEvent`](/reference/api/rust-library-reference/nemo-relay/api/event/struct-markevent) to wrap in an [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event).
+
+##### Returns
+
+A mark [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) containing the provided [`MarkEvent`](/reference/api/rust-library-reference/nemo-relay/api/event/struct-markevent).
+
+#### `create_scope_handle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn create_scope_handle(\n    &amp;self,\n    params: <a href=\"../../scope/struct-createscopehandleparams\">CreateScopeHandleParams</a>&lt;'_&gt;,\n) -&gt; <a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>"}} /></pre>
+
+Create a new scope handle.
+
+##### Parameters
+
+- `name`: Human-readable scope name.
+- `parent_uuid`: Optional parent scope UUID.
+- `scope_type`: Semantic category of the scope.
+- `attributes`: Scope attribute bitflags.
+- `data`: Optional application payload stored on the handle.
+- `metadata`: Optional metadata stored on the handle.
+- `timestamp`: Optional handle start time. When omitted, the current UTC time is used.
+
+##### Returns
+
+A new [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope/struct-scopehandle) with a fresh UUID.
+
+#### `build_scope_start_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_scope_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a scope-start event from a handle.
+
+##### Parameters
+
+- `handle`: Scope handle to serialize into an event.
+- `data`: Optional semantic input payload exported on the start event.
+
+##### Returns
+
+A scope-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided handle.
+
+#### `end_scope_handle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_scope_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a scope-end event from a handle.
+
+##### Parameters
+
+- `handle`: Scope handle to serialize into an event.
+- `data`: Optional data payload returned from the scope.
+- `metadata`: Optional metadata payload merged over `handle.metadata`.
+
+##### Returns
+
+A scope-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided handle.
+
+#### `build_scope_end_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_scope_end_event(&amp;self, params: <a href=\"../../scope/struct-endscopehandleparams\">EndScopeHandleParams</a>&lt;'_&gt;) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a scope-end event from builder parameters.
+
+The `metadata` payload is merged over the metadata already stored on the handle.
+
+##### Parameters
+
+- `params`: Scope end-event builder parameters.
+
+##### Returns
+
+A scope-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided parameters.
+
+#### `create_tool_handle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn create_tool_handle(\n    &amp;self,\n    params: <a href=\"../../tool/struct-createtoolhandleparams\">CreateToolHandleParams</a>&lt;'_&gt;,\n) -&gt; <a href=\"../../tool/struct-toolhandle\">ToolHandle</a>"}} /></pre>
+
+Create a new tool handle.
+
+##### Parameters
+
+- `name`: Tool name recorded on emitted events.
+- `parent_uuid`: Optional parent scope UUID.
+- `attributes`: Tool attribute bitflags.
+- `data`: Optional application payload stored on the handle.
+- `metadata`: Optional metadata stored on the handle.
+- `tool_call_id`: Optional provider-specific correlation identifier.
+- `timestamp`: Optional handle start time. When omitted, the current UTC time is used.
+
+##### Returns
+
+A new [`ToolHandle`](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolhandle) with a fresh UUID.
+
+#### `build_tool_start_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_tool_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../tool/struct-toolhandle\">ToolHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a tool-start event from a handle.
+
+##### Parameters
+
+- `handle`: Tool handle to serialize into an event.
+- `data`: Optional tool input payload.
+
+##### Returns
+
+A tool-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided handle.
+
+#### `end_tool_handle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_tool_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../tool/struct-toolhandle\">ToolHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a tool-end event from a handle and optional overrides.
+
+##### Parameters
+
+- `handle`: Tool handle to serialize into an event.
+- `data`: Optional end-event data payload.
+- `metadata`: Optional metadata payload merged over `handle.metadata`.
+
+##### Returns
+
+A tool-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided handle.
+
+#### `build_tool_end_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_tool_end_event(&amp;self, params: <a href=\"../../tool/struct-endtoolhandleparams\">EndToolHandleParams</a>&lt;'_&gt;) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build a tool-end event from builder parameters.
+
+The `metadata` payload is merged over the metadata already stored on the handle.
+
+##### Parameters
+
+- `params`: Tool end-event builder parameters.
+
+##### Returns
+
+A tool-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided parameters.
+
+#### `create_llm_handle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn create_llm_handle(&amp;self, params: <a href=\"../../llm/struct-createllmhandleparams\">CreateLlmHandleParams</a>&lt;'_&gt;) -&gt; <a href=\"../../llm/struct-llmhandle\">LlmHandle</a>"}} /></pre>
+
+Create a new LLM handle.
+
+##### Parameters
+
+- `name`: Logical provider or model family name. Gateway-managed LLM calls use provider route names such as `anthropic.messages`, which become the emitted event name.
+- `parent_uuid`: Optional parent scope UUID.
+- `attributes`: LLM attribute bitflags.
+- `data`: Optional application payload stored on the handle.
+- `metadata`: Optional metadata stored on the handle.
+- `model_name`: Optional normalized model name stored on the handle.
+- `timestamp`: Optional handle start time. When omitted, the current UTC time is used.
+
+##### Returns
+
+A new [`LlmHandle`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmhandle) with a fresh UUID.
+
+#### `build_llm_start_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_llm_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../llm/struct-llmhandle\">LlmHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    annotated_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build an LLM-start event from a handle.
+
+##### Parameters
+
+- `handle`: LLM handle to serialize into an event.
+- `data`: Sanitized LLM request payload.
+- `annotated_request`: Optional normalized request annotation.
+
+##### Returns
+
+An LLM-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided handle.
+
+#### `end_llm_handle`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_llm_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../llm/struct-llmhandle\">LlmHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    annotated_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build an LLM-end event from a handle and optional overrides.
+
+##### Parameters
+
+- `handle`: LLM handle to serialize into an event.
+- `data`: Sanitized LLM response payload.
+- `metadata`: Optional metadata payload merged over `handle.metadata`.
+- `annotated_response`: Optional normalized response annotation.
+
+##### Returns
+
+An LLM-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided handle.
+
+#### `build_llm_end_event`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_llm_end_event(&amp;self, params: <a href=\"../../llm/struct-endllmhandleparams\">EndLlmHandleParams</a>&lt;'_&gt;) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+
+Build an LLM-end event from builder parameters.
+
+The `metadata` payload is merged over the metadata already stored on the handle.
+
+##### Parameters
+
+- `params`: LLM end-event builder parameters.
+
+##### Returns
+
+An LLM-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/enum-event) derived from the provided parameters.
+
+## Trait Implementations
+
+### `impl Default for NemoRelayContextState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-nemorelaycontextstate\">NemoRelayContextState</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

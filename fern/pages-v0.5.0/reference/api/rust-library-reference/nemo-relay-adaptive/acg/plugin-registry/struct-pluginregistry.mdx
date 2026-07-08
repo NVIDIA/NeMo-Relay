@@ -1,0 +1,87 @@
+---
+title: "Struct Plugin Registry"
+sidebar-title: "PluginRegistry"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg/plugin_registry/struct-pluginregistry"
+description: "Registry for storing and retrieving provider plugins."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PluginRegistry { /* private fields */ }
+```
+
+Registry for storing and retrieving provider plugins.
+
+Instance-scoped (not a global static) for testability. Stores plugins as `Arc<dyn ProviderPlugin>` keyed by plugin ID.
+
+## Implementations
+
+### `impl PluginRegistry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginregistry\">PluginRegistry</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Create a new empty plugin registry.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;mut self, plugin: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../plugin/trait-providerplugin\">ProviderPlugin</a>&gt;) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Register a plugin in the registry.
+
+Returns `Err(AcgError::PluginAlreadyRegistered)` if a plugin with the same ID is already registered.
+
+#### `get`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get(&amp;self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../plugin/trait-providerplugin\">ProviderPlugin</a>&gt;&gt;"}} /></pre>
+
+Retrieve a plugin by ID, returning an `Arc` clone.
+
+#### `list_plugin_ids`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn list_plugin_ids(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Return a sorted list of all registered plugin IDs.
+
+#### `deregister`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;mut self, plugin_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Remove a plugin from the registry, returning `true` if it was present.
+
+#### `len`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn len(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>"}} /></pre>
+
+Return the number of registered plugins.
+
+#### `is_empty`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_empty(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Return `true` if the registry contains no plugins.
+
+## Trait Implementations
+
+### `impl Debug for PluginRegistry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-pluginregistry\">PluginRegistry</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for PluginRegistry`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-pluginregistry\">PluginRegistry</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
