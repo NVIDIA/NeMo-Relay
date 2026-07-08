@@ -392,6 +392,9 @@ for attribute in (
 ):
     if attribute not in otel_text:
         raise SystemExit(f"OTEL is missing optimization attribute {attribute}")
+otel_projected_mark_count = otel_text.count("nemo_relay.mark.projection")
+if otel_projected_mark_count == 0:
+    raise SystemExit("OTEL did not project canonical marks as tool spans")
 
 by_reason = collections.Counter(event.get("data", {}).get("reason_code") for event in decisions)
 summary = {
@@ -412,6 +415,7 @@ summary = {
     "atif": trajectories,
     "atif_mark_counts": dict(atif_mark_names),
     "otel_file": otel_path.name,
+    "otel_projected_mark_count": otel_projected_mark_count,
     "phoenix_url": f"http://127.0.0.1:{phoenix_port}",
     "phoenix_atif_project": "switchyard-inferencehub-atif",
     "visor_enabled": visor_enabled == "true",
