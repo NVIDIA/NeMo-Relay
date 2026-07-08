@@ -13,8 +13,13 @@ use async_stream::stream;
 use futures_util::{StreamExt, stream as futures_stream};
 use nemo_relay::api::event::{CategoryProfile, DataSchema, EventCategory};
 use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::optimization::record_llm_optimization_contribution;
 use nemo_relay::api::runtime::{LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn};
 use nemo_relay::api::scope::{EmitMarkEventParams, event};
+use nemo_relay::codec::optimization::{
+    LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
+    LlmOptimizationModelTransition,
+};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
@@ -28,7 +33,7 @@ use uuid::Uuid;
 use crate::contract::{
     DecisionAttempt, DecisionProfile, ROUTING_DECISION_SCHEMA_VERSION,
     ROUTING_REQUEST_SCHEMA_VERSION, RequestIdentity, RequestMaterialization, RequestProtocol,
-    RequestSummary, RoutingDecision, RoutingRequest,
+    RequestSummary, RoutingDecision, RoutingRequest, RoutingTarget,
 };
 use crate::stream_translation::StreamTranscoder;
 use crate::translation::{
@@ -43,6 +48,7 @@ const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
 const ROUTING_MARK_SCHEMA: &str = "switchyard.routing_mark";
+const ROUTING_CONTRIBUTION_SCHEMA: &str = "nvidia.switchyard.routing_optimization";
 
 /// Supported provider wire protocols.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -518,8 +524,11 @@ impl SwitchyardRuntime {
         }
 
         if self.config.mode == RoutingMode::ObserveOnly {
-            if let Err(error) = self.decided_request(inbound, &original, 1, None).await {
-                self.emit_error(None, 1, "decision_api", &error);
+            match self.decided_request(inbound, &original, 1, None).await {
+                Ok((_, decision, _)) => {
+                    self.record_routing_contribution(&decision, 1, false);
+                }
+                Err(error) => self.emit_error(None, 1, "decision_api", &error),
             }
             return self
                 .dispatch_fallback_buffered(inbound, original, next, "observe_only")
@@ -544,7 +553,10 @@ impl SwitchyardRuntime {
             let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
             match next(routed).await {
                 Ok(response) => match translate_response(target_protocol, inbound, &response) {
-                    Ok(response) => return Ok(response),
+                    Ok(response) => {
+                        self.record_routing_contribution(&decision, attempt, true);
+                        return Ok(response);
+                    }
                     Err(error) => {
                         self.emit_error(
                             Some(&routing_request),
@@ -613,8 +625,11 @@ impl SwitchyardRuntime {
                 .await;
         }
         if self.config.mode == RoutingMode::ObserveOnly {
-            if let Err(error) = self.decided_request(inbound, &original, 1, None).await {
-                self.emit_error(None, 1, "decision_api", &error);
+            match self.decided_request(inbound, &original, 1, None).await {
+                Ok((_, decision, _)) => {
+                    self.record_routing_contribution(&decision, 1, false);
+                }
+                Err(error) => self.emit_error(None, 1, "decision_api", &error),
             }
             return self
                 .dispatch_fallback_stream(inbound, original, next, "observe_only")
@@ -640,6 +655,7 @@ impl SwitchyardRuntime {
             match next(routed).await {
                 Ok(mut upstream) => match upstream.next().await {
                     Some(Ok(first)) => {
+                        self.record_routing_contribution(&decision, attempt, true);
                         let committed = Box::pin(
                             futures_stream::once(async move { Ok(first) }).chain(upstream),
                         ) as LlmJsonStream;
@@ -767,6 +783,11 @@ impl SwitchyardRuntime {
             .await
             .map_err(|error| format!("Decision API returned invalid JSON: {error}"))?;
         self.validate_decision(&decision)?;
+        if let Some(baseline) = decision.baseline_route.as_ref()
+            && let Err(error) = self.validate_target(baseline)
+        {
+            self.emit_error(Some(&request), attempt, "baseline_binding", &error);
+        }
         let routed = self.apply_target(inbound, original.clone(), &decision)?;
         let latency = started.elapsed().as_millis() as u64;
         self.emit_decision(
@@ -896,21 +917,69 @@ impl SwitchyardRuntime {
                 decision.schema_version
             ));
         }
+        self.validate_target(&decision.route).map(|_| ())
+    }
+
+    fn validate_target(&self, target: &RoutingTarget) -> Result<&TargetBinding, String> {
         let binding = self
             .config
             .targets
-            .get(&decision.route.backend_id)
-            .ok_or_else(|| format!("unknown backend_id {:?}", decision.route.backend_id))?;
-        if binding.model != decision.route.target_model
-            || binding.protocol.label() != decision.route.target_protocol_profile
-            || binding.endpoint != decision.route.target_endpoint
+            .get(&target.backend_id)
+            .ok_or_else(|| format!("unknown backend_id {:?}", target.backend_id))?;
+        if binding.model != target.target_model
+            || binding.protocol.label() != target.target_protocol_profile
+            || binding.endpoint != target.target_endpoint
         {
             return Err(format!(
                 "decision target {:?} does not match its exact Relay binding",
-                decision.route.backend_id
+                target.backend_id
             ));
         }
-        Ok(())
+        Ok(binding)
+    }
+
+    fn record_routing_contribution(&self, decision: &RoutingDecision, attempt: u32, applied: bool) {
+        let Some(contribution) = self.routing_contribution(decision, attempt, applied) else {
+            return;
+        };
+        let _ = record_llm_optimization_contribution(contribution);
+    }
+
+    fn routing_contribution(
+        &self,
+        decision: &RoutingDecision,
+        attempt: u32,
+        applied: bool,
+    ) -> Option<LlmOptimizationContribution> {
+        let baseline = decision
+            .baseline_route
+            .as_ref()
+            .filter(|baseline| self.validate_target(baseline).is_ok())?;
+        let mut contribution = LlmOptimizationContribution::new(
+            SWITCHYARD_PLUGIN_KIND,
+            LlmOptimizationKind::model_routing(),
+        );
+        contribution.applied = applied;
+        contribution.model_transition = Some(LlmOptimizationModelTransition {
+            baseline: Some(LlmOptimizationModel::new(&baseline.target_model)),
+            effective: Some(LlmOptimizationModel::new(&decision.route.target_model)),
+        });
+        contribution.payload_schema = Some(DataSchema {
+            name: ROUTING_CONTRIBUTION_SCHEMA.to_string(),
+            version: "1".to_string(),
+        });
+        contribution.payload = Some(json!({
+            "decision_id": decision.decision_id,
+            "selected_backend_id": decision.route.backend_id,
+            "selected_tier": decision.route.tier,
+            "baseline_backend_id": baseline.backend_id,
+            "baseline_tier": baseline.tier,
+            "routing_attempt": attempt,
+            "rollout_mode": self.config.mode.label(),
+            "reason_code": decision.reason_code,
+            "reason_summary": decision.reason_summary,
+        }));
+        Some(contribution)
     }
 
     fn apply_target(
@@ -980,6 +1049,7 @@ impl SwitchyardRuntime {
                 target_protocol_profile: binding.protocol.label().into(),
                 target_endpoint: binding.endpoint.clone(),
             },
+            baseline_route: None,
             confidence: None,
             reason_code: Some("relay_trusted_fallback".into()),
             reason_summary: None,
@@ -1430,6 +1500,9 @@ mod tests {
 
     use axum::{Json as AxumJson, Router, extract::State, routing::post};
     use nemo_relay::api::event::Event;
+    use nemo_relay::api::llm::{
+        LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
+    };
     use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
     use nemo_relay::api::subscriber::{
         deregister_subscriber, flush_subscribers, register_subscriber,
@@ -1459,6 +1532,10 @@ mod tests {
                 (
                     "selected-chat".into(),
                     binding(WireProtocol::OpenaiChat, "selected"),
+                ),
+                (
+                    "baseline-chat".into(),
+                    binding(WireProtocol::OpenaiChat, "baseline"),
                 ),
                 (
                     "fallback-chat".into(),
@@ -1497,6 +1574,13 @@ mod tests {
                 target_protocol_profile: "openai_chat".into(),
                 target_endpoint: "/v1/chat/completions".into(),
             },
+            baseline_route: Some(crate::contract::RoutingTarget {
+                tier: "capable".into(),
+                target_model: "baseline".into(),
+                backend_id: "baseline-chat".into(),
+                target_protocol_profile: "openai_chat".into(),
+                target_endpoint: "/v1/chat/completions".into(),
+            }),
             confidence: Some(0.9),
             reason_code: Some("test".into()),
             reason_summary: None,
@@ -1653,6 +1737,40 @@ mod tests {
     }
 
     #[test]
+    fn routing_contribution_requires_an_exact_independent_baseline_binding() {
+        let runtime =
+            SwitchyardRuntime::new(config("http://127.0.0.1:1/v1/routing/decision".into()))
+                .unwrap();
+
+        let contribution = runtime.routing_contribution(&decision(), 2, true).unwrap();
+        assert!(contribution.applied);
+        assert_eq!(
+            contribution.kind.as_str(),
+            LlmOptimizationKind::MODEL_ROUTING
+        );
+        let transition = contribution.model_transition.unwrap();
+        assert_eq!(transition.baseline.unwrap().model, "baseline");
+        assert_eq!(transition.effective.unwrap().model, "selected");
+        assert_eq!(contribution.payload.as_ref().unwrap()["routing_attempt"], 2);
+        assert_eq!(
+            contribution.payload_schema.as_ref().unwrap().name,
+            ROUTING_CONTRIBUTION_SCHEMA
+        );
+
+        let observed = runtime.routing_contribution(&decision(), 1, false).unwrap();
+        assert!(!observed.applied);
+
+        let mut missing = decision();
+        missing.baseline_route = None;
+        assert!(runtime.routing_contribution(&missing, 1, true).is_none());
+
+        let mut drifted = decision();
+        drifted.baseline_route.as_mut().unwrap().target_model = "drifted".into();
+        assert!(runtime.routing_contribution(&drifted, 1, true).is_none());
+        assert!(runtime.validate_decision(&drifted).is_ok());
+    }
+
+    #[test]
     fn routing_decision_mark_has_canonical_shape_and_mirrored_identity() {
         let subscriber_name = format!("switchyard-mark-shape-{}", uuid::Uuid::now_v7());
         let events = Arc::new(Mutex::new(Vec::<Event>::new()));
@@ -1748,10 +1866,16 @@ mod tests {
     }
 
     async fn decision_server() -> (String, Arc<Mutex<Vec<RoutingRequest>>>) {
+        decision_server_for(decision()).await
+    }
+
+    async fn decision_server_for(
+        decision: RoutingDecision,
+    ) -> (String, Arc<Mutex<Vec<RoutingRequest>>>) {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let state = DecisionState {
             requests: Arc::clone(&requests),
-            decision: decision(),
+            decision,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1766,6 +1890,260 @@ mod tests {
             .unwrap();
         });
         (format!("http://{address}/v1/routing/decision"), requests)
+    }
+
+    async fn managed_buffered_events(
+        runtime: SwitchyardRuntime,
+        next: LlmExecutionNextFn,
+    ) -> Vec<Event> {
+        let subscriber_name = format!("switchyard-accounting-{}", uuid::Uuid::now_v7());
+        let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+        let captured = Arc::clone(&events);
+        register_subscriber(
+            &subscriber_name,
+            Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+        )
+        .unwrap();
+        let runtime = Arc::new(runtime);
+        let func: LlmExecutionNextFn = Arc::new(move |request| {
+            let runtime = Arc::clone(&runtime);
+            let next = Arc::clone(&next);
+            Box::pin(async move {
+                runtime
+                    .execute_buffered("openai.chat_completions", request, next)
+                    .await
+            })
+        });
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("openai.chat_completions")
+                .request(chat_request())
+                .func(func)
+                .build(),
+        )
+        .await
+        .unwrap();
+        flush_subscribers().unwrap();
+        deregister_subscriber(&subscriber_name).unwrap();
+        Arc::try_unwrap(events).unwrap().into_inner().unwrap()
+    }
+
+    async fn managed_stream_events(
+        runtime: SwitchyardRuntime,
+        next: LlmStreamExecutionNextFn,
+    ) -> Vec<Event> {
+        let subscriber_name = format!("switchyard-stream-accounting-{}", uuid::Uuid::now_v7());
+        let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+        let captured = Arc::clone(&events);
+        register_subscriber(
+            &subscriber_name,
+            Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+        )
+        .unwrap();
+        let runtime = Arc::new(runtime);
+        let func: LlmStreamExecutionNextFn = Arc::new(move |request| {
+            let runtime = Arc::clone(&runtime);
+            let next = Arc::clone(&next);
+            Box::pin(async move {
+                runtime
+                    .execute_stream("openai.chat_completions", request, next)
+                    .await
+            })
+        });
+        let mut stream = llm_stream_call_execute(
+            LlmStreamCallExecuteParams::builder()
+                .name("openai.chat_completions")
+                .request(chat_request())
+                .func(func)
+                .collector(Box::new(|_| Ok(())))
+                .finalizer(Box::new(|| json!({"done": true})))
+                .build(),
+        )
+        .await
+        .unwrap();
+        while stream.next().await.is_some() {}
+        drop(stream);
+        flush_subscribers().unwrap();
+        deregister_subscriber(&subscriber_name).unwrap();
+        Arc::try_unwrap(events).unwrap().into_inner().unwrap()
+    }
+
+    #[tokio::test]
+    async fn buffered_accounting_records_only_the_terminal_committed_route() {
+        let (url, _) = decision_server().await;
+        let successful = managed_buffered_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(|_| Box::pin(async { Ok(chat_response()) })),
+        )
+        .await;
+        let marks = successful
+            .iter()
+            .filter(|event| event.name() == "nemo_relay.llm.optimization")
+            .collect::<Vec<_>>();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].data().unwrap()["applied"], true);
+        assert_eq!(
+            marks[0].data().unwrap()["model_transition"]["baseline"]["model"],
+            "baseline"
+        );
+        let summary = successful
+            .iter()
+            .find_map(|event| {
+                event
+                    .annotated_response()
+                    .and_then(|response| response.optimization_summary.as_ref())
+            })
+            .unwrap();
+        assert_eq!(summary.contributions.len(), 1);
+        assert!(summary.contributions[0].applied);
+
+        let (url, _) = decision_server().await;
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let fallback = managed_buffered_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(move |_| {
+                let seen = Arc::clone(&seen);
+                Box::pin(async move {
+                    if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(FlowError::Upstream(UpstreamFailure {
+                            status: Some(401),
+                            body: "unauthorized".into(),
+                            headers: BTreeMap::new(),
+                            class: UpstreamFailureClass::Authentication,
+                        }))
+                    } else {
+                        Ok(chat_response())
+                    }
+                })
+            }),
+        )
+        .await;
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        assert!(
+            fallback
+                .iter()
+                .all(|event| event.name() != "nemo_relay.llm.optimization")
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_baseline_is_telemetry_only_and_does_not_change_the_selected_route() {
+        let mut drifted = decision();
+        drifted.baseline_route.as_mut().unwrap().target_model = "drifted".into();
+        let (url, _) = decision_server_for(drifted).await;
+        let events = managed_buffered_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(|request| {
+                Box::pin(async move {
+                    assert_eq!(request.content["model"], "selected");
+                    Ok(chat_response())
+                })
+            }),
+        )
+        .await;
+        assert!(events.iter().any(|event| {
+            event.name() == "switchyard.routing.error"
+                && event.data().is_some_and(|data| {
+                    data["error_class"] == "baseline_binding"
+                        && data["error"]
+                            .as_str()
+                            .is_some_and(|error| error.contains("exact Relay binding"))
+                })
+        }));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.name() != "nemo_relay.llm.optimization")
+        );
+    }
+
+    #[tokio::test]
+    async fn observe_only_accounting_is_visible_but_not_applied() {
+        let (url, _) = decision_server().await;
+        let mut observe = config(url);
+        observe.mode = RoutingMode::ObserveOnly;
+        let events = managed_buffered_events(
+            SwitchyardRuntime::new(observe).unwrap(),
+            Arc::new(|request| {
+                Box::pin(async move {
+                    assert_eq!(request.content["model"], "fallback");
+                    Ok(chat_response())
+                })
+            }),
+        )
+        .await;
+        let contribution = events
+            .iter()
+            .find(|event| event.name() == "nemo_relay.llm.optimization")
+            .and_then(Event::data)
+            .unwrap();
+        assert_eq!(contribution["applied"], false);
+        let summary = events
+            .iter()
+            .find_map(|event| {
+                event
+                    .annotated_response()
+                    .and_then(|response| response.optimization_summary.as_ref())
+            })
+            .unwrap();
+        assert_eq!(summary.contributions.len(), 1);
+        assert!(!summary.contributions[0].applied);
+        assert!(summary.tokens_saved.total_tokens.is_none());
+    }
+
+    #[tokio::test]
+    async fn streaming_accounting_commits_on_the_first_successful_item_only() {
+        let (url, _) = decision_server().await;
+        let committed = managed_stream_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(|_| {
+                Box::pin(async {
+                    Ok(Box::pin(futures_stream::iter(vec![Ok(chat_chunk(
+                        "ok",
+                        json!("stop"),
+                    ))])) as LlmJsonStream)
+                })
+            }),
+        )
+        .await;
+        assert_eq!(
+            committed
+                .iter()
+                .filter(|event| event.name() == "nemo_relay.llm.optimization")
+                .count(),
+            1
+        );
+
+        let (url, _) = decision_server().await;
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let fallback = managed_stream_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(move |_| {
+                let seen = Arc::clone(&seen);
+                Box::pin(async move {
+                    let items = if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        vec![Err(FlowError::Upstream(UpstreamFailure {
+                            status: Some(401),
+                            body: "unauthorized".into(),
+                            headers: BTreeMap::new(),
+                            class: UpstreamFailureClass::Authentication,
+                        }))]
+                    } else {
+                        vec![Ok(chat_chunk("fallback", json!("stop")))]
+                    };
+                    Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+                })
+            }),
+        )
+        .await;
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        assert!(
+            fallback
+                .iter()
+                .all(|event| event.name() != "nemo_relay.llm.optimization")
+        );
     }
 
     #[tokio::test]

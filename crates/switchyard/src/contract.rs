@@ -166,6 +166,9 @@ pub struct RoutingDecision {
     pub router: DecisionProvider,
     /// Selected target.
     pub route: RoutingTarget,
+    /// Explicit counterfactual route supplied by routers that define one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_route: Option<RoutingTarget>,
     /// Optional confidence.
     #[serde(default)]
     pub confidence: Option<f64>,
@@ -210,6 +213,34 @@ mod tests {
             decision.extra.get("future_field"),
             Some(&json!({"safe": true}))
         );
+        assert!(decision.baseline_route.is_none());
+    }
+
+    #[test]
+    fn current_switchyard_decision_contract_accepts_an_explicit_baseline() {
+        let decision: RoutingDecision = serde_json::from_value(json!({
+            "schema_version": "switchyard.routing_decision.v1",
+            "decision_id": "decision-1",
+            "router": {"name": "stage", "version": "1"},
+            "route": {
+                "tier": "efficient",
+                "target_model": "model-small",
+                "backend_id": "backend-small",
+                "target_protocol_profile": "openai_chat",
+                "target_endpoint": "/v1/chat/completions"
+            },
+            "baseline_route": {
+                "tier": "capable",
+                "target_model": "model-large",
+                "backend_id": "backend-large",
+                "target_protocol_profile": "anthropic_messages",
+                "target_endpoint": "/v1/messages"
+            }
+        }))
+        .unwrap();
+        let baseline = decision.baseline_route.unwrap();
+        assert_eq!(baseline.backend_id, "backend-large");
+        assert_eq!(baseline.target_protocol_profile, "anthropic_messages");
     }
 
     #[test]
