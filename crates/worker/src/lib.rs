@@ -142,7 +142,9 @@ type LlmStreamExecutionFn =
 struct WorkerHandlers {
     registrations: Vec<Registration>,
     subscribers: HashMap<String, SubscriberFn>,
-    event_sanitizers: HashMap<String, EventSanitizeFn>,
+    mark_sanitizers: HashMap<String, EventSanitizeFn>,
+    scope_start_sanitizers: HashMap<String, EventSanitizeFn>,
+    scope_end_sanitizers: HashMap<String, EventSanitizeFn>,
     tool_sanitize_requests: HashMap<String, ToolSanitizeFn>,
     tool_sanitize_responses: HashMap<String, ToolSanitizeFn>,
     tool_conditionals: HashMap<String, ToolConditionalFn>,
@@ -205,9 +207,17 @@ impl PluginContext {
         F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
     {
         self.push_registration(name, surface, priority, false);
-        self.handlers
-            .event_sanitizers
-            .insert(name.into(), Arc::new(callback));
+        let sanitizers = match surface {
+            RegistrationSurface::MarkSanitizeGuardrail => &mut self.handlers.mark_sanitizers,
+            RegistrationSurface::ScopeSanitizeStartGuardrail => {
+                &mut self.handlers.scope_start_sanitizers
+            }
+            RegistrationSurface::ScopeSanitizeEndGuardrail => {
+                &mut self.handlers.scope_end_sanitizers
+            }
+            _ => unreachable!("event sanitizer registration requires an event sanitizer surface"),
+        };
+        sanitizers.insert(name.into(), Arc::new(callback));
     }
 
     /// Registers a mark event sanitizer.
@@ -1404,7 +1414,7 @@ impl WorkerService {
             | RegistrationSurface::ScopeSanitizeEndGuardrail => {
                 let event = event_payload(request.payload)?;
                 let fields = event.sanitize_fields();
-                let handler = self.event_sanitizer(&request.registration_name)?;
+                let handler = self.event_sanitizer(surface, &request.registration_name)?;
                 let fields = with_thread_scope(&scope, || handler(&event, fields));
                 Ok(json_response(
                     serde_json::to_value(fields)
@@ -1520,16 +1530,20 @@ impl WorkerService {
             })
     }
 
-    fn event_sanitizer(&self, name: &str) -> Result<EventSanitizeFn> {
-        self.handlers
+    fn event_sanitizer(&self, surface: RegistrationSurface, name: &str) -> Result<EventSanitizeFn> {
+        let handlers = self
+            .handlers
             .lock()
-            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
-            .event_sanitizers
-            .get(name)
-            .cloned()
-            .ok_or_else(|| {
-                WorkerSdkError::InvalidInput(format!("event sanitizer '{name}' not registered"))
-            })
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?;
+        let sanitizers = match surface {
+            RegistrationSurface::MarkSanitizeGuardrail => &handlers.mark_sanitizers,
+            RegistrationSurface::ScopeSanitizeStartGuardrail => &handlers.scope_start_sanitizers,
+            RegistrationSurface::ScopeSanitizeEndGuardrail => &handlers.scope_end_sanitizers,
+            _ => unreachable!("event sanitizer lookup requires an event sanitizer surface"),
+        };
+        sanitizers.get(name).cloned().ok_or_else(|| {
+            WorkerSdkError::InvalidInput(format!("event sanitizer '{name}' not registered"))
+        })
     }
 
     fn tool_sanitize_request(&self, name: &str) -> Result<ToolSanitizeFn> {

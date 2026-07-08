@@ -42,7 +42,7 @@ pub(crate) fn snapshot_event_subscribers(
 }
 
 /// Apply the event sanitizer chain visible on the current scope stack.
-pub(crate) fn sanitize_event(event: Event) -> Event {
+pub(crate) fn sanitize_event(event: Event) -> Option<Event> {
     sanitize_event_with_scope_stack(event, &current_scope_stack())
 }
 
@@ -50,13 +50,13 @@ pub(crate) fn sanitize_event(event: Event) -> Event {
 pub(crate) fn sanitize_event_with_scope_stack(
     event: Event,
     scope_stack: &ScopeStackHandle,
-) -> Event {
+) -> Option<Event> {
     let entries = {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let context = global_context();
         let state = match context.read() {
             Ok(state) => state,
-            Err(_) => return event,
+            Err(_) => return None,
         };
         match &event {
             Event::Mark(_) => {
@@ -88,7 +88,9 @@ pub(crate) fn sanitize_event_with_scope_stack(
             }
         }
     };
-    NemoRelayContextState::event_sanitize_snapshot_chain(event, &entries)
+    Some(NemoRelayContextState::event_sanitize_snapshot_chain(
+        event, &entries,
+    ))
 }
 
 pub(crate) fn ensure_runtime_owner() -> Result<()> {

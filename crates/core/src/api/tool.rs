@@ -252,8 +252,9 @@ fn tool_call_with_subscriber_snapshot(
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
         (handle, event)
     };
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     Ok((handle, subscribers))
 }
 
@@ -354,10 +355,11 @@ fn tool_call_end_with_pending_marks(
                 mark.category_profile,
             ))
         })
-        .map(sanitize_event)
+        .filter_map(sanitize_event)
         .collect::<Vec<_>>();
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, subscribers);
+    }
     for mark in marks {
         NemoRelayContextState::emit_event(&mark, subscribers);
     }
@@ -377,8 +379,9 @@ fn emit_tool_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_tool_handle(handle, handle.data.clone(), metadata)
     };
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, lifecycle_subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, lifecycle_subscribers);
+    }
     Ok(())
 }
 

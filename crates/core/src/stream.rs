@@ -227,8 +227,9 @@ impl LlmStreamWrapper {
                 Err(_) => None,
             }
         };
-        if let Some(event) = event_snapshot {
-            let event = sanitize_event_with_scope_stack(event, &self.scope_stack);
+        if let Some(event) = event_snapshot
+            && let Some(event) = sanitize_event_with_scope_stack(event, &self.scope_stack)
+        {
             NemoRelayContextState::emit_event(&event, &self.subscribers);
         }
     }
@@ -255,8 +256,9 @@ impl LlmStreamWrapper {
                 Err(_) => None,
             }
         };
-        if let Some(event) = event_snapshot {
-            let event = sanitize_event_with_scope_stack(event, &self.scope_stack);
+        if let Some(event) = event_snapshot
+            && let Some(event) = sanitize_event_with_scope_stack(event, &self.scope_stack)
+        {
             NemoRelayContextState::emit_event(&event, &self.subscribers);
         }
     }

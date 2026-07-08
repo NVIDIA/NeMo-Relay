@@ -233,7 +233,9 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
     };
     let event = sanitize_event(event);
     task_scope_push(handle.clone());
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    if let Some(event) = event {
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     Ok(handle)
 }
 
@@ -293,7 +295,9 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     let event = sanitize_event(event);
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    if let Some(event) = event {
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     Ok(())
 }
 
@@ -346,7 +350,8 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
         ));
         (event, subscribers)
     };
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     Ok(())
 }

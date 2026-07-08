@@ -206,6 +206,13 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .count(),
         2
     );
+    assert_eq!(
+        registrations
+            .iter()
+            .filter(|registration| registration.local_name == "event-sanitize")
+            .count(),
+        3
+    );
 
     let invoke_err = client
         .invoke(Request::new(InvokeRequest {
@@ -456,14 +463,14 @@ async fn worker_service_invokes_every_registration_surface() {
 
     let mark_fields = invoke_json(
         &mut client,
-        event_invoke_surface("mark-sanitize", RegistrationSurface::MarkSanitizeGuardrail),
+        event_invoke_surface("event-sanitize", RegistrationSurface::MarkSanitizeGuardrail),
     )
     .await;
     assert_eq!(mark_fields["data"]["phase"], "mark");
     let start_fields = invoke_json(
         &mut client,
         event_invoke_surface(
-            "scope-start-sanitize",
+            "event-sanitize",
             RegistrationSurface::ScopeSanitizeStartGuardrail,
         ),
     )
@@ -472,7 +479,7 @@ async fn worker_service_invokes_every_registration_surface() {
     let end_fields = invoke_json(
         &mut client,
         event_invoke_surface(
-            "scope-end-sanitize",
+            "event-sanitize",
             RegistrationSurface::ScopeSanitizeEndGuardrail,
         ),
     )
@@ -1560,15 +1567,15 @@ impl WorkerPlugin for SurfacePlugin {
                 .expect("events lock")
                 .push(event.name().into());
         });
-        ctx.register_mark_sanitize_guardrail("mark-sanitize", 1, |event, mut fields| {
+        ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
             fields.data = Some(json!({"name": event.name(), "phase": "mark"}));
             fields
         });
-        ctx.register_scope_sanitize_start_guardrail("scope-start-sanitize", 1, |_, mut fields| {
+        ctx.register_scope_sanitize_start_guardrail("event-sanitize", 1, |_, mut fields| {
             fields.metadata = Some(json!({"phase": "scope_start"}));
             fields
         });
-        ctx.register_scope_sanitize_end_guardrail("scope-end-sanitize", 1, |_, mut fields| {
+        ctx.register_scope_sanitize_end_guardrail("event-sanitize", 1, |_, mut fields| {
             fields.metadata = Some(json!({"phase": "scope_end"}));
             fields
         });

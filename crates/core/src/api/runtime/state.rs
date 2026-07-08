@@ -581,8 +581,9 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        let event = sanitize_event(event);
-        Self::emit_event(&event, subscribers);
+        if let Some(event) = sanitize_event(event) {
+            Self::emit_event(&event, subscribers);
+        }
         handle
     }
 
@@ -605,8 +606,9 @@ impl NemoRelayContextState {
             EventCategory::from(handle.scope_type),
             None,
         ));
-        let event = sanitize_event(event);
-        Self::emit_event(&event, subscribers);
+        if let Some(event) = sanitize_event(event) {
+            Self::emit_event(&event, subscribers);
+        }
     }
 
     /// Snapshot event sanitizer entries in priority order.

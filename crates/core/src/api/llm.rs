@@ -321,8 +321,9 @@ fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.build_llm_start_event(handle, Some(input), annotated_request)
     };
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, subscribers);
+    }
     Ok(())
 }
 
@@ -348,8 +349,9 @@ fn emit_pending_request_marks(
             mark.category,
             mark.category_profile,
         ));
-        let event = sanitize_event(event);
-        NemoRelayContextState::emit_event(&event, subscribers);
+        if let Some(event) = sanitize_event(event) {
+            NemoRelayContextState::emit_event(&event, subscribers);
+        }
     }
     Ok(())
 }
@@ -522,8 +524,9 @@ fn llm_call_end_with_behavior(
                 .build(),
         )
     };
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     if let Some(error) = decode_error
         && behavior.response_codec_errors_fatal
     {
@@ -554,8 +557,9 @@ fn emit_llm_end_without_output(
         let event = state.end_llm_handle(handle, handle.data.clone(), metadata, None);
         (event, subscribers)
     };
-    let event = sanitize_event(event);
-    NemoRelayContextState::emit_event(&event, &subscribers);
+    if let Some(event) = sanitize_event(event) {
+        NemoRelayContextState::emit_event(&event, &subscribers);
+    }
     Ok(())
 }
 

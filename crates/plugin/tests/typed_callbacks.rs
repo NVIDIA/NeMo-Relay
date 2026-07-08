@@ -2648,6 +2648,28 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
         unsafe {
             (registration.cb)(
                 registration.user_data as *mut c_void,
+                ptr::null(),
+                fields,
+                &mut out,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
+                event,
+                ptr::null(),
+                &mut out,
+            )
+        },
+        NemoRelayStatus::NullPointer
+    );
+    assert_eq!(
+        unsafe {
+            (registration.cb)(
+                registration.user_data as *mut c_void,
                 event,
                 fields,
                 ptr::null_mut(),
@@ -3036,6 +3058,7 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
         }),
     );
     let invalid_fields = host_string(&host, "{not json");
+    out = stale_out;
     assert_eq!(
         unsafe {
             (registration.cb)(
