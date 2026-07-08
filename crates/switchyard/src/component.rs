@@ -1513,6 +1513,7 @@ mod tests {
         deregister_subscriber, flush_subscribers, register_subscriber,
     };
     use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
+    use nemo_relay::plugin::rollback_registrations;
 
     use super::*;
 
@@ -1642,6 +1643,429 @@ mod tests {
             "id": "chat-1", "object": "chat.completion.chunk", "model": "selected",
             "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": finish_reason}]
         })
+    }
+
+    #[test]
+    fn wire_protocol_and_plugin_lifecycle_contracts_are_stable() {
+        for (protocol, label, endpoint) in [
+            (
+                WireProtocol::OpenaiChat,
+                "openai_chat",
+                "/v1/chat/completions",
+            ),
+            (
+                WireProtocol::OpenaiResponses,
+                "openai_responses",
+                "/v1/responses",
+            ),
+            (
+                WireProtocol::AnthropicMessages,
+                "anthropic_messages",
+                "/v1/messages",
+            ),
+        ] {
+            assert_eq!(protocol.label(), label);
+            assert_eq!(protocol.endpoint(), endpoint);
+            assert_eq!(
+                WireProtocol::from_call(label, &request(protocol)),
+                Some(protocol)
+            );
+            assert_eq!(
+                WireProtocol::from_call("unknown", &request(protocol)),
+                Some(protocol)
+            );
+        }
+        assert_eq!(
+            WireProtocol::from_call(
+                "unknown",
+                &LlmRequest {
+                    headers: Map::new(),
+                    content: json!({})
+                }
+            ),
+            None
+        );
+        assert_eq!(RoutingMode::Enforce.label(), "enforce");
+        assert_eq!(RoutingMode::ObserveOnly.label(), "observe_only");
+
+        let valid = config("http://127.0.0.1:1/v1/routing/decision".into());
+        let component: PluginComponentSpec = valid.clone().into();
+        assert_eq!(component.kind, SWITCHYARD_PLUGIN_KIND);
+        assert!(component.enabled);
+        assert_eq!(component.config["decision_profile_id"], "stage_router");
+
+        let plugin = SwitchyardPlugin;
+        assert_eq!(plugin.plugin_kind(), SWITCHYARD_PLUGIN_KIND);
+        assert!(!plugin.allows_multiple_components());
+        assert!(plugin.validate(&component.config).is_empty());
+        let diagnostics = plugin.validate(json!({"version": "invalid"}).as_object().unwrap());
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].level, DiagnosticLevel::Error);
+        assert_eq!(diagnostics[0].code, "switchyard.invalid_config");
+    }
+
+    #[tokio::test]
+    async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts() {
+        let plugin = SwitchyardPlugin;
+        let component: PluginComponentSpec =
+            config("http://127.0.0.1:1/v1/routing/decision".into()).into();
+        let mut context = PluginRegistrationContext::with_namespace(format!(
+            "switchyard-test-{}-",
+            Uuid::now_v7()
+        ));
+
+        plugin
+            .register(&component.config, &mut context)
+            .await
+            .unwrap();
+
+        let mut registrations = context.into_registrations();
+        assert_eq!(registrations.len(), 2);
+        rollback_registrations(&mut registrations);
+        assert!(registrations.is_empty());
+    }
+
+    #[test]
+    fn configuration_validation_rejects_unsafe_or_ambiguous_bindings() {
+        let url = "http://127.0.0.1:1/v1/routing/decision".to_string();
+        let assert_invalid = |config: SwitchyardConfig, expected: &str| {
+            let error = SwitchyardRuntime::new(config)
+                .err()
+                .expect("config must fail");
+            assert!(
+                error.contains(expected),
+                "{error:?} did not contain {expected:?}"
+            );
+        };
+
+        let mut candidate = config(url.clone());
+        candidate.version = 2;
+        assert_invalid(candidate, "unsupported Switchyard config version");
+        let mut candidate = config(url.clone());
+        candidate.decision_profile_id.clear();
+        assert_invalid(candidate, "decision_profile_id");
+        let mut candidate = config(url.clone());
+        candidate.decision_timeout_millis = 0;
+        assert_invalid(candidate, "decision_timeout_millis");
+        let mut candidate = config(url.clone());
+        candidate.max_retries = 11;
+        assert_invalid(candidate, "max_retries");
+        let mut candidate = config(url.clone());
+        candidate.recent_message_count = 0;
+        assert_invalid(candidate, "recent_message_count");
+        let candidate = config("file:///tmp/decision".into());
+        assert_invalid(candidate, "must use http or https");
+        let mut candidate = config(url.clone());
+        candidate.targets.clear();
+        assert_invalid(candidate, "targets must not be empty");
+        let mut candidate = config(url.clone());
+        candidate.enabled_inbound_profiles.clear();
+        assert_invalid(candidate, "enabled_inbound_profiles");
+
+        let mut candidate = config(url.clone());
+        candidate.targets.get_mut("selected-chat").unwrap().endpoint = "/wrong".into();
+        assert_invalid(candidate, "endpoint must be");
+        let mut candidate = config(url.clone());
+        candidate.targets.get_mut("selected-chat").unwrap().base_url =
+            "file:///tmp/provider".into();
+        assert_invalid(candidate, "base_url must use http or https");
+        let mut candidate = config(url.clone());
+        candidate.targets.insert(
+            "duplicate-chat".into(),
+            candidate.targets["selected-chat"].clone(),
+        );
+        assert_invalid(candidate, "conflicts with another exact backend binding");
+        let mut candidate = config(url.clone());
+        candidate.default_targets.openai_chat = "missing".into();
+        assert_invalid(candidate, "default target \"missing\" is not configured");
+        let mut candidate = config(url.clone());
+        candidate.default_targets.openai_chat = "fallback-responses".into();
+        assert_invalid(candidate, "must use protocol openai_chat");
+
+        let mut candidate = config(url.clone());
+        candidate
+            .decision_headers
+            .insert("bad header".into(), "value".into());
+        assert_invalid(candidate, "invalid header name");
+        let mut candidate = config(url.clone());
+        candidate
+            .decision_headers
+            .insert("x-test".into(), "bad\nvalue".into());
+        assert_invalid(candidate, "invalid header value");
+        let mut candidate = config(url.clone());
+        candidate.decision_header_env.insert(
+            "authorization".into(),
+            "SWITCHYARD_TEST_MISSING_DECISION_SECRET".into(),
+        );
+        assert_invalid(candidate, "is not set");
+        let mut candidate = config(url);
+        candidate
+            .targets
+            .get_mut("selected-chat")
+            .unwrap()
+            .header_env
+            .insert(
+                "authorization".into(),
+                "SWITCHYARD_TEST_MISSING_TARGET_SECRET".into(),
+            );
+        assert_invalid(candidate, "is not set");
+    }
+
+    #[test]
+    fn atof_cross_component_validation_reports_each_activation_mismatch() {
+        assert!(validate_switchyard_atof_configuration(&PluginConfig::default()).is_ok());
+
+        let payload = PluginConfig {
+            components: vec![config("http://switchyard.test/v1/routing/decision".into()).into()],
+            ..PluginConfig::default()
+        };
+        assert!(validate_switchyard_atof_configuration(&payload).is_ok());
+
+        let mut switchyard = config("http://switchyard.test/v1/routing/decision".into());
+        switchyard.context_mode = ContextMode::AtofRequired;
+        switchyard.atof_endpoint_url = Some("http://events.test/v1/atof/events".into());
+        let mut plugin_config = PluginConfig {
+            components: vec![switchyard.into()],
+            ..PluginConfig::default()
+        };
+        plugin_config.components.push(PluginComponentSpec {
+            kind: "observability".into(),
+            enabled: true,
+            config: json!({"atof": {"enabled": true, "endpoints": [{
+                "url": "http://wrong.test/v1/atof/events",
+                "header_env": {"authorization": "TOKEN"}
+            }]}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        });
+        assert!(
+            validate_switchyard_atof_configuration(&plugin_config)
+                .unwrap_err()
+                .contains("requires HTTP ATOF endpoint")
+        );
+
+        plugin_config.components[1].config["atof"]["endpoints"][0]["url"] =
+            json!("http://events.test/v1/atof/events");
+        plugin_config.components[1].config["atof"]["endpoints"][0]["field_name_policy"] =
+            json!("snake_case");
+        assert!(
+            validate_switchyard_atof_configuration(&plugin_config)
+                .unwrap_err()
+                .contains("field_name_policy = preserve")
+        );
+        let endpoint = &mut plugin_config.components[1].config["atof"]["endpoints"][0];
+        endpoint["field_name_policy"] = json!("preserve");
+        endpoint.as_object_mut().unwrap().remove("header_env");
+        assert!(
+            validate_switchyard_atof_configuration(&plugin_config)
+                .unwrap_err()
+                .contains("environment-referenced header")
+        );
+    }
+
+    #[tokio::test]
+    async fn execution_bypasses_inapplicable_calls_and_fails_open_on_extensions() {
+        let runtime =
+            SwitchyardRuntime::new(config("http://127.0.0.1:1/v1/routing/decision".into()))
+                .unwrap();
+        let passthrough: LlmExecutionNextFn =
+            Arc::new(|request| Box::pin(async move { Ok(request.content) }));
+        let unknown = LlmRequest {
+            headers: Map::new(),
+            content: json!({"opaque": true}),
+        };
+        assert_eq!(
+            runtime
+                .execute_buffered("custom.provider", unknown, Arc::clone(&passthrough))
+                .await
+                .unwrap()["opaque"],
+            true
+        );
+
+        let mut disabled_config = config("http://127.0.0.1:1/v1/routing/decision".into());
+        disabled_config
+            .enabled_inbound_profiles
+            .remove(&WireProtocol::OpenaiChat);
+        let disabled = SwitchyardRuntime::new(disabled_config).unwrap();
+        assert_eq!(
+            disabled
+                .execute_buffered(
+                    "openai.chat_completions",
+                    chat_request(),
+                    Arc::clone(&passthrough),
+                )
+                .await
+                .unwrap()["model"],
+            "inbound"
+        );
+
+        let mut unsupported = chat_request();
+        unsupported.content["thinking"] = json!({"type": "enabled"});
+        let response = runtime
+            .execute_buffered(
+                "openai.chat_completions",
+                unsupported,
+                Arc::new(|request| {
+                    Box::pin(async move {
+                        assert_eq!(request.content["model"], "fallback");
+                        Ok(chat_response())
+                    })
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn stream_setup_retries_and_empty_streams_have_one_bounded_fallback() {
+        let (url, decisions) = decision_server().await;
+        let runtime = SwitchyardRuntime::new(config(url)).unwrap();
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let next: LlmStreamExecutionNextFn = Arc::new(move |_| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(FlowError::Upstream(UpstreamFailure {
+                        status: None,
+                        body: "connect".into(),
+                        headers: BTreeMap::new(),
+                        class: UpstreamFailureClass::Connection,
+                    }));
+                }
+                Ok(Box::pin(futures_stream::iter(vec![Ok(chat_chunk(
+                    "ok",
+                    json!("stop"),
+                ))])) as LlmJsonStream)
+            })
+        });
+        let output = runtime
+            .execute_stream("openai.chat_completions", chat_request(), next)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(output.len(), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        assert_eq!(decisions.lock().unwrap().len(), 2);
+
+        let (url, decisions) = decision_server().await;
+        let runtime = SwitchyardRuntime::new(config(url)).unwrap();
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let next: LlmStreamExecutionNextFn = Arc::new(move |request| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                let attempt = seen.fetch_add(1, Ordering::SeqCst);
+                let items = if attempt < 4 {
+                    Vec::new()
+                } else {
+                    assert_eq!(request.content["model"], "fallback");
+                    vec![Ok(chat_chunk("fallback", json!("stop")))]
+                };
+                Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            })
+        });
+        let output = runtime
+            .execute_stream("openai.chat_completions", chat_request(), next)
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(output.len(), 1);
+        assert_eq!(dispatches.load(Ordering::SeqCst), 5);
+        assert_eq!(decisions.lock().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn translated_stream_preserves_success_and_propagates_both_error_sources() {
+        let source = Box::pin(futures_stream::iter(vec![
+            Ok(chat_chunk("hello", Json::Null)),
+            Ok(chat_chunk("", json!("stop"))),
+        ])) as LlmJsonStream;
+        let output = translated_stream(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected".into(),
+            source,
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert!(output.iter().all(Result::is_ok));
+        assert!(output.iter().any(|item| {
+            item.as_ref()
+                .is_ok_and(|chunk| chunk.to_string().contains("hello"))
+        }));
+
+        let upstream_error = FlowError::Internal("upstream stream failed".into());
+        let source = Box::pin(futures_stream::iter(vec![Err(upstream_error)])) as LlmJsonStream;
+        let output = translated_stream(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected".into(),
+            source,
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert!(output[0].is_err());
+
+        let malformed = Box::pin(futures_stream::iter(vec![Ok(json!({
+            "choices": [{"delta": {"reasoning_content": "private"}}]
+        }))])) as LlmJsonStream;
+        let output = translated_stream(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected".into(),
+            malformed,
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert!(output[0].is_err());
+    }
+
+    #[test]
+    fn provider_failure_reporting_covers_every_retry_class() {
+        for (class, label, retryable) in [
+            (UpstreamFailureClass::Connection, "connection", true),
+            (UpstreamFailureClass::Timeout, "timeout", true),
+            (
+                UpstreamFailureClass::RetryableStatus,
+                "retryable_status",
+                true,
+            ),
+            (UpstreamFailureClass::ContextWindow, "context_window", true),
+            (
+                UpstreamFailureClass::ModelUnavailable,
+                "model_unavailable",
+                true,
+            ),
+            (
+                UpstreamFailureClass::Authentication,
+                "authentication",
+                false,
+            ),
+            (
+                UpstreamFailureClass::InvalidRequest,
+                "invalid_request",
+                false,
+            ),
+            (UpstreamFailureClass::Other, "other", false),
+        ] {
+            let error = FlowError::Upstream(UpstreamFailure {
+                status: Some(503),
+                body: "failure".into(),
+                headers: BTreeMap::new(),
+                class,
+            });
+            assert_eq!(provider_error_class(&error), label);
+            assert_eq!(error_is_retryable(&error), retryable);
+            assert_eq!(provider_error_summary(&error), format!("{label}:http_503"));
+        }
+        let relay = FlowError::Internal("failure".into());
+        assert_eq!(provider_error_class(&relay), "relay");
+        assert_eq!(provider_error_summary(&relay), relay.to_string());
     }
 
     #[test]
