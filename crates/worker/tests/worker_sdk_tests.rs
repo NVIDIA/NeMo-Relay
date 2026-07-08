@@ -256,6 +256,34 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn worker_service_rejects_duplicate_registration_names_on_one_surface() {
+    let (handle, mut client) = spawn_worker(
+        Arc::new(DuplicateEventSanitizerPlugin),
+        "http://127.0.0.1:9".into(),
+    )
+    .await;
+
+    let response = client
+        .register(Request::new(RegisterRequest {
+            activation_id: ACTIVATION_ID.into(),
+            plugin_id: PLUGIN_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            config: Some(json_env(json!({}))),
+        }))
+        .await
+        .expect("duplicate registration should return protocol data")
+        .into_inner();
+    assert!(response.registrations.is_empty());
+    let error = response
+        .error
+        .expect("duplicate registration should return an error");
+    assert_eq!(error.code, "worker.error");
+    assert!(error.message.contains("duplicate registration 'duplicate'"));
+
+    handle.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     let timeout = Duration::from_secs(2);
     let plugin = Arc::new(CancellationPlugin::default());
@@ -1431,6 +1459,20 @@ impl WorkerPlugin for MinimalPlugin {
     }
 
     fn register(&self, _ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        Ok(())
+    }
+}
+
+struct DuplicateEventSanitizerPlugin;
+
+impl WorkerPlugin for DuplicateEventSanitizerPlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        ctx.register_mark_sanitize_guardrail("duplicate", 0, |_, fields| fields);
+        ctx.register_mark_sanitize_guardrail("duplicate", 1, |_, fields| fields);
         Ok(())
     }
 }

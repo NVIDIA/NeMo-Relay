@@ -19,7 +19,7 @@
 //! arbitrary blocking work started by the callback has stopped.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
@@ -1043,6 +1043,12 @@ impl PluginWorker for WorkerService {
                 error: Some(sdk_error_to_worker(err)),
             }));
         }
+        if let Err(err) = validate_unique_registrations(&ctx.handlers.registrations) {
+            return Ok(Response::new(RegisterResponse {
+                registrations: Vec::new(),
+                error: Some(sdk_error_to_worker(err)),
+            }));
+        }
         let registrations = ctx.handlers.registrations.clone();
         *self
             .handlers
@@ -1303,6 +1309,19 @@ impl PluginWorker for WorkerService {
             message: "shutdown is not implemented by the Rust worker SDK yet".into(),
         }))
     }
+}
+
+fn validate_unique_registrations(registrations: &[Registration]) -> Result<()> {
+    let mut seen = HashSet::new();
+    for registration in registrations {
+        if !seen.insert((registration.surface, registration.local_name.as_str())) {
+            return Err(WorkerSdkError::InvalidInput(format!(
+                "duplicate registration '{}' for surface {}",
+                registration.local_name, registration.surface
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl WorkerService {

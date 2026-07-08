@@ -64,6 +64,10 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
             mark_event_fields(fields, "worker_plugin_mark")
         });
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize_data", 1, |_, mut fields| {
+            fields.data = Some(json!({"worker_plugin_mark_data": true}));
+            fields
+        });
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,

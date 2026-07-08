@@ -14,7 +14,9 @@ use nemo_relay::api::llm::{
     llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{TASK_SCOPE_STACK, create_scope_stack};
-use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
+use nemo_relay::api::scope::{
+    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
@@ -274,6 +276,47 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         true
     );
 
+    loaded.clear();
+}
+
+#[tokio::test]
+async fn worker_event_sanitizers_preserve_prior_field_changes() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "worker_event_sanitizer_field_preservation",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+
+    TASK_SCOPE_STACK
+        .scope(create_scope_stack(), async {
+            event(
+                EmitMarkEventParams::builder()
+                    .name("worker-event-sanitizer-field-preservation")
+                    .data(json!({"original_data": true}))
+                    .metadata(json!({"original_metadata": true}))
+                    .build(),
+            )
+            .expect("mark event should emit");
+        })
+        .await;
+
+    flush_subscribers().expect("worker fixture events should flush");
+    let captured_events = events.lock().unwrap().clone();
+    let mark = find_event(
+        &captured_events,
+        "worker-event-sanitizer-field-preservation",
+        None,
+    );
+    assert_eq!(mark.data(), Some(&json!({"worker_plugin_mark_data": true})));
+    assert_eq!(mark.metadata().unwrap()["worker_plugin_mark"], true);
+    assert_eq!(mark.metadata().unwrap()["original_metadata"], true);
+
+    deregister_subscriber("worker_event_sanitizer_field_preservation")
+        .expect("test subscriber should deregister");
     loaded.clear();
 }
 
