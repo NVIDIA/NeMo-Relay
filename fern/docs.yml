@@ -17,17 +17,17 @@ redirects:
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes
 - source: /nemo/relay/reference/api/python-library-reference/pii-redaction
-  destination: /nemo/relay/reference/api/python-library-reference/nemo-relay/pii-redaction
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/pii-redaction
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/pricing
-  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
+  destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing
-  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
+  destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/plugins/model-pricing
 - source: /nemo/relay/reference/api/python-library-reference/:slug*
-  destination: /nemo/relay/reference/api/python-library-reference/nemo-relay/:slug*
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/:slug*
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/pricing/:slug*
-  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
+  destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing/:slug*
-  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
+  destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/plugins/model-pricing/:slug*
 - source: /nemo/relay/build-plugins/plugin-configuration-files
   destination: /nemo/relay/configure-plugins/plugin-configuration-files
 - source: /nemo/relay/observability-plugin/about
@@ -61,9 +61,7 @@ redirects:
 - source: /nemo/relay/v0.3.0/build-plugins/nemoguardrails
   destination: /nemo/relay/configure-plugins/nemo-guardrails/about
 - source: /nemo/relay/build-plugins/basic-guide
-  destination: /nemo/relay/configure-plugins/language-binding/about
-- source: /nemo/relay/build-plugins/:slug*
-  destination: /nemo/relay/configure-plugins/language-binding/:slug*
+  destination: /nemo/relay/build-plugins/language-binding/about
 - source: /nemo/relay/nemo-relay-cli/cursor
   destination: /nemo/relay/nemo-relay-cli/about
 experimental:
