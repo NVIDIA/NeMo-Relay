@@ -226,8 +226,8 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     let pending_mark = find_event(&captured_events, "fixture.worker.llm_request.mark", None);
     assert_eq!(pending_mark.parent_uuid(), Some(llm_start.uuid()));
     assert_eq!(
-        pending_mark.data().unwrap()["source"],
-        "worker_request_intercept"
+        pending_mark.data().unwrap()["worker_plugin_mark_data"],
+        true
     );
     assert_eq!(pending_mark.metadata().unwrap()["fixture"], true);
     assert_eq!(pending_mark.metadata().unwrap()["worker_plugin_mark"], true);
