@@ -68,6 +68,10 @@ redirects:
 - source: /nemo/relay/pii-redaction-plugin/configuration
   destination: /nemo/relay/configure-plugins/pii-redaction/configuration
 
+# Legacy release documentation
+- source: /nemo/relay/v0.3.0/build-plugins/nemoguardrails
+  destination: /nemo/relay/configure-plugins/nemo-guardrails/about
+
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide
   destination: /nemo/relay/configure-plugins/language-binding/about
