@@ -268,7 +268,7 @@ collector_running=0
 ATIF_DIR="$artifact_dir/atif" \
 PHOENIX_BASE_URL="http://127.0.0.1:$phoenix_port" \
 UV_CACHE_DIR=/tmp/phoenix-atif-cache \
-  uv run --with arize-phoenix-client python -c '
+  uv run --no-project --with arize-phoenix-client python -c '
 import json
 import os
 import pathlib
