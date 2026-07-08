@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+targets:
+  claude-sonnet-4-6:
+    model: azure/anthropic/claude-sonnet-4-6
+    format: openai
+    base_url: https://inference-api.nvidia.com/v1
+    api_key: ${NV_INFERENCEHUB_KEY}
+  claude-opus-4-6:
+    model: azure/anthropic/claude-opus-4-6
+    format: openai
+    base_url: https://inference-api.nvidia.com/v1
+    api_key: ${NV_INFERENCEHUB_KEY}
+
+profiles:
+  claude-4-6-stage-router:
+    type: stage_router
+    capable: claude-opus-4-6
+    efficient: claude-sonnet-4-6
+    fallback_target_on_evict: claude-opus-4-6
+    picker: efficient_first
+    # Exercise the classifier for non-critical warm decisions. Hard overrides
+    # still take precedence, and cold/stale state still uses the picker default.
+    confidence_threshold: 1.0
+    signal_recent_window: 8
+    classifier:
+      model: azure/anthropic/claude-sonnet-4-6
+      api_key: ${NV_INFERENCEHUB_KEY}
+      base_url: https://inference-api.nvidia.com/v1
+      timeout_secs: 120.0
+      recent_turn_window: 4
+      max_tokens: 96
+      system_prompt: >-
+        Select exactly one model tier for the next coding-agent call. Return only
+        JSON in the form {"tier":"efficient"} or {"tier":"capable"}. Choose
+        efficient for direct reads, extraction, formatting, status updates, and
+        low-risk mechanical work. Choose capable for architecture, concurrency,
+        debugging, multi-step reasoning, subtle correctness constraints, or
+        decisions that require a defensible technical analysis. Treat the State
+        line as evidence, but classify the latest request rather than blindly
+        inheriting the previous turn.
