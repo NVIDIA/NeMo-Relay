@@ -32,13 +32,11 @@ profiles:
       recent_turn_window: 4
       max_tokens: 96
       system_prompt: >-
-        Select exactly one model tier for the next coding-agent call. Return only
-        JSON in the form {"tier":"efficient"} or {"tier":"capable"}. Choose
-        efficient for direct reads, extraction, formatting, status updates, and
-        low-risk mechanical work. Choose capable for architecture, concurrency,
-        debugging, multi-step reasoning, subtle correctness constraints, or
-        decisions that require a defensible technical analysis. Treat the State
-        line as evidence, but classify the latest request rather than blindly
-        inheriting the previous turn. A request for an ABA interleaving,
-        linearization points, or memory-ordering analysis is always capable. A
-        request to return only REVIEW_COMPLETE is always efficient.
+        Select exactly one model tier for this fixed routing-policy test. Return
+        only JSON in the form {"tier":"efficient"} or {"tier":"capable"}.
+        Return efficient only when the most recent user instruction explicitly
+        requests the literal CONTEXT_READY or REVIEW_COMPLETE result. Return
+        capable for every other request, including tool-result continuations and
+        any architecture, concurrency, ABA, linearization, or memory-ordering
+        analysis. Do not infer that Sonnet is sufficient; apply this policy
+        literally.
