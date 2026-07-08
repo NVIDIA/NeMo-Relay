@@ -950,7 +950,19 @@ impl Session {
                     NormalizedEvent::PromptSubmitted(event) => self.start_turn(event).await,
                     NormalizedEvent::Compaction(event) => self.mark("compaction", event),
                     NormalizedEvent::Notification(event) => self.mark("notification", event),
-                    NormalizedEvent::HookMark(event) => self.mark("hook_mark", event),
+                    NormalizedEvent::HookMark(event) => {
+                        let name = if event
+                            .metadata
+                            .get("skill_load_source")
+                            .and_then(Value::as_str)
+                            == Some("prompt_expansion")
+                        {
+                            "skill.load.inferred"
+                        } else {
+                            "hook_mark"
+                        };
+                        self.mark(name, event)
+                    }
                 }
             })
             .await

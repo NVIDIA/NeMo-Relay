@@ -14,6 +14,7 @@ use crate::api::shared::{
     ensure_runtime_owner, metadata_with_otel_status, resolve_parent_uuid, sanitize_event,
     snapshot_event_subscribers,
 };
+use crate::api::skill_load;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -229,12 +230,26 @@ fn tool_call_with_subscriber_snapshot(
         let entries = state.tool_sanitize_request_entries(&scope_locals);
         (entries, subscribers)
     };
+    let handled_skill_loads = params
+        .metadata
+        .as_ref()
+        .and_then(Json::as_object)
+        .and_then(|metadata| metadata.get(skill_load::HANDLED_METADATA_KEY))
+        .and_then(Json::as_bool)
+        .is_some_and(|handled| handled);
+    let skill_loads = if handled_skill_loads {
+        Vec::new()
+    } else if let Some(skill_loads) = skill_load::precomputed(params.metadata.as_ref()) {
+        skill_loads
+    } else {
+        skill_load::detect(params.name, &params.args)
+    };
     let sanitized_args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
         params.name,
         params.args,
         &entries,
     );
-    let (handle, event) = {
+    let (handle, event, marks) = {
         let context = global_context();
         let state = context
             .read()
@@ -250,10 +265,36 @@ fn tool_call_with_subscriber_snapshot(
             .build();
         let handle = state.create_tool_handle(handle_params);
         let event = state.build_tool_start_event(&handle, Some(sanitized_args));
-        (handle, event)
+        let marks = skill_loads
+            .into_iter()
+            .map(|skill_load| {
+                state.create_event(MarkEvent::new(
+                    BaseEvent::builder()
+                        .name("skill.load")
+                        .parent_uuid(handle.uuid)
+                        .timestamp(handle.started_at)
+                        .data(json!({"skill_name": skill_load.name}))
+                        .metadata(json!({
+                            "skill_load_source": skill_load.source.as_str(),
+                            "tool_name": handle.name,
+                        }))
+                        .build(),
+                    None,
+                    None,
+                ))
+            })
+            .collect::<Vec<_>>();
+        (handle, event, marks)
     };
+    let marks = marks
+        .into_iter()
+        .filter_map(sanitize_event)
+        .collect::<Vec<_>>();
     if let Some(event) = sanitize_event(event) {
         NemoRelayContextState::emit_event(&event, &subscribers);
+    }
+    for mark in marks {
+        NemoRelayContextState::emit_event(&mark, &subscribers);
     }
     Ok((handle, subscribers))
 }

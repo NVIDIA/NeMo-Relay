@@ -18,6 +18,7 @@ use crate::error::CliError;
 const HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
+    "UserPromptExpansion",
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",
