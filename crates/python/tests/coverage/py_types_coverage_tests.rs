@@ -623,6 +623,7 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
                 api_name: "custom".into(),
                 data: json!({"ok": true}),
             }),
+            optimization_summary: None,
             extra: serde_json::Map::from_iter([("extra".into(), json!(true))]),
         };
 
@@ -1217,6 +1218,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                     api_name: "custom".into(),
                     data: json!({"debug": true}),
                 }),
+                optimization_summary: None,
                 extra: serde_json::Map::from_iter([("trace".into(), json!("abc"))]),
             },
         };
@@ -1260,6 +1262,7 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                 finish_reason: None,
                 usage: None,
                 api_specific: None,
+                optimization_summary: None,
                 extra: serde_json::Map::new(),
             },
         };
@@ -1478,6 +1481,7 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     api_name: "custom".into(),
                     data: json!({"debug": true}),
                 }),
+                optimization_summary: None,
                 extra: serde_json::Map::new(),
             },
         };
