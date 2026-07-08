@@ -2,7 +2,7 @@
 title: "Module callbacks"
 sidebar-title: "callbacks"
 description: "Callback type aliases used by the runtime middleware pipeline."
-position: 37
+position: 38
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -15,6 +15,7 @@ The public middleware registration APIs accept callback closures with the signat
 
 ## Type Aliases
 
+- [EventSanitizeFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsanitizefn): Sanitize mutable observability fields on a fully constructed event.
 - [EventSubscriberFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn): Consume runtime lifecycle events after they are emitted.
 - [LlmCollectorFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmcollectorfn): Per-chunk collector used by the streaming LLM runtime.
 - [LlmConditionalFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-llmconditionalfn): Decide whether an LLM call is allowed to continue.

@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[repr(i32)]pub enum RegistrationSurface {
-Show 13 variants    Unspecified = 0,
+Show 16 variants    Unspecified = 0,
     Subscriber = 1,
     ToolSanitizeRequestGuardrail = 10,
     ToolSanitizeResponseGuardrail = 11,
@@ -24,6 +24,9 @@ Show 13 variants    Unspecified = 0,
     LlmRequestIntercept = 23,
     LlmExecutionIntercept = 24,
     LlmStreamExecutionIntercept = 25,
+    MarkSanitizeGuardrail = 30,
+    ScopeSanitizeStartGuardrail = 31,
+    ScopeSanitizeEndGuardrail = 32,
 }
 ```
 
@@ -80,6 +83,18 @@ Show 13 variants    Unspecified = 0,
 ### `LlmStreamExecutionIntercept = 25`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LlmStreamExecutionIntercept = 25"}} /></pre>
+
+### `MarkSanitizeGuardrail = 30`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "MarkSanitizeGuardrail = 30"}} /></pre>
+
+### `ScopeSanitizeStartGuardrail = 31`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeSanitizeStartGuardrail = 31"}} /></pre>
+
+### `ScopeSanitizeEndGuardrail = 32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeSanitizeEndGuardrail = 32"}} /></pre>
 
 ## Implementations
 

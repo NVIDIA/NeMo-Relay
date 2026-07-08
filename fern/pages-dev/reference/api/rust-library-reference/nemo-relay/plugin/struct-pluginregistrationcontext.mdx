@@ -49,6 +49,24 @@ Plugin handlers should pass stable component-local names such as `"tool"` or `"s
 
 Registers an event subscriber and records its rollback closure.
 
+#### `register_mark_sanitize_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_mark_sanitize_guardrail(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callback: <a href=\"../api/runtime/callbacks/type-eventsanitizefn\">EventSanitizeFn</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers a mark event sanitizer and records its rollback closure.
+
+#### `register_scope_sanitize_start_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_start_guardrail(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callback: <a href=\"../api/runtime/callbacks/type-eventsanitizefn\">EventSanitizeFn</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers a scope-start event sanitizer and records its rollback closure.
+
+#### `register_scope_sanitize_end_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_end_guardrail(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callback: <a href=\"../api/runtime/callbacks/type-eventsanitizefn\">EventSanitizeFn</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers a scope-end event sanitizer and records its rollback closure.
+
 #### `register_llm_request_intercept`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    callback: <a href=\"../api/runtime/callbacks/type-llmrequestinterceptfn\">LlmRequestInterceptFn</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>

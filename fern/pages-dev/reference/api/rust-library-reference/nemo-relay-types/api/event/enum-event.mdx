@@ -2,7 +2,7 @@
 title: "Enum Event"
 sidebar-title: "Event"
 description: "Tagged union covering the two ATOF event kinds emitted by the runtime."
-position: 8
+position: 9
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -150,6 +150,18 @@ Return the optional application payload attached to the event.
 ##### Returns
 
 `Some` payload when event data is present, otherwise `None`.
+
+#### `sanitize_fields`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn sanitize_fields(&amp;self) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>"}} /></pre>
+
+Snapshot the observability fields that sanitizers may rewrite.
+
+#### `apply_sanitize_fields`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn apply_sanitize_fields(&amp;mut self, fields: <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>)"}} /></pre>
+
+Replace the observability fields controlled by event sanitizers.
 
 #### `data_schema`
 

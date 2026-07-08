@@ -24,6 +24,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
+- [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
 - [LlmAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
 - [LlmNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmnext): Typed continuation passed to LLM execution intercepts.
 - [LlmRequest](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
@@ -83,6 +84,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 
 - [Json](/reference/api/rust-library-reference/nemo-relay-plugin/type-json): Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.
 - [LlmJsonStream](/reference/api/rust-library-reference/nemo-relay-plugin/type-llmjsonstream): Synchronous JSON chunk stream used by native LLM stream intercept helpers.
+- [NemoRelayNativeEventSanitizeCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeeventsanitizecb): Native event observability-field sanitizer callback.
 - [NemoRelayNativeEventSubscriberCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeeventsubscribercb): Native event subscriber callback.
 - [NemoRelayNativeFreeFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativefreefn): Optional destructor for user data captured by native callbacks.
 - [NemoRelayNativeJsonCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativejsoncb): Native JSON transform callback for LLM response sanitizers.

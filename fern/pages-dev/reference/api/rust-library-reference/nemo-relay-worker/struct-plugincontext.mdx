@@ -2,7 +2,7 @@
 title: "Struct Plugin Context"
 sidebar-title: "PluginContext"
 description: "Registration context passed to `WorkerPlugin::register`."
-position: 7
+position: 8
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -44,6 +44,24 @@ Returns the host runtime handle for event and scope operations.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_subscriber&lt;F&gt;(&amp;mut self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, callback: F)where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>) + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
 
 Registers an event subscriber.
+
+#### `register_mark_sanitize_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_mark_sanitize_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a mark event sanitizer.
+
+#### `register_scope_sanitize_start_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_start_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a scope-start event sanitizer.
+
+#### `register_scope_sanitize_end_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_end_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a scope-end event sanitizer.
 
 #### `register_tool_sanitize_request_guardrail`
 
