@@ -105,7 +105,11 @@ impl StreamTranscoder {
             .and_then(|choices| choices.first())
         {
             let delta = &choice["delta"];
-            if let Some(text) = delta.get("content").and_then(Json::as_str) {
+            if let Some(text) = delta
+                .get("content")
+                .and_then(Json::as_str)
+                .filter(|text| !text.is_empty())
+            {
                 events.push(NormalizedStreamEvent::TextDelta { text: text.into() });
             }
             for call in delta["tool_calls"].as_array().into_iter().flatten() {
@@ -615,6 +619,30 @@ mod tests {
         transcoder.transcode(&start).unwrap();
         let output = transcoder.transcode(&delta).unwrap();
         assert_eq!(output.last().unwrap()["delta"]["partial_json"], "{\"key\":");
+    }
+
+    #[test]
+    fn empty_chat_content_does_not_interrupt_anthropic_tool_arguments() {
+        let mut transcoder = StreamTranscoder::new(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected-model",
+        );
+        let start = json!({"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call-1", "function": {"name": "Read", "arguments": ""}}]}, "finish_reason": null}]});
+        let delta = json!({"choices": [{"delta": {"content": "", "tool_calls": [{"index": 0, "function": {"arguments": "{\"file_path\":\"/tmp/task\"}"}}]}, "finish_reason": null}]});
+
+        let start_output = transcoder.transcode(&start).unwrap();
+        let delta_output = transcoder.transcode(&delta).unwrap();
+
+        assert_eq!(start_output.len(), 2);
+        assert_eq!(start_output[1]["content_block"]["type"], "tool_use");
+        assert_eq!(delta_output.len(), 1);
+        assert_eq!(delta_output[0]["type"], "content_block_delta");
+        assert_eq!(delta_output[0]["index"], start_output[1]["index"]);
+        assert_eq!(
+            delta_output[0]["delta"]["partial_json"],
+            "{\"file_path\":\"/tmp/task\"}"
+        );
     }
 
     #[test]
