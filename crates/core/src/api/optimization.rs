@@ -52,9 +52,15 @@ impl LlmOptimizationRecorder {
                 }
                 return false;
             }
-            Some(payload) => match serde_json::to_vec(payload) {
-                Ok(serialized) => serialized.len(),
-                Err(_) => {
+            Some(payload) => match bounded_json_size(payload, MAX_LLM_OPTIMIZATION_PAYLOAD_BYTES) {
+                Ok(size) => size,
+                Err(PayloadSizeError::LimitExceeded) => {
+                    if let Ok(mut state) = self.state.lock() {
+                        state.contribution_limit_exceeded = true;
+                    }
+                    return false;
+                }
+                Err(PayloadSizeError::Serialization) => {
                     if let Ok(mut state) = self.state.lock() {
                         state.invalid_payload_schema = true;
                     }
@@ -121,6 +127,48 @@ impl LlmOptimizationRecorder {
             limitations,
         }
     }
+}
+
+enum PayloadSizeError {
+    LimitExceeded,
+    Serialization,
+}
+
+fn bounded_json_size(value: &serde_json::Value, limit: usize) -> Result<usize, PayloadSizeError> {
+    struct CountingWriter {
+        size: usize,
+        limit: usize,
+        exceeded: bool,
+    }
+
+    impl std::io::Write for CountingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.size.saturating_add(bytes.len()) > self.limit {
+                self.exceeded = true;
+                return Err(std::io::Error::other("optimization payload limit exceeded"));
+            }
+            self.size += bytes.len();
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = CountingWriter {
+        size: 0,
+        limit,
+        exceeded: false,
+    };
+    if serde_json::to_writer(&mut writer, value).is_err() {
+        return Err(if writer.exceeded {
+            PayloadSizeError::LimitExceeded
+        } else {
+            PayloadSizeError::Serialization
+        });
+    }
+    Ok(writer.size)
 }
 
 struct FinishedContributions {
