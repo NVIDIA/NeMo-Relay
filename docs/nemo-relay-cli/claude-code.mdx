@@ -123,7 +123,10 @@ process.
 Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
 `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`,
 `PostToolUseFailure`, `Notification`, and `PreCompact` for scope, tool, and
-mark events. `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and
+mark events. `UserPromptExpansion` records nonempty slash-command expansions
+as `skill.load.inferred`; Claude Code does not identify whether that expansion
+came from a skill or a legacy custom command. The normal `Skill` pre-tool hook
+emits an observed `skill.load` mark. `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and
 `Stop` are retained as private LLM correlation hints and are not emitted as
 standalone NeMo Relay events.
 

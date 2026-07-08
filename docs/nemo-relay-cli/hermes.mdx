@@ -128,6 +128,9 @@ The generated Hermes hooks cover `on_session_start`, `on_session_end`,
 `pre_api_request`, `post_api_request`, `api_request_error`, `pre_tool_call`,
 `post_tool_call`, `subagent_start`, and `subagent_stop`.
 
+Hermes `skill_view` pre-tool calls emit observed `skill.load` marks. The mark
+contains only the skill name and tool identity; it does not retain skill paths.
+
 The API hooks are the main Hermes LLM lifecycle path for NeMo Relay. The legacy
 LLM hooks remain installed because they can still provide useful private hints,
 but they are not treated as equal peers to the API hooks in the observability

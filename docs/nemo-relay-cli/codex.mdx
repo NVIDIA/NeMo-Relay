@@ -181,7 +181,9 @@ traffic to pass through the gateway.
 
 Generated Codex hooks include `SessionStart`, `SessionEnd`, `SubagentStart`,
 `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-`Notification`, and `PreCompact` for scope, tool, and mark events.
+`Notification`, and `PreCompact` for scope, tool, and mark events. Complete
+standalone `cat`, `bat`, or PowerShell `Get-Content` reads of `SKILL.md` emit
+observed `skill.load` marks.
 `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
 retained as private LLM correlation hints and are not emitted as standalone
 NeMo Relay events.

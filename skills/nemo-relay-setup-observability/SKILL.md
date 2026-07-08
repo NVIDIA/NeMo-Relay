@@ -41,6 +41,10 @@ activity but has not yet decided which output they need.
 - Event fields include semantic input/output through the ATOF `data` field,
   typed profile data such as `model_name` and `tool_call_id`, and codec-provided
   annotated LLM request/response data for in-process subscribers and exporters.
+- Complete on-demand `SKILL.md` loads automatically emit `skill.load` marks
+  under the tool span. The payload contains only `skill_name`; metadata records
+  the load source and tool name. Partial reads do not count, and ambiguous
+  slash-command expansions use the separate `skill.load.inferred` name.
 
 ## Shared Lifecycle
 

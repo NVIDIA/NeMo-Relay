@@ -109,6 +109,8 @@ It captures:
 - LangGraph run scopes through callbacks.
 - Human-in-the-loop interrupt and resume marks.
 - Configured skills and subagent summaries at agent-run start.
+- Automatic `skill.load` marks when a Deep Agents tool reads a complete
+  `SKILL.md`; this is distinct from the configured-skills summary.
 - In-process dictionary-style subagents with the same NeMo Relay middleware, so
   their model and tool calls are captured when Deep Agents invokes them.
 
