@@ -44,7 +44,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for dependency in cargo claude curl docker jq python3 sed tar; do
+for dependency in cargo claude curl docker jq python3 sed tar uv; do
   command -v "$dependency" >/dev/null || {
     echo "missing required command: $dependency" >&2
     exit 1
@@ -263,6 +263,27 @@ sleep 2
 docker stop --time 10 "$collector_container" >/dev/null
 collector_running=0
 
+# Phoenix has a native ATIF importer. Load the ATIF trajectories directly for
+# agent/LLM/tool review; canonical marks remain preserved in observed_events.
+ATIF_DIR="$artifact_dir/atif" \
+PHOENIX_BASE_URL="http://127.0.0.1:$phoenix_port" \
+UV_CACHE_DIR=/tmp/phoenix-atif-cache \
+  uv run --with arize-phoenix-client python -c '
+import json
+import os
+import pathlib
+from phoenix.client import Client
+from phoenix.client.helpers.atif import upload_atif_trajectories_as_spans
+
+paths = sorted(pathlib.Path(os.environ["ATIF_DIR"]).glob("*.json"))
+upload_atif_trajectories_as_spans(
+    Client(base_url=os.environ["PHOENIX_BASE_URL"]),
+    [json.loads(path.read_text()) for path in paths],
+    project_name="switchyard-inferencehub-atif",
+)
+print(f"uploaded {len(paths)} direct ATIF trajectories")
+' >"$artifact_dir/phoenix-atif-upload.log" 2>&1
+
 python3 - "$artifact_dir" "$claude_session_id" "$phoenix_port" "${VISOR_PLUGIN_MANIFEST:+true}" <<'PY'
 import collections
 import json
@@ -306,17 +327,30 @@ routing_marks = [
 ]
 if not routing_marks:
     raise SystemExit("no Switchyard optimization contributions were emitted")
+committed_models = []
 for event in routing_marks:
     transition = event.get("data", {}).get("model_transition", {})
     baseline = (transition.get("baseline") or {}).get("model")
     effective = (transition.get("effective") or {}).get("model")
     if baseline != "azure/anthropic/claude-opus-4-6" or effective not in expected:
         raise SystemExit(f"invalid routed model transition: {transition}")
+    if event.get("data", {}).get("applied"):
+        committed_models.append(effective)
+if not expected.issubset(set(committed_models)):
+    raise SystemExit(f"both models were not committed upstream: {committed_models}")
+
+fallbacks = [event for event in events if event.get("name") == "switchyard.routing.fallback"]
+provider_errors = [
+    event for event in events
+    if event.get("name") == "switchyard.routing.error"
+    and event.get("data", {}).get("error_class", "").startswith("provider_")
+]
 
 atif_paths = sorted((root / "atif").glob("trajectory-*.atif.json"))
 trajectories = []
 tokens_saved = 0
 summary_count = 0
+atif_mark_names = collections.Counter()
 for path in atif_paths:
     payload = json.loads(path.read_text())
     for step in payload.get("steps", []):
@@ -324,6 +358,10 @@ for path in atif_paths:
         if optimization:
             summary_count += 1
             tokens_saved += (optimization.get("tokens_saved") or {}).get("total_tokens") or 0
+    for event in (payload.get("extra") or {}).get("observed_events", []):
+        name = event.get("name")
+        if name:
+            atif_mark_names[name] += 1
     trajectories.append({
         "file": path.name,
         "step_count": len(payload.get("steps", [])),
@@ -332,28 +370,50 @@ for path in atif_paths:
     })
 if not atif_paths or summary_count == 0:
     raise SystemExit("ATIF did not retain optimization summaries")
+for mark_name in (
+    "switchyard.routing.requested",
+    "switchyard.routing.decision",
+    "nemo_relay.llm.optimization",
+):
+    if not atif_mark_names[mark_name]:
+        raise SystemExit(f"ATIF observed_events is missing {mark_name}")
 if visor_enabled == "true" and tokens_saved <= 0:
     raise SystemExit("Visor was enabled but downstream ATIF token savings were not positive")
 
 otel_path = root / "trajectory.otel.json"
 if not otel_path.exists() or otel_path.stat().st_size == 0:
     raise SystemExit("OTEL collector did not write a trajectory")
+otel_text = otel_path.read_text()
+for attribute in (
+    "nemo_relay.llm.optimization.baseline_model",
+    "nemo_relay.llm.optimization.effective_model",
+    "nemo_relay.llm.optimization.prompt_tokens_saved",
+    "nemo_relay.llm.optimization.total_tokens_saved",
+):
+    if attribute not in otel_text:
+        raise SystemExit(f"OTEL is missing optimization attribute {attribute}")
 
 by_reason = collections.Counter(event.get("data", {}).get("reason_code") for event in decisions)
 summary = {
     "harness": "claude-code-cli",
     "claude_session_id": claude_session_id,
     "decision_count": len(decisions),
-    "route_models": models,
-    "route_counts": dict(collections.Counter(models)),
+    "decision_route_models": models,
+    "decision_route_counts": dict(collections.Counter(models)),
+    "committed_route_models": committed_models,
+    "committed_route_counts": dict(collections.Counter(committed_models)),
+    "fallback_count": len(fallbacks),
+    "provider_error_count": len(provider_errors),
     "reason_counts": dict(by_reason),
     "fresh_decision_count": len(warm),
     "optimization_mark_count": len(optimization_marks),
     "switchyard_contribution_count": len(routing_marks),
     "downstream_total_tokens_saved": tokens_saved,
     "atif": trajectories,
+    "atif_mark_counts": dict(atif_mark_names),
     "otel_file": otel_path.name,
     "phoenix_url": f"http://127.0.0.1:{phoenix_port}",
+    "phoenix_atif_project": "switchyard-inferencehub-atif",
     "visor_enabled": visor_enabled == "true",
 }
 (root / "trajectory-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -385,7 +445,8 @@ turn depth. Turn lifecycle events cannot make old material evidence fresh.
 | --- | --- |
 | `trajectory-summary.json` | Machine-checked route, freshness, contribution, token, and exporter totals |
 | `atof/trajectory.atof.jsonl` | Canonical Relay lifecycle, routing, Visor, and optimization events |
-| `atif/*.atif.json` | Direct ATIF trajectories visualizable by Phoenix |
+| `atif/*.atif.json` | Direct ATIF agent/LLM/tool trajectories for Phoenix; canonical marks remain in `extra.observed_events` |
+| `phoenix-atif-upload.log` | Result of the native ATIF import into Phoenix |
 | `trajectory.otel.json` | OTLP JSON exported by the collector |
 | `query-*.log` | Claude Code/Relay output for each fixed query |
 | `switchyard.log` | Switchyard server and StageRouter diagnostics |
@@ -400,6 +461,17 @@ explicit prompt/total token savings. Relay combines those contributions once at
 LLM close. The token counts are the durable evidence; monetary values are
 repriceable estimates based on Anthropic public list prices dated 2026-05-27,
 not a claim about internal InferenceHub billing.
+
+`decision_route_models` records every Switchyard selection. A selection is not
+treated as actual model usage until the upstream stream commits; those models
+appear separately in `committed_route_models`. Provider failures and trusted
+fallback dispatches are counted explicitly and never claim routing savings.
+
+Direct ATIF intentionally remains step-oriented. Phoenix renders its agent,
+LLM, and tool steps directly, while the complete Switchyard, Visor, and
+optimization marks remain queryable in `extra.observed_events`. The OTEL file
+projects those same non-excluded marks as zero-duration tool spans for trace-tree
+inspection; it does not replace or generate the ATIF data.
 
 Phoenix URL during a kept-local run: `{summary['phoenix_url']}`
 """

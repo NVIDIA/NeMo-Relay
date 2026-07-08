@@ -95,10 +95,10 @@ agent_version = "inferencehub-claude-4.6-e2e"
 model_name = "switchyard-stage-router"
 output_directory = "@ATIF_DIR@"
 filename_template = "trajectory-{session_id}.atif.json"
-mark_projection = "tool"
 
 [components.config.opentelemetry]
 enabled = true
+mark_projection = "tool"
 transport = "http_binary"
 endpoint = "http://127.0.0.1:4318/v1/traces"
 service_name = "nemo-relay-switchyard-inferencehub-e2e"
