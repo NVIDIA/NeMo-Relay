@@ -253,7 +253,7 @@ run_query() {
 }
 
 run_query 01 context \
-  'Use the Read tool to read TASK_CONTEXT.md completely. Then reply with exactly CONTEXT_READY.' start
+  "Use the Read tool to read $artifact_dir/workspace/TASK_CONTEXT.md completely. Then reply with exactly CONTEXT_READY." start
 run_query 02 architecture \
   'Without calling tools, produce a rigorous review of the bounded queue in TASK_CONTEXT.md. Give a concrete wraparound ABA interleaving, separate reservation from publication linearization points, specify the minimum acquire/release ordering, and recommend the smallest defensible correction. Keep the answer under 700 words.' resume
 run_query 03 status \
