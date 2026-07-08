@@ -235,7 +235,7 @@ run_query() {
         --plugin-config-path "$artifact_dir/.nemo-relay/plugins.toml" \
         -- -p --output-format json \
         --model azure/anthropic/claude-sonnet-4-6 \
-        --allowedTools Read --permission-mode bypassPermissions \
+        --tools Read --permission-mode bypassPermissions \
         --disable-slash-commands "${session_args[@]}" "$query"
   ) >"$artifact_dir/query-$sequence-$label.log" 2>&1
   after_lines="$(wc -l <"$artifact_dir/atof/trajectory.atof.jsonl" | tr -d ' ')"
