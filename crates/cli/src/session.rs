@@ -1216,6 +1216,22 @@ impl Session {
         )
     }
 
+    // Tool hook payloads do not consistently repeat the harness session id.
+    // Mirror the stable managed identity onto each tool event so external
+    // consumers can correlate it without reconstructing the parent scope tree.
+    fn event_identity_metadata(&self, event_metadata: Value) -> Value {
+        merge_metadata(
+            event_metadata,
+            json!({
+                "session_id": self.session_id,
+                "turn_id": self.turn_index.to_string(),
+                "harness": self.agent_kind.as_str(),
+                "source": "hook",
+                "identity_quality": "native",
+            }),
+        )
+    }
+
     async fn end_turn(&mut self, event: SessionEvent) -> Result<(), CliError> {
         if let Some(subagent_id) = alignment::aliased_turn_subagent_id(&event) {
             self.close_subagent_scope(&subagent_id, event.payload)
@@ -1614,7 +1630,7 @@ impl Session {
         let active_tool_owner_subagent_id = owner.subagent_id.clone();
         tool_conditional_execution(event.tool_name.as_str(), &arguments)?;
         let metadata = tool_correlation_metadata(
-            event.metadata,
+            self.event_identity_metadata(event.metadata),
             owner.status,
             owner.source.as_deref(),
             owner.subagent_id.as_deref(),
@@ -1646,6 +1662,7 @@ impl Session {
     // hooks observable and preserves the final result/status instead of dropping orphaned endings.
     async fn end_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
         self.ensure_turn_started(event.metadata.clone())?;
+        let event_metadata = self.event_identity_metadata(event.metadata.clone());
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
         let explicit_subagent_id = event
             .subagent_id
@@ -1665,7 +1682,7 @@ impl Session {
                     event.arguments
                 };
                 let metadata = tool_correlation_metadata(
-                    event.metadata.clone(),
+                    event_metadata.clone(),
                     owner.status,
                     owner.source.as_deref(),
                     owner.subagent_id.as_deref(),
@@ -1688,7 +1705,7 @@ impl Session {
                 .handle(&handle)
                 .result(event.result.clone())
                 .metadata(merge_metadata(
-                    event.metadata,
+                    event_metadata,
                     json!({ "status": event.status }),
                 ))
                 .build(),

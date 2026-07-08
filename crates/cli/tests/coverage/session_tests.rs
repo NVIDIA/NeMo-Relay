@@ -5052,6 +5052,15 @@ async fn claude_agent_tool_async_launch_keeps_subagent_open_for_later_hooks() {
         tool.metadata.as_ref().unwrap()["tool_correlation_subagent_id"],
         json!("worker")
     );
+    assert_eq!(
+        tool.metadata.as_ref().unwrap()["session_id"],
+        json!("agent-tool-async")
+    );
+    assert_eq!(tool.metadata.as_ref().unwrap()["turn_id"], json!("1"));
+    assert_eq!(
+        tool.metadata.as_ref().unwrap()["identity_quality"],
+        json!("native")
+    );
 }
 
 #[tokio::test]
