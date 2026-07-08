@@ -2896,7 +2896,7 @@ async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
 }
 
 #[tokio::test]
-async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
+async fn hermes_orphan_subagent_stop_does_not_create_atif_mark_step() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let temp = tempfile::tempdir().unwrap();
     let atif_dir = temp.path().join("atif");
@@ -2911,25 +2911,7 @@ async fn hermes_orphan_subagent_stop_exports_readable_mark_with_lineage() {
     let atif = read_atif_for_session(&atif_dir, "hermes-orphan");
     assert!(atif["subagent_trajectories"].is_null());
     let root_steps = atif["steps"].as_array().unwrap();
-    assert_eq!(root_steps.len(), 1);
-    assert_eq!(root_steps[0]["source"], json!("system"));
-    assert_eq!(root_steps[0]["message"], json!("subagent_stop"));
-    assert_eq!(
-        root_steps[0]["extra"]["event_payload"]["hook_event_name"],
-        json!("subagent_stop")
-    );
-    assert_eq!(
-        root_steps[0]["extra"]["event_payload"]["extra"]["subagent_id"],
-        json!("worker-1")
-    );
-    assert_eq!(
-        root_steps[0]["extra"]["ancestry"]["function_name"],
-        json!("subagent_end_without_start")
-    );
-    assert_eq!(
-        root_steps[0]["extra"]["ancestry"]["parent_name"],
-        json!("hermes-turn")
-    );
+    assert!(root_steps.is_empty());
 }
 
 #[tokio::test]

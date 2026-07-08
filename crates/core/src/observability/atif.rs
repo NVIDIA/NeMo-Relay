@@ -273,6 +273,12 @@ pub struct AtifStepExtra {
     /// Full raw LLM response payload for response-level fidelity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_response: Option<Json>,
+    /// Legacy event payload field retained for source compatibility.
+    ///
+    /// The ATIF exporter does not translate point-in-time mark events into
+    /// trajectory steps, so exporter-produced steps leave this field unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_payload: Option<Json>,
     /// Per-tool callable lineage, aligned with `tool_calls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_ancestry: Vec<AtifAncestry>,
@@ -361,7 +367,7 @@ impl AtifExporter {
     pub fn subscriber(&self) -> EventSubscriberFn {
         let state = self.state.clone();
         Arc::new(move |event: &Event| {
-            if event.kind() == "mark" {
+            if matches!(event, Event::Mark(_)) {
                 return;
             }
             if let Ok(mut s) = state.lock() {
@@ -1887,6 +1893,7 @@ impl PendingAgentStep {
             invocation: self.invocation.take(),
             llm_request: None,
             llm_response: self.llm_response.take(),
+            event_payload: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
             tool_invocations: if self.tool_invocations.is_empty() {
                 None
@@ -2241,6 +2248,7 @@ impl StepConversionState {
             invocation: None,
             llm_request: Some(content.clone()),
             llm_response: None,
+            event_payload: None,
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
