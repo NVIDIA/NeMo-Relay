@@ -167,8 +167,6 @@ class AtifConfig:
     agent_name: str = "NeMo Relay"
     agent_version: str | None = None
     model_name: str = "unknown"
-    mark_projection: MarkProjection = "inherit"
-    mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
     tool_definitions: list[JsonObject] | None = None
     extra: JsonObject | None = None
     output_directory: str | None = None
@@ -182,8 +180,6 @@ class AtifConfig:
             "agent_name": self.agent_name,
             "agent_version": self.agent_version,
             "model_name": self.model_name,
-            "mark_projection": self.mark_projection,
-            "mark_exclude_names": self.mark_exclude_names,
             "tool_definitions": self.tool_definitions,
             "extra": self.extra,
             "output_directory": self.output_directory,

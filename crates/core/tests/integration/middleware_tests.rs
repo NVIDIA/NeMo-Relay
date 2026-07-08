@@ -58,7 +58,7 @@ use nemo_relay::error::FlowError;
 #[cfg(all(feature = "otel", feature = "openinference"))]
 use nemo_relay::observability::MarkProjection;
 #[cfg(all(feature = "otel", feature = "openinference"))]
-use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
+use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 #[cfg(all(feature = "otel", feature = "openinference"))]
 use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 #[cfg(all(feature = "otel", feature = "openinference"))]
@@ -801,7 +801,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
 
 #[cfg(all(feature = "otel", feature = "openinference"))]
 #[tokio::test]
-async fn test_managed_tool_pending_marks_project_through_all_exporters() {
+async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
     setup_isolated_thread();
@@ -823,8 +823,7 @@ async fn test_managed_tool_pending_marks_project_through_all_exporters() {
             tool_definitions: None,
             extra: None,
         },
-    )
-    .with_mark_projection(MarkProjection::Tool);
+    );
     register_subscriber("managed_tool_projection_atif", atif.subscriber()).unwrap();
 
     let otel_exporter = InMemorySpanExporterBuilder::new().build();
@@ -910,37 +909,13 @@ async fn test_managed_tool_pending_marks_project_through_all_exporters() {
     drop(captured);
 
     let trajectory = atif.export().unwrap();
-    let mark_step = trajectory
-        .steps
-        .iter()
-        .find(|step| {
-            step.tool_calls.as_deref().is_some_and(|calls| {
-                calls
-                    .iter()
-                    .any(|call| call.function_name == "plugin.output_compacted")
-            })
+    assert!(trajectory.steps.iter().all(|step| {
+        !step.tool_calls.as_deref().is_some_and(|calls| {
+            calls
+                .iter()
+                .any(|call| call.function_name == "plugin.output_compacted")
         })
-        .unwrap();
-    assert_eq!(mark_step.llm_call_count, Some(0));
-    let projected_call = &mark_step.tool_calls.as_ref().unwrap()[0];
-    assert_eq!(projected_call.arguments, json!({"saved_tokens": 12}));
-    let step_extra: AtifStepExtra =
-        serde_json::from_value(mark_step.extra.clone().unwrap()).unwrap();
-    assert_eq!(step_extra.event_category.as_deref(), Some("custom"));
-    assert_eq!(
-        step_extra.event_category_profile,
-        Some(json!({"subtype": "example.compaction"}))
-    );
-    assert_eq!(
-        projected_call.extra.as_ref().unwrap()["metadata"],
-        json!({"source": "test"})
-    );
-    assert_eq!(
-        mark_step.observation.as_ref().unwrap().results[0]
-            .source_call_id
-            .as_deref(),
-        Some(projected_call.tool_call_id.as_str())
-    );
+    }));
 
     otel.force_flush().unwrap();
     let otel_spans = otel_exporter.get_finished_spans().unwrap();

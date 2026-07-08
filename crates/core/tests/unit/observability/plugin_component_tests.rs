@@ -216,8 +216,6 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(atif.agent_name, "NeMo Relay");
     assert_eq!(atif.agent_version, env!("CARGO_PKG_VERSION"));
     assert_eq!(atif.model_name, "unknown");
-    assert_eq!(atif.mark_projection, MarkProjection::Inherit);
-    assert_eq!(atif.mark_exclude_names, vec!["llm.chunk"]);
     assert_eq!(atif.filename_template, "nemo-relay-atif-{session_id}.json");
 
     let otlp = OtlpSectionConfig::default();
@@ -243,23 +241,12 @@ fn default_config_and_component_conversion_cover_public_shape() {
 }
 
 #[test]
-fn mark_projection_parses_per_exporter_and_rejects_unknown_values() {
-    let atif: AtifSectionConfig = serde_json::from_value(json!({
-        "mark_projection": "tool"
-    }))
-    .unwrap();
+fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
     let otlp: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool"
     }))
     .unwrap();
-    assert_eq!(atif.mark_projection, MarkProjection::Tool);
     assert_eq!(otlp.mark_projection, MarkProjection::Tool);
-
-    let inherited: AtifSectionConfig = serde_json::from_value(json!({
-        "mark_projection": "inherit"
-    }))
-    .unwrap();
-    assert_eq!(inherited.mark_projection, MarkProjection::Inherit);
 
     let custom_exclusions: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool",
@@ -284,6 +271,14 @@ fn mark_projection_parses_per_exporter_and_rejects_unknown_values() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.code
         == "observability.invalid_plugin_config"
         && diagnostic.message.contains("unknown variant `span`")));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atif": {"mark_projection": "tool"}
+    })));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.unknown_field"
+            && diagnostic.field.as_deref() == Some("mark_projection")
+    }));
 }
 
 #[cfg(feature = "schema")]
@@ -976,7 +971,7 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
 }
 
 #[test]
-fn atif_keeps_openclaw_child_only_fallback_as_a_top_level_trajectory() {
+fn atif_writes_openclaw_child_only_fallback_without_mark_steps() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let dir = temp_dir("observability-atif-openclaw-child-fallback");
@@ -1080,8 +1075,7 @@ fn atif_keeps_openclaw_child_only_fallback_as_a_top_level_trajectory() {
 
     let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(value["trajectory_id"], child_uuid.to_string());
-    assert_eq!(value["steps"].as_array().unwrap().len(), 1);
-    assert_eq!(value["steps"][0]["message"], "worker-started");
+    assert!(value["steps"].as_array().unwrap().is_empty());
     assert!(
         value.get("subagent_trajectories").is_none() || value["subagent_trajectories"].is_null()
     );

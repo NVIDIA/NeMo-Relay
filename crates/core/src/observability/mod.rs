@@ -27,7 +27,7 @@ pub mod plugin_component;
 ///
 /// Marks remain canonical ATOF events regardless of this setting. Exporters
 /// apply the selected projection only when translating those events into a
-/// downstream trajectory or trace format.
+/// downstream trace format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -35,11 +35,11 @@ pub enum MarkProjection {
     /// Use each exporter’s native handling for marks.
     #[default]
     Inherit,
-    /// Force marks into ATIF system steps or OTEL span events.
+    /// Force marks into exporter-native trace span events.
     Event,
-    /// Render non-excluded marks as deterministic ATIF tool steps or
-    /// zero-duration OTEL child spans so trace-tree consumers can display them
-    /// directly. High-volume `llm.chunk` marks remain exporter-native events.
+    /// Render non-excluded marks as zero-duration trace child spans so
+    /// trace-tree consumers can display them directly. High-volume
+    /// `llm.chunk` marks remain exporter-native events.
     Tool,
 }
 
@@ -82,16 +82,6 @@ pub(crate) fn effective_mark_projection(
     } else {
         projection
     }
-}
-
-pub(crate) fn is_llm_chunk_mark(event: &crate::api::event::Event) -> bool {
-    event.name() == "llm.chunk"
-        || event
-            .metadata()
-            .and_then(crate::json::Json::as_object)
-            .and_then(|metadata| metadata.get("hook_event_name"))
-            .and_then(crate::json::Json::as_str)
-            == Some("llm.chunk")
 }
 
 #[cfg(all(test, feature = "otel", feature = "openinference"))]

@@ -47,8 +47,6 @@ export interface AtifConfig {
   agent_name?: string;
   agent_version?: string;
   model_name?: string;
-  mark_projection?: 'inherit' | 'event' | 'tool';
-  mark_exclude_names?: string[];
   tool_definitions?: Record<string, Json>[];
   extra?: Record<string, Json>;
   output_directory?: string;

@@ -987,7 +987,7 @@ fn late_parented_marks_reuse_completed_parent_trace_context() {
     ));
     processor.process(&make_mark_event(
         Some(tool_uuid),
-        "visor.tool_output_compressed",
+        "plugin.output_compacted",
         Some(json!({"estimated_tokens_saved": 42})),
     ));
     processor.force_flush().unwrap();
@@ -1000,7 +1000,7 @@ fn late_parented_marks_reuse_completed_parent_trace_context() {
         .unwrap();
     let mark_span = spans
         .iter()
-        .find(|span| span.name.as_ref() == "mark:visor.tool_output_compressed")
+        .find(|span| span.name.as_ref() == "mark:plugin.output_compacted")
         .unwrap();
 
     assert_eq!(

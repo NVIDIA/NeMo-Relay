@@ -54,8 +54,6 @@ type ObservabilityAtifConfig struct {
 	AgentName        string                               `json:"agent_name,omitempty"`
 	AgentVersion     string                               `json:"agent_version,omitempty"`
 	ModelName        string                               `json:"model_name,omitempty"`
-	MarkProjection   ObservabilityMarkProjection          `json:"mark_projection,omitempty"`
-	MarkExcludeNames []string                             `json:"mark_exclude_names,omitempty"`
 	ToolDefinitions  []map[string]any                     `json:"tool_definitions,omitempty"`
 	Extra            map[string]any                       `json:"extra,omitempty"`
 	OutputDirectory  string                               `json:"output_directory,omitempty"`
@@ -179,8 +177,6 @@ func NewObservabilityAtifConfig() ObservabilityAtifConfig {
 	return ObservabilityAtifConfig{
 		AgentName:        "NeMo Relay",
 		ModelName:        "unknown",
-		MarkProjection:   ObservabilityMarkProjectionInherit,
-		MarkExcludeNames: []string{"llm.chunk"},
 		FilenameTemplate: "nemo-relay-atif-{session_id}.json",
 	}
 }
