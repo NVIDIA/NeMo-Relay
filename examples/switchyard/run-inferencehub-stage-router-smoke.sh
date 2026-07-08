@@ -223,6 +223,10 @@ run_query() {
     cd "$artifact_dir/workspace"
     ANTHROPIC_API_KEY=inferencehub \
     CLAUDE_CONFIG_DIR="$artifact_dir/claude" \
+    CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 \
+    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
+    CLAUDE_CODE_DISABLE_THINKING=1 \
+    DISABLE_INTERLEAVED_THINKING=1 \
     DISABLE_PROMPT_CACHING=1 \
       "$relay_root/target/debug/nemo-relay" run \
         --agent claude \
