@@ -24,6 +24,7 @@ pub(crate) struct StreamTranscoder {
     open_block: Option<usize>,
     started: bool,
     usage: Option<Json>,
+    pending_chat_finish: Option<String>,
     text: String,
 }
 
@@ -46,6 +47,7 @@ impl StreamTranscoder {
             open_block: None,
             started: false,
             usage: None,
+            pending_chat_finish: None,
             text: String::new(),
         }
     }
@@ -72,6 +74,24 @@ impl StreamTranscoder {
         Ok(output)
     }
 
+    /// Flush a terminal OpenAI Chat finish that was held for a possible
+    /// trailing usage-only chunk.
+    pub(crate) fn finish(&mut self) -> Vec<Json> {
+        let Some(reason) = self.pending_chat_finish.take() else {
+            return Vec::new();
+        };
+        let mut output = Vec::new();
+        let event = NormalizedStreamEvent::Finish {
+            reason: Some(reason),
+        };
+        match self.target {
+            WireProtocol::OpenaiChat => self.encode_chat(event, &mut output),
+            WireProtocol::OpenaiResponses => self.encode_responses(event, &mut output),
+            WireProtocol::AnthropicMessages => self.encode_anthropic(event, &mut output),
+        }
+        output
+    }
+
     fn decode_chat(&mut self, chunk: &Json) -> Vec<NormalizedStreamEvent> {
         if let Some(error) = chunk.get("error") {
             return vec![NormalizedStreamEvent::Error {
@@ -79,6 +99,7 @@ impl StreamTranscoder {
             }];
         }
         let mut events = Vec::new();
+        let mut finish_reason = None;
         if let Some(choice) = chunk["choices"]
             .as_array()
             .and_then(|choices| choices.first())
@@ -112,14 +133,26 @@ impl StreamTranscoder {
                 }
             }
             if let Some(reason) = choice.get("finish_reason").and_then(Json::as_str) {
-                events.push(NormalizedStreamEvent::Finish {
-                    reason: Some(reason.into()),
-                });
+                finish_reason = Some(reason.to_string());
             }
         }
+        let has_usage = chunk.get("usage").is_some_and(|usage| !usage.is_null());
         if let Some(usage) = chunk.get("usage").filter(|usage| !usage.is_null()) {
             events.push(NormalizedStreamEvent::Usage {
                 usage: normalize_usage(WireProtocol::OpenaiChat, usage),
+            });
+        }
+        if let Some(reason) = finish_reason {
+            if has_usage {
+                events.push(NormalizedStreamEvent::Finish {
+                    reason: Some(reason),
+                });
+            } else {
+                self.pending_chat_finish = Some(reason);
+            }
+        } else if has_usage && let Some(reason) = self.pending_chat_finish.take() {
+            events.push(NormalizedStreamEvent::Finish {
+                reason: Some(reason),
             });
         }
         events
@@ -582,6 +615,69 @@ mod tests {
         transcoder.transcode(&start).unwrap();
         let output = transcoder.transcode(&delta).unwrap();
         assert_eq!(output.last().unwrap()["delta"]["partial_json"], "{\"key\":");
+    }
+
+    #[test]
+    fn chat_usage_only_terminal_chunk_precedes_the_translated_finish() {
+        let mut transcoder = StreamTranscoder::new(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected-model",
+        );
+        let mut output = transcoder
+            .transcode(&json!({"choices": [{"delta": {"content": "ok"}, "finish_reason": null}]}))
+            .unwrap();
+        let finish = transcoder
+            .transcode(&json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+            .unwrap();
+        assert!(finish.iter().all(|chunk| chunk["type"] != "message_stop"));
+        output.extend(finish);
+        let usage = transcoder
+            .transcode(&json!({
+                "choices": [],
+                "usage": {"prompt_tokens": 13, "completion_tokens": 7, "total_tokens": 20}
+            }))
+            .unwrap();
+        let delta_index = usage
+            .iter()
+            .position(|chunk| chunk["type"] == "message_delta")
+            .unwrap();
+        let stop_index = usage
+            .iter()
+            .position(|chunk| chunk["type"] == "message_stop")
+            .unwrap();
+        assert!(delta_index < stop_index);
+        assert_eq!(usage[delta_index]["usage"]["input_tokens"], 13);
+        assert_eq!(usage[delta_index]["usage"]["output_tokens"], 7);
+        output.extend(usage);
+
+        let codec = AnthropicMessagesStreamingCodec::new();
+        let mut collector = codec.collector();
+        let finalizer = codec.finalizer();
+        for chunk in output {
+            collector(chunk).unwrap();
+        }
+        let annotated =
+            crate::translation::decode_response(WireProtocol::AnthropicMessages, &finalizer())
+                .unwrap();
+        assert_eq!(annotated.usage.as_ref().unwrap().prompt_tokens, Some(13));
+        assert_eq!(annotated.usage.as_ref().unwrap().completion_tokens, Some(7));
+    }
+
+    #[test]
+    fn chat_finish_without_usage_is_flushed_at_upstream_eof() {
+        let mut transcoder = StreamTranscoder::new(
+            WireProtocol::OpenaiChat,
+            WireProtocol::AnthropicMessages,
+            "selected-model",
+        );
+        let finish = transcoder
+            .transcode(&json!({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+            .unwrap();
+        assert!(finish.iter().all(|chunk| chunk["type"] != "message_stop"));
+        let flushed = transcoder.finish();
+        assert_eq!(flushed.last().unwrap()["type"], "message_stop");
+        assert!(transcoder.finish().is_empty());
     }
 
     #[test]

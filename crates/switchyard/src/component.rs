@@ -1490,6 +1490,9 @@ fn translated_stream(
                 }
             }
         }
+        for chunk in transcoder.finish() {
+            yield Ok(chunk);
+        }
     })
 }
 
