@@ -492,7 +492,7 @@ fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
 #[test]
 fn preserves_real_bearer_keys_on_openai_route() {
     // Real provider keys (Hermes's `sk-...` against NVIDIA, an actual OpenAI dev key, etc.)
-    // must pass through untouched — only the consumer JWT shape (`Bearer eyJ...`) is stripped.
+    // must pass through untouched — only recognized ChatGPT auth tokens are stripped.
     let mut inbound = HeaderMap::new();
     inbound.insert(
         "authorization",
@@ -644,7 +644,7 @@ fn chatgpt_jwt_routes_to_chatgpt_backend_when_no_api_key() {
 }
 
 #[test]
-fn no_jwt_does_not_trigger_chatgpt_backend() {
+fn provider_key_does_not_trigger_chatgpt_backend() {
     let mut headers = HeaderMap::new();
     headers.insert(
         "authorization",

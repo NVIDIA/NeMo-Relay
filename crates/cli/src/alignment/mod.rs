@@ -523,8 +523,8 @@ fn openai_body_session_id(body: &Value, route: GatewayRouteKind) -> Option<Strin
 
 /// Select an agent-native upstream before falling back to configured providers.
 ///
-/// Codex uses this for ChatGPT OAuth tokens that target the ChatGPT backend
-/// instead of the public OpenAI API.
+/// Codex uses this for ChatGPT auth tokens that target the ChatGPT backend instead
+/// of the public OpenAI API.
 pub(crate) fn gateway_upstream_url_override(
     headers: &HeaderMap,
     route: GatewayRouteKind,
@@ -541,14 +541,14 @@ pub(crate) fn gateway_upstream_url_override(
 
 /// Remove or preserve agent-native auth before generic provider auth injection.
 ///
-/// Codex strips ChatGPT OAuth JWTs only when an OpenAI API key is available to
+/// Codex strips ChatGPT auth tokens only when an OpenAI API key is available to
 /// replace them.
 pub(crate) fn gateway_forward_headers(
     headers: &HeaderMap,
     route: GatewayRouteKind,
     has_openai_replacement_key: bool,
 ) -> HeaderMap {
-    codex::strip_chatgpt_oauth_for_openai_route(headers, route, has_openai_replacement_key)
+    codex::strip_chatgpt_auth_for_openai_route(headers, route, has_openai_replacement_key)
 }
 
 /// Read the explicit subagent header from a gateway request.

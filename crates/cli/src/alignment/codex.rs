@@ -18,8 +18,8 @@ use crate::alignment::{
 };
 use crate::model::{AgentKind, SessionEvent, SubagentEvent};
 
-// ChatGPT backend base URL used by Codex when authenticated with ChatGPT-Plus OAuth. This mirrors
-// Codex's own `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base.
+// ChatGPT backend base URL used by Codex when authenticated with ChatGPT. This mirrors Codex's own
+// `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base.
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 // The Codex fields needed to turn a child thread into a parent-owned subagent scope. Optional
@@ -58,22 +58,22 @@ pub(crate) fn prompt_cache_session_id(body: &Value, route: GatewayRouteKind) -> 
     json_string_at(body, &[&["prompt_cache_key"][..]])
 }
 
-// Gives the gateway a Codex-native upstream only when the inbound token is the ChatGPT OAuth JWT
-// shape and no `OPENAI_API_KEY` is available to substitute. The gateway stays generic by asking
-// alignment for an optional override instead of knowing Codex backend URLs.
+// Gives the gateway a Codex-native upstream only when the inbound token is a recognized ChatGPT
+// auth token and no `OPENAI_API_KEY` is available to substitute. The gateway stays generic by
+// asking alignment for an optional override instead of knowing Codex backend URLs.
 pub(crate) fn chatgpt_upstream_url_if_needed(
     headers: &HeaderMap,
     route: GatewayRouteKind,
     path_and_query: &str,
     has_replacement_key: bool,
 ) -> Option<String> {
-    (is_openai_route(route) && has_chatgpt_oauth_jwt(headers) && !has_replacement_key)
+    (is_openai_route(route) && has_chatgpt_auth_token(headers) && !has_replacement_key)
         .then(|| chatgpt_upstream_url(path_and_query))
 }
 
-// Removes Codex ChatGPT OAuth JWTs from OpenAI-family routes when the gateway has a real API key
+// Removes Codex ChatGPT auth tokens from OpenAI-family routes when the gateway has a real API key
 // to inject. Real provider keys and non-OpenAI routes are preserved.
-pub(crate) fn strip_chatgpt_oauth_for_openai_route(
+pub(crate) fn strip_chatgpt_auth_for_openai_route(
     headers: &HeaderMap,
     route: GatewayRouteKind,
     has_replacement_key: bool,
@@ -82,7 +82,7 @@ pub(crate) fn strip_chatgpt_oauth_for_openai_route(
         return headers.clone();
     }
     let mut out = headers.clone();
-    if has_chatgpt_oauth_jwt(&out) {
+    if has_chatgpt_auth_token(&out) {
         out.remove(http::header::AUTHORIZATION);
     }
     out
@@ -95,16 +95,16 @@ fn chatgpt_upstream_url(path_and_query: &str) -> String {
     format!("{CHATGPT_CODEX_BASE_URL}{path}")
 }
 
-// Codex stores ChatGPT-Plus OAuth tokens in `~/.codex/auth.json`; the access token is a JWT whose
-// bearer value starts with `eyJ`. Provider API keys (`sk-...`) and opaque tokens do not match.
-fn has_chatgpt_oauth_jwt(headers: &HeaderMap) -> bool {
+// Codex can authenticate to the ChatGPT backend with either an OAuth JWT (`eyJ...`) or a Codex
+// access token (`at-...`). Provider API keys (`sk-...`) and unrelated opaque tokens do not match.
+fn has_chatgpt_auth_token(headers: &HeaderMap) -> bool {
     headers
         .get(http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("Bearer eyJ"))
+        .is_some_and(|value| value.starts_with("Bearer eyJ") || value.starts_with("Bearer at-"))
 }
 
-// The ChatGPT OAuth transport fallback applies only to OpenAI-family routes. Anthropic routes use
+// The ChatGPT auth transport fallback applies only to OpenAI-family routes. Anthropic routes use
 // a different auth scheme and should never be redirected through Codex's ChatGPT backend.
 fn is_openai_route(route: GatewayRouteKind) -> bool {
     matches!(

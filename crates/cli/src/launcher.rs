@@ -770,10 +770,11 @@ fn codex_gateway_provider_config(gateway_url: &str) -> String {
     //
     // `requires_openai_auth=true` so Codex's `resolve_provider_auth` (`codex-rs/model-provider/
     // src/auth.rs`) attaches credentials via `BearerAuthProvider`. When the auth mode is
-    // `Chatgpt` the token is an OAuth JWT; when `ApiKey` it is the `OPENAI_API_KEY` value.
+    // `Chatgpt` the token is an OAuth JWT or Codex access token; when `ApiKey` it is the
+    // `OPENAI_API_KEY` value.
     // The gateway inspects the inbound `Authorization` header: if `OPENAI_API_KEY` is set in the
-    // environment the JWT is replaced (see `gateway.rs::strip_chatgpt_oauth_for_openai_route`
-    // and `inject_provider_auth`); otherwise the JWT is forwarded to the ChatGPT backend.
+    // environment the ChatGPT token is replaced (see `alignment::gateway_forward_headers` and
+    // `gateway.rs::inject_provider_auth`); otherwise it is forwarded to the ChatGPT backend.
     format!(
         "model_providers.nemo-relay-openai={{name=\"NeMo Relay OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
         toml_string(gateway_url)

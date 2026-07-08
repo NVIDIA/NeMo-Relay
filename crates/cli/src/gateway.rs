@@ -1016,7 +1016,7 @@ fn normalize_openai_path_for_base(base: &str, path_and_query: &str) -> String {
 }
 
 // Gives alignment adapters a chance to choose an agent-native upstream before default provider
-// routing runs. Today this supports Codex ChatGPT OAuth; future harness fallbacks should stay in
+// routing runs. Today this supports Codex ChatGPT auth; future harness fallbacks should stay in
 // alignment rather than adding provider-shaped checks here.
 fn gateway_upstream_url_override(
     route: ProviderRoute,

@@ -63,7 +63,7 @@ fn prompt_cache_session_id_requires_codex_responses_metadata() {
 }
 
 #[test]
-fn chatgpt_backend_override_requires_jwt_and_missing_replacement_key() {
+fn chatgpt_backend_override_accepts_oauth_jwt_without_replacement_key() {
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         "authorization",
@@ -101,24 +101,61 @@ fn chatgpt_backend_override_requires_jwt_and_missing_replacement_key() {
 }
 
 #[test]
-fn chatgpt_oauth_strip_preserves_provider_keys_and_non_openai_routes() {
+fn chatgpt_backend_override_accepts_codex_access_token() {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "authorization",
+        axum::http::HeaderValue::from_static("Bearer at-test-codex-access-token"),
+    );
+
+    assert_eq!(
+        chatgpt_upstream_url_if_needed(
+            &headers,
+            GatewayRouteKind::OpenAiResponses,
+            "/v1/responses",
+            false,
+        )
+        .as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/responses")
+    );
+}
+
+#[test]
+fn chatgpt_auth_strip_allows_api_key_substitution_for_codex_access_token() {
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "authorization",
+        axum::http::HeaderValue::from_static("Bearer at-test-codex-access-token"),
+    );
+
+    let stripped =
+        strip_chatgpt_auth_for_openai_route(&headers, GatewayRouteKind::OpenAiResponses, true);
+    assert!(stripped.get("authorization").is_none());
+
+    let preserved =
+        strip_chatgpt_auth_for_openai_route(&headers, GatewayRouteKind::OpenAiResponses, false);
+    assert_eq!(
+        preserved.get("authorization").unwrap(),
+        "Bearer at-test-codex-access-token"
+    );
+}
+
+#[test]
+fn chatgpt_auth_strip_preserves_provider_keys_and_non_openai_routes() {
     let mut jwt_headers = axum::http::HeaderMap::new();
     jwt_headers.insert(
         "authorization",
         axum::http::HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
     );
     let stripped =
-        strip_chatgpt_oauth_for_openai_route(&jwt_headers, GatewayRouteKind::OpenAiResponses, true);
+        strip_chatgpt_auth_for_openai_route(&jwt_headers, GatewayRouteKind::OpenAiResponses, true);
     assert!(stripped.get("authorization").is_none());
 
-    let preserved_without_replacement = strip_chatgpt_oauth_for_openai_route(
-        &jwt_headers,
-        GatewayRouteKind::OpenAiResponses,
-        false,
-    );
+    let preserved_without_replacement =
+        strip_chatgpt_auth_for_openai_route(&jwt_headers, GatewayRouteKind::OpenAiResponses, false);
     assert!(preserved_without_replacement.get("authorization").is_some());
 
-    let preserved_non_openai = strip_chatgpt_oauth_for_openai_route(
+    let preserved_non_openai = strip_chatgpt_auth_for_openai_route(
         &jwt_headers,
         GatewayRouteKind::AnthropicMessages,
         true,
@@ -131,7 +168,7 @@ fn chatgpt_oauth_strip_preserves_provider_keys_and_non_openai_routes() {
         axum::http::HeaderValue::from_static("Bearer sk-real-provider-key"),
     );
     let preserved_key =
-        strip_chatgpt_oauth_for_openai_route(&key_headers, GatewayRouteKind::OpenAiResponses, true);
+        strip_chatgpt_auth_for_openai_route(&key_headers, GatewayRouteKind::OpenAiResponses, true);
     assert_eq!(
         preserved_key.get("authorization").unwrap(),
         "Bearer sk-real-provider-key"
