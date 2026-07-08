@@ -36,9 +36,7 @@ class Handler(BaseHTTPRequestHandler):
                     "id": "chatcmpl-fake",
                     "object": "chat.completion.chunk",
                     "model": model,
-                    "choices": [
-                        {"index": 0, "delta": {}, "finish_reason": "stop"}
-                    ],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 },
             ]
             payload = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
