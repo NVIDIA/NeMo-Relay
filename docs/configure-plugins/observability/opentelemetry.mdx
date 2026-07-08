@@ -55,7 +55,7 @@ The following table describes OpenTelemetry exporter settings:
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
-| `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration child spans for trace-tree visibility. |
+| `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration spans, parented as children when context is available, for trace-tree visibility. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
@@ -77,7 +77,7 @@ The default `inherit` projection follows exporter-native handling: a mark with
 an active parent span is a span event, while an orphan mark is a standalone
 zero-duration `mark:<name>` span. `mark_projection = "event"` explicitly selects
 that representation. Set `mark_projection = "tool"` only when the target
-backend needs non-streaming marks represented as visible child spans. Projected
+backend needs eligible marks represented as visible child spans. Projected
 marks use `SpanKind::Internal`, carry
 `nemo_relay.mark.projection = "tool"`, and retain mark UUID, parentage,
 category/profile, and payload attributes. High-volume `llm.chunk` marks retain
@@ -86,6 +86,7 @@ exporter-native handling by default and when excluded from tool projection.
 Add other event names to `mark_exclude_names` for a backend to keep those
 marks in exporter-native form rather than visible tool children. The exclusion
 list affects only tool projection; it does not remove mark payload or metadata.
+Set `mark_exclude_names = []` to disable the default `llm.chunk` exclusion.
 
 Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
 attributes. These values match ATIF `step.extra.ancestry.function_id` and
