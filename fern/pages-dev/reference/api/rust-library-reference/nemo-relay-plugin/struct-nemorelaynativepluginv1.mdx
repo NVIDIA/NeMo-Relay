@@ -1,0 +1,54 @@
+---
+title: "Struct Nemo Relay Native Plugin V1"
+sidebar-title: "NemoRelayNativePluginV1"
+description: "Versioned plugin descriptor returned by native plugin entry symbols."
+position: 16
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativePluginV1 &#123;\n    pub struct_size: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n    pub plugin_kind: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>,\n    pub allows_multiple_components: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub user_data: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/enum.c_void.html\">c_void</a>,\n    pub validate: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-nemorelaynativepluginvalidatefn\">NemoRelayNativePluginValidateFn</a>&gt;,\n    pub register: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-nemorelaynativepluginregisterfn\">NemoRelayNativePluginRegisterFn</a>&gt;,\n    pub drop: <a href=\"type-nemorelaynativeplugindropfn\">NemoRelayNativePluginDropFn</a>,\n&#125;"}} /></pre>
+
+Versioned plugin descriptor returned by native plugin entry symbols.
+
+## Fields
+
+### `struct_size: usize`
+
+Size of this struct as seen by the plugin.
+
+### `plugin_kind: *mut NemoRelayNativeString`
+
+Host-owned plugin kind string.
+
+### `allows_multiple_components: bool`
+
+Whether this plugin kind supports multiple configured components.
+
+### `user_data: *mut c_void`
+
+Plugin-owned state pointer passed to callbacks.
+
+### `validate: Option<NemoRelayNativePluginValidateFn>`
+
+Optional validation callback.
+
+### `register: Option<NemoRelayNativePluginRegisterFn>`
+
+Required registration callback.
+
+### `drop: NemoRelayNativePluginDropFn`
+
+Optional plugin-owned state destructor.
+
+## Trait Implementations
+
+### `impl Default for NemoRelayNativePluginV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-nemorelaynativepluginv1\">NemoRelayNativePluginV1</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

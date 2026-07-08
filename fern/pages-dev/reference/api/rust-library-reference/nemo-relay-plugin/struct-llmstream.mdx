@@ -1,0 +1,354 @@
+---
+title: "Struct LlmStream"
+sidebar-title: "LlmStream"
+description: "Host- or plugin-owned stream returned across the native LLM stream ABI."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct LlmStream { /* private fields */ }
+```
+
+Host- or plugin-owned stream returned across the native LLM stream ABI.
+
+## Implementations
+
+### `impl LlmStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmstream\">LlmStream</a>"}} /></pre>
+
+#### `from_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn from_raw(\n    host: &amp;<a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>,\n    raw: <a href=\"struct-nemorelaynativellmstreamv1\">NemoRelayNativeLlmStreamV1</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Creates a typed stream wrapper from a raw stream table.
+
+##### Safety
+
+`raw` must contain callbacks and `user_data` produced by the same host and must not be used again after it is moved into this wrapper.
+
+#### `next_chunk`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn next_chunk(&amp;mut self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;&gt;"}} /></pre>
+
+Polls the next stream chunk.
+
+#### `cancel`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn cancel(&amp;mut self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Cancels the stream if it has not reached end-of-stream.
+
+## Trait Implementations
+
+### `impl Drop for LlmStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-llmstream\">LlmStream</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+
+### `impl Iterator for LlmStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a> for <a href=\"struct-llmstream\">LlmStream</a>"}} /></pre>
+
+#### `Item`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a> = <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+#### `next`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#tymethod.next\">next</a>(&amp;mut self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;"}} /></pre>
+
+#### `next_chunk`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.next_chunk\">next_chunk</a>&lt;const N: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;(\n    &amp;mut self,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;[Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.array.html\">N</a>], <a href=\"https://doc.rust-lang.org/1.93.0/core/array/iter/struct.IntoIter.html\">IntoIter</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, N&gt;&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `size_hint`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.size_hint\">size_hint</a>(&amp;self) -&gt; (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;)"}} /></pre>
+
+#### `count`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.count\">count</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `last`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.last\">last</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `advance_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.advance_by\">advance_by</a>(&amp;mut self, n: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/num/nonzero/struct.NonZero.html\">NonZero</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;&gt;"}} /></pre>
+
+#### `nth`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.nth\">nth</a>(&amp;mut self, n: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;"}} /></pre>
+
+#### `step_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.step_by\">step_by</a>(self, step: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/step_by/struct.StepBy.html\">StepBy</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `chain`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.chain\">chain</a>&lt;U&gt;(self, other: U) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/chain/struct.Chain.html\">Chain</a>&lt;Self, &lt;U as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    U: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,"}} /></pre>
+
+#### `zip`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.zip\">zip</a>&lt;U&gt;(self, other: U) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/zip/struct.Zip.html\">Zip</a>&lt;Self, &lt;U as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.IntoIter\">IntoIter</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    U: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,"}} /></pre>
+
+#### `intersperse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.intersperse\">intersperse</a>(self, separator: Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/intersperse/struct.Intersperse.html\">Intersperse</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a>,"}} /></pre>
+
+#### `intersperse_with`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.intersperse_with\">intersperse_with</a>&lt;G&gt;(self, separator: G) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/intersperse/struct.IntersperseWith.html\">IntersperseWith</a>&lt;Self, G&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    G: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>() -&gt; Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>,"}} /></pre>
+
+#### `map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.map\">map</a>&lt;B, F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/map/struct.Map.html\">Map</a>&lt;Self, F&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; B,"}} /></pre>
+
+#### `for_each`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.for_each\">for_each</a>&lt;F&gt;(self, f: F)where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>),"}} /></pre>
+
+#### `filter`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.filter\">filter</a>&lt;P&gt;(self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/filter/struct.Filter.html\">Filter</a>&lt;Self, P&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `filter_map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.filter_map\">filter_map</a>&lt;B, F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/filter_map/struct.FilterMap.html\">FilterMap</a>&lt;Self, F&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;B&gt;,"}} /></pre>
+
+#### `enumerate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.enumerate\">enumerate</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/enumerate/struct.Enumerate.html\">Enumerate</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `peekable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.peekable\">peekable</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/peekable/struct.Peekable.html\">Peekable</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `skip_while`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.skip_while\">skip_while</a>&lt;P&gt;(self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/skip_while/struct.SkipWhile.html\">SkipWhile</a>&lt;Self, P&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `take_while`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.take_while\">take_while</a>&lt;P&gt;(self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/take_while/struct.TakeWhile.html\">TakeWhile</a>&lt;Self, P&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `map_while`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.map_while\">map_while</a>&lt;B, P&gt;(self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/map_while/struct.MapWhile.html\">MapWhile</a>&lt;Self, P&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;B&gt;,"}} /></pre>
+
+#### `skip`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.skip\">skip</a>(self, n: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/skip/struct.Skip.html\">Skip</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `take`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.take\">take</a>(self, n: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/take/struct.Take.html\">Take</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `scan`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.scan\">scan</a>&lt;St, B, F&gt;(self, initial_state: St, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/scan/struct.Scan.html\">Scan</a>&lt;Self, St, F&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut St</a>, Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;B&gt;,"}} /></pre>
+
+#### `flat_map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.flat_map\">flat_map</a>&lt;U, F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/flatten/struct.FlatMap.html\">FlatMap</a>&lt;Self, U, F&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    U: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; U,"}} /></pre>
+
+#### `flatten`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.flatten\">flatten</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/flatten/struct.Flatten.html\">Flatten</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,"}} /></pre>
+
+#### `map_windows`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.map_windows\">map_windows</a>&lt;F, R, const N: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/map_windows/struct.MapWindows.html\">MapWindows</a>&lt;Self, F, N&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;[Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.array.html\">N</a>]) -&gt; R,"}} /></pre>
+
+#### `fuse`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.fuse\">fuse</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/fuse/struct.Fuse.html\">Fuse</a>&lt;Self&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `inspect`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.inspect\">inspect</a>&lt;F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/inspect/struct.Inspect.html\">Inspect</a>&lt;Self, F&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>),"}} /></pre>
+
+#### `by_ref`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.by_ref\">by_ref</a>(&amp;mut self) -&gt; &amp;mut Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `collect`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.collect\">collect</a>&lt;B&gt;(self) -&gt; Bwhere\n    B: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.FromIterator.html\">FromIterator</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `try_collect`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.try_collect\">try_collect</a>&lt;B&gt;(\n    &amp;mut self,\n) -&gt; &lt;&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Residual\">Residual</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html\">Residual</a>&lt;B&gt;&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html#associatedtype.TryType\">TryType</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>,\n    &lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Residual\">Residual</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html\">Residual</a>&lt;B&gt;,\n    B: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.FromIterator.html\">FromIterator</a>&lt;&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Output\">Output</a>&gt;,"}} /></pre>
+
+#### `collect_into`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.collect_into\">collect_into</a>&lt;E&gt;(self, collection: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut E</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut E</a>where\n    E: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.Extend.html\">Extend</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `partition`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.partition\">partition</a>&lt;B, F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.tuple.html\">(B, B)</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    B: <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.Extend.html\">Extend</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `is_partitioned`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.is_partitioned\">is_partitioned</a>&lt;P&gt;(self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `try_fold`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.try_fold\">try_fold</a>&lt;B, F, R&gt;(&amp;mut self, init: B, f: F) -&gt; Rwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(B, Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; R,\n    R: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&lt;Output = B&gt;,"}} /></pre>
+
+#### `try_for_each`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.try_for_each\">try_for_each</a>&lt;F, R&gt;(&amp;mut self, f: F) -&gt; Rwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; R,\n    R: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&lt;Output = <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;,"}} /></pre>
+
+#### `fold`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.fold\">fold</a>&lt;B, F&gt;(self, init: B, f: F) -&gt; Bwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(B, Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; B,"}} /></pre>
+
+#### `reduce`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.reduce\">reduce</a>&lt;F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>,"}} /></pre>
+
+#### `try_reduce`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.try_reduce\">try_reduce</a>&lt;R&gt;(\n    &amp;mut self,\n    f: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; R,\n) -&gt; &lt;&lt;R as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Residual\">Residual</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html\">Residual</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&lt;R as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Output\">Output</a>&gt;&gt;&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html#associatedtype.TryType\">TryType</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    R: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&lt;Output = Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,\n    &lt;R as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Residual\">Residual</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html\">Residual</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;&gt;,"}} /></pre>
+
+#### `all`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.all\">all</a>&lt;F&gt;(&amp;mut self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `any`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.any\">any</a>&lt;F&gt;(&amp;mut self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `find`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.find\">find</a>&lt;P&gt;(&amp;mut self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `find_map`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.find_map\">find_map</a>&lt;B, F&gt;(&amp;mut self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;B&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;B&gt;,"}} /></pre>
+
+#### `try_find`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.try_find\">try_find</a>&lt;R&gt;(\n    &amp;mut self,\n    f: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; R,\n) -&gt; &lt;&lt;R as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Residual\">Residual</a> as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html\">Residual</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;&gt;&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html#associatedtype.TryType\">TryType</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    R: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&lt;Output = <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;,\n    &lt;R as <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html\">Try</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Try.html#associatedtype.Residual\">Residual</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/try_trait/trait.Residual.html\">Residual</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;&gt;,"}} /></pre>
+
+#### `position`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.position\">position</a>&lt;P&gt;(&amp;mut self, predicate: P) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `max`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.max\">max</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Ord.html\">Ord</a>,"}} /></pre>
+
+#### `min`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.min\">min</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Ord.html\">Ord</a>,"}} /></pre>
+
+#### `max_by_key`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.max_by_key\">max_by_key</a>&lt;B, F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    B: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Ord.html\">Ord</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; B,"}} /></pre>
+
+#### `max_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.max_by\">max_by</a>&lt;F&gt;(self, compare: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, &amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>,"}} /></pre>
+
+#### `min_by_key`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.min_by_key\">min_by_key</a>&lt;B, F&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    B: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Ord.html\">Ord</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; B,"}} /></pre>
+
+#### `min_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.min_by\">min_by</a>&lt;F&gt;(self, compare: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, &amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>,"}} /></pre>
+
+#### `unzip`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.unzip\">unzip</a>&lt;A, B, FromA, FromB&gt;(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.tuple.html\">(FromA, FromB)</a>where\n    FromA: <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.Extend.html\">Extend</a>&lt;A&gt;,\n    FromB: <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.Extend.html\">Extend</a>&lt;B&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a>&lt;Item = <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.tuple.html\">(A, B)</a>&gt;,"}} /></pre>
+
+#### `copied`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.copied\">copied</a>&lt;'a, T&gt;(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/copied/struct.Copied.html\">Copied</a>&lt;Self&gt;where\n    T: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Copy.html\">Copy</a> + 'a,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a>&lt;Item = <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;'a T</a>&gt;,"}} /></pre>
+
+#### `cloned`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.cloned\">cloned</a>&lt;'a, T&gt;(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/cloned/struct.Cloned.html\">Cloned</a>&lt;Self&gt;where\n    T: <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> + 'a,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html\">Iterator</a>&lt;Item = <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;'a T</a>&gt;,"}} /></pre>
+
+#### `array_chunks`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.array_chunks\">array_chunks</a>&lt;const N: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/adapters/array_chunks/struct.ArrayChunks.html\">ArrayChunks</a>&lt;Self, N&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `sum`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.sum\">sum</a>&lt;S&gt;(self) -&gt; Swhere\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    S: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/accum/trait.Sum.html\">Sum</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,"}} /></pre>
+
+#### `product`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.product\">product</a>&lt;P&gt;(self) -&gt; Pwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    P: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/accum/trait.Product.html\">Product</a>&lt;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,"}} /></pre>
+
+#### `cmp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.cmp\">cmp</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.Ord.html\">Ord</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `cmp_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.cmp_by\">cmp_by</a>&lt;I, F&gt;(self, other: I, cmp: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, &lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>,"}} /></pre>
+
+#### `partial_cmp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.partial_cmp\">partial_cmp</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>&gt;where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `partial_cmp_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.partial_cmp_by\">partial_cmp_by</a>&lt;I, F&gt;(self, other: I, partial_cmp: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>&gt;where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, &lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/enum.Ordering.html\">Ordering</a>&gt;,"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.eq\">eq</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `eq_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.eq_by\">eq_by</a>&lt;I, F&gt;(self, other: I, eq: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, &lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.ne\">ne</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `lt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.lt\">lt</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `le`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.le\">le</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `gt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.gt\">gt</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `ge`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.ge\">ge</a>&lt;I&gt;(self, other: I) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>&lt;&lt;I as <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&gt;::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html#associatedtype.Item\">Item</a>&gt;,\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `is_sorted`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.is_sorted\">is_sorted</a>(self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>,"}} /></pre>
+
+#### `is_sorted_by`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.is_sorted_by\">is_sorted_by</a>&lt;F&gt;(self, compare: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(&amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>, &amp;Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,"}} /></pre>
+
+#### `is_sorted_by_key`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#method.is_sorted_by_key\">is_sorted_by_key</a>&lt;F, K&gt;(self, f: F) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>where\n    Self: <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sized.html\">Sized</a>,\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(Self::<a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/iterator/trait.Iterator.html#associatedtype.Item\">Item</a>) -&gt; K,\n    K: <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialOrd.html\">PartialOrd</a>,"}} /></pre>
+
+### `impl Send for LlmStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-llmstream\">LlmStream</a>"}} /></pre>

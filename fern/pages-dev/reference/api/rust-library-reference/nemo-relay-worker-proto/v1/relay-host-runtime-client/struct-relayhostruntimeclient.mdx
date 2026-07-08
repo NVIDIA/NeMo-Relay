@@ -1,0 +1,127 @@
+---
+title: "Struct Relay Host Runtime Client"
+sidebar-title: "RelayHostRuntimeClient"
+slug: "/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/relay_host_runtime_client/struct-relayhostruntimeclient"
+description: "API documentation for the Rust `RelayHostRuntimeClient` struct in crate `nemo_relay_worker_proto`."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct RelayHostRuntimeClient<T> { /* private fields */ }
+```
+
+## Implementations
+
+### `impl RelayHostRuntimeClient<Channel>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-relayhostruntimeclient\">RelayHostRuntimeClient</a>&lt;Channel&gt;"}} /></pre>
+
+#### `connect`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn connect&lt;D&gt;(dst: D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, Error&gt;where\n    D: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.TryInto.html\">TryInto</a>&lt;Endpoint&gt;,\n    D::<a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.TryInto.html#associatedtype.Error\">Error</a>: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;StdError&gt;,"}} /></pre>
+
+Attempt to create a new client by connecting to a given endpoint.
+
+### `impl<T> RelayHostRuntimeClient<T>where T: GrpcService<Body>, T::Error: Into<StdError>, T::ResponseBody: Body<Data = Bytes> + Send + 'static, <T::ResponseBody as Body>::Error: Into<StdError> + Send,`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T&gt; <a href=\"struct-relayhostruntimeclient\">RelayHostRuntimeClient</a>&lt;T&gt;where\n    T: GrpcService&lt;Body&gt;,\n    T::Error: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;StdError&gt;,\n    T::ResponseBody: Body&lt;Data = Bytes&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'static,\n    &lt;T::ResponseBody as Body&gt;::Error: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;StdError&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>,"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(inner: T) -&gt; Self"}} /></pre>
+
+#### `with_origin`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_origin(inner: T, origin: Uri) -&gt; Self"}} /></pre>
+
+#### `with_interceptor`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_interceptor&lt;F&gt;(\n    inner: T,\n    interceptor: F,\n) -&gt; <a href=\"struct-relayhostruntimeclient\">RelayHostRuntimeClient</a>&lt;InterceptedService&lt;T, F&gt;&gt;where\n    F: Interceptor,\n    T::ResponseBody: <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a>,\n    T: Service&lt;Request&lt;Body&gt;, Response = Response&lt;&lt;T as GrpcService&lt;Body&gt;&gt;::ResponseBody&gt;&gt;,\n    &lt;T as Service&lt;Request&lt;Body&gt;&gt;&gt;::Error: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;StdError&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>,"}} /></pre>
+
+#### `send_compressed`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn send_compressed(self, encoding: CompressionEncoding) -&gt; Self"}} /></pre>
+
+Compress requests with the given encoding.
+
+This requires the server to support it otherwise it might respond with an error.
+
+#### `accept_compressed`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn accept_compressed(self, encoding: CompressionEncoding) -&gt; Self"}} /></pre>
+
+Enable decompressing responses.
+
+#### `max_decoding_message_size`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_decoding_message_size(self, limit: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
+
+Limits the maximum size of a decoded message.
+
+Default: `4MB`
+
+#### `max_encoding_message_size`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_encoding_message_size(self, limit: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
+
+Limits the maximum size of an encoded message.
+
+Default: `usize::MAX`
+
+#### `emit_mark`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn emit_mark(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-emitmarkrequest\">EmitMarkRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-hostack\">HostAck</a>&gt;, Status&gt;"}} /></pre>
+
+#### `push_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn push_scope(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-pushscoperequest\">PushScopeRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-pushscoperesponse\">PushScopeResponse</a>&gt;, Status&gt;"}} /></pre>
+
+#### `pop_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn pop_scope(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-popscoperequest\">PopScopeRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-hostack\">HostAck</a>&gt;, Status&gt;"}} /></pre>
+
+#### `create_scope_stack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn create_scope_stack(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-createscopestackrequest\">CreateScopeStackRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-createscopestackresponse\">CreateScopeStackResponse</a>&gt;, Status&gt;"}} /></pre>
+
+#### `drop_scope_stack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn drop_scope_stack(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-dropscopestackrequest\">DropScopeStackRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-hostack\">HostAck</a>&gt;, Status&gt;"}} /></pre>
+
+#### `tool_next`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn tool_next(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-toolnextrequest\">ToolNextRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-jsonresult\">JsonResult</a>&gt;, Status&gt;"}} /></pre>
+
+#### `llm_next`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn llm_next(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmnextrequest\">LlmNextRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;<a href=\"../struct-jsonresult\">JsonResult</a>&gt;, Status&gt;"}} /></pre>
+
+#### `llm_stream_next`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn llm_stream_next(\n    &amp;mut self,\n    request: impl IntoRequest&lt;<a href=\"../struct-llmstreamnextrequest\">LlmStreamNextRequest</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Response&lt;Streaming&lt;<a href=\"../struct-streamchunk\">StreamChunk</a>&gt;&gt;, Status&gt;"}} /></pre>
+
+## Trait Implementations
+
+### `impl<T: Clone> Clone for RelayHostRuntimeClient<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a>&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-relayhostruntimeclient\">RelayHostRuntimeClient</a>&lt;T&gt;"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-relayhostruntimeclient\">RelayHostRuntimeClient</a>&lt;T&gt;"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl<T: Debug> Debug for RelayHostRuntimeClient<T>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a>&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-relayhostruntimeclient\">RelayHostRuntimeClient</a>&lt;T&gt;"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>

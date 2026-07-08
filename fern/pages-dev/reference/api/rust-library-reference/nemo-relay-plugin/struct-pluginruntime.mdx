@@ -1,0 +1,102 @@
+---
+title: "Struct Plugin Runtime"
+sidebar-title: "PluginRuntime"
+description: "Cloneable high-level runtime handle for host APIs available to native plugins."
+position: 23
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PluginRuntime { /* private fields */ }
+```
+
+Cloneable high-level runtime handle for host APIs available to native plugins.
+
+## Implementations
+
+### `impl PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(host: &amp;<a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>) -&gt; Self"}} /></pre>
+
+Creates a runtime handle from the host ABI table.
+
+#### `host_api`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn host_api(&amp;self) -&gt; &amp;<a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
+
+Returns the underlying host ABI table.
+
+#### `current_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn current_scope(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Retrieves the current scope handle.
+
+#### `push_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Pushes a scope and emits its start event.
+
+#### `pop_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn pop_scope(\n    &amp;self,\n    handle: &amp;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Pops a scope and emits its end event.
+
+#### `scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Opens a scope that is popped automatically when the guard is closed or dropped.
+
+#### `emit_mark`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Emits a mark event under the current scope.
+
+#### `create_scope_stack`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn create_scope_stack(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopestack\">ScopeStack</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Creates a new independent scope stack.
+
+#### `capture_scope_stack_thread`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn capture_scope_stack_thread(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopestackbinding\">ScopeStackBinding</a>&lt;'_&gt;&gt;"}} /></pre>
+
+Captures the current thread-local scope-stack binding.
+
+#### `scope_stack_active`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_stack_active(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Returns whether the current context has an explicitly active scope stack.
+
+#### `bind_scope_stack_thread`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn bind_scope_stack_thread&lt;'a&gt;(\n    &amp;'a self,\n    stack: &amp;'a <a href=\"struct-scopestack\">ScopeStack</a>&lt;'a&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-threadscopestackguard\">ThreadScopeStackGuard</a>&lt;'a&gt;&gt;"}} /></pre>
+
+Binds `stack` to the current OS thread until the returned guard is dropped.
+
+## Trait Implementations
+
+### `impl Clone for PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

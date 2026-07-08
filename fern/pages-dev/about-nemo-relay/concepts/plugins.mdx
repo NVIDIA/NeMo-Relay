@@ -1,6 +1,6 @@
 ---
 title: "Plugins"
-description: ""
+description: "Understand NeMo Relay plugin configuration, lifecycle, ownership, and built-in components."
 position: 3
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -147,11 +147,16 @@ Plugins install runtime behavior; they do not create a separate execution
 model. Scopes still own parentage and cleanup, middleware still owns execution
 ordering, and events still own the canonical runtime record.
 
-## Built-In Plugin Examples
+## Built-In Plugin Components
 
-Core plugin APIs register built-in components before lookup, validation, and
-initialization. Applications can still register custom plugins, but first-party
-components are available by kind without an explicit registration call.
+The core runtime registers the `observability`, `nemo_guardrails`, and
+`pricing` components before lookup, validation, and initialization. The CLI and
+the Python and Node.js bindings also register `adaptive` and `pii_redaction`.
+Direct Rust applications must register Adaptive and PII Redaction from their
+component crates before validating or initializing either kind:
+`nemo_relay_adaptive::plugin_component::register_adaptive_component()` and
+`nemo_relay_pii_redaction::component::register_pii_redaction_component()`.
+Applications can still register custom plugins.
 
 ### Adaptive
 
@@ -159,27 +164,29 @@ Adaptive is implemented as a built-in plugin component. It is not a separate
 runtime model. It uses the same plugin system as custom components.
 
 This matters conceptually because adaptive behavior is configured and activated
-through the same component lifecycle as other plugins:
+through the same component lifecycle as other plugins. Direct Rust applications
+follow this sequence:
 
-- Validate the config
-- Initialize the plugin system
-- Inspect the activation result if needed
+1. Call `nemo_relay_adaptive::plugin_component::register_adaptive_component()`.
+2. Validate the config.
+3. Initialize the plugin system.
+4. Inspect the activation result if needed.
 
 Detailed adaptive configuration belongs in
-[Adaptive Configuration](/adaptive-plugin/configuration),
-[Adaptive Cache Governor (ACG)](/adaptive-plugin/acg), and
-[Adaptive Hints](/adaptive-plugin/adaptive-hints).
+[Adaptive Configuration](/configure-plugins/adaptive/configuration),
+[Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg), and
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints).
 
 ### Observability
 
 The core crate ships a built-in `observability` plugin component for Agent
 Trajectory Observability Format (ATOF), Agent Trajectory Interchange Format
 (ATIF), OpenTelemetry, and OpenInference exporters. Each exporter section is
-disabled unless its section sets `enabled: true`, and subscriber names are
+disabled unless its section sets `enabled = true`, and subscriber names are
 inferred from the plugin namespace instead of exposed in public config.
 
 Detailed observability plugin configuration belongs in
-[Observability Configuration](/observability-plugin/configuration).
+[Observability Configuration](/configure-plugins/observability/configuration).
 
 ### NeMo Guardrails
 
@@ -194,10 +201,44 @@ The current shipped user-facing paths are:
   subprocess worker
 
 Detailed Guardrails plugin configuration belongs in
-[NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration).
+[NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration).
 
-For the CLI gateway's `plugins.toml` discovery, precedence, merge, and editing
-rules, see [Plugin Configuration Files](/build-plugins/plugin-configuration-files).
+### PII Redaction
+
+The `pii_redaction` component sanitizes emitted observability payloads without
+changing real callback arguments or results. The CLI and primary language
+bindings register this component. Direct Rust applications must call
+`nemo_relay_pii_redaction::component::register_pii_redaction_component()`
+before they validate or initialize a PII Redaction component.
+
+Configure actions, detectors, targets, and backend modes through [PII Redaction
+Configuration](/configure-plugins/pii-redaction/configuration).
+
+### Model Pricing
+
+The core crate ships a built-in `pricing` component. It loads catalog sources
+that response codecs can use to annotate managed LLM responses with cost
+estimates. Configure catalog sources through [Model Pricing](/configure-plugins/model-pricing).
+
+For `plugins.toml` discovery, precedence, merge, and gateway editing rules,
+refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+## Discoverable Plugins
+
+Discoverable plugins use the same component lifecycle, but the CLI reads a
+`relay-plugin.toml` manifest before it creates an internal component. The
+manifest identifies a Rust native shared library or a local `grpc-v1` worker,
+declares compatibility and capabilities, and supplies integrity evidence for
+the artifact.
+
+The operator keeps the manifest reference and component configuration in
+`plugins.toml`. Use `nemo-relay plugins validate <plugin-id>` to check the
+manifest, optional static schema, host policy, compatibility, and trust
+evidence before enabling or running a dynamic plugin. During startup, Relay
+loads the enabled adapter and then validates the synthesized component. Refer
+to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+for the operator workflow and [Discoverable Plugins](/build-plugins/dynamic-plugins/about)
+for the authoring model.
 
 ## Practical Guidance
 

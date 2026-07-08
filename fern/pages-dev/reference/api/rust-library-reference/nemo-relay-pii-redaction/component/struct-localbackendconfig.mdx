@@ -7,7 +7,7 @@ position: 3
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct LocalBackendConfig &#123;\n    pub backend: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub model_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub detector_profile: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub allow_network: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;,\n    pub max_latency_ms: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>&gt;,\n&#125;"}} /></pre>
 
@@ -75,11 +75,11 @@ Target latency budget hint for a future local-model backend.
 
 ### `impl EditorConfig for LocalBackendConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">EditorConfig</a> for <a href=\"struct-localbackendconfig\">LocalBackendConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl EditorConfig for <a href=\"struct-localbackendconfig\">LocalBackendConfig</a>"}} /></pre>
 
 #### `editor_schema`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../../nemo-relay/config_editor/trait-editorconfig\">editor_schema</a>() -&gt; &amp;'static <a href=\"../../nemo-relay/config_editor/struct-editorschema\">EditorSchema</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn editor_schema() -&gt; &amp;'static EditorSchema"}} /></pre>
 
 ### `impl Serialize for LocalBackendConfig`
 

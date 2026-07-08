@@ -1,0 +1,82 @@
+---
+title: "Type Alias Json"
+sidebar-title: "Json"
+description: "Type alias for `serde_json::Value`, used as the universal JSON representation throughout NeMo Relay APIs."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type Json = <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>;"}} /></pre>
+
+Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.
+
+## Aliased Type
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Json &#123;\n    Null,\n    Bool(<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>),\n    Number(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/number/struct.Number.html\">Number</a>),\n    String(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Array(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;),\n    Object(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;),\n&#125;"}} /></pre>
+
+## Variants
+
+### `Null`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Null"}} /></pre>
+
+Represents a JSON null value.
+
+```rust
+let v = json!(null);
+```
+
+### `Bool(bool)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Bool(<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>)"}} /></pre>
+
+Represents a JSON boolean.
+
+```rust
+let v = json!(true);
+```
+
+### `Number(Number)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Number(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/number/struct.Number.html\">Number</a>)"}} /></pre>
+
+Represents a JSON number, whether integer or floating point.
+
+```rust
+let v = json!(12.5);
+```
+
+### `String(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "String(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+Represents a JSON string.
+
+```rust
+let v = json!("a string");
+```
+
+### `Array(Vec<Value>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Array(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;)"}} /></pre>
+
+Represents a JSON array.
+
+```rust
+let v = json!(["an", "array"]);
+```
+
+### `Object(Map<String, Value>)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Object(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;)"}} /></pre>
+
+Represents a JSON object.
+
+By default the map is backed by a BTreeMap. Enable the `preserve_order` feature of serde_json to use IndexMap instead, which preserves entries in the order they are inserted into the map. In particular, this allows JSON data to be deserialized into a Value and serialized to a string while retaining the order of map keys in the input.
+
+```rust
+let v = json!({ "an": "object" });
+```

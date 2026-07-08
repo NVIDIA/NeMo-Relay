@@ -1,0 +1,38 @@
+---
+title: "Struct Scope Stack Binding"
+sidebar-title: "ScopeStackBinding"
+description: "Captured thread-local scope-stack binding."
+position: 28
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ScopeStackBinding<'a> { /* private fields */ }
+```
+
+Captured thread-local scope-stack binding.
+
+## Implementations
+
+### `impl<'a> ScopeStackBinding<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-scopestackbinding\">ScopeStackBinding</a>&lt;'a&gt;"}} /></pre>
+
+#### `restore`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn restore(self) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Restores and consumes this binding.
+
+## Trait Implementations
+
+### `impl Drop for ScopeStackBinding<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-scopestackbinding\">ScopeStackBinding</a>&lt;'_&gt;"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

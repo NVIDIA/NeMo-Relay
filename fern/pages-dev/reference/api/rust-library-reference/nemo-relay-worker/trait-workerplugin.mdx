@@ -1,0 +1,44 @@
+---
+title: "Trait Worker Plugin"
+sidebar-title: "WorkerPlugin"
+description: "Trait implemented by Rust out-of-process worker plugins."
+position: 16
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait WorkerPlugin:\n    <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>\n    + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>\n    + 'static &#123;\n    // Required methods\n    fn plugin_id(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>;\n    fn register(&amp;self, ctx: &amp;mut <a href=\"struct-plugincontext\">PluginContext</a>, config: &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;;\n&#8203;\n    // Provided methods\n    fn allows_multiple_components(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a> &#123; ... &#125;\n    fn validate(&amp;self, _config: &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-configdiagnostic\">ConfigDiagnostic</a>&gt; &#123; ... &#125;\n&#125;"}} /></pre>
+
+Trait implemented by Rust out-of-process worker plugins.
+
+## Required Methods
+
+#### `plugin_id`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn plugin_id(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+Stable plugin id/kind returned to the Relay host.
+
+#### `register`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn register(&amp;self, ctx: &amp;mut <a href=\"struct-plugincontext\">PluginContext</a>, config: &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers callbacks into the worker context.
+
+## Provided Methods
+
+#### `allows_multiple_components`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn allows_multiple_components(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Whether multiple configured components of this plugin kind are allowed.
+
+#### `validate`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn validate(&amp;self, _config: &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-configdiagnostic\">ConfigDiagnostic</a>&gt;"}} /></pre>
+
+Validates component config.
+
+## Implementors

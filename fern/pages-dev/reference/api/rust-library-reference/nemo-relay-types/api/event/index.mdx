@@ -1,0 +1,38 @@
+---
+title: "Module event"
+sidebar-title: "event"
+description: "Lifecycle event DTOs. Event types for Agent Trajectory Observability Format (ATOF) runtime events."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Lifecycle event DTOs. Event types for Agent Trajectory Observability Format (ATOF) runtime events.
+
+## Structs
+
+- [BaseEvent](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-baseevent): Shared event metadata carried by every ATOF event.
+- [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-categoryprofile): Category-specific profile data.
+- [DataSchema](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
+- [EventCategory](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-eventcategory): Semantic category carried by ATOF `category`.
+- [MarkEvent](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-markevent): ATOF point-in-time mark event.
+- [PendingMarkSpec](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-pendingmarkspec): Mark requested by middleware for materialization by a lifecycle owner.
+- [ScopeEvent](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-scopeevent): ATOF scope lifecycle event.
+
+## Enums
+
+- [Event](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
+- [ScopeCategory](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-scopecategory): Agent Trajectory Observability Format (ATOF) lifecycle phase for a scope event.
+
+## Constants
+
+- [ATOF_VERSION](/reference/api/rust-library-reference/nemo-relay-types/api/event/constant-atof-version): Agent Trajectory Observability Format (ATOF) protocol version emitted by this runtime.
+
+## Functions
+
+- [attributes_from_handle](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-attributes-from-handle): Convert handle bitflags into ATOF attributes.
+- [llm_attributes_to_strings](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-llm-attributes-to-strings): Convert LLM bitflags into ATOF attributes.
+- [scope_attributes_to_strings](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-scope-attributes-to-strings): Convert scope bitflags into ATOF attributes.
+- [tool_attributes_to_strings](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-tool-attributes-to-strings): Convert tool bitflags into ATOF attributes.

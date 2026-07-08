@@ -1,0 +1,18 @@
+---
+title: "Function serve_plugin_arc"
+sidebar-title: "serve_plugin_arc"
+description: "Serves a shared worker plugin using environment variables supplied by the Relay host."
+position: 18
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn serve_plugin_arc(plugin: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"trait-workerplugin\">WorkerPlugin</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Serves a shared worker plugin using environment variables supplied by the Relay host.
+
+## Errors
+
+Returns an error when required worker environment variables are missing or the gRPC server fails.

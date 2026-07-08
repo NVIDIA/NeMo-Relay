@@ -7,7 +7,7 @@ position: 15
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 ```rust
 #[repr(i32)]pub enum NemoRelayScopeType {
@@ -119,7 +119,7 @@ Unknown or unspecified scope type.
 
 ### `impl From<NemoRelayScopeType> for ScopeType`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>&gt; for ScopeType"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>&gt; for <a href=\"../../nemo-relay-types/api/scope/enum-scopetype\">ScopeType</a>"}} /></pre>
 
 #### `from`
 
@@ -127,11 +127,11 @@ Unknown or unspecified scope type.
 
 ### `impl From<ScopeType> for NemoRelayScopeType`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;ScopeType&gt; for <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"../../nemo-relay-types/api/scope/enum-scopetype\">ScopeType</a>&gt; for <a href=\"enum-nemorelayscopetype\">NemoRelayScopeType</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(v: ScopeType) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(v: <a href=\"../../nemo-relay-types/api/scope/enum-scopetype\">ScopeType</a>) -&gt; Self"}} /></pre>
 
 ### `impl Copy for NemoRelayScopeType`
 

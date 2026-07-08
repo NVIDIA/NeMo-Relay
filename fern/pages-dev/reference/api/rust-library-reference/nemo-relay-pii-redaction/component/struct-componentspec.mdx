@@ -7,7 +7,7 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ComponentSpec &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub config: <a href=\"struct-piiredactionconfig\">PiiRedactionConfig</a>,\n&#125;"}} /></pre>
 
@@ -59,7 +59,7 @@ Creates an enabled PII redaction component spec.
 
 ### `impl From<ComponentSpec> for PluginComponentSpec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"struct-componentspec\">ComponentSpec</a>&gt; for <a href=\"../../nemo-relay/plugin/struct-plugincomponentspec\">PluginComponentSpec</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"struct-componentspec\">ComponentSpec</a>&gt; for PluginComponentSpec"}} /></pre>
 
 #### `from`
 

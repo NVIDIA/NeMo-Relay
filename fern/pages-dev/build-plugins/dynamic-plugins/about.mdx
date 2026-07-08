@@ -1,0 +1,106 @@
+---
+title: "Discoverable Plugins"
+description: "Package Rust native libraries and local gRPC workers as discoverable NeMo Relay plugins."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use discoverable plugins when you need to package reusable behavior outside the
+Relay host binary. A package includes a `relay-plugin.toml` manifest and one of
+two execution lanes:
+
+| Lane | Use when | Stable boundary |
+| --- | --- | --- |
+| `rust_dynamic` | Behavior must run in the Relay process. | Native ABI v1 |
+| `worker` | Behavior should run in a separate local process. | `grpc-v1` |
+
+The manifest describes compatibility, capabilities, artifact integrity, and the
+load contract. Operators register the manifest reference and component
+configuration in `plugins.toml`, then enable the plugin through the CLI
+lifecycle. Keep the package contract separate from the operator workflow: refer
+operators to [Configure Discoverable
+Plugins](/configure-plugins/discoverable-plugins).
+
+## Manifest Contract
+
+Every manifest uses the common fields shown below, followed by lane-specific
+compatibility, capability, source, and load fields. This complete example
+defines a Python worker:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "acme.example"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+manifest_root = "."
+artifact = "acme_example/worker.py"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+runtime = "python"
+entrypoint = "acme_example.worker:main"
+```
+
+`compat.relay` is a normal SemVer requirement. Use `>=0.5,<1.0` unless your
+plugin requires a narrower Relay version. Keep `defaults.enabled = false`:
+operators must enable a registered dynamic plugin explicitly. Declare only the
+capabilities the plugin needs. Add `config_schema.path` only with the
+`config_schema` capability.
+
+The following requirements vary by execution lane:
+
+| Manifest area | Native dynamic plugin | Worker plugin |
+| --- | --- | --- |
+| `plugin.kind` | `rust_dynamic` | `worker` |
+| `compat` | `native_api = "1"` | `worker_protocol = "grpc-v1"` |
+| `capabilities.items` | Includes `plugin_native` | Includes `plugin_worker` |
+| `load` | `library` and `symbol` | `runtime` and `entrypoint` |
+| `source.manifest_root` | Optional | Required for `runtime = "python"`; `nemo-relay plugins add` uses it to create and retain the managed worker environment. |
+
+Use `runtime = "python"` for a `module:function` entrypoint, `runtime =
+"rust"` for a Rust executable, or `runtime = "command"` for another local
+executable that implements `grpc-v1`.
+
+The CLI verifies `source.artifact` against `integrity.sha256` during `plugins
+add` and `plugins validate`. After a native artifact or non-Python worker
+changes, update its digest and rerun validation. After Python worker source or
+dependency changes, remove and add the worker again so Relay rebuilds its
+managed environment. Native loading also verifies `load.library` against
+`integrity.sha256`. Add `integrity.signature` when an operator’s policy can
+require Ed25519 signature verification. Treat these fields as release
+artifacts: update the digest and signature whenever the declared artifact
+changes.
+
+## Choose a Discoverable Plugin Type
+
+Discoverable plugins always use a manifest. Choose the guide that matches the
+manifest-backed package you distribute:
+
+- **Native dynamic plugin (Rust):** Refer to [Native Dynamic Plugins (Rust)](/build-plugins/dynamic-plugins/native-dynamic/about)
+  for shared-library packages and the native ABI, then [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)
+  for the SDK example.
+- **gRPC worker plugin:** Refer to [gRPC Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about)
+  for runtime choices, lifecycle, and trust; [gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about)
+  or [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
+  for language-specific authoring; and [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
+  for the stable `grpc-v1` boundary.
+
+For the complete comparison of manifest-backed packages and in-process,
+code-driven language binding plugins, refer to [Build Plugins](/build-plugins).

@@ -7,7 +7,7 @@ position: 40
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
 ```rust
 pub struct AdaptiveRuntime { /* private fields */ }
@@ -77,7 +77,7 @@ This method performs a simple polling wait and is intended for tests, shutdown p
 
 #### `build_cache_request_facts`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_cache_request_facts(\n    &amp;self,\n    agent_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    provider: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    annotated_request: &amp;AnnotatedLlmRequest,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"acg/telemetry/struct-cacherequestfacts\">CacheRequestFacts</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_cache_request_facts(\n    &amp;self,\n    agent_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    provider: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    annotated_request: &amp;<a href=\"../nemo-relay-types/codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"acg/telemetry/struct-cacherequestfacts\">CacheRequestFacts</a>&gt;"}} /></pre>
 
 Build cache-diagnostics facts for an annotated request.
 

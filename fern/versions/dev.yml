@@ -22,30 +22,58 @@ navigation:
   title: Instrument Applications
   slug: instrument-applications
   title-source: frontmatter
-- folder: ../pages-dev/observability-plugin
-  title: Observability Plugin
-  slug: observability-plugin
-  title-source: frontmatter
-- folder: ../pages-dev/adaptive-plugin
-  title: Adaptive Plugin
-  slug: adaptive-plugin
-  title-source: frontmatter
-- folder: ../pages-dev/nemo-guardrails-plugin
-  title: NeMo Guardrails Plugin
-  slug: nemo-guardrails-plugin
-  title-source: frontmatter
-- folder: ../pages-dev/pii-redaction-plugin
-  title: PII Redaction Plugin
-  slug: pii-redaction-plugin
-  title-source: frontmatter
+- section: Configure Plugins
+  slug: configure-plugins
+  contents:
+  - page: About
+    path: ../pages-dev/configure-plugins/about.mdx
+    slug: about
+  - folder: ../pages-dev/configure-plugins/observability
+    title: Observability
+    title-source: frontmatter
+  - folder: ../pages-dev/configure-plugins/adaptive
+    title: Adaptive
+    title-source: frontmatter
+  - folder: ../pages-dev/configure-plugins/nemo-guardrails
+    title: NeMo Guardrails
+    title-source: frontmatter
+  - folder: ../pages-dev/configure-plugins/pii-redaction
+    title: PII Redaction
+    title-source: frontmatter
+  - page: Model Pricing
+    path: ../pages-dev/configure-plugins/model-pricing.mdx
+    slug: model-pricing
+  - page: Configure Discoverable Plugins
+    path: ../pages-dev/configure-plugins/discoverable-plugins.mdx
+    slug: discoverable-plugins
+  - page: Plugin Configuration Files
+    path: ../pages-dev/configure-plugins/plugin-configuration-files.mdx
+    slug: plugin-configuration-files
 - folder: ../pages-dev/integrate-into-frameworks
   title: Integrate into Frameworks
   slug: integrate-into-frameworks
   title-source: frontmatter
-- folder: ../pages-dev/build-plugins
-  title: Build Plugins
+- section: Build Plugins
   slug: build-plugins
-  title-source: frontmatter
+  contents:
+  - page: About
+    path: ../pages-dev/build-plugins/about.mdx
+    slug: about
+  - folder: ../pages-dev/build-plugins/language-binding
+    title: Language Binding
+    title-source: frontmatter
+  - section: Dynamic Plugins
+    slug: dynamic-plugins
+    contents:
+    - page: Discoverable Plugins
+      path: ../pages-dev/build-plugins/dynamic-plugins/about.mdx
+      slug: about
+    - folder: ../pages-dev/build-plugins/dynamic-plugins/native-dynamic
+      title: Native Dynamic
+      title-source: frontmatter
+    - folder: ../pages-dev/build-plugins/dynamic-plugins/grpc-worker
+      title: gRPC Worker
+      title-source: frontmatter
 - folder: ../pages-dev/contribute
   title: Contribute
   slug: contribute

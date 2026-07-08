@@ -7,9 +7,9 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi`.
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PluginOutput &#123;\n    pub translated_request: LlmRequest,\n    pub translation_report: <a href=\"../types/struct-translationreport\">TranslationReport</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PluginOutput &#123;\n    pub translated_request: <a href=\"../../../nemo-relay-types/api/llm/struct-llmrequest\">LlmRequest</a>,\n    pub translation_report: <a href=\"../types/struct-translationreport\">TranslationReport</a>,\n&#125;"}} /></pre>
 
 Output produced by a plugin after translation.
 

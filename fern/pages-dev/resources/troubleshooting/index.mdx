@@ -1,6 +1,6 @@
 ---
 title: "Troubleshooting Guide"
-description: ""
+description: "Troubleshoot NeMo Relay builds, bindings, instrumentation, and runtime behavior."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -108,7 +108,7 @@ Use [Middleware](/about-nemo-relay/concepts/middleware) to confirm when an execu
 
 Confirm that the subscriber is registered before the runtime emits the events you expect. For scope-local subscribers, confirm that the active scope is the owning scope or a descendant scope.
 
-Use [Subscribers](/about-nemo-relay/concepts/subscribers), [Events](/about-nemo-relay/concepts/events), and [Observability](/observability-plugin/about) to verify lifecycle timing and event names.
+Use [Subscribers](/about-nemo-relay/concepts/subscribers), [Events](/about-nemo-relay/concepts/events), and [Observability](/configure-plugins/observability/about) to verify lifecycle timing and event names.
 
 ## Events Are Missing Expected Fields
 
@@ -123,8 +123,8 @@ exporter subscribed after the relevant events were emitted, or the export
 filter does not match the active `root_uuid`. Mixed trajectories usually mean
 multiple agents share a root scope or the export did not filter by root scope.
 
-Use [Agent Trajectory Interchange Format (ATIF)](/observability-plugin/atif)
-and [Observability](/observability-plugin/about) to confirm exporter
+Use [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif)
+and [Observability](/configure-plugins/observability/about) to confirm exporter
 setup, event collection timing, and root-scope filtering.
 
 ## LLM Stream Output Is Missing The Final Chunk
@@ -143,7 +143,7 @@ Use [Non-Serializable Data](/integrate-into-frameworks/non-serializable-data), [
 
 If a plugin fails before runtime execution, validate configuration separately from behavior registration. Check required fields, value types, defaults, and whether the plugin is reading configuration from the expected source.
 
-Use [Validate Plugin Configuration](/build-plugins/validate-configuration), [Design Plugin Configuration](/build-plugins/advanced-configuration), and [Register Plugin Behavior](/build-plugins/register-behavior) to isolate configuration problems from runtime behavior problems.
+Use [Validate Plugin Configuration](/build-plugins/language-binding/validate-configuration), [Design Plugin Configuration](/build-plugins/language-binding/advanced-configuration), and [Register Plugin Behavior](/build-plugins/language-binding/register-behavior) to isolate configuration problems from runtime behavior problems.
 
 ## Adaptive Tuning Does Not Change Behavior
 
@@ -152,9 +152,9 @@ the runtime path actually reaches that component. If behavior does not change,
 check whether the configured policy is disabled, scoped too narrowly, or not
 connected to the call path under test.
 
-Use [Adaptive Configuration](/adaptive-plugin/configuration),
-[Adaptive Cache Governor (ACG)](/adaptive-plugin/acg), and
-[Adaptive Hints](/adaptive-plugin/adaptive-hints) to verify component
+Use [Adaptive Configuration](/configure-plugins/adaptive/configuration),
+[Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg), and
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints) to verify component
 names and configuration scope.
 
 ## Framework Integration Behaves Differently From Core APIs
