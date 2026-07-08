@@ -248,6 +248,14 @@ fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
     .unwrap();
     assert_eq!(otlp.mark_projection, MarkProjection::Tool);
 
+    let event: OtlpSectionConfig = serde_json::from_value(json!({
+        "mark_projection": "event",
+        "mark_exclude_names": []
+    }))
+    .unwrap();
+    assert_eq!(event.mark_projection, MarkProjection::Event);
+    assert!(event.mark_exclude_names.is_empty());
+
     let custom_exclusions: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool",
         "mark_exclude_names": ["notification", "hook_mark"]

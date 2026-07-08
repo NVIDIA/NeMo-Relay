@@ -101,6 +101,26 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	}
 }
 
+func TestObservabilityOtlpConfigPreservesExplicitEmptyMarkExclusions(t *testing.T) {
+	inherited, err := json.Marshal(ObservabilityOtlpConfig{})
+	if err != nil {
+		t.Fatalf("marshal zero-value OTLP config failed: %v", err)
+	}
+	if strings.Contains(string(inherited), `"mark_exclude_names"`) {
+		t.Fatalf("nil exclusions should inherit the core default: %s", inherited)
+	}
+
+	config := NewObservabilityOtlpConfig()
+	config.MarkExcludeNames = []string{}
+	explicitEmpty, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal OTLP config with empty exclusions failed: %v", err)
+	}
+	if !strings.Contains(string(explicitEmpty), `"mark_exclude_names":[]`) {
+		t.Fatalf("explicit empty exclusions should be preserved: %s", explicitEmpty)
+	}
+}
+
 func assertS3StorageConfig(t *testing.T, storage ObservabilityS3StorageConfig) {
 	t.Helper()
 	if storage.Bucket != "archive" ||

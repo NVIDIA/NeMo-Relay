@@ -154,6 +154,30 @@ type ObservabilityOtlpConfig struct {
 	TimeoutMillis        uint64                      `json:"timeout_millis,omitempty"`
 }
 
+// MarshalJSON preserves the distinction between a nil exclusion list, which
+// inherits the core default, and an explicitly empty list, which disables all
+// default exclusions.
+func (config ObservabilityOtlpConfig) MarshalJSON() ([]byte, error) {
+	type alias ObservabilityOtlpConfig
+	payload, err := json.Marshal(alias(config))
+	if err != nil {
+		return nil, err
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil {
+		return nil, err
+	}
+	if config.MarkExcludeNames != nil {
+		exclusions, err := json.Marshal(config.MarkExcludeNames)
+		if err != nil {
+			return nil, err
+		}
+		object["mark_exclude_names"] = exclusions
+	}
+	return json.Marshal(object)
+}
+
 // ObservabilityComponentSpec wraps one observability config as a top-level plugin component.
 type ObservabilityComponentSpec struct {
 	Enabled bool                `json:"enabled,omitempty"`
