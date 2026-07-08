@@ -126,9 +126,43 @@ fn empty_annotated_response() -> AnnotatedLlmResponse {
         tool_calls: None,
         finish_reason: None,
         usage: None,
+        optimization_summary: None,
         api_specific: None,
         extra: serde_json::Map::new(),
     }
+}
+
+#[test]
+fn optimization_summary_emits_namespaced_openinference_attributes() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"complete",
+            "baseline_model":{"model":"baseline"}, "effective_model":{"model":"effective"},
+            "tokens_saved":{"prompt_tokens":12,"total_tokens":12},
+            "baseline_cost":{"total":0.02,"currency":"USD","source":"model_pricing","pricing_as_of":"2026-07-08","pricing_source":"test"},
+            "actual_cost":{"total":0.01,"currency":"USD","source":"model_pricing"},
+            "estimated_cost_saved":0.01, "currency":"USD", "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.effective_model"],
+        "effective"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.total_tokens_saved"],
+        "12"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_cost"],
+        "0.01"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_source"],
+        "test"
+    );
 }
 
 fn install_test_pricing(model_id: &str) {
@@ -2939,6 +2973,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
                         cache_write_tokens: Some(10),
                         cost: None,
                     }),
+                    optimization_summary: None,
                     api_specific: None,
                     extra: serde_json::Map::new(),
                 }))
@@ -3909,6 +3944,7 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
                         cache_write_tokens: None,
                         cost: None,
                     }),
+                    optimization_summary: None,
                     api_specific: None,
                     extra: serde_json::Map::new(),
                 }))

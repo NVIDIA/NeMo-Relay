@@ -162,7 +162,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     )
     .unwrap();
 
-    let (request_without_codec, annotated_without_codec, pending_marks_without_codec) =
+    let (request_without_codec, annotated_without_codec, pending_marks_without_codec, _) =
         run_request_intercepts_with_codec(
             "shared",
             LlmRequest {
@@ -199,7 +199,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     .unwrap();
 
     let codec: Arc<dyn LlmCodec> = Arc::new(SharedTestCodec);
-    let (request_with_codec, annotated_with_codec, pending_marks_with_codec) =
+    let (request_with_codec, annotated_with_codec, pending_marks_with_codec, _) =
         run_request_intercepts_with_codec(
             "shared",
             LlmRequest {
@@ -269,7 +269,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     )
     .unwrap();
 
-    let (request, _, _) = run_request_intercepts_with_codec(
+    let (request, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),
@@ -296,7 +296,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
             .build(),
     )
     .unwrap();
-    let (request_with_codec, _, _) = run_request_intercepts_with_codec(
+    let (request_with_codec, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),
@@ -333,7 +333,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     )
     .unwrap();
 
-    let (request, _, _) = run_request_intercepts_with_codec(
+    let (request, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),
@@ -375,7 +375,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
             .build(),
     )
     .unwrap();
-    let (request, _, _) = run_request_intercepts_with_codec(
+    let (request, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),

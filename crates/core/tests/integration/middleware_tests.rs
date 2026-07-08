@@ -22,6 +22,7 @@ use nemo_relay::api::llm::{
     llm_stream_call_execute,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::optimization::record_llm_optimization_contribution;
 use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
@@ -54,6 +55,10 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{
     ToolExecutionInterceptOutcome, tool_call, tool_call_end, tool_call_execute,
     tool_conditional_execution, tool_request_intercepts,
+};
+use nemo_relay::codec::optimization::{
+    LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
+    LlmOptimizationTokens,
 };
 use nemo_relay::error::FlowError;
 #[cfg(all(feature = "otel", feature = "openinference"))]
@@ -2370,7 +2375,6 @@ fn test_llm_request_intercept_registry_mutations_apply_to_later_calls() {
         }),
     )
     .unwrap();
-
     let request = llm_request_intercepts(
         "llm",
         LlmRequest {
@@ -3422,6 +3426,118 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
     deregister_llm_request_intercept("pending_managed").unwrap();
     deregister_mark_sanitize_guardrail("llm_pending_mark_sanitizer").unwrap();
     deregister_subscriber("pending_mark_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "optimization_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    register_llm_request_intercept(
+        "optimization_contributor",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            let mut contribution =
+                LlmOptimizationContribution::new("test.optimizer", "test_custom_kind");
+            contribution.token_impact = Some(LlmOptimizationTokenImpact {
+                saved: Some(LlmOptimizationTokens::saved_prompt(12)),
+                quality: Some(LlmOptimizationEvidenceQuality::Estimated),
+                estimation_method: Some("test-counter".to_string()),
+                ..LlmOptimizationTokenImpact::default()
+            });
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_optimization_contribution(contribution))
+        }),
+    )
+    .unwrap();
+    register_llm_execution_intercept(
+        "optimization_execution_contributor",
+        1,
+        Arc::new(|_name, request, next| {
+            Box::pin(async move {
+                let contribution =
+                    LlmOptimizationContribution::new("test.execution", "test_execution_kind");
+                assert!(record_llm_optimization_contribution(contribution));
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("optimized-managed-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async { Ok(json!({"response": "done"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let start = captured
+        .iter()
+        .find(|event| {
+            event.name() == "optimized-managed-llm"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    let marks = captured
+        .iter()
+        .filter(|event| event.name() == "nemo_relay.llm.optimization")
+        .collect::<Vec<_>>();
+    assert_eq!(marks.len(), 2);
+    assert!(
+        marks
+            .iter()
+            .all(|mark| mark.parent_uuid() == Some(start.uuid()))
+    );
+    assert!(marks.iter().all(|mark| {
+        mark.data_schema().unwrap().name == "nemo.relay.llm_optimization_contribution"
+    }));
+    assert_eq!(
+        marks[0].data().unwrap()["token_impact"]["saved"]["prompt_tokens"],
+        12
+    );
+    assert_eq!(marks[0].data().unwrap()["sequence"], 0);
+    assert_eq!(marks[1].data().unwrap()["sequence"], 1);
+
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "optimized-managed-llm"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    let summary = end
+        .annotated_response()
+        .unwrap()
+        .optimization_summary
+        .as_ref()
+        .unwrap();
+    assert_eq!(summary.tokens_saved.prompt_tokens, Some(12));
+    assert_eq!(summary.contributions.len(), 2);
+    assert_eq!(summary.contributions[0].producer, "test.optimizer");
+    assert_eq!(summary.contributions[1].producer, "test.execution");
+
+    deregister_llm_request_intercept("optimization_contributor").unwrap();
+    deregister_llm_execution_intercept("optimization_execution_contributor").unwrap();
+    deregister_subscriber("optimization_observer").unwrap();
 }
 
 #[tokio::test]

@@ -1181,6 +1181,7 @@ impl LlmResponseCodec for MockResponseCodec {
                 cache_write_tokens: None,
                 cost: None,
             }),
+            optimization_summary: None,
             api_specific: None,
             extra: serde_json::Map::new(),
         })

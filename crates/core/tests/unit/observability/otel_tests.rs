@@ -45,9 +45,43 @@ fn empty_annotated_response() -> AnnotatedLlmResponse {
         tool_calls: None,
         finish_reason: None,
         usage: None,
+        optimization_summary: None,
         api_specific: None,
         extra: serde_json::Map::new(),
     }
+}
+
+#[test]
+fn optimization_summary_emits_namespaced_otel_attributes() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"complete",
+            "baseline_model":{"model":"baseline"}, "effective_model":{"model":"effective"},
+            "tokens_saved":{"prompt_tokens":12,"total_tokens":12},
+            "baseline_cost":{"total":0.02,"currency":"USD","source":"model_pricing","pricing_as_of":"2026-07-08","pricing_source":"test"},
+            "actual_cost":{"total":0.01,"currency":"USD","source":"model_pricing"},
+            "estimated_cost_saved":0.01, "currency":"USD", "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_model"],
+        "baseline"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.prompt_tokens_saved"],
+        "12"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.estimated_cost_saved"],
+        "0.01"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_as_of"],
+        "2026-07-08"
+    );
 }
 
 fn install_test_pricing(model_id: &str) {

@@ -26,6 +26,7 @@ use tokio_stream::StreamExt;
 use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -302,6 +303,8 @@ pub fn wrap_js_llm_request_intercept_fn(
                 annotated: Option<AnnotatedLlmRequest>,
                 #[serde(default)]
                 pending_marks: Vec<JsPendingMarkSpec>,
+                #[serde(default)]
+                optimization_contributions: Vec<LlmOptimizationContribution>,
             }
             let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
                 FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
@@ -310,6 +313,7 @@ pub fn wrap_js_llm_request_intercept_fn(
                 request: outcome.request,
                 annotated_request: outcome.annotated,
                 pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+                optimization_contributions: outcome.optimization_contributions,
             })
         },
     )

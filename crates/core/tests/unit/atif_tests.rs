@@ -108,6 +108,7 @@ fn annotated_response_with_usage(model: &str, usage: Usage) -> AnnotatedLlmRespo
         tool_calls: None,
         finish_reason: None,
         usage: Some(usage),
+        optimization_summary: None,
         api_specific: None,
         extra: serde_json::Map::new(),
     }
@@ -1493,6 +1494,68 @@ fn test_final_metrics_preserve_explicit_zero_cost_without_fabricating_tokens() {
     assert_eq!(final_metrics.total_completion_tokens, None);
     assert_eq!(final_metrics.total_cached_tokens, None);
     assert_eq!(final_metrics.total_cost_usd, Some(0.0));
+}
+
+#[test]
+fn test_optimization_summary_projects_to_step_and_final_metrics() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version": "1",
+            "calculation_version": "1",
+            "status": "complete",
+            "baseline_model": {"model": "baseline"},
+            "effective_model": {"model": "effective"},
+            "tokens_saved": {"prompt_tokens": 12, "total_tokens": 12},
+            "baseline_cost": {"total": 0.02, "currency": "USD", "source": "model_pricing", "pricing_as_of": "2026-07-08", "pricing_source": "test"},
+            "actual_cost": {"total": 0.01, "currency": "USD", "source": "model_pricing", "pricing_as_of": "2026-07-08", "pricing_source": "test"},
+            "estimated_cost_saved": 0.01,
+            "currency": "USD",
+            "contributions": []
+        }))
+        .unwrap();
+    let mut response = annotated_response_with_usage(
+        "effective",
+        Usage {
+            prompt_tokens: Some(8),
+            ..Usage::default()
+        },
+    );
+    response.optimization_summary = Some(summary);
+
+    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    assert_eq!(
+        metrics
+            .extra
+            .as_ref()
+            .unwrap()
+            .pointer("/nemo_relay/optimization/tokens_saved/prompt_tokens"),
+        Some(&json!(12))
+    );
+    let final_metrics = compute_final_metrics(&[AtifStep {
+        step_id: 1,
+        source: "agent".to_string(),
+        message: json!("done"),
+        timestamp: None,
+        model_name: Some("effective".to_string()),
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: Some(metrics),
+        llm_call_count: Some(1),
+        is_copied_context: None,
+        extra: None,
+    }])
+    .unwrap();
+    let optimization = final_metrics
+        .extra
+        .as_ref()
+        .unwrap()
+        .pointer("/nemo_relay/optimization")
+        .unwrap();
+    assert_eq!(optimization["prompt_tokens_saved"], 12);
+    assert_eq!(optimization["total_tokens_saved"], 12);
+    assert_eq!(optimization["estimated_cost_saved_usd"], 0.01);
 }
 
 #[test]

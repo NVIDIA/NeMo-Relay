@@ -2955,7 +2955,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
 #[napi(
-    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions: Json[] }>"
 )]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
@@ -2971,6 +2971,7 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
                                 "request": r.request,
                                 "annotated": r.annotated_request,
                                 "pendingMarks": callable::js_pending_marks(r.pending_marks),
+                                "optimizationContributions": r.optimization_contributions,
                             })
                         })
                         .map_err(to_napi_err)

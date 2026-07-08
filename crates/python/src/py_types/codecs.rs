@@ -539,6 +539,7 @@ impl PyAnnotatedLLMResponse {
                 tool_calls: optional_py_json(tool_calls, "tool_calls")?,
                 finish_reason: optional_finish_reason(finish_reason)?,
                 usage: optional_py_json(usage, "usage")?,
+                optimization_summary: None,
                 api_specific: optional_py_json(api_specific, "api_specific")?,
                 extra: optional_py_json(extra, "extra")?.unwrap_or_default(),
             },

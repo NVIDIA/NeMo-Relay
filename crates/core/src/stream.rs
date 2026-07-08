@@ -33,6 +33,8 @@ use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::LlmHandle;
+use crate::api::llm::emit_optimization_marks;
+use crate::api::optimization::finalize_optimization_summary;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{EventSubscriberFn, ScopeStackHandle, current_scope_stack};
@@ -208,15 +210,29 @@ impl LlmStreamWrapper {
         } else {
             Some(sanitized)
         };
-        let annotated_response: Option<Arc<AnnotatedLlmResponse>> = self
-            .response_codec
-            .as_ref()
-            .and_then(|codec| {
+        let mut annotated_response: Option<AnnotatedLlmResponse> =
+            self.response_codec.as_ref().and_then(|codec| {
                 let mut decoded = codec.decode_response(data.as_ref()?).ok()?;
                 attach_estimated_cost_for_provider(&mut decoded, Some(&self.handle.name));
                 Some(decoded)
-            })
-            .map(Arc::new);
+            });
+        let _ = emit_optimization_marks(&self.handle, &self.subscribers);
+        let pricing = crate::codec::response::active_pricing_resolver();
+        let summary = finalize_optimization_summary(
+            &self.handle.optimization_recorder,
+            annotated_response.as_mut(),
+            self.handle.model_name.as_deref(),
+            &pricing,
+        );
+        if annotated_response.is_none()
+            && let Some(summary) = summary
+        {
+            annotated_response = Some(AnnotatedLlmResponse {
+                optimization_summary: Some(summary),
+                ..AnnotatedLlmResponse::default()
+            });
+        }
+        let annotated_response = annotated_response.map(Arc::new);
         let event_snapshot = {
             let ctx = global_context();
             let state = ctx.read();

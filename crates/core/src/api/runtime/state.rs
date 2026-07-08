@@ -1137,6 +1137,7 @@ impl NemoRelayContextState {
         let mut request_value = request;
         let mut annotated_value = annotated;
         let mut pending_marks = Vec::new();
+        let mut optimization_contributions = Vec::new();
         for entry in entries {
             let input_content = request_value.content.clone();
             let outcome = (entry.payload.callable)(name, request_value, annotated_value)?;
@@ -1155,6 +1156,7 @@ impl NemoRelayContextState {
             request_value = outcome.request;
             annotated_value = outcome.annotated_request;
             pending_marks.extend(outcome.pending_marks);
+            optimization_contributions.extend(outcome.optimization_contributions);
             if entry.payload.break_chain {
                 break;
             }
@@ -1163,6 +1165,7 @@ impl NemoRelayContextState {
             request: request_value,
             annotated_request: annotated_value,
             pending_marks,
+            optimization_contributions,
         })
     }
 

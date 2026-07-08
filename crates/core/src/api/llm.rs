@@ -9,7 +9,12 @@ use serde_json::json;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
+use crate::api::event::{
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, MarkEvent, PendingMarkSpec,
+};
+use crate::api::optimization::{
+    LlmOptimizationRecorder, finalize_optimization_summary, scope_llm_optimization_recorder,
+};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -65,6 +70,10 @@ pub struct LlmHandle {
     /// Optional normalized model name for observability.
     #[builder(default, setter(into))]
     pub model_name: Option<String>,
+    /// Bounded, in-memory optimization evidence recorder for this call.
+    #[serde(skip, default)]
+    #[builder(default)]
+    pub optimization_recorder: LlmOptimizationRecorder,
 }
 
 /// Builder parameters for [`NemoRelayContextState::create_llm_handle`].
@@ -356,6 +365,42 @@ fn emit_pending_request_marks(
     Ok(())
 }
 
+pub(crate) fn emit_optimization_marks(
+    handle: &LlmHandle,
+    subscribers: &[EventSubscriberFn],
+) -> Result<()> {
+    let contributions = handle.optimization_recorder.take_unemitted();
+    if contributions.is_empty() {
+        return Ok(());
+    }
+    ensure_runtime_owner()?;
+    for contribution in contributions {
+        let offset = contribution.sequence.unwrap_or(0).saturating_add(2);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let data = serde_json::to_value(&contribution).unwrap_or(Json::Null);
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("nemo_relay.llm.optimization")
+                .parent_uuid(handle.uuid)
+                .timestamp(handle.started_at + TimeDelta::microseconds(offset))
+                .data(data)
+                .data_schema(DataSchema {
+                    name: "nemo.relay.llm_optimization_contribution".to_string(),
+                    version: "1".to_string(),
+                })
+                .build(),
+            Some(EventCategory::custom()),
+            Some(
+                CategoryProfile::builder()
+                    .subtype("nemo_relay.llm.optimization")
+                    .build(),
+            ),
+        ));
+        NemoRelayContextState::emit_event(&event, subscribers);
+    }
+    Ok(())
+}
+
 /// Start a manual LLM lifecycle span.
 ///
 /// This emits an LLM-start event after applying sanitize-request guardrails to
@@ -490,15 +535,15 @@ fn llm_call_end_with_behavior(
         Some(sanitized_response)
     };
     let mut decode_error = None;
-    let annotated_response = match annotated_response {
-        Some(annotated_response) => Some(annotated_response),
+    let mut annotated_response = match annotated_response {
+        Some(annotated_response) => Some((*annotated_response).clone()),
         None => match (response_codec.as_ref(), data.as_ref()) {
             (Some(codec), Some(response)) => match codec.decode_response(response) {
                 Ok(mut decoded) => {
                     if behavior.attach_estimated_cost {
                         attach_estimated_cost_for_provider(&mut decoded, Some(&handle.name));
                     }
-                    Some(Arc::new(decoded))
+                    Some(decoded)
                 }
                 Err(error) => {
                     decode_error = Some(error);
@@ -508,6 +553,23 @@ fn llm_call_end_with_behavior(
             _ => None,
         },
     };
+    emit_optimization_marks(handle, &subscribers)?;
+    let pricing = crate::codec::response::active_pricing_resolver();
+    let summary = finalize_optimization_summary(
+        &handle.optimization_recorder,
+        annotated_response.as_mut(),
+        handle.model_name.as_deref(),
+        &pricing,
+    );
+    if annotated_response.is_none()
+        && let Some(summary) = summary
+    {
+        annotated_response = Some(AnnotatedLlmResponse {
+            optimization_summary: Some(summary),
+            ..AnnotatedLlmResponse::default()
+        });
+    }
+    let annotated_response = annotated_response.map(Arc::new);
     let event = {
         let context = global_context();
         let state = context
@@ -542,20 +604,35 @@ fn emit_llm_end_without_output(
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
-    let (event, subscribers) = {
+    let subscribers = {
         let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = match lifecycle_subscribers {
+        match lifecycle_subscribers {
             Some(subscribers) => subscribers.to_vec(),
             None => snapshot_event_subscribers(scope_subscribers)?,
-        };
+        }
+    };
+    emit_optimization_marks(handle, &subscribers)?;
+    let pricing = crate::codec::response::active_pricing_resolver();
+    let annotated_response = finalize_optimization_summary(
+        &handle.optimization_recorder,
+        None,
+        handle.model_name.as_deref(),
+        &pricing,
+    )
+    .map(|summary| {
+        Arc::new(AnnotatedLlmResponse {
+            optimization_summary: Some(summary),
+            ..AnnotatedLlmResponse::default()
+        })
+    });
+    let event = {
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let event = state.end_llm_handle(handle, handle.data.clone(), metadata, None);
-        (event, subscribers)
+        state.end_llm_handle(handle, handle.data.clone(), metadata, annotated_response)
     };
     if let Some(event) = sanitize_event(event) {
         NemoRelayContextState::emit_event(&event, &subscribers);
@@ -661,7 +738,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
-    let (intercepted_request, annotated_request, pending_marks) =
+    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
     let handle = create_llm_handle(
@@ -687,6 +764,10 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         &lifecycle_subscribers,
     )?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
+    handle
+        .optimization_recorder
+        .record_all(optimization_contributions);
+    emit_optimization_marks(&handle, &lifecycle_subscribers)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -700,7 +781,12 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         state.llm_build_execution_chain(&name, func, &scope_locals)
     };
 
-    match execution(intercepted_request).await {
+    match scope_llm_optimization_recorder(
+        handle.optimization_recorder.clone(),
+        execution(intercepted_request),
+    )
+    .await
+    {
         Ok(response) => {
             llm_call_end_with_behavior(
                 LlmCallEndParams::builder()
@@ -826,7 +912,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
-    let (intercepted_request, annotated_request, pending_marks) =
+    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         run_request_intercepts_with_codec(&name, request, codec)?;
 
     let handle = create_llm_handle(
@@ -852,6 +938,10 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         &lifecycle_subscribers,
     )?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers)?;
+    handle
+        .optimization_recorder
+        .record_all(optimization_contributions);
+    emit_optimization_marks(&handle, &lifecycle_subscribers)?;
 
     let execution = {
         let scope_stack = current_scope_stack();
@@ -866,7 +956,12 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         state.llm_stream_build_execution_chain(&name, func, &scope_locals)
     };
 
-    match execution(intercepted_request).await {
+    match scope_llm_optimization_recorder(
+        handle.optimization_recorder.clone(),
+        execution(intercepted_request),
+    )
+    .await
+    {
         Ok(raw_stream) => {
             let wrapper = LlmStreamWrapper::new_managed(
                 raw_stream,

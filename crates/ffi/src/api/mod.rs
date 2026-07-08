@@ -308,6 +308,7 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
         request: unsafe { &*request }.0.clone(),
         annotated_request,
         pending_marks,
+        optimization_contributions: Vec::new(),
     };
     match serde_json::to_value(outcome) {
         Ok(value) => {
