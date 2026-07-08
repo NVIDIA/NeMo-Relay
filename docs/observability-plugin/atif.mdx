@@ -183,6 +183,12 @@ per-destination sink failures are isolated to the failed sink.
 The exporter translates NeMo Relay lifecycle events into ATIF v1.7 trajectory
 data. LLM start and end events become model steps, tool events become tool
 calls and observations, and scope nesting contributes lineage metadata.
+Point-in-time mark events become `system` steps: the step `message` is the
+mark's hook event name when present, otherwise the mark name, and the mark
+payload, metadata, semantic category, and subtype are preserved under
+`extra.event_payload`, `extra.event_metadata`, `extra.event_category`, and
+`extra.event_subtype`. A mark is recorded whenever it carries a payload,
+metadata, or a category, so a mark stays discoverable even without a payload.
 Nested agent scopes are embedded in the parent file as `subagent_trajectories`
 and referenced from parent observation results with
 `subagent_trajectory_ref.trajectory_id`. The reference points to the embedded

@@ -22,7 +22,7 @@
 //! | LLM End         | `agent` step            | Response content, tool_calls promoted|
 //! | Tool Start      | *(skipped)*             | tool_calls come from LLM End instead |
 //! | Tool End        | agent observation         | Correlated by `source_call_id`       |
-//! | Mark (with data)| `system` step           | Custom event data preserved          |
+//! | Mark            | `system` step           | Name, payload, metadata, category, subtype preserved in `extra` |
 //! | Scope Start/End | *(skipped)*             | Structural events, not trajectory    |
 //!
 //! The exporter serializes the full collected event stream into a single ATIF
@@ -276,6 +276,15 @@ pub struct AtifStepExtra {
     /// Full raw point-in-time event payload for mark/system steps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_payload: Option<Json>,
+    /// Raw point-in-time event metadata for mark/system steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_metadata: Option<Json>,
+    /// Semantic ATOF category for mark/system steps, when the mark carries one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_category: Option<String>,
+    /// Vendor subtype for mark/system steps, from the mark category profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_subtype: Option<String>,
     /// Per-tool callable lineage, aligned with `tool_calls`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_ancestry: Vec<AtifAncestry>,
@@ -1888,6 +1897,9 @@ impl PendingAgentStep {
             llm_request: None,
             llm_response: self.llm_response.take(),
             event_payload: None,
+            event_metadata: None,
+            event_category: None,
+            event_subtype: None,
             tool_ancestry: std::mem::take(&mut self.tool_ancestry),
             tool_invocations: if self.tool_invocations.is_empty() {
                 None
@@ -2244,6 +2256,9 @@ impl StepConversionState {
             llm_request: Some(content.clone()),
             llm_response: None,
             event_payload: None,
+            event_metadata: None,
+            event_category: None,
+            event_subtype: None,
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
@@ -2592,10 +2607,16 @@ impl StepConversionState {
             return;
         }
         self.flush_observations();
-        let Some(data) = mark.data() else {
-            return;
-        };
-        if is_empty_mark_payload(data) {
+        let payload = mark
+            .data()
+            .filter(|data| !is_empty_mark_payload(data))
+            .cloned();
+        let metadata = mark.metadata();
+        let category = mark.category();
+        // Preserve any mark that carries inspectable content: a payload,
+        // metadata, or a semantic category. Marks with none of these are runtime
+        // noise (for example empty checkpoints) and stay skipped.
+        if payload.is_none() && metadata.is_none() && category.is_none() {
             return;
         }
         let extra = AtifStepExtra {
@@ -2609,14 +2630,19 @@ impl StepConversionState {
             }),
             llm_request: None,
             llm_response: None,
-            event_payload: Some(data.clone()),
+            event_payload: payload,
+            event_metadata: metadata.cloned(),
+            event_category: category.map(|category| category.as_str().to_string()),
+            event_subtype: mark
+                .category_profile()
+                .and_then(|profile| profile.subtype.clone()),
             tool_ancestry: Vec::new(),
             tool_invocations: None,
         };
         self.steps.push(AtifStep {
             step_id: 0,
             source: "system".to_string(),
-            message: mark_message(mark, data),
+            message: mark_message(mark),
             timestamp: Some(mark.timestamp().to_rfc3339()),
             model_name: None,
             reasoning_effort: None,
@@ -3352,7 +3378,7 @@ fn events_to_steps_for_agent(
 ///      step with multiple results
 /// 4. Tool End observation results are correlated with the preceding LLM End's
 ///    promoted tool_calls by function name → `source_call_id`.
-/// 5. Mark events → system steps if they carry data.
+/// 5. Mark events → system steps when they carry a payload, metadata, or category.
 /// 6. Scope Start/End → skipped.
 fn events_to_steps(events: &[&Event]) -> Vec<AtifStep> {
     let mut sorted: Vec<&Event> = events.to_vec();
@@ -3384,8 +3410,9 @@ fn is_llm_chunk_mark(mark: &Event) -> bool {
 // A runtime mark is point-in-time telemetry rather than a scoped call with start/end events. Agent
 // hook adapters use marks for lifecycle notifications that do not map to first-class ATIF step
 // types, for example hook-only status updates or synthetic fallback events. The ATIF step message
-// stays schema-compatible while the original payload is preserved in `Step.extra.event_payload`.
-fn mark_message(mark: &Event, _data: &Json) -> Json {
+// stays schema-compatible while the original payload, metadata, category, and subtype are
+// preserved in `Step.extra` (`event_payload`, `event_metadata`, `event_category`, `event_subtype`).
+fn mark_message(mark: &Event) -> Json {
     Json::String(mark_hook_event_name(mark).unwrap_or_default())
 }
 

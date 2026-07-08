@@ -2671,6 +2671,45 @@ fn test_exporter_mark_steps_include_hook_name_and_ancestry() {
 }
 
 #[test]
+fn test_exporter_preserves_metadata_only_mark() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let agent_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+
+    let agent_start = event_builder(agent_uuid, EventType::Start)
+        .name("agent")
+        .scope_type(ScopeType::Agent)
+        .build();
+    // A payload-less mark that still carries metadata must be preserved rather
+    // than dropped as empty noise.
+    let mark = event_builder(mark_uuid, EventType::Mark)
+        .name("status-note")
+        .parent_uuid(agent_uuid)
+        .metadata(json!({"hook_event_name": "Notification", "detail": "waiting"}))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(agent_start);
+        state.events.push(mark);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "system")
+        .expect("metadata-only mark should produce a system step");
+    assert_eq!(step.message, json!("Notification"));
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert!(extra.event_payload.is_none());
+    assert_eq!(
+        extra.event_metadata,
+        Some(json!({"hook_event_name": "Notification", "detail": "waiting"}))
+    );
+}
+
+#[test]
 fn test_exporter_embeds_nested_subagent_trajectory() {
     let root_uuid = Uuid::now_v7();
     let child_uuid = Uuid::now_v7();

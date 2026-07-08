@@ -645,6 +645,21 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
         "nemo_relay.mark.metadata_json",
         event.metadata(),
     );
+    if let Some(category) = event.category() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.mark.category",
+            category.as_str().to_string(),
+        ));
+    }
+    if let Some(subtype) = event
+        .category_profile()
+        .and_then(|profile| profile.subtype.as_deref())
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.mark.subtype",
+            subtype.to_string(),
+        ));
+    }
     attributes
 }
 

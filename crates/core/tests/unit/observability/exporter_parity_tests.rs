@@ -11,14 +11,15 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Duration, Utc};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider, SpanData};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, ScopeCategory,
-    ScopeEvent,
+    BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, MarkEvent,
+    ScopeCategory, ScopeEvent,
 };
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
@@ -790,4 +791,363 @@ fn test_manual_fallback_payload_parity() {
         openinference.get("llm.token_count.total"),
         Some(&"1500".to_string())
     );
+}
+
+// ===================================================================
+// Mark projection parity
+// ===================================================================
+
+fn parity_base_ts() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+fn scope_event_at(
+    scope_category: ScopeCategory,
+    uuid: Uuid,
+    name: &str,
+    category: EventCategory,
+    timestamp: DateTime<Utc>,
+    data: Option<Json>,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name(name)
+            .timestamp(timestamp)
+            .data_opt(data)
+            .build(),
+        scope_category,
+        Vec::new(),
+        category,
+        None,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mark_event_at(
+    uuid: Uuid,
+    parent: Option<Uuid>,
+    name: &str,
+    timestamp: DateTime<Utc>,
+    data: Option<Json>,
+    metadata: Option<Json>,
+    category: Option<EventCategory>,
+    profile: Option<CategoryProfile>,
+) -> Event {
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name(name)
+            .timestamp(timestamp)
+            .parent_uuid_opt(parent)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .build(),
+        category,
+        profile,
+    ))
+}
+
+/// Attributes of the named span event recorded on the named span.
+fn span_event_attrs(
+    spans: &[SpanData],
+    span_name: &str,
+    event_name: &str,
+) -> HashMap<String, String> {
+    let span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == span_name)
+        .unwrap_or_else(|| panic!("missing span {span_name}"));
+    let event = span
+        .events
+        .events
+        .iter()
+        .find(|event| event.name.as_ref() == event_name)
+        .unwrap_or_else(|| panic!("missing span event {event_name} on span {span_name}"));
+    attr_map(&event.attributes)
+}
+
+fn system_steps(trajectory: &AtifTrajectory) -> Vec<&AtifStep> {
+    trajectory
+        .steps
+        .iter()
+        .filter(|step| step.source == "system")
+        .collect()
+}
+
+/// A mark with structured data, metadata, category, and subtype under an open
+/// parent scope must retain every field across ATOF, ATIF, OTLP, and
+/// OpenInference.
+#[test]
+fn test_mark_field_retention_parity_across_exporters() {
+    let agent_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+    let data = json!({"checkpoint": "phase-1", "count": 3});
+    let metadata = json!({"emitter": "neutral-fixture"});
+
+    let events = [
+        scope_event_at(
+            ScopeCategory::Start,
+            agent_uuid,
+            "agent-scope",
+            EventCategory::agent(),
+            parity_base_ts(),
+            None,
+        ),
+        mark_event_at(
+            mark_uuid,
+            Some(agent_uuid),
+            "phase-marker",
+            parity_base_ts() + Duration::seconds(1),
+            Some(data.clone()),
+            Some(metadata.clone()),
+            Some(EventCategory::custom()),
+            Some(CategoryProfile::builder().subtype("checkpoint").build()),
+        ),
+        scope_event_at(
+            ScopeCategory::End,
+            agent_uuid,
+            "agent-scope",
+            EventCategory::agent(),
+            parity_base_ts() + Duration::seconds(2),
+            None,
+        ),
+    ];
+
+    // ATOF: the source event retains every field verbatim.
+    let atof = events[1].to_json_value();
+    assert_eq!(atof["kind"], json!("mark"));
+    assert_eq!(atof["name"], json!("phase-marker"));
+    assert_eq!(atof["data"], data);
+    assert_eq!(atof["metadata"], metadata);
+    assert_eq!(atof["category"], json!("custom"));
+    assert_eq!(atof["category_profile"]["subtype"], json!("checkpoint"));
+    assert_eq!(atof["parent_uuid"], json!(agent_uuid.to_string()));
+
+    let exports = export_through_all_exporters(&events);
+
+    // ATIF: a system step preserves name, payload, metadata, category, subtype,
+    // parentage, and timestamp.
+    let steps = system_steps(&exports.trajectory);
+    assert_eq!(steps.len(), 1);
+    let step = steps[0];
+    assert_eq!(step.message, json!("phase-marker"));
+    assert_eq!(
+        step.timestamp.as_deref(),
+        Some(
+            (parity_base_ts() + Duration::seconds(1))
+                .to_rfc3339()
+                .as_str()
+        )
+    );
+    let extra: AtifStepExtra = serde_json::from_value(step.extra.clone().unwrap()).unwrap();
+    assert_eq!(extra.event_payload, Some(data.clone()));
+    assert_eq!(extra.event_metadata, Some(metadata.clone()));
+    assert_eq!(extra.event_category.as_deref(), Some("custom"));
+    assert_eq!(extra.event_subtype.as_deref(), Some("checkpoint"));
+    assert_eq!(extra.ancestry.function_name, "phase-marker");
+    assert_eq!(
+        extra.ancestry.parent_id.as_deref(),
+        Some(agent_uuid.to_string().as_str())
+    );
+
+    // OTLP + OpenInference: the mark attaches to its open parent span as a span
+    // event that keeps the same facts, including category and subtype.
+    for attrs in [
+        span_event_attrs(&exports.otel_spans, "agent-scope", "phase-marker"),
+        span_event_attrs(&exports.openinference_spans, "agent-scope", "phase-marker"),
+    ] {
+        assert_eq!(
+            attrs.get("nemo_relay.mark.uuid"),
+            Some(&mark_uuid.to_string())
+        );
+        assert_eq!(
+            attrs.get("nemo_relay.mark.parent_uuid"),
+            Some(&agent_uuid.to_string())
+        );
+        assert_eq!(
+            attrs
+                .get("nemo_relay.mark.data_json")
+                .map(|raw| serde_json::from_str::<Json>(raw).unwrap()),
+            Some(data.clone())
+        );
+        assert_eq!(
+            attrs
+                .get("nemo_relay.mark.metadata_json")
+                .map(|raw| serde_json::from_str::<Json>(raw).unwrap()),
+            Some(metadata.clone())
+        );
+        assert_eq!(
+            attrs.get("nemo_relay.mark.category"),
+            Some(&"custom".to_string())
+        );
+        assert_eq!(
+            attrs.get("nemo_relay.mark.subtype"),
+            Some(&"checkpoint".to_string())
+        );
+    }
+}
+
+/// A mark emitted after an LLM call keeps its position relative to the LLM
+/// steps in the ATIF trajectory.
+#[test]
+fn test_mark_ordering_preserved_relative_to_llm_in_atif() {
+    let agent_uuid = Uuid::now_v7();
+    let llm_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+
+    let events = [
+        scope_event_at(
+            ScopeCategory::Start,
+            agent_uuid,
+            "agent-scope",
+            EventCategory::agent(),
+            parity_base_ts(),
+            None,
+        ),
+        scope_event_at(
+            ScopeCategory::Start,
+            llm_uuid,
+            "model-call",
+            EventCategory::llm(),
+            parity_base_ts() + Duration::seconds(1),
+            Some(json!({"headers": {}, "content": chat_request_content("order-model")})),
+        ),
+        scope_event_at(
+            ScopeCategory::End,
+            llm_uuid,
+            "model-call",
+            EventCategory::llm(),
+            parity_base_ts() + Duration::seconds(2),
+            Some(chat_response_output("order-model")),
+        ),
+        mark_event_at(
+            mark_uuid,
+            Some(agent_uuid),
+            "post-call-note",
+            parity_base_ts() + Duration::seconds(3),
+            Some(json!({"note": "after the model call"})),
+            None,
+            None,
+            None,
+        ),
+        scope_event_at(
+            ScopeCategory::End,
+            agent_uuid,
+            "agent-scope",
+            EventCategory::agent(),
+            parity_base_ts() + Duration::seconds(4),
+            None,
+        ),
+    ];
+
+    let exports = export_through_all_exporters(&events);
+    let sources: Vec<&str> = exports
+        .trajectory
+        .steps
+        .iter()
+        .map(|step| step.source.as_str())
+        .collect();
+    // LLM start -> user, LLM end -> agent, mark -> system, in emission order.
+    assert_eq!(sources, ["user", "agent", "system"]);
+    assert_eq!(
+        system_steps(&exports.trajectory)[0].message,
+        json!("post-call-note")
+    );
+}
+
+/// Marks emitted after their parent scope has closed (or with no parent) still
+/// reach every exporter: ATIF keeps them as discoverable system steps and the
+/// span exporters fall back to zero-duration orphan spans that retain the mark
+/// facts.
+#[test]
+fn test_orphan_mark_fallback_parity() {
+    let agent_uuid = Uuid::now_v7();
+    let late_uuid = Uuid::now_v7();
+    let detached_uuid = Uuid::now_v7();
+
+    let events = [
+        scope_event_at(
+            ScopeCategory::Start,
+            agent_uuid,
+            "agent-scope",
+            EventCategory::agent(),
+            parity_base_ts(),
+            None,
+        ),
+        scope_event_at(
+            ScopeCategory::End,
+            agent_uuid,
+            "agent-scope",
+            EventCategory::agent(),
+            parity_base_ts() + Duration::seconds(1),
+            None,
+        ),
+        // Parent scope already closed when this mark is emitted.
+        mark_event_at(
+            late_uuid,
+            Some(agent_uuid),
+            "late-note",
+            parity_base_ts() + Duration::seconds(2),
+            Some(json!({"stage": "post-scope"})),
+            None,
+            Some(EventCategory::custom()),
+            Some(CategoryProfile::builder().subtype("late").build()),
+        ),
+        // No parent scope at all.
+        mark_event_at(
+            detached_uuid,
+            None,
+            "detached-note",
+            parity_base_ts() + Duration::seconds(3),
+            Some(json!({"stage": "standalone"})),
+            None,
+            None,
+            None,
+        ),
+    ];
+
+    let exports = export_through_all_exporters(&events);
+
+    // ATIF keeps the after-scope mark as a system step with its facts intact.
+    let late_step = system_steps(&exports.trajectory)
+        .into_iter()
+        .find(|step| step.message == json!("late-note"))
+        .expect("ATIF should retain the after-scope mark as a system step");
+    let late_extra: AtifStepExtra =
+        serde_json::from_value(late_step.extra.clone().unwrap()).unwrap();
+    assert_eq!(late_extra.event_category.as_deref(), Some("custom"));
+    assert_eq!(late_extra.event_subtype.as_deref(), Some("late"));
+
+    // Both span exporters fall back to zero-duration orphan spans that retain
+    // the mark facts, including category/subtype.
+    for spans in [&exports.otel_spans, &exports.openinference_spans] {
+        let late = spans
+            .iter()
+            .find(|span| span.name.as_ref() == "mark:late-note")
+            .expect("orphan span mark:late-note");
+        assert_eq!(late.start_time, late.end_time);
+        let attrs = attr_map(&late.attributes);
+        assert_eq!(
+            attrs.get("nemo_relay.mark.orphan"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            attrs.get("nemo_relay.mark.category"),
+            Some(&"custom".to_string())
+        );
+        assert_eq!(
+            attrs.get("nemo_relay.mark.subtype"),
+            Some(&"late".to_string())
+        );
+
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.name.as_ref() == "mark:detached-note"),
+            "parentless mark should still produce an orphan span"
+        );
+    }
 }
