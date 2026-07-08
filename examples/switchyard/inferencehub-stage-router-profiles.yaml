@@ -39,4 +39,6 @@ profiles:
         debugging, multi-step reasoning, subtle correctness constraints, or
         decisions that require a defensible technical analysis. Treat the State
         line as evidence, but classify the latest request rather than blindly
-        inheriting the previous turn.
+        inheriting the previous turn. A request for an ABA interleaving,
+        linearization points, or memory-ordering analysis is always capable. A
+        request to return only REVIEW_COMPLETE is always efficient.
