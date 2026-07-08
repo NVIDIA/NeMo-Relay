@@ -1313,3 +1313,41 @@ async fn acg_component_stream_execution_intercept_passes_original_request_when_t
 
     assert_eq!(first, invalid_request.content);
 }
+
+#[test]
+fn acg_component_request_intercept_rewrites_annotation_without_mutating_provider_content() {
+    let request = sample_layered_anthropic_request();
+    let original_content = request.content.clone();
+    let original_annotation = sample_annotated_request("claude-sonnet-4-20250514");
+    let plugin = build_provider_plugin("anthropic").unwrap();
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: Some(layered_stability_result(6)),
+        acg_observation_count: 6,
+    }));
+    let intercept = create_acg_llm_request_intercept(
+        hot_cache,
+        "agent-1".to_string(),
+        "anthropic".to_string(),
+        plugin,
+    );
+
+    let outcome = intercept("anthropic", request, Some(original_annotation.clone())).unwrap();
+
+    assert_eq!(outcome.request.content, original_content);
+    let annotation = outcome
+        .annotated_request
+        .expect("translated annotation should be returned");
+    assert_eq!(
+        annotation.model.as_deref(),
+        Some("claude-sonnet-4-20250514")
+    );
+    assert_ne!(
+        annotation, original_annotation,
+        "translated branch should rebuild the annotation from the rewritten request"
+    );
+}

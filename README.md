@@ -16,16 +16,16 @@ SPDX-License-Identifier: Apache-2.0
 
 # NVIDIA NeMo Relay
 
-NVIDIA NeMo Relay helps see and control what happens inside agent runs
-without rewriting the agent stack already made. It gives coding agents,
+NVIDIA NeMo Relay provides visibility into and control over agent runs without
+requiring changes to the existing agent stack. It gives coding agents,
 applications, framework integrations, middleware, and observability backends a
 shared runtime for scopes, policy, plugins, and lifecycle events.
 
 ## Where To Start
 
-| Goal | Start With... |
+| Goal | Start With |
 |---|---|
-| Observe Codex, Claude Code, or Hermes locally via CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
+| Observe Codex, Claude Code, or Hermes locally with the CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
@@ -36,9 +36,8 @@ shared runtime for scopes, policy, plugins, and lifecycle events.
 
 ## Quick Start CLI
 
-A good first step is to record a real agent run on disk. Once Relay is writing raw
-events and a trajectory file, there is something concrete to inspect, debug, and
-build from.
+Start by recording a real agent run on disk. After Relay writes raw events and a
+trajectory file, you have concrete data to inspect, debug, and build on.
 
 ### Local Agent Trajectory
 
@@ -49,6 +48,8 @@ trajectories.
 
 
 #### 1. Install the CLI
+
+Run the installer for your platform:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
@@ -65,7 +66,7 @@ nemo-relay --version
 ```
 
 The installer supports Linux x86_64/ARM64, macOS Apple Silicon, and Windows
-x86_64/ARM64. See the [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation)
+x86_64/ARM64. Refer to the [installation guide](https://docs.nvidia.com/nemo/relay/getting-started/installation)
 for version pinning, custom directories, and source-based installation.
 
 #### 2. Enable Local Observability Output
@@ -82,13 +83,13 @@ The editor creates or updates the nearest project plugin file at
 then configure these sections:
 
 1. Toggle the Observability component on.
-2. Open `ATOF`, toggle the section `[on]`
+2. Open `ATOF`. Toggle the section `[on]`.
 
    Optionally set:
    - `output_directory` to `.nemo-relay/atof`
    - `filename` to `events.jsonl`
    - `mode` to `overwrite`
-3. Open `ATIF`, toggle the section `[on]`
+3. Open `ATIF`. Toggle the section `[on]`.
 
    Optionally set:
    - `output_directory` to `.nemo-relay/atif`
@@ -97,12 +98,12 @@ then configure these sections:
 5. Press `s` to save.
 
 > [!NOTE]
-> Use `nemo-relay plugins edit` _without_ `--project` only if needing to use these
-> exporter settings in a user-level Relay config instead of a specific project.
+> Run `nemo-relay plugins edit` without `--project` only when you want
+> user-level exporter settings that apply across projects.
 
 #### 3. Run Codex or Claude Code Through Relay
 
-Use either host CLI that is installed on a machine. For example:
+Run the Relay wrapper for the host CLI installed on your machine. For example:
 
 ```bash
 nemo-relay codex -- exec "Summarize this repository."
@@ -119,8 +120,8 @@ and provider settings for that launched process, then shuts the gateway down
 when the agent exits.
 
 > [!WARNING]
-> Codex users may need to review and activate generated hooks before events
-> appear. Using the Codex Desktop App also adds further complications.
+> If generated hooks are inactive, Codex users must review and activate them
+> before events appear. The Codex Desktop App has additional limitations.
 > Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
 > current hook activation caveat and troubleshooting steps.
 
@@ -170,7 +171,7 @@ A successful run creates several outputs to inspect:
 
 #### Next Steps
 
-Go to the full [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for
+Refer to the full [NeMo Relay CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for
 persistent host plugin installation, gateway configuration, exporter options,
 and agent-specific diagnostics.
 
@@ -211,7 +212,7 @@ Then run a minimal example workflow for that binding:
 
 ## What Relay Adds
 
-Relay is the liaison between agent systems. A production application may
+Relay connects agent systems. A production application can
 combine NeMo Agent Toolkit, LangChain, LangGraph, provider SDKs, custom harness
 code, NeMo Guardrails, tracing systems, and evaluation pipelines. Relay gives
 those pieces one runtime contract instead of asking every layer to invent its

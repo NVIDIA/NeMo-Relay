@@ -1,25 +1,24 @@
 ---
 title: "Plugin Installation"
-description: ""
+description: "Install and manage NeMo Relay host plugins for Claude Code and Codex."
 position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use the plugin installation when you want Claude Code or Codex to load NeMo Relay
-through the host's normal plugin system instead of launching the agent through a
-`nemo-relay` wrapper command.
+Install a host plugin when you want Claude Code or Codex to load NeMo Relay
+through its normal plugin system instead of through a `nemo-relay` wrapper
+command.
 
-The installed plugin keeps the same observability model as transparent runs. The
-host hooks provide agent, subagent, tool, prompt, compaction, and stop
-lifecycle signals, while model-provider routing sends LLM traffic through the
-local NeMo Relay gateway. Hooks alone cannot produce complete LLM request and
+The installed plugin emits agent, subagent, tool, prompt, compaction, and stop
+lifecycle signals. Model-provider routing sends LLM traffic through the local
+NeMo Relay gateway. Hooks alone cannot capture complete LLM request and
 response spans.
 
 ## Requirements
 
-To begin, install `nemo-relay` to make sure it is available on `PATH` or `%PATH%`.
+Install `nemo-relay` and ensure that it is available on `PATH` or `%PATH%`.
 The plugin installer does not download a second Relay binary, install a daemon,
 or require a plugin-local executable.
 
@@ -30,10 +29,13 @@ The selected host CLI must also be available:
 
 ## Install Host Plugin
 
-To install one host plugin, enter:
+Run the command for the host plugin that you want to install:
 
 ```bash
 nemo-relay install claude-code
+```
+
+```bash
 nemo-relay install codex
 ```
 
@@ -69,8 +71,9 @@ registers the generated `nemo-relay-plugin` package with the selected host.
 
 For Claude Code, install registers the local Claude marketplace, installs
 `nemo-relay-plugin@nemo-relay-local` at user scope, and enables provider routing
-through the local NeMo Relay sidecar. Existing Claude auth and model settings
-are preserved unless they must be backed up to add the Relay provider route.
+through the local NeMo Relay sidecar. During installation, NeMo Relay preserves
+existing Claude authentication and model settings and backs them up only when
+it adds the Relay provider route.
 
 For Codex, install registers the local Codex marketplace, installs
 `nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, merges generated hook
@@ -84,19 +87,25 @@ installed Codex hook runs, reuses an already healthy sidecar when one exists,
 and exits after its idle timeout.
 
 <Warning>
-A complete first-request capture in Codex depends on Codex firing an installed
-hook before the first provider request. If a Codex version calls the provider
-before any hook, the first request cannot be guaranteed under hook-only lazy
-startup.
+The plugin captures the first provider request only when Codex fires an
+installed hook before that request. If a Codex version calls the provider
+before any hook, the plugin cannot guarantee first-request capture under
+hook-only lazy startup.
 </Warning>
 
 ## Diagnose
 
-Run the plugin doctor after installation:
+Run the command for the installed host that you want to diagnose:
 
 ```bash
 nemo-relay doctor --plugin claude-code
+```
+
+```bash
 nemo-relay doctor --plugin codex
+```
+
+```bash
 nemo-relay doctor --plugin all
 ```
 
@@ -120,11 +129,17 @@ host plugin.
 
 ## Uninstall
 
-Remove an installed plugin and restore host configuration:
+Run the command for the installed host plugin that you want to remove:
 
 ```bash
 nemo-relay uninstall claude-code
+```
+
+```bash
 nemo-relay uninstall codex
+```
+
+```bash
 nemo-relay uninstall all
 ```
 
@@ -142,8 +157,8 @@ validation:
 - `.agents/plugins/marketplace.json`
 
 Those manifests are useful when validating host plugin metadata from a source
-checkout. For end-user setup, we recommend using `nemo-relay install <host>` because it
-generates the local marketplace, registers the host plugin, and performs the
-required provider and hook setup together. Avoid keeping both a source-installed
+checkout. For end-user setup, use `nemo-relay install <host>`. It generates the
+local marketplace, registers the host plugin, and performs the required
+provider and hook setup. Avoid keeping both a source-installed
 plugin and a generated install active for the same host because both can forward
 the same hook payload.

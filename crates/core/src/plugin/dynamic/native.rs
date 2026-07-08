@@ -2301,3 +2301,7 @@ fn write_native_json(value: &Json, out: *mut *mut NemoRelayNativeString) -> Nemo
     unsafe { *out = handle };
     NemoRelayStatus::Ok
 }
+
+#[cfg(test)]
+#[path = "../../../tests/unit/native_plugin_tests.rs"]
+mod tests;

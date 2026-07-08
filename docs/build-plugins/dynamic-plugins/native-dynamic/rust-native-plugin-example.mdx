@@ -1,0 +1,133 @@
+---
+title: "Build a Rust Native Plugin"
+description: "Build and package the NeMo Relay Rust native dynamic-plugin example."
+position: 11
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `nemo-relay-plugin` crate to create an in-process native plugin without
+writing the C ABI by hand. The SDK exports the stable ABI entry point and
+provides typed helpers for the supported registration surfaces.
+
+This example builds a native plugin that registers an event subscriber. The
+repository also includes an extended example in `examples/rust-native-plugin`
+with validation, middleware, marks, scopes, and a configuration schema.
+
+## Create the Project
+
+Create a Rust library project with this `Cargo.toml` file:
+
+```toml
+[package]
+name = "acme-native-policy"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nemo-relay-plugin = "0.5.0"
+serde_json = "1"
+```
+
+Add the following implementation to `src/lib.rs`:
+
+```rust
+use nemo_relay_plugin::{Json, NativePlugin, PluginContext, Result};
+use serde_json::Map;
+
+struct NativePolicy;
+
+impl NativePlugin for NativePolicy {
+    fn plugin_kind(&self) -> &str {
+        "acme.native_policy"
+    }
+
+    fn register(
+        &mut self,
+        _config: &Map<String, Json>,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        context.register_subscriber("audit", |_| {})
+    }
+}
+
+nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || NativePolicy);
+```
+
+## Create the Manifest
+
+Create `relay-plugin.toml` with the following content:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "acme.native_policy"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[source]
+artifact = "target/release/<platform-library-file>"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+library = "target/release/<platform-library-file>"
+symbol = "nemo_relay_register_plugin"
+```
+
+Update the library filename for your platform: use `.dylib` on macOS, `.so`
+on Linux, or `.dll` on Windows. Replace `<platform-library-file>` in both
+manifest fields with that filename.
+
+## Build, Register, and Validate
+
+Build the library, calculate its digest, and register the plugin with the
+following commands. The digest command requires Python 3.
+
+```bash
+cargo build --release
+python - <<'PY'
+from hashlib import sha256
+from pathlib import Path
+
+artifact = Path("target/release/<platform-library-file>")
+print(f"sha256:{sha256(artifact.read_bytes()).hexdigest()}")
+PY
+nemo-relay plugins add ./relay-plugin.toml
+nemo-relay plugins enable acme.native_policy
+nemo-relay plugins validate acme.native_policy
+```
+
+Use the following PowerShell command on Windows:
+
+```powershell
+$artifact = ".\\target\\release\\<platform-library-file>"
+$hash = (Get-FileHash -Algorithm SHA256 $artifact).Hash.ToLower()
+"sha256:$hash"
+```
+
+Replace `<platform-library-file>` in the digest command, then replace
+`sha256:<artifact-sha256>` with its output before you run `plugins add`. The
+command writes a `[[plugins.dynamic]]` manifest reference. Use
+`nemo-relay plugins edit` or edit that record to add component fields when the
+plugin accepts configuration.
+
+Keep tests outside `src`, use the shared DTOs re-exported by
+`nemo-relay-plugin`, and do not retain host-owned ABI handles after a callback
+returns. Refer to [Configure Discoverable
+Plugins](/configure-plugins/discoverable-plugins) for trust-policy configuration.

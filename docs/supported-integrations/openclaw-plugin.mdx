@@ -1,6 +1,6 @@
 ---
 title: "OpenClaw Plugin Guide"
-description: ""
+description: "Install and configure the OpenClaw plugin for NeMo Relay observability and policy hooks."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -201,8 +201,8 @@ plugin configuration, so they use `snake_case` regardless of language.
 Missing observability sections are disabled. Plugin-host validation or
 initialization errors degrade the NeMo Relay runtime as a whole, and the status
 method reports configured output health from the generic observability
-component. See
-[Observability Configuration](/observability-plugin/configuration)
+component. Refer to
+[Observability Configuration](/configure-plugins/observability/configuration)
 for the complete `observability` component schema and exporter-specific fields.
 
 ## Verify the Integration
@@ -325,6 +325,6 @@ match the same assistant turn.
 
 Current OpenClaw public hooks are separate event streams, so some LLM timing
 attribution is best-effort. If a matching request hook is missing, the plugin
-may replay an LLM output with a placeholder request after the configured grace
+can replay an LLM output with a placeholder request after the configured grace
 window. If timing is ambiguous, the plugin emits diagnostic marks instead of
 unsafe latency.

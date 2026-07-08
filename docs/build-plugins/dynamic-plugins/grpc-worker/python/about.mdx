@@ -1,0 +1,304 @@
+---
+title: "gRPC Worker Plugins (Python)"
+description: "Build, package, configure, and run Python gRPC worker plugins for NeMo Relay."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `nemo-relay-plugin` package to build an out-of-process plugin worker.
+The SDK owns gRPC server setup, generated protocol stubs, JSON-envelope
+conversion, continuations, cancellation hooks, and scope-stack helpers.
+Refer to [gRPC Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about)
+to compare the Python, Rust, and command worker runtimes.
+
+This guide builds a complete plugin that adds a tag to every tool request and
+emits a mark through the Relay host runtime.
+
+## Create the Project
+
+Create the following project layout:
+
+```text
+python-grpc-worker/
+├── pyproject.toml
+├── relay-plugin.toml
+└── nemo_relay_python_grpc_worker/
+    ├── __init__.py
+    └── worker.py
+```
+
+Add the following `pyproject.toml` file:
+
+```toml
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-python-grpc-worker-example"
+version = "0.1.0"
+description = "Example Python gRPC worker plugin for NeMo Relay"
+requires-python = ">=3.11"
+dependencies = [
+  "nemo-relay-plugin>=0.5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nemo_relay_python_grpc_worker"]
+```
+
+Create `nemo_relay_python_grpc_worker/__init__.py` with the following content:
+
+```python
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Example Python gRPC worker plugin package."""
+```
+
+## Implement the Worker
+
+Add the following implementation to
+`nemo_relay_python_grpc_worker/worker.py`:
+
+```python
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Example Python worker plugin using the nemo-relay-plugin SDK."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
+
+
+class ExamplePythonWorker(WorkerPlugin):
+    """Small worker plugin that tags tool request JSON and emits a host mark."""
+
+    plugin_id = "examples.python_grpc_worker"
+
+    def validate(self, config: Json) -> list[ConfigDiagnostic | dict[str, Any]]:
+        if not isinstance(config, dict):
+            return [
+                ConfigDiagnostic(
+                    level=DiagnosticLevel.ERROR,
+                    code="examples.python_grpc_worker.invalid_config",
+                    component=self.plugin_id,
+                    message="plugin config must be a JSON object",
+                )
+            ]
+        if config.get("reject") is True:
+            return [
+                ConfigDiagnostic(
+                    level=DiagnosticLevel.ERROR,
+                    code="examples.python_grpc_worker.rejected",
+                    component=self.plugin_id,
+                    field="reject",
+                    message="Python gRPC worker rejection requested",
+                )
+            ]
+        if "tag" in config and not isinstance(config["tag"], str):
+            return [
+                ConfigDiagnostic(
+                    level=DiagnosticLevel.ERROR,
+                    code="examples.python_grpc_worker.invalid_tag",
+                    component=self.plugin_id,
+                    field="tag",
+                    message="tag must be a string",
+                )
+            ]
+        return []
+
+    def register(self, ctx: PluginContext, config: Json) -> None:
+        if not isinstance(config, dict):
+            raise TypeError("plugin config must be a JSON object")
+        if config.get("reject") is True:
+            raise ValueError("Python gRPC worker rejection requested")
+        tag = config.get("tag", "python_grpc_worker")
+        if not isinstance(tag, str):
+            raise TypeError("tag must be a string")
+
+        async def tag_tool_request(tool_name: str, args: Json) -> Json:
+            tagged_args = _tag_json(args, tag)
+            await ctx.runtime.emit_mark(
+                "examples.python_grpc_worker.tool_request",
+                {"tool_name": tool_name, "source": "python-grpc-worker", "tag": tag},
+            )
+            return tagged_args
+
+        ctx.register_tool_request_intercept("tag_tool_request", tag_tool_request)
+
+
+def _tag_json(value: Json, tag: str) -> Json:
+    if not isinstance(value, dict):
+        return value
+    metadata = value.get("_nemo_relay_plugin")
+    if metadata is None:
+        metadata = {}
+    elif not isinstance(metadata, dict):
+        return value
+    return {
+        **value,
+        "_nemo_relay_plugin": {**metadata, "tag": tag},
+    }
+
+
+async def main() -> None:
+    """Entrypoint referenced by relay-plugin.toml."""
+    await serve_plugin(ExamplePythonWorker())
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(main())
+```
+
+`WorkerPlugin.validate` returns structured diagnostics after Relay starts the
+worker process and before Relay installs registrations. `WorkerPlugin.register`
+registers a tool request intercept that updates the request JSON and emits a
+mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
+requests shutdown.
+
+## Create the Manifest
+
+Create `relay-plugin.toml` with the following content:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.python_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+manifest_root = "."
+artifact = "nemo_relay_python_grpc_worker/worker.py"
+
+[integrity]
+sha256 = "sha256:966849be254cc6299a17a4bb65500363e9a48f98cc1e0091192e42b23821486f"
+
+[load]
+runtime = "python"
+entrypoint = "nemo_relay_python_grpc_worker.worker:main"
+```
+
+The digest matches the `worker.py` file in this guide. Use Python 3.11 or later
+to calculate a new digest before you register the worker:
+
+```bash
+python3 - <<'PY'
+from hashlib import sha256
+from pathlib import Path
+
+artifact = Path("nemo_relay_python_grpc_worker/worker.py")
+print(f"sha256:{sha256(artifact.read_bytes()).hexdigest()}")
+PY
+```
+
+## Register the Plugin
+
+Run the following commands from the project directory:
+
+```bash
+relay_tmp="$(mktemp -d)"
+relay_config="$relay_tmp/gateway.toml"
+
+nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
+```
+
+`plugins add` creates an isolated Relay-managed Python environment and installs
+the `source.manifest_root` project into it. Relay uses that recorded environment
+when it starts the worker. Do not start the worker directly: Relay supplies its
+worker socket, host socket, activation ID, and activation token.
+
+## Configure the Plugin
+
+After `plugins add` registers the worker, edit
+`$relay_tmp/plugins.toml`. Add the configuration table to the
+`[[plugins.dynamic]]` entry that `plugins add` created. The configuration sets
+the tag that the worker adds to tool request JSON:
+
+```toml
+# `plugins add` writes the canonical absolute manifest path.
+[[plugins.dynamic]]
+manifest = "/absolute/path/to/python-grpc-worker/relay-plugin.toml"
+
+[plugins.dynamic.config]
+tag = "documentation"
+```
+
+Do not use this TOML block instead of `plugins add` for a Python worker. The
+CLI also creates the lifecycle record that points to the Relay-managed Python
+environment. The `tag` field is optional and defaults to `python_grpc_worker`.
+
+## Test Worker-Side Validation
+
+`nemo-relay plugins validate` checks the manifest, trust evidence, and optional
+static schema. It does not call `WorkerPlugin.validate`.
+
+To test runtime validation:
+
+1. Set `reject = true`, then start the gateway. Relay starts the worker and
+   reports the worker diagnostic before it installs registrations.
+2. Set `tag` to a non-string value, then start the gateway. Relay reports the
+   structured diagnostic from `WorkerPlugin.validate`.
+
+`WorkerPlugin.validate` runs after Relay starts the worker and before Relay
+installs registrations.
+
+## Run the Plugin
+
+Enable, validate, and start the gateway with the following commands:
+
+```bash
+nemo-relay --config "$relay_config" plugins enable examples.python_grpc_worker
+nemo-relay --config "$relay_config" plugins validate examples.python_grpc_worker
+nemo-relay --config "$relay_config" --bind 127.0.0.1:4040
+```
+
+## Update the Worker
+
+After you change worker source code or dependencies, rebuild the managed
+environment instead of only updating the manifest digest:
+
+1. Recalculate `integrity.sha256` with Python 3.11 or later and update
+   `relay-plugin.toml`.
+2. Remove the registered worker, then add it again:
+
+   ```bash
+   nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
+   nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
+   ```
+
+3. Restore any `[[plugins.dynamic]].config` values, then enable the worker.
+
+`plugins add` installs a new copy of `source.manifest_root` into a fresh
+Relay-managed environment. It cannot refresh an already registered worker.
+
+After you stop Relay, remove the plugin and its managed environment:
+
+```bash
+nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
+rm -rf "$relay_tmp"
+```
+
+Refer to [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol) for the
+shared `grpc-v1` contract and
+[Configure Discoverable Plugins](/configure-plugins/discoverable-plugins) for
+host trust and lifecycle policies.

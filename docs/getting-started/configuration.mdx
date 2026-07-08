@@ -1,7 +1,7 @@
 ---
 title: "Configuration"
 sidebar-title: "Configuration / Setup"
-description: ""
+description: "Configure NeMo Relay runtime behavior, plugins, observability, and adaptive features."
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -29,13 +29,13 @@ Plugins use a structured plugin configuration with:
 - One or more component definitions
 - Optional component policy
 
-Start with [Define a Plugin](/build-plugins/basic-guide) when you need reusable middleware, subscribers, or adaptive behavior.
+Start with [Language Binding Plugins](/build-plugins/language-binding/about) when you need reusable middleware, subscribers, or adaptive behavior.
 
-Use [NeMo Guardrails Configuration](/nemo-guardrails-plugin/configuration) when
+Use [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration) when
 you want the built-in first-party `nemo_guardrails` component.
 
-The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. See
-[Plugin Configuration Files](/build-plugins/plugin-configuration-files)
+The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. Refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
 for file locations, precedence, merge behavior, editor controls, and validation
 rules.
 
@@ -45,9 +45,9 @@ Agent Trajectory Observability Format (ATOF) exporters, Agent Trajectory
 Interchange Format (ATIF) exporters, OpenTelemetry subscribers, and
 OpenInference subscribers can be configured directly through binding-native
 config objects. Use the built-in `observability` plugin when you want one
-plugin component to own standard exporter setup and teardown. See
-[Observability Configuration](/observability-plugin/configuration)
-and [Observability](/observability-plugin/about)
+plugin component to own standard exporter setup and teardown. Refer to
+[Observability Configuration](/configure-plugins/observability/configuration)
+and [Observability](/configure-plugins/observability/about)
 for the supported export paths.
 
 NeMo Relay does not require application-level environment variables for normal
@@ -61,4 +61,4 @@ deployment manifests.
 
 ## Adaptive Setup
 
-Adaptive tuning is enabled through the adaptive plugin component and binding helper APIs. See [Adaptive Configuration](/adaptive-plugin/configuration).
+Adaptive tuning is enabled through the adaptive plugin component and binding helper APIs. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration).

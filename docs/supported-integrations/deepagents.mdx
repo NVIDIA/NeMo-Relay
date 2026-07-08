@@ -1,7 +1,7 @@
 ---
 title: "NeMo Relay Deep Agents Integration"
 sidebar-title: "Deep Agents Integration Guide"
-description: ""
+description: "Add NeMo Relay observability to Deep Agents applications."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -91,7 +91,7 @@ when you need to capture Deep Agents skill or subagent marks.
 
 ## Verify the Integration
 
-The integration is wired correctly when:
+The integration works correctly when:
 
 - The Deep Agents run completes and prints a final response.
 - The `deepagents-request` scope contains the top-level agent execution.
@@ -115,5 +115,5 @@ It captures:
 Remote graphs or processes still need NeMo Relay instrumentation in that graph
 or process to capture their internal model and tool calls.
 
-Refer to [Observability](/observability-plugin/about)
+Refer to [Observability](/configure-plugins/observability/about)
 for details on exporting NeMo Relay observability data to third-party systems.

@@ -31,8 +31,8 @@ outcome succeeds.
 
 There is no mark-specific registration path. Use the existing global,
 scope-local, or plugin-context tool execution registration APIs and return the
-canonical outcome from every registered callback. Legacy raw intercept returns
-are rejected at public and dynamic-plugin boundaries.
+canonical outcome from every registered callback. Relay rejects legacy raw
+intercept returns at public and dynamic-plugin boundaries.
 
 ## Managed Lifecycle
 
@@ -68,10 +68,11 @@ Canonical JSON uses `pending_marks` and `category_profile` across bindings.
 This finalizes the unpublished tool execution intercept contract. Update every
 registered tool execution intercept to return the canonical outcome, while
 leaving the default tool callback and `next(args)` continuation as raw JSON.
-Rebuild development native plugins and workers against the current Relay main
-branch.
+Rebuild development native plugins and workers against the same NeMo Relay
+release that hosts them.
 
 ## Related Topics
 
 - [LLM Request Intercept Outcomes](/reference/llm-request-intercept-outcomes)
 - [Add Middleware](/instrument-applications/advanced-guide)
+- [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
