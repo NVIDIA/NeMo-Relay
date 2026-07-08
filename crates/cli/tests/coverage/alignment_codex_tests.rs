@@ -118,6 +118,24 @@ fn chatgpt_backend_override_accepts_codex_access_token() {
         .as_deref(),
         Some("https://chatgpt.com/backend-api/codex/responses")
     );
+    assert_eq!(
+        chatgpt_upstream_url_if_needed(
+            &headers,
+            GatewayRouteKind::AnthropicMessages,
+            "/v1/messages",
+            false,
+        ),
+        None
+    );
+    assert_eq!(
+        chatgpt_upstream_url_if_needed(
+            &headers,
+            GatewayRouteKind::OpenAiResponses,
+            "/v1/responses",
+            true,
+        ),
+        None
+    );
 }
 
 #[test]
