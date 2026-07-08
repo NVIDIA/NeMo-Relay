@@ -114,6 +114,29 @@ describe('Tool replay', () => {
     assert.equal(nf.calls.toolCallEnd[0]?.data, null);
   });
 
+  it('emits a skill-load mark from original params when captured args are stripped', () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    backend.onAfterToolCall(
+      {
+        toolName: 'read_file',
+        params: { path: '/workspace/skills/review/SKILL.md' },
+        toolCallId: 'tool-call-1',
+        runId: 'run-1',
+        result: { text: 'ok' },
+      },
+      { runId: 'run-1', sessionId: 'session-1', toolCallId: 'tool-call-1' },
+    );
+
+    assert.equal(nf.calls.event.some((event) => event.name === 'skill.load'), false);
+    assert.deepEqual(
+      (nf.calls.toolCall[0]?.metadata as Record<string, unknown>)['nemo_relay.skill_loads'],
+      [{ skill_name: 'review', source: 'structured_read' }],
+    );
+    assert.equal(backend.state().counters.marksEmitted, 2);
+  });
+
   it('passes non-null tool end payload when result and error are missing', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf, {

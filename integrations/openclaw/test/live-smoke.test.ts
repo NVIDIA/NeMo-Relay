@@ -12,6 +12,7 @@ import { it } from 'node:test';
 
 import { registerNemoRelayPlugin } from '../src/runtime-state.js';
 import { defaultNemoRelayModuleLoader, type NemoRelayModuleLoader, type NemoRelayModules } from '../src/modules.js';
+import type { PluginAgentToolCallMiddlewareContext } from '../src/openclaw-hook-types.js';
 import type { OpenClawPluginApi, PluginLogger } from 'openclaw/plugin-sdk/plugin-entry';
 import { callGatewayStatus, type TestGatewayMethodHandler } from './gateway-status.js';
 
@@ -84,6 +85,8 @@ it(
       assert.ok(sessionStart, 'expected session_start hook registration');
       assert.ok(llmInput, 'expected llm_input hook registration');
       assert.ok(llmOutput, 'expected llm_output hook registration');
+      const toolMiddleware = api.calls.toolMiddlewares[0];
+      assert.ok(toolMiddleware, 'expected agent tool-call middleware registration');
       assert.ok(afterToolCall, 'expected after_tool_call hook registration');
       assert.ok(sessionEnd, 'expected session_end hook registration');
 
@@ -112,21 +115,30 @@ it(
         },
         { runId: 'live-run-1', sessionId: '../live-session:1', agentId: 'agent-live' },
       );
+      const skillToolEvent = {
+        toolName: 'read_file',
+        params: { path: '/workspace/skills/review/SKILL.md' },
+        runId: 'live-run-1',
+        toolCallId: 'tool-live-1',
+      };
+      const skillToolContext = {
+        runId: 'live-run-1',
+        sessionId: '../live-session:1',
+        toolName: 'read_file',
+        toolCallId: 'tool-live-1',
+      };
+      await toolMiddleware.handler({
+        ...skillToolEvent,
+        ...skillToolContext,
+        execute: async () => ({ text: 'ok' }),
+      });
       await afterToolCall.handler(
         {
-          toolName: 'read_file',
-          params: { path: 'README.md' },
-          runId: 'live-run-1',
-          toolCallId: 'tool-live-1',
+          ...skillToolEvent,
           result: { text: 'ok' },
           durationMs: 2,
         },
-        {
-          runId: 'live-run-1',
-          sessionId: '../live-session:1',
-          toolName: 'read_file',
-          toolCallId: 'tool-live-1',
-        },
+        skillToolContext,
       );
       await sessionEnd.handler(
         { sessionId: '../live-session:1', messageCount: 1, reason: 'idle' },
@@ -138,6 +150,11 @@ it(
       assert.ok(exportedPath, 'expected generic observability ATIF export');
       const exported = JSON.parse(await fs.readFile(path.join(outputDir, exportedPath), 'utf8')) as unknown;
       assert.equal(typeof exported, 'object');
+      const exportedJson = JSON.stringify(exported);
+      assert.match(exportedJson, /"name":"skill\.load"/);
+      assert.match(exportedJson, /"skill_name":"review"/);
+      assert.doesNotMatch(exportedJson, /"message":"skill\.load"/);
+      assert.doesNotMatch(exportedJson, /workspace\/skills\/review/);
 
       const status = await callGatewayStatus(api.calls.gatewayMethods[0]?.handler);
       assert.equal(status.outputs.atif, 'enabled');
@@ -157,6 +174,7 @@ it(
 );
 
 type HookHandler = (event: unknown, ctx: unknown) => void | Promise<void>;
+type ToolMiddlewareHandler = (ctx: PluginAgentToolCallMiddlewareContext) => Promise<unknown>;
 
 type TestApi = {
   id: string;
@@ -168,6 +186,10 @@ type TestApi = {
   registerService: (service: Parameters<OpenClawPluginApi['registerService']>[0]) => void;
   registerRuntimeLifecycle: (lifecycle: Parameters<OpenClawPluginApi['registerRuntimeLifecycle']>[0]) => void;
   on: (hookName: string, handler: HookHandler) => void;
+  registerAgentToolCallMiddleware: (
+    handler: ToolMiddlewareHandler,
+    options?: { runtimes?: string[]; priority?: number },
+  ) => void;
   registerGatewayMethod: (method: string, handler: TestGatewayMethodHandler, opts?: { scope?: string }) => void;
   calls: {
     services: Parameters<OpenClawPluginApi['registerService']>[0][];
@@ -177,6 +199,10 @@ type TestApi = {
       handler: TestGatewayMethodHandler;
     }>;
     hooks: Array<{ hookName: string; handler: HookHandler }>;
+    toolMiddlewares: Array<{
+      handler: ToolMiddlewareHandler;
+      options?: { runtimes?: string[]; priority?: number };
+    }>;
   };
 };
 
@@ -186,6 +212,7 @@ function createApi(params: { pluginConfig: Record<string, unknown> }): TestApi {
     lifecycle: [],
     gatewayMethods: [],
     hooks: [],
+    toolMiddlewares: [],
   };
   const logger: PluginLogger = {
     info: () => {},
@@ -203,6 +230,8 @@ function createApi(params: { pluginConfig: Record<string, unknown> }): TestApi {
     registerService: (service) => calls.services.push(service),
     registerRuntimeLifecycle: (lifecycle) => calls.lifecycle.push(lifecycle),
     on: (hookName: string, handler: HookHandler) => calls.hooks.push({ hookName, handler }),
+    registerAgentToolCallMiddleware: (handler, options) =>
+      calls.toolMiddlewares.push(options === undefined ? { handler } : { handler, options }),
     registerGatewayMethod: (method, handler) => calls.gatewayMethods.push({ method, handler }),
     calls,
   };

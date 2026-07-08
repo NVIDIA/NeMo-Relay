@@ -221,6 +221,116 @@ describe('HookReplayBackend', () => {
     assertNoOverclaimedHookMetadata(nf.calls.event[1]?.metadata);
   });
 
+  it('emits skill loads eagerly and suppresses the after-tool fallback', async () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+    const context = {
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolCallId: 'tool-call-1',
+    };
+
+    await backend.onBeforeToolCall(
+      {
+        toolName: 'read_file',
+        params: { path: '/workspace/skills/review/SKILL.md' },
+        runId: 'run-1',
+        toolCallId: 'tool-call-1',
+      },
+      context,
+    );
+    backend.onAfterToolCall(
+      {
+        toolName: 'read_file',
+        params: { path: '/workspace/skills/review/SKILL.md' },
+        runId: 'run-1',
+        toolCallId: 'tool-call-1',
+        result: { text: 'ok' },
+      },
+      context,
+    );
+
+    assert.equal(nf.calls.toolCall.length, 1);
+    assert.deepEqual(nf.calls.toolCall[0]?.args, { stripped: true, argKeys: ['path'] });
+    assert.deepEqual(nf.calls.toolCall[0]?.metadata, {
+      source: 'openclaw.before_tool_call',
+      sessionId: 'session-1',
+      runId: 'run-1',
+      toolCallId: 'tool-call-1',
+      'nemo_relay.skill_loads': [
+        {
+          skill_name: 'review',
+          source: 'structured_read',
+        },
+      ],
+    });
+    assert.equal(nf.calls.toolCallEnd.length, 1);
+    assert.equal(nf.calls.toolCallEnd[0]?.handle, nf.calls.toolCall[0]?.handle);
+    assert.equal(backend.state().counters.marksEmitted, 2);
+  });
+
+  it('closes an eager skill-read tool span when the session ends without an after hook', async () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+
+    await backend.onBeforeToolCall(
+      {
+        toolName: 'read_file',
+        params: { path: '/workspace/skills/review/SKILL.md' },
+        toolCallId: 'tool-call-1',
+      },
+      { sessionId: 'session-1', toolCallId: 'tool-call-1' },
+    );
+    await backend.onSessionEnd(
+      { sessionId: 'session-1', messageCount: 0, reason: 'shutdown' },
+      { sessionId: 'session-1' },
+    );
+
+    assert.equal(nf.calls.toolCall.length, 1);
+    assert.equal(nf.calls.toolCallEnd.length, 1);
+    assert.equal(nf.calls.toolCallEnd[0]?.handle, nf.calls.toolCall[0]?.handle);
+    assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
+      content: 'Skill-read tool ended without an after_tool_call event.',
+      reason: 'session_closed',
+    });
+  });
+
+  it('falls back to after-tool detection when eager tool-span creation fails', async () => {
+    const nf = createNemoRelayRuntime();
+    const backend = createBackend(nf);
+    const originalToolCall = nf.toolCall;
+    nf.toolCall = (() => {
+      throw new Error('tool start failed');
+    }) as typeof nf.toolCall;
+
+    await assert.doesNotReject(
+      backend.onBeforeToolCall(
+        {
+          toolName: 'read_file',
+          params: { path: '/workspace/skills/review/SKILL.md' },
+          toolCallId: 'tool-call-1',
+        },
+        { sessionId: 'session-1', toolCallId: 'tool-call-1' },
+      ),
+    );
+    nf.toolCall = originalToolCall;
+    backend.onAfterToolCall(
+      {
+        toolName: 'read_file',
+        params: { path: '/workspace/skills/review/SKILL.md' },
+        toolCallId: 'tool-call-1',
+        result: { text: 'ok' },
+      },
+      { sessionId: 'session-1', toolCallId: 'tool-call-1' },
+    );
+
+    assert.equal(backend.state().counters.replayErrors, 1);
+    assert.deepEqual(
+      (nf.calls.toolCall[0]?.metadata as Record<string, unknown>)['nemo_relay.skill_loads'],
+      [{ skill_name: 'review', source: 'structured_read' }],
+    );
+  });
+
   it('backdates a lazy session root to tool start when after_tool_call is the first hook', () => {
     const nf = createNemoRelayRuntime();
     const backend = createBackend(nf);
@@ -1009,6 +1119,16 @@ type TestNemoRelayRuntime = NemoRelayRuntimeModule & {
       timestamp: unknown;
     }>;
     llmCallEnd: Array<{ handle: unknown; response: unknown; data: unknown; metadata: unknown; timestamp: unknown }>;
+    toolCall: Array<{
+      name: string;
+      args: unknown;
+      handle: unknown;
+      parentHandle: unknown;
+      metadata: unknown;
+      toolCallId: unknown;
+      timestamp: unknown;
+    }>;
+    toolCallEnd: Array<{ handle: unknown; result: unknown; metadata: unknown; timestamp: unknown }>;
     setThreadScopeStack: unknown[];
     toolConditionalExecution: Array<{ name: string; args: unknown }>;
   };
@@ -1054,6 +1174,8 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
     event: [],
     llmCall: [],
     llmCallEnd: [],
+    toolCall: [],
+    toolCallEnd: [],
     setThreadScopeStack: [],
     toolConditionalExecution: [],
   };
@@ -1090,8 +1212,24 @@ function createNemoRelayRuntime(): TestNemoRelayRuntime {
       const [handle, response, data, metadata, timestamp] = args;
       calls.llmCallEnd.push({ handle, response, data, metadata, timestamp });
     },
-    toolCall: () => ({}) as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>,
-    toolCallEnd: () => {},
+    toolCall: (...args: Parameters<NemoRelayRuntimeModule['toolCall']>) => {
+      const [name, toolArgs, parentHandle, , , metadata, toolCallId, timestamp] = args;
+      const handle = { id: `tool-${nextScopeId++}` };
+      calls.toolCall.push({
+        name,
+        args: toolArgs,
+        handle,
+        parentHandle,
+        metadata,
+        toolCallId,
+        timestamp,
+      });
+      return handle as unknown as ReturnType<NemoRelayRuntimeModule['toolCall']>;
+    },
+    toolCallEnd: (...args: Parameters<NemoRelayRuntimeModule['toolCallEnd']>) => {
+      const [handle, result, , metadata, timestamp] = args;
+      calls.toolCallEnd.push({ handle, result, metadata, timestamp });
+    },
     toolConditionalExecution: async (name, args) => {
       calls.toolConditionalExecution.push({ name, args });
     },

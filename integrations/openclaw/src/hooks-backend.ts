@@ -21,7 +21,13 @@ import {
   replayAgentEndMessages,
   replayPendingLlmOutputsForSession,
 } from './hook-replay/llm.js';
-import { guardBeforeToolCall, replayAfterToolCall } from './hook-replay/tool.js';
+import {
+  guardBeforeToolCall,
+  replayAfterToolCall,
+  startEagerSkillToolCall,
+  type EagerSkillToolCall,
+} from './hook-replay/tool.js';
+import { detectSkillLoads } from './hook-replay/skill-load.js';
 import {
   createHookReplayState,
   drainSession,
@@ -86,6 +92,7 @@ export class HookReplayBackend {
   private readonly warningCounts = new Map<string, number>();
   private readonly pendingSubagentLineageByChildSessionKey = new Map<string, PendingSubagentLineage>();
   private readonly pendingSubagentChildKeyByRunId = new Map<string, string>();
+  private readonly eagerSkillLoadsByToolCall = new Map<string, EagerSkillToolCall>();
 
   constructor(options: HookReplayBackendOptions) {
     this.nf = options.nf;
@@ -170,12 +177,34 @@ export class HookReplayBackend {
 
   /** Replay a finished OpenClaw tool call as a NeMo Relay tool span or blocked mark. */
   onAfterToolCall(event: PluginHookAfterToolCallEvent, ctx: PluginHookToolContext): void {
-    replayAfterToolCall(this.sessionManager(), event, ctx);
+    replayAfterToolCall(this.sessionManager(), event, ctx, this.consumeEagerSkillToolCall(event, ctx));
   }
 
   /** Run conditional-execution guardrails before OpenClaw invokes a tool. */
   async onBeforeToolCall(event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext): Promise<void> {
-    await guardBeforeToolCall(this.sessionManager(), event, ctx);
+    const session = await guardBeforeToolCall(this.sessionManager(), event, ctx);
+    const toolCallId = event.toolCallId ?? ctx.toolCallId;
+    if (!session || !toolCallId) {
+      return;
+    }
+    const detections = detectSkillLoads(event.toolName, event.params);
+    if (detections.length === 0) {
+      return;
+    }
+
+    const observedAtMicros = nowMicros();
+    this.pruneEagerSkillLoads(Math.trunc(observedAtMicros / 1000));
+    const eagerToolCall = startEagerSkillToolCall(
+      this.sessionManager(),
+      event,
+      ctx,
+      session,
+      detections,
+      observedAtMicros,
+    );
+    if (eagerToolCall) {
+      this.eagerSkillLoadsByToolCall.set(this.skillToolCallKey(session.ownerKey, toolCallId), eagerToolCall);
+    }
   }
 
   /** Capture assistant message writes that may contain the clearest provider output. */
@@ -424,11 +453,71 @@ export class HookReplayBackend {
   /** Drain, close, export, and delete one session. */
   private async closeSession(session: SessionState, summary: JsonRecord, metadata?: JsonRecord): Promise<void> {
     this.materializeDeferredSessionRoot(session);
+    for (const [key, record] of this.eagerSkillLoadsByToolCall) {
+      if (key.startsWith(`${session.ownerKey}\u0000`)) {
+        this.closeEagerSkillToolCall(session, record, 'session_closed', nowMicros());
+        this.eagerSkillLoadsByToolCall.delete(key);
+      }
+    }
     drainSession(this.sessionManager(), session);
     closeSessionRoot(this.sessionManager(), session, summary, session.finalOutput ?? summary, metadata);
     this.flushSubscriberDelivery('session_close');
     this.forgetPendingSubagentLineage(session);
     deleteSession(this.stateValue, session);
+  }
+
+  /** Consume the tool span already started by tool-call middleware. */
+  private consumeEagerSkillToolCall(
+    event: PluginHookAfterToolCallEvent,
+    ctx: PluginHookToolContext,
+  ): EagerSkillToolCall | undefined {
+    const toolCallId = event.toolCallId ?? ctx.toolCallId;
+    const ownerKey = resolveSessionOwnerKey(this.stateValue, {
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+      runId: event.runId ?? ctx.runId,
+    });
+    if (!toolCallId || !ownerKey) {
+      return undefined;
+    }
+    const record = this.eagerSkillLoadsByToolCall.get(this.skillToolCallKey(ownerKey, toolCallId));
+    this.eagerSkillLoadsByToolCall.delete(this.skillToolCallKey(ownerKey, toolCallId));
+    return record;
+  }
+
+  private skillToolCallKey(ownerKey: string, toolCallId: string): string {
+    return `${ownerKey}\u0000${toolCallId}`;
+  }
+
+  private pruneEagerSkillLoads(nowMs: number): void {
+    for (const [key, record] of this.eagerSkillLoadsByToolCall) {
+      if (nowMs - record.observedAtMs > 5 * 60 * 1000) {
+        const [ownerKey] = key.split('\u0000', 1);
+        const session = ownerKey ? this.stateValue.sessions.get(ownerKey) : undefined;
+        if (session) {
+          this.closeEagerSkillToolCall(session, record, 'after_tool_call_timeout', nowMs * 1000);
+        }
+        this.eagerSkillLoadsByToolCall.delete(key);
+      }
+    }
+  }
+
+  private closeEagerSkillToolCall(
+    session: SessionState,
+    record: EagerSkillToolCall,
+    reason: string,
+    timestamp: number,
+  ): void {
+    this.emitCapturedUnderSession('eager_skill_tool_cleanup', session, () => {
+      this.nf.toolCallEnd(
+        record.handle,
+        toJsonRecord({ content: 'Skill-read tool ended without an after_tool_call event.', reason }),
+        null,
+        toJsonRecord({ source: 'openclaw.skill_load_cleanup', reason }),
+        timestamp,
+      );
+      this.stateValue.counters.toolSpansReplayed += 1;
+    });
   }
 
   /** Emit a session-level OpenClaw lifecycle mark. */

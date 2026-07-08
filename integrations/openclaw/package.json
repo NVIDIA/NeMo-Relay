@@ -25,6 +25,7 @@
     "src/hook-replay/llm.ts",
     "src/hook-replay/marks.ts",
     "src/hook-replay/session.ts",
+    "src/hook-replay/skill-load.ts",
     "src/hook-replay/tool.ts",
     "src/hooks-backend.ts",
     "src/modules.ts",

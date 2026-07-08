@@ -124,6 +124,40 @@ class TestGraphCallbacks:
         assert _events_to_strings(subscribed_events) == self._expected_events
 
 
+def test_complete_skill_read_inside_langgraph_emits_mark(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: NemoRelayCallbackHandler,
+):
+    from langgraph.graph import END, START, StateGraph
+
+    def load_skill(state: State) -> State:
+        handle = nemo_relay.tools.call("read_file", {"path": "/skills/review/SKILL.md"})
+        nemo_relay.tools.call_end(handle, {"loaded": True})
+        return state
+
+    builder = StateGraph(cast(Any, State))
+    builder.add_node("load_skill", load_skill)
+    builder.add_edge(START, "load_skill")
+    builder.add_edge("load_skill", END)
+    graph = builder.compile()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        result = graph.invoke({"value": 1}, config={"callbacks": [callback_handler]})
+
+    nemo_relay.subscribers.flush()
+    assert result == {"value": 1}
+    mark = next(
+        event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent) and event.name == "skill.load"
+    )
+    tool_start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "read_file" and event.scope_category == "start"
+    )
+    assert mark.parent_uuid == tool_start.uuid
+    assert mark.data == {"skill_name": "review"}
+
+
 def test_graph_lifecycle_callbacks_emit_marks(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: NemoRelayCallbackHandler,
