@@ -18,10 +18,25 @@ announcement:
   message: "🔔 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and behavior may change with each release."
 
 redirects:
+# Release notes
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes
+
+# Generated API references
 - source: /nemo/relay/reference/api/python-library-reference/pii-redaction
   destination: /nemo/relay/reference/api/python-library-reference/nemo-relay/pii-redaction
+- source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/pricing
+  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
+- source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing
+  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
+- source: /nemo/relay/reference/api/python-library-reference/:slug*
+  destination: /nemo/relay/reference/api/python-library-reference/nemo-relay/:slug*
+- source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/pricing/:slug*
+  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
+- source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing/:slug*
+  destination: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
+
+# Plugin configuration documentation
 - source: /nemo/relay/build-plugins/plugin-configuration-files
   destination: /nemo/relay/configure-plugins/plugin-configuration-files
 - source: /nemo/relay/observability-plugin/about
@@ -52,6 +67,16 @@ redirects:
   destination: /nemo/relay/configure-plugins/pii-redaction/about
 - source: /nemo/relay/pii-redaction-plugin/configuration
   destination: /nemo/relay/configure-plugins/pii-redaction/configuration
+
+# Build plugin guides
+- source: /nemo/relay/build-plugins/basic-guide
+  destination: /nemo/relay/configure-plugins/language-binding/about
+- source: /nemo/relay/build-plugins/:slug*
+  destination: /nemo/relay/configure-plugins/language-binding/:slug*
+
+# CLI guides
+- source: /nemo/relay/nemo-relay-cli/cursor
+  destination: /nemo/relay/nemo-relay-cli/about
 
 experimental:
   mdx-components:
