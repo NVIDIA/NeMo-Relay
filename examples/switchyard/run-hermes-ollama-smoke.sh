@@ -35,7 +35,7 @@ cleanup() {
     docker network rm "$docker_network" >/dev/null 2>&1 || true
   fi
   if [[ $status -ne 0 ]]; then
-    echo "Hermes/Cascade smoke failed; artifacts preserved in $artifact_dir" >&2
+    echo "Hermes/StageRouter smoke failed; artifacts preserved in $artifact_dir" >&2
     e2e_tail_logs "$artifact_dir"
   fi
 }
@@ -143,7 +143,7 @@ run_query() {
   mv "$atif_path" "$artifact_dir/trajectory-$sequence-$label.atif.json"
 }
 
-emit_cascade_signal() {
+emit_stage_router_signal() {
   local sequence="$1"
   local label="$2"
   local output="$3"
@@ -197,10 +197,10 @@ if [[ -z "$session_id" || "$session_id" == "null" ]]; then
   echo "could not recover the Hermes session ID from the first routing mark" >&2
   exit 1
 fi
-emit_cascade_signal 02 complex \
-  'CUDA out of memory while analyzing the concurrent queue; critical failure requires careful recovery and a strong model.'
+emit_stage_router_signal 02 complex \
+  'CUDA out of memory while analyzing the concurrent queue; critical failure requires careful recovery and a capable model.'
 run_query 02 complex "$complex_query" "$session_id"
-emit_cascade_signal 03 simple-followup \
+emit_stage_router_signal 03 simple-followup \
   'All tests passed. The next request is a direct low-risk formatting response: return exactly SIMPLE_DONE.'
 run_query 03 simple-followup "$followup_query" "$session_id"
 
@@ -241,7 +241,7 @@ for sequence, label, start, end in event_ranges:
     representative_decisions.append(decision)
 actual_models = [event.get("data", {}).get("selected_model") for event in representative_decisions]
 if actual_models != expected_models:
-    raise SystemExit(f"unexpected Cascade route sequence: {actual_models}; expected {expected_models}")
+    raise SystemExit(f"unexpected StageRouter route sequence: {actual_models}; expected {expected_models}")
 
 required_mark_names = {"switchyard.routing.requested", "switchyard.routing.decision"}
 if not required_mark_names.issubset({event.get("name") for event in marks}):
@@ -290,9 +290,9 @@ summary = {
     "expected_route_sequence": expected_models,
     "actual_route_sequence": actual_models,
     "routing_basis": [
-        "cold Cascade weak default",
-        "canonical ATOF critical-error tool result (strong override)",
-        "canonical ATOF clean-tests tool result (weak classifier decision)",
+        "cold StageRouter efficient default",
+        "canonical ATOF critical-error tool result (capable override)",
+        "canonical ATOF clean-tests tool result (efficient classifier decision)",
     ],
     "atof": {"file": atof_path.name, "event_count": len(events), "routing_mark_count": len(marks)},
     "atif": {"files": [path.name for path in atif_paths], "trajectory_count": len(atif_paths)},
@@ -300,14 +300,14 @@ summary = {
     "phoenix_url": f"http://127.0.0.1:{phoenix_port}",
 }
 (root / "trajectory-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-readme = f"""# Hermes / Ollama / Switchyard Cascade trajectory
+readme = f"""# Hermes / Ollama / Switchyard StageRouter trajectory
 
 This bundle captures one fixed three-query Hermes session routed through NeMo
 Relay and the Switchyard Decision API. The verified representative route is:
 
-1. `llama3.2:latest` (weak) — cold Cascade default
-2. `qwen3.6:35b` (strong) — critical-signal Cascade override
-3. `llama3.2:latest` (weak) — clean-state classifier decision
+1. `llama3.2:latest` (efficient) — cold StageRouter default
+2. `qwen3.6:35b` (capable) — critical-signal StageRouter override
+3. `llama3.2:latest` (efficient) — clean-state classifier decision
 
 Session ID: `{session_id}`
 
@@ -319,10 +319,10 @@ memory. Fixture events carry `metadata.trajectory_fixture = true` and a fixture
 label so they cannot be confused with organic Hermes events.
 
 The fixtures are necessary for this demonstration because the current
-Switchyard Cascade Decision API classifies from its accumulated ATOF snapshot,
+Switchyard StageRouter Decision API classifies from its accumulated ATOF snapshot,
 not directly from `current_request.body`. The critical fixture exercises the
-real strong override. The clean-tests fixture removes the prior critical signal
-from the one-result window and exercises the weak classifier path.
+real capable override. The clean-tests fixture removes the prior critical signal
+from the one-result window and exercises the efficient classifier path.
 
 ## File map
 
@@ -330,14 +330,14 @@ from the one-result window and exercises the weak classifier path.
 | --- | --- | --- |
 | `trajectory-summary.json` | Machine-readable queries, selected models, reasons, counts, and Phoenix URL | Confirms expected and actual representative routes match |
 | `trajectory.atof.jsonl` | Complete Relay ATOF stream for all three queries and the labeled fixtures | Identity propagation, lifecycle events, routing marks, and accumulator input |
-| `trajectory-01-simple.atof.jsonl` | ATOF emitted by the first Hermes invocation | Cold-start weak default |
-| `trajectory-02-complex.atof.jsonl` | ATOF emitted by the complex Hermes invocation | Dispatch through the selected strong backend |
-| `trajectory-03-simple-followup.atof.jsonl` | ATOF emitted by the final Hermes invocation | Return to the weak backend |
-| `trajectory-signal-*.atof.jsonl` | Canonical, labeled tool start/end fixtures | Strong critical-error override and weak clean-state classification |
+| `trajectory-01-simple.atof.jsonl` | ATOF emitted by the first Hermes invocation | Cold-start efficient default |
+| `trajectory-02-complex.atof.jsonl` | ATOF emitted by the complex Hermes invocation | Dispatch through the selected capable backend |
+| `trajectory-03-simple-followup.atof.jsonl` | ATOF emitted by the final Hermes invocation | Return to the efficient backend |
+| `trajectory-signal-*.atof.jsonl` | Canonical, labeled tool start/end fixtures | Capable critical-error override and efficient clean-state classification |
 | `*.atof-ingest.json` | Switchyard ingestion reports for query segments and fixtures | Successful or idempotent ATOF accumulation |
-| `trajectory-01-simple.atif.json` | ATIF representation of query 1 | Weak-model trajectory structure |
-| `trajectory-02-complex.atif.json` | ATIF representation of query 2 | Strong-model trajectory structure |
-| `trajectory-03-simple-followup.atif.json` | ATIF representation of query 3 | Weak follow-up trajectory structure |
+| `trajectory-01-simple.atif.json` | ATIF representation of query 1 | Efficient-model trajectory structure |
+| `trajectory-02-complex.atif.json` | ATIF representation of query 2 | Capable-model trajectory structure |
+| `trajectory-03-simple-followup.atif.json` | ATIF representation of query 3 | Efficient follow-up trajectory structure |
 | `trajectory.otel.json` | OTLP JSON batches written by the OpenTelemetry Collector | Relay spans exported to the collector and forwarded to Phoenix |
 | `query-*.log` | Hermes/Relay stdout and stderr for each invocation | Human-readable harness responses and execution diagnostics |
 | `query-event-ranges.tsv` | Query label and ATOF line-count boundaries | Separates representative user-query decisions from extra Hermes calls |
@@ -395,7 +395,7 @@ PY
     query-event-ranges.tsv
 )
 
-echo "Hermes/Ollama Cascade trajectory passed: llama3.2 -> qwen3.6:35b -> llama3.2"
+echo "Hermes/Ollama StageRouter trajectory passed: llama3.2 -> qwen3.6:35b -> llama3.2"
 echo "Artifacts: $artifact_dir"
 echo "Bundle: $artifact_dir/trajectory-bundle.tar.gz"
 if [[ "$keep_phoenix" == "1" ]]; then

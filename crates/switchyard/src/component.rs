@@ -978,6 +978,7 @@ impl SwitchyardRuntime {
             "rollout_mode": self.config.mode.label(),
             "reason_code": decision.reason_code,
             "reason_summary": decision.reason_summary,
+            "router_metadata": decision.metadata,
         }));
         Some(contribution)
     }
@@ -1154,6 +1155,7 @@ impl SwitchyardRuntime {
                 "confidence": decision.confidence,
                 "reason_code": decision.reason_code,
                 "reason_summary": decision.reason_summary,
+                "router_metadata": decision.metadata,
                 "latency_ms": latency_ms,
                 "observe_only": observe_only,
                 "rollout_mode": self.config.mode.label(),
@@ -1528,7 +1530,7 @@ mod tests {
     fn config(decision_api_url: String) -> SwitchyardConfig {
         SwitchyardConfig {
             decision_api_url,
-            decision_profile_id: "cascade".into(),
+            decision_profile_id: "stage_router".into(),
             request_materialization: RequestMaterialization::SummaryOnly,
             context_mode: ContextMode::PayloadOnly,
             targets: BTreeMap::from([
@@ -1567,11 +1569,11 @@ mod tests {
             schema_version: ROUTING_DECISION_SCHEMA_VERSION.into(),
             decision_id: "decision-1".into(),
             router: crate::contract::DecisionProvider {
-                name: "cascade".into(),
+                name: "stage_router".into(),
                 version: "1".into(),
             },
             route: crate::contract::RoutingTarget {
-                tier: "strong".into(),
+                tier: "efficient".into(),
                 target_model: "selected".into(),
                 backend_id: "selected-chat".into(),
                 target_protocol_profile: "openai_chat".into(),
@@ -1587,7 +1589,11 @@ mod tests {
             confidence: Some(0.9),
             reason_code: Some("test".into()),
             reason_summary: None,
-            metadata: BTreeMap::new(),
+            metadata: BTreeMap::from([
+                ("feature_state".into(), json!("fresh")),
+                ("snapshot_age_millis".into(), json!(37)),
+                ("snapshot_max_age_millis".into(), json!(300_000)),
+            ]),
             extra: BTreeMap::new(),
         }
     }
@@ -1756,6 +1762,14 @@ mod tests {
         assert_eq!(transition.effective.unwrap().model, "selected");
         assert_eq!(contribution.payload.as_ref().unwrap()["routing_attempt"], 2);
         assert_eq!(
+            contribution.payload.as_ref().unwrap()["router_metadata"]["feature_state"],
+            "fresh"
+        );
+        assert_eq!(
+            contribution.payload.as_ref().unwrap()["router_metadata"]["snapshot_age_millis"],
+            37
+        );
+        assert_eq!(
             contribution.payload_schema.as_ref().unwrap().name,
             ROUTING_CONTRIBUTION_SCHEMA
         );
@@ -1813,9 +1827,11 @@ mod tests {
         );
         assert_eq!(event["data_schema"]["name"], ROUTING_MARK_SCHEMA);
         assert_eq!(event["data_schema"]["version"], "1");
-        assert_eq!(event["data"]["profile_id"], "cascade");
+        assert_eq!(event["data"]["profile_id"], "stage_router");
         assert_eq!(event["data"]["selected_model"], "selected");
         assert_eq!(event["data"]["latency_ms"], 17);
+        assert_eq!(event["data"]["router_metadata"]["feature_state"], "fresh");
+        assert_eq!(event["data"]["router_metadata"]["snapshot_age_millis"], 37);
         assert_eq!(
             event["metadata"]["session_id"],
             routing_request.identity.session_id

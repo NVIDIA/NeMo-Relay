@@ -10,7 +10,7 @@ enabled = true
 [components.config]
 mode = "enforce"
 decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
-decision_profile_id = "remote-cascade"
+decision_profile_id = "remote-stage-router"
 request_materialization = "summary_only"
 context_mode = "atof_required"
 decision_timeout_millis = 1000

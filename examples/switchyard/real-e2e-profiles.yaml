@@ -12,10 +12,10 @@ targets:
     base_url: http://127.0.0.1:4101/v1
 
 profiles:
-  remote-cascade:
-    type: cascade
-    strong: strong
-    weak: weak
+  remote-stage-router:
+    type: stage_router
+    capable: strong
+    efficient: weak
     fallback_target_on_evict: strong
-    picker: cascade_weak_default
+    picker: efficient_first
     confidence_threshold: 0.7

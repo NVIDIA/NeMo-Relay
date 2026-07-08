@@ -10,7 +10,7 @@ enabled = true
 [components.config]
 mode = "enforce"
 decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
-decision_profile_id = "hermes-ollama-cascade"
+decision_profile_id = "hermes-ollama-stage-router"
 request_materialization = "full_body"
 context_mode = "atof_required"
 decision_timeout_millis = 120000
@@ -71,8 +71,8 @@ authorization = "SWITCHYARD_AUTHORIZATION"
 [components.config.atif]
 enabled = true
 agent_name = "Hermes"
-agent_version = "switchyard-cascade-smoke"
-model_name = "switchyard-cascade"
+agent_version = "switchyard-stage-router-smoke"
+model_name = "switchyard-stage-router"
 output_directory = "."
 filename_template = "trajectory-{session_id}.atif.json"
 
@@ -87,4 +87,4 @@ timeout_millis = 5000
 
 [components.config.opentelemetry.resource_attributes]
 "deployment.environment.name" = "local-e2e"
-"switchyard.profile.id" = "hermes-ollama-cascade"
+"switchyard.profile.id" = "hermes-ollama-stage-router"

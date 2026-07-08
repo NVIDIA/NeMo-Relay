@@ -197,9 +197,9 @@ mod tests {
         let decision: RoutingDecision = serde_json::from_value(json!({
             "schema_version": "switchyard.routing_decision.v1",
             "decision_id": "decision-1",
-            "router": {"name": "cascade", "version": "1"},
+            "router": {"name": "stage_router", "version": "1"},
             "route": {
-                "tier": "strong",
+                "tier": "capable",
                 "target_model": "model-a",
                 "backend_id": "backend-a",
                 "target_protocol_profile": "openai_chat",
@@ -248,7 +248,7 @@ mod tests {
         let missing_route = json!({
             "schema_version": "switchyard.routing_decision.v1",
             "decision_id": "decision-1",
-            "router": {"name": "cascade", "version": "1"}
+            "router": {"name": "stage_router", "version": "1"}
         });
         assert!(serde_json::from_value::<RoutingDecision>(missing_route).is_err());
     }

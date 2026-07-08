@@ -12,12 +12,12 @@ targets:
     base_url: http://127.0.0.1:11434/v1
 
 profiles:
-  hermes-ollama-cascade:
-    type: cascade
-    strong: ollama-strong
-    weak: ollama-weak
+  hermes-ollama-stage-router:
+    type: stage_router
+    capable: ollama-strong
+    efficient: ollama-weak
     fallback_target_on_evict: ollama-strong
-    picker: cascade_weak_default
+    picker: efficient_first
     # Force the classifier path for ordinary prompts so this smoke demonstrates
     # request-complexity routing rather than relying on incidental tool signals.
     confidence_threshold: 1.0
@@ -26,7 +26,7 @@ profiles:
     signal_recent_window: 1
     classifier:
       # Keep classification small and deterministic; qwen3.6:35b remains the
-      # strong backend selected for the complex trajectory turn.
+      # capable backend selected for the complex trajectory turn.
       model: llama3.2:latest
       api_key: ${OLLAMA_CLASSIFIER_API_KEY}
       base_url: http://127.0.0.1:11434/v1
@@ -35,11 +35,11 @@ profiles:
       max_tokens: 128
       system_prompt: >-
         Select exactly one model tier for the latest user request. Return only
-        JSON in the form {"tier":"weak"} or {"tier":"strong"}. Choose weak
+        JSON in the form {"tier":"efficient"} or {"tier":"capable"}. Choose efficient
         for arithmetic, extraction, formatting, concise factual responses, or
-        other direct low-risk work. Choose strong for architecture, concurrency,
+        other direct low-risk work. Choose capable for architecture, concurrency,
         debugging, multi-step reasoning, subtle correctness constraints, or
         requests requiring a defensible technical analysis. In the supplied
-        State line, severity at least 1.0 always means strong; tests_passed=true
-        with severity 0.0 means weak. Classify the latest state even when earlier
+        State line, severity at least 1.0 always means capable; tests_passed=true
+        with severity 0.0 means efficient. Classify the latest state even when earlier
         conversation turns were more complex.
