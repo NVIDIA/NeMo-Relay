@@ -709,6 +709,47 @@ mod tests {
     }
 
     #[test]
+    fn inline_tool_arguments_and_provider_errors_translate_without_loss() {
+        let mut responses = StreamTranscoder::new(
+            WireProtocol::OpenaiResponses,
+            WireProtocol::AnthropicMessages,
+            "selected-model",
+        );
+        let tool = responses
+            .transcode(&json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{\"key\":1}"}
+            }))
+            .unwrap();
+        assert!(
+            tool.iter()
+                .any(|chunk| chunk["delta"]["partial_json"] == "{\"key\":1}")
+        );
+        let error = responses
+            .transcode(
+                &json!({"type": "response.failed", "response": {"error": {"message": "denied"}}}),
+            )
+            .unwrap();
+        assert_eq!(error.last().unwrap()["type"], "error");
+        assert_eq!(error.last().unwrap()["error"]["message"], "denied");
+
+        let mut anthropic = StreamTranscoder::new(
+            WireProtocol::AnthropicMessages,
+            WireProtocol::OpenaiResponses,
+            "selected-model",
+        );
+        let tool = anthropic
+            .transcode(&json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "call-2", "name": "lookup", "input": {"key": 2}}
+            }))
+            .unwrap();
+        assert!(tool.iter().any(|chunk| chunk["delta"] == "{\"key\":2}"));
+    }
+
+    #[test]
     fn every_cross_protocol_stream_pair_is_incremental_and_collectable() {
         let protocols = [
             WireProtocol::OpenaiChat,
