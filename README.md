@@ -29,8 +29,8 @@ shared runtime for scopes, policy, plugins, and lifecycle events.
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
-| Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/observability-plugin/about) |
-| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
+| Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) |
+| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/v0.5.0/build-plugins/about) |
 | Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 
