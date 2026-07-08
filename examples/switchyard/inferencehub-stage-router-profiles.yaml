@@ -20,23 +20,8 @@ profiles:
     efficient: claude-sonnet-4-6
     fallback_target_on_evict: claude-opus-4-6
     picker: efficient_first
-    # Exercise the classifier for non-critical warm decisions. Hard overrides
-    # still take precedence, and cold/stale state still uses the picker default.
-    confidence_threshold: 1.0
+    # Exercise deterministic dimensions on organic tool results. The failing
+    # invariant check clears this threshold toward capable; the clean check
+    # returns to the efficient picker default.
+    confidence_threshold: 0.05
     signal_recent_window: 8
-    classifier:
-      model: azure/anthropic/claude-sonnet-4-6
-      api_key: ${NV_INFERENCEHUB_KEY}
-      base_url: https://inference-api.nvidia.com/v1
-      timeout_secs: 120.0
-      recent_turn_window: 4
-      max_tokens: 96
-      system_prompt: >-
-        Select exactly one model tier for this fixed routing-policy test. Return
-        only JSON in the form {"tier":"efficient"} or {"tier":"capable"}.
-        Return efficient only when the most recent user instruction explicitly
-        requests the literal CONTEXT_READY or REVIEW_COMPLETE result. Return
-        capable for every other request, including tool-result continuations and
-        any architecture, concurrency, ABA, linearization, or memory-ordering
-        analysis. Do not infer that Sonnet is sufficient; apply this policy
-        literally.

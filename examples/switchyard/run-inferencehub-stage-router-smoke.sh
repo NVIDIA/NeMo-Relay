@@ -145,9 +145,9 @@ providers = ["anthropic_messages", "openai_chat", "openai_responses"]
 EOF
 fi
 
-# Use a real, deterministic tool result rather than an injected routing
-# failure. Its size is intentional: it gives Visor causal compression evidence
-# and leaves StageRouter enough organic Relay history for later decisions.
+# The harness runs a real deterministic assertion over this fixture. Its size
+# gives Visor causal compression evidence and leaves StageRouter enough organic
+# Relay history for later decisions.
 python3 - "$artifact_dir/workspace/TASK_CONTEXT.md" <<'PY'
 import pathlib
 import sys
@@ -237,7 +237,7 @@ run_query() {
         --plugin-config-path "$artifact_dir/.nemo-relay/plugins.toml" \
         -- -p --output-format json \
         --model azure/anthropic/claude-sonnet-4-6 \
-        --tools Read --permission-mode bypassPermissions \
+        --tools Bash --permission-mode bypassPermissions \
         --disable-slash-commands "${session_args[@]}" "$query"
   ) >"$artifact_dir/query-$sequence-$label.log" 2>&1
   after_lines="$(wc -l <"$artifact_dir/atof/trajectory.atof.jsonl" | tr -d ' ')"
@@ -253,11 +253,11 @@ run_query() {
 }
 
 run_query 01 context \
-  "Use the Read tool to read $artifact_dir/workspace/TASK_CONTEXT.md completely. Then reply with exactly CONTEXT_READY." start
+  "Use Bash exactly once to run: python3 -c 'from pathlib import Path; print(Path(\"$artifact_dir/workspace/TASK_CONTEXT.md\").read_text()); raise AssertionError(\"queue generation invariant failed\")'. After the tool completes, do not retry it; reply with exactly FAILURE_CAPTURED." start
 run_query 02 architecture \
   'Without calling tools, produce a rigorous review of the bounded queue in TASK_CONTEXT.md. Give a concrete wraparound ABA interleaving, separate reservation from publication linearization points, specify the minimum acquire/release ordering, and recommend the smallest defensible correction. Keep the answer under 700 words.' resume
 run_query 03 status \
-  'Without calling tools, reply with exactly REVIEW_COMPLETE and no other text.' resume
+  "Use Bash exactly once to run: python3 -c 'print(\"All tests passed\")'. After the tool completes, do not retry it; reply with exactly REVIEW_COMPLETE." resume
 
 sleep 2
 docker stop --time 10 "$collector_container" >/dev/null
@@ -281,6 +281,11 @@ expected = {
 }
 if not expected.issubset(set(models)):
     raise SystemExit(f"both InferenceHub routes were not observed: {models}")
+if models[0] != "azure/anthropic/claude-sonnet-4-6":
+    raise SystemExit(f"cold route was not the efficient target: {models}")
+first_capable = models.index("azure/anthropic/claude-opus-4-6")
+if "azure/anthropic/claude-sonnet-4-6" not in models[first_capable + 1:]:
+    raise SystemExit(f"route did not return to efficient after capable: {models}")
 if any(event.get("data", {}).get("router") != "stage_router" for event in decisions):
     raise SystemExit("non-StageRouter decision observed")
 warm = [
@@ -289,6 +294,8 @@ warm = [
 ]
 if not warm or any("snapshot_age_millis" not in event["data"]["router_metadata"] for event in warm):
     raise SystemExit("fresh decisions did not retain snapshot age metadata")
+if not any(event["data"]["router_metadata"].get("source") == "dimensions" for event in warm):
+    raise SystemExit("the organic tool results did not exercise dimensions routing")
 if any("cascade" in json.dumps(event).lower() for event in decisions):
     raise SystemExit("legacy Cascade terminology leaked into decisions")
 
@@ -361,12 +368,14 @@ random router is used.
 
 ## Fixed trajectory
 
-1. Read a 240-invariant queue fixture with the real Claude Code `Read` tool.
+1. Run a real, deliberately failing queue-invariant check that prints the
+   240-invariant fixture before raising `AssertionError`.
 2. Review its ABA and memory-ordering failure mode under a strict reasoning prompt.
-3. Return a mechanical completion status.
+3. Run a clean check and return a mechanical completion status.
 
-The first request starts cold on the efficient picker default. Later decisions
-use exact-session ATOF state and the StageRouter classifier. `router_metadata`
+The first request starts cold on the efficient picker default. The real failing
+tool result moves the dimensions scorer to capable; the clean check returns it
+to efficient. Later decisions use exact-session ATOF state. `router_metadata`
 records `feature_state`, monotonic snapshot age, age limit, event count, and
 turn depth. Turn lifecycle events cannot make old material evidence fresh.
 
@@ -379,7 +388,7 @@ turn depth. Turn lifecycle events cannot make old material evidence fresh.
 | `atif/*.atif.json` | Direct ATIF trajectories visualizable by Phoenix |
 | `trajectory.otel.json` | OTLP JSON exported by the collector |
 | `query-*.log` | Claude Code/Relay output for each fixed query |
-| `switchyard.log` | Switchyard server and classifier diagnostics |
+| `switchyard.log` | Switchyard server and StageRouter diagnostics |
 | `pricing.json` | Repriceable public-list estimate catalog used by Relay |
 | `phoenix/` | Persistent Phoenix state for the captured run |
 
