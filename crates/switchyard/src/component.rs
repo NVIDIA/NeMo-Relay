@@ -1980,6 +1980,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fallback_setup_failures_preserve_the_provider_error() {
+        let runtime =
+            SwitchyardRuntime::new(config("http://127.0.0.1:1/v1/routing/decision".into()))
+                .unwrap();
+        let buffered: LlmExecutionNextFn = Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("buffered fallback failed".into())) })
+        });
+        let error = runtime
+            .dispatch_fallback_buffered(WireProtocol::OpenaiChat, chat_request(), buffered, "test")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("buffered fallback failed"));
+
+        let streaming: LlmStreamExecutionNextFn = Arc::new(|_| {
+            Box::pin(async { Err(FlowError::Internal("stream fallback failed".into())) })
+        });
+        let error = runtime
+            .dispatch_fallback_stream(WireProtocol::OpenaiChat, chat_request(), streaming, "test")
+            .await
+            .err()
+            .expect("stream fallback setup must fail");
+        assert!(error.to_string().contains("stream fallback failed"));
+    }
+
+    #[tokio::test]
     async fn translated_stream_preserves_success_and_propagates_both_error_sources() {
         let source = Box::pin(futures_stream::iter(vec![
             Ok(chat_chunk("hello", Json::Null)),
