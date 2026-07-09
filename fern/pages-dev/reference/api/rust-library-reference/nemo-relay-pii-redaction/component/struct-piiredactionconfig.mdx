@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PiiRedactionConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub mode: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub input: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub output: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub tool_input: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub tool_output: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    pub codec: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub builtin: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-builtinbackendconfig\">BuiltinBackendConfig</a>&gt;,\n    pub local: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-localbackendconfig\">LocalBackendConfig</a>&gt;,\n    pub policy: ConfigPolicy,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct PiiRedactionConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    pub mode: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub input: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub output: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub mark: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub tool_input: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub tool_output: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    pub priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    pub codec: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub builtin: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-builtinbackendconfig\">BuiltinBackendConfig</a>&gt;,\n    pub local: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-localbackendconfig\">LocalBackendConfig</a>&gt;,\n    pub policy: ConfigPolicy,\n&#125;"}} /></pre>
 
 Canonical config document for the PII redaction component.
 
@@ -30,6 +30,10 @@ Whether to sanitize managed LLM request payloads.
 ### `output: bool`
 
 Whether to sanitize managed LLM response payloads.
+
+### `mark: bool`
+
+Whether to sanitize mark event observability fields.
 
 ### `tool_input: bool`
 
