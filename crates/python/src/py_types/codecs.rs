@@ -18,6 +18,7 @@ use super::{
     FORCE_ANNOTATED_REQUEST_TOOLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_API_SPECIFIC_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_MESSAGE_SERIALIZATION_ERROR,
+    FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_TOOL_CALLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
 };
@@ -539,6 +540,7 @@ impl PyAnnotatedLLMResponse {
                 tool_calls: optional_py_json(tool_calls, "tool_calls")?,
                 finish_reason: optional_finish_reason(finish_reason)?,
                 usage: optional_py_json(usage, "usage")?,
+                optimization_summary: None,
                 api_specific: optional_py_json(api_specific, "api_specific")?,
                 extra: optional_py_json(extra, "extra")?.unwrap_or_default(),
             },
@@ -610,6 +612,23 @@ impl PyAnnotatedLLMResponse {
                     "serialization error",
                     #[cfg(test)]
                     FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
+                )?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    /// Return Relay's plugin-neutral optimization accounting, if present.
+    #[getter]
+    pub(crate) fn optimization_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.optimization_summary {
+            Some(summary) => {
+                let value = to_python_json_value(
+                    summary,
+                    "serialization error",
+                    #[cfg(test)]
+                    FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR,
                 )?;
                 json_to_py(py, &value)
             }

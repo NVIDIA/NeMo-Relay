@@ -636,6 +636,7 @@ fn test_annotated_event_accessors_and_codec_handles() {
             }),
         }),
         api_specific: None,
+        optimization_summary: None,
         extra: serde_json::Map::from_iter([("trace".into(), json!(true))]),
     };
     let llm_end = make_scope_event(ScopeEventFixture {

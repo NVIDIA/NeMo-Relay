@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Json;
 
+use super::optimization::LlmOptimizationSummary;
 use super::request::MessageContent;
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,10 @@ pub struct AnnotatedLlmResponse {
     /// Token usage statistics.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+
+    /// Plugin-neutral optimization accounting computed by Relay at LLM close.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub optimization_summary: Option<LlmOptimizationSummary>,
 
     /// API-specific response data that cannot be normalized across providers.
     #[serde(skip_serializing_if = "Option::is_none")]

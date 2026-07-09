@@ -241,9 +241,10 @@ type PendingMarkSpec struct {
 
 // LLMRequestInterceptOutcome is the canonical result of an LLM request intercept.
 type LLMRequestInterceptOutcome struct {
-	Request          LLMRequestDTO     `json:"request"`
-	AnnotatedRequest json.RawMessage   `json:"annotated_request"`
-	PendingMarks     []PendingMarkSpec `json:"pending_marks"`
+	Request                   LLMRequestDTO                 `json:"request"`
+	AnnotatedRequest          json.RawMessage               `json:"annotated_request"`
+	PendingMarks              []PendingMarkSpec             `json:"pending_marks"`
+	OptimizationContributions []LLMOptimizationContribution `json:"optimization_contributions"`
 }
 
 // ToolExecutionInterceptOutcome is the canonical result of a tool execution
@@ -599,6 +600,9 @@ func goLlmRequestInterceptTrampoline(
 	}
 	if outcome.PendingMarks == nil {
 		outcome.PendingMarks = []PendingMarkSpec{}
+	}
+	if outcome.OptimizationContributions == nil {
+		outcome.OptimizationContributions = []LLMOptimizationContribution{}
 	}
 	outcomeJSON, err := jsonMarshal(outcome)
 	if err != nil {

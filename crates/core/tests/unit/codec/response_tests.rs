@@ -55,6 +55,7 @@ fn full_response() -> AnnotatedLlmResponse {
             cache_write_tokens: Some(3),
             cost: None,
         }),
+        optimization_summary: None,
         api_specific: Some(ApiSpecificResponse::OpenAIChat {
             logprobs: None,
             system_fingerprint: Some("fp_abc123".into()),
@@ -73,6 +74,7 @@ fn minimal_response() -> AnnotatedLlmResponse {
         tool_calls: None,
         finish_reason: None,
         usage: None,
+        optimization_summary: None,
         api_specific: None,
         extra: serde_json::Map::new(),
     }
@@ -1698,6 +1700,7 @@ impl LlmResponseCodec for MockResponseCodec {
             tool_calls: None,
             finish_reason: Some(FinishReason::Complete),
             usage: None,
+            optimization_summary: None,
             api_specific: None,
             extra: serde_json::Map::new(),
         })
