@@ -1504,7 +1504,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::{Json as AxumJson, Router, extract::State, routing::post};
-    use nemo_relay::api::event::Event;
+    use nemo_relay::api::event::{Event, ScopeCategory};
     use nemo_relay::api::llm::{
         LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
     };
@@ -1512,6 +1512,7 @@ mod tests {
     use nemo_relay::api::subscriber::{
         deregister_subscriber, flush_subscribers, register_subscriber,
     };
+    use nemo_relay::codec::optimization::LlmOptimizationSummaryStatus;
     use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
     use nemo_relay::plugin::rollback_registrations;
 
@@ -2496,6 +2497,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retry_then_success_records_one_terminal_route_with_matching_mark_identity() {
+        let (url, decisions) = decision_server().await;
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let events = managed_buffered_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(move |_| {
+                let seen = Arc::clone(&seen);
+                Box::pin(async move {
+                    if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(FlowError::Upstream(UpstreamFailure {
+                            status: Some(503),
+                            body: "retry once".into(),
+                            headers: BTreeMap::new(),
+                            class: UpstreamFailureClass::RetryableStatus,
+                        }))
+                    } else {
+                        Ok(chat_response())
+                    }
+                })
+            }),
+        )
+        .await;
+
+        assert_eq!(dispatches.load(Ordering::SeqCst), 2);
+        let requests = decisions.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].attempt.routing_attempt, 2);
+        drop(requests);
+
+        let start = events
+            .iter()
+            .find(|event| {
+                event.name() == "openai.chat_completions"
+                    && event.scope_category() == Some(ScopeCategory::Start)
+            })
+            .unwrap();
+        let marks = events
+            .iter()
+            .filter(|event| event.name() == "nemo_relay.llm.optimization")
+            .collect::<Vec<_>>();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].parent_uuid(), Some(start.uuid()));
+        assert_eq!(marks[0].data().unwrap()["payload"]["routing_attempt"], 2);
+
+        let summary = events
+            .iter()
+            .find_map(|event| {
+                event
+                    .annotated_response()
+                    .and_then(|response| response.optimization_summary.as_ref())
+            })
+            .unwrap();
+        assert_eq!(summary.contributions.len(), 1);
+        let contribution = &summary.contributions[0];
+        assert!(contribution.applied);
+        assert_eq!(contribution.payload.as_ref().unwrap()["routing_attempt"], 2);
+        assert_eq!(marks[0].data().unwrap()["id"], json!(contribution.id));
+        assert_eq!(
+            marks[0].data().unwrap()["sequence"],
+            json!(contribution.sequence)
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_decision_metadata_limits_accounting_without_failing_provider_success() {
+        let mut oversized = decision();
+        oversized
+            .metadata
+            .insert("oversized_evidence".into(), json!("x".repeat(20_000)));
+        let (url, _) = decision_server_for(oversized).await;
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let events = managed_buffered_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(move |_| {
+                let seen = Arc::clone(&seen);
+                Box::pin(async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    Ok(chat_response())
+                })
+            }),
+        )
+        .await;
+
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.name() != "nemo_relay.llm.optimization")
+        );
+        let summary = events
+            .iter()
+            .find_map(|event| {
+                event
+                    .annotated_response()
+                    .and_then(|response| response.optimization_summary.as_ref())
+            })
+            .unwrap();
+        assert_eq!(summary.status, LlmOptimizationSummaryStatus::Partial);
+        assert!(summary.contributions.is_empty());
+        assert!(
+            summary
+                .limitations
+                .iter()
+                .any(|limitation| limitation == "contribution_limit_exceeded")
+        );
+    }
+
+    #[tokio::test]
     async fn malformed_baseline_is_telemetry_only_and_does_not_change_the_selected_route() {
         let mut drifted = decision();
         drifted.baseline_route.as_mut().unwrap().target_model = "drifted".into();
@@ -2611,6 +2722,58 @@ mod tests {
             fallback
                 .iter()
                 .all(|event| event.name() != "nemo_relay.llm.optimization")
+        );
+    }
+
+    #[tokio::test]
+    async fn committed_stream_error_keeps_one_route_and_never_redispatches() {
+        let (url, decisions) = decision_server().await;
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&dispatches);
+        let events = managed_stream_events(
+            SwitchyardRuntime::new(config(url)).unwrap(),
+            Arc::new(move |_| {
+                let seen = Arc::clone(&seen);
+                Box::pin(async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    Ok(Box::pin(futures_stream::iter(vec![
+                        Ok(chat_chunk("partial", Json::Null)),
+                        Err(FlowError::Upstream(UpstreamFailure {
+                            status: None,
+                            body: "connection closed after commit".into(),
+                            headers: BTreeMap::new(),
+                            class: UpstreamFailureClass::Connection,
+                        })),
+                    ])) as LlmJsonStream)
+                })
+            }),
+        )
+        .await;
+
+        assert_eq!(dispatches.load(Ordering::SeqCst), 1);
+        assert_eq!(decisions.lock().unwrap().len(), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.name() == "nemo_relay.llm.optimization")
+                .count(),
+            1
+        );
+        let summary = events
+            .iter()
+            .find_map(|event| {
+                event
+                    .annotated_response()
+                    .and_then(|response| response.optimization_summary.as_ref())
+            })
+            .unwrap();
+        assert_eq!(summary.contributions.len(), 1);
+        assert!(summary.contributions[0].applied);
+        assert!(
+            summary
+                .limitations
+                .iter()
+                .any(|limitation| limitation == "stream_interrupted")
         );
     }
 
