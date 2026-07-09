@@ -6,7 +6,8 @@ set -euo pipefail
 
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$relay_root/examples/switchyard/e2e-common.sh"
-switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-relay-cost-baseline}"
+switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-topic-nemo-relay-integration}"
+switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4}"
 secret_file="${INFERENCEHUB_SECRETS_FILE:-$(cd "$relay_root/.." && pwd)/.inference_secrets}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 artifact_dir="${SWITCHYARD_TRAJECTORY_DIR:-$relay_root/artifacts/inferencehub-stage-router-$run_id}"
@@ -54,6 +55,7 @@ done
   echo "Switchyard worktree not found: $switchyard_root" >&2
   exit 1
 }
+e2e_verify_switchyard_checkout "$switchyard_root" "$switchyard_expected_commit" >"$artifact_dir/switchyard-revision.txt"
 [[ -f "$secret_file" ]] || {
   echo "InferenceHub secret file not found; set INFERENCEHUB_SECRETS_FILE" >&2
   exit 1

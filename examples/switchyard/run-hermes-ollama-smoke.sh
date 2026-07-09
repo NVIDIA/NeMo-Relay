@@ -6,7 +6,8 @@ set -euo pipefail
 
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$relay_root/examples/switchyard/e2e-common.sh"
-switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-relay-cumulative}"
+switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-topic-nemo-relay-integration}"
+switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 artifact_dir="${SWITCHYARD_TRAJECTORY_DIR:-$relay_root/artifacts/hermes-switchyard-$run_id}"
 token="$(e2e_random_token)"
@@ -20,6 +21,8 @@ phoenix_running=0
 network_created=0
 
 mkdir -p "$artifact_dir/phoenix"
+[[ -d "$switchyard_root" ]] || { echo "Switchyard worktree not found: $switchyard_root" >&2; exit 1; }
+e2e_verify_switchyard_checkout "$switchyard_root" "$switchyard_expected_commit" >"$artifact_dir/switchyard-revision.txt"
 
 cleanup() {
   local status=$?

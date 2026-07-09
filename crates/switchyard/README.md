@@ -3,98 +3,65 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-[![License](https://img.shields.io/github/license/NVIDIA/NeMo-Relay)](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE)
-[![GitHub](https://img.shields.io/badge/github-repo-blue?logo=github)](https://github.com/NVIDIA/NeMo-Relay/)
-[![Codecov](https://codecov.io/gh/NVIDIA/NeMo-Relay/branch/main/graph/badge.svg)](https://app.codecov.io/gh/NVIDIA/NeMo-Relay)
-
 # NeMo Relay Switchyard Plugin
 
-`nemo-relay-switchyard` is Relay's first-party remote Decision API integration. It has no Rust
-dependency on Switchyard. The current `switchyard.routing_request.v1` and
-`switchyard.routing_decision.v1` JSON contracts are represented by local compatibility types
-intentionally: the plugin depends on the versioned wire contract, while Relay retains ownership of
-its runtime and target-binding boundary. These types are not a placeholder for a future Rust
-dependency on Switchyard.
+`nemo-relay-switchyard` is an experimental Relay integration for the
+[Switchyard Decision API](https://github.com/NVIDIA-NeMo/Switchyard). Relay calls the
+Decision API at request time; the plugin does not currently link against Switchyard Rust
+crates or start the Switchyard service.
 
-The component supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages on both
-buffered and SSE paths. Relay owns target URLs, credentials, exact backend bindings, protocol
-translation, bounded provider retries, and the final trusted fallback. Switchyard selects only a
-configured backend ID and its exact model/protocol/endpoint tuple.
+## Experimental setup
 
-## Why Use It?
+The current integration runs Switchyard as a separate service. The included scripts expect a
+Switchyard checkout at the latest commit on
+[`topic/nemo-relay-integration`](https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration):
 
-- **Route through a remote Decision API**: Let Switchyard select among Relay-owned backend targets
-  without coupling the Relay runtime to Switchyard's implementation.
-- **Keep provider boundaries in Relay**: Relay validates exact model, protocol, endpoint, and URL
-  bindings before dispatch.
-- **Fail open safely**: Decision failures, unsupported extensions, and provider failures use the
-  configured same-protocol trusted fallback.
-- **Preserve causal evidence**: Routing marks and optimization contributions identify the selected
-  model, capable baseline, freshness state, retry attempt, and terminal committed route.
+```text
+5e61cb71ea94fe4f0d365bbc788c9011d42af2e4
+```
 
-## What You Get
+Create or update the adjacent worktree before running an example:
 
-- Remote Decision API request and decision contract compatibility.
-- OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages translation.
-- Buffered and streaming dispatch with bounded retries and strict stream commitment.
-- Six request-materialization modes and identity-aware ATOF integration.
-- Exact backend validation, environment-referenced credentials, and per-protocol fallbacks.
+```bash
+git fetch upstream topic/nemo-relay-integration
+git worktree add --detach ../Switchyard-topic-nemo-relay-integration \
+  5e61cb71ea94fe4f0d365bbc788c9011d42af2e4
+```
 
-## Installation
-
-The Switchyard component is shipped as part of the NeMo Relay workspace. Enable it through the
-Relay plugin configuration described below.
+The scripts verify this commit before launching `switchyard-server`. To intentionally test a
+different revision, set both `SWITCHYARD_ROOT` and `SWITCHYARD_EXPECTED_COMMIT`.
 
 ## Configuration
 
-Start from [`examples/switchyard/plugins.toml`](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/switchyard/plugins.toml). Sensitive
-headers contain environment variable names, never secret values. For example:
+Enable the plugin in the Relay configuration. Relay owns provider URLs, credentials, exact target
+bindings, protocol translation, retries, and the trusted fallback. Switchyard returns a selected
+backend ID and routing metadata.
 
-```bash
-export SWITCHYARD_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
-export SWITCHYARD_AUTHORIZATION="Bearer ${SWITCHYARD_TOKEN}"
-nemo-relay --plugin-config-path examples/switchyard/plugins.toml doctor
-```
-
-`context_mode = "payload_only"` requires no history exporter. `context_mode = "atof_required"`
-requires an enabled `http_post` ATOF endpoint at the configured (or derived)
-`/v1/atof/events` URL, `field_name_policy = "preserve"`, and at least one environment-referenced
-authentication header.
+For ATOF-backed routing, configure an enabled HTTP ATOF exporter pointing at the Switchyard
+`/v1/atof/events` endpoint. `payload_only` profiles do not require ATOF history.
 
 ## Verification
 
-Run every command in this section from the root of the NeMo Relay repository checkout.
-
-The crate's default test suite includes the fake Decision API/provider E2E, all six request
-materialization modes, all buffered and streaming 3×3 protocol combinations, exact target
-validation, retry exhaustion, non-retryable fallback, and the stream commit boundary:
+Run commands from the root of the NeMo Relay checkout:
 
 ```bash
 cargo test -p nemo-relay-switchyard
-cargo test -p nemo-relay-cli gateway::tests
-cargo test -p nemo-relay --features atof-streaming observability::atof::tests
-```
-
-The repeatable real-service E2E starts the cumulative Switchyard server and deterministic fake
-providers, routes cold and warm buffered requests, and checks the SSE path:
-
-```bash
 examples/switchyard/run-real-e2e.sh
 ```
 
-With Ollama serving `qwen3.6:35b` on `127.0.0.1:11434` and Hermes installed, run a real model
-trajectory through Hermes, Relay, and the cumulative Switchyard server:
+The real-service script starts the pinned Switchyard server and Relay against deterministic fake
+providers. The optional Hermes, Ollama, and InferenceHub scripts generate longer trajectories and
+export ATOF/ATIF/OTEL artifacts:
 
 ```bash
 examples/switchyard/run-hermes-ollama-smoke.sh
+examples/switchyard/run-inferencehub-stage-router-smoke.sh
 ```
 
-Both scripts create a random shared bearer token for the run; no credential value is stored in the
-repository. Override `SWITCHYARD_ROOT` when the cumulative worktree is not adjacent to this Relay
-worktree.
+The scripts generate ephemeral bearer tokens; no credential values are stored in the repository.
 
-## Documentation
+## Future direction
 
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
-- [NVIDIA-NeMo/Switchyard](https://github.com/NVIDIA-NeMo/Switchyard)
-- [Switchyard Decision API integration example](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/switchyard)
+This service boundary is intentional for the current experimental integration. A future
+Switchyard library-only implementation can provide an in-process DecisionProvider while retaining
+the same versioned request and decision contracts.
