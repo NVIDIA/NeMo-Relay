@@ -72,6 +72,7 @@ use crate::convert::{
 use crate::stream::LlmStream;
 use crate::types::{
     EventSanitizeFields, LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle,
+    event_sanitize_fields_from_js,
 };
 
 #[napi::module_init]
@@ -1097,6 +1098,9 @@ impl PersistentJsFunction {
         fields: EventSanitizeFields,
     ) -> napi::Result<EventSanitizeFields> {
         let mut value = ptr::null_mut();
+        // SAFETY: `self.reference` is a live N-API reference created in
+        // `self.env`, and `value` is writable storage for the borrowed
+        // function value.
         let status =
             unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
         if status != napi::sys::Status::napi_ok {
@@ -1104,10 +1108,17 @@ impl PersistentJsFunction {
                 "failed to borrow event sanitizer function",
             ));
         }
+        // SAFETY: `value` was resolved from this struct's function reference,
+        // so it is a live function value in `self.env` for this call.
         let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
+        // SAFETY: `Json::to_napi_value` created this event value in `self.env`,
+        // so wrapping it as `JsUnknown` is valid for the immediate callback.
         let event = unsafe {
             JsUnknown::from_raw_unchecked(self.env, Json::to_napi_value(self.env, event)?)
         };
+        // SAFETY: `EventSanitizeFields::to_napi_value` created this fields
+        // value in `self.env`, so wrapping it as `JsUnknown` is valid for the
+        // immediate callback.
         let fields = unsafe {
             JsUnknown::from_raw_unchecked(
                 self.env,
@@ -1115,12 +1126,7 @@ impl PersistentJsFunction {
             )
         };
         let returned = func.call(None, &[event, fields])?;
-        if returned.get_type()? != napi::ValueType::Object {
-            return Err(napi::Error::from_reason(
-                "event sanitizer must return an object",
-            ));
-        }
-        unsafe { EventSanitizeFields::from_napi_value(self.env, returned.raw()) }
+        event_sanitize_fields_from_js(returned)
     }
 }
 
@@ -1162,7 +1168,15 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
     let background = callable::wrap_js_event_sanitize_fn(tsfn);
     Ok(Arc::new(move |event, fields| {
         if std::thread::current().id() == register_thread {
-            let event_json = event.try_to_json_value().unwrap_or(Json::Null);
+            let event_json = match event.try_to_json_value() {
+                Ok(event_json) => event_json,
+                Err(error) => {
+                    record_callback_error(format!(
+                        "nemo_relay: failed to serialize JS event sanitizer context: {error}"
+                    ));
+                    return fields;
+                }
+            };
             let sanitized = direct
                 .call_event_sanitize(event_json, js_event_fields(&fields))
                 .ok()

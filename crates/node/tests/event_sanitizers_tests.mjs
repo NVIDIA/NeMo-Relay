@@ -86,20 +86,32 @@ describe('event sanitizer registries', () => {
     assert.ok(lifecycle.every((event) => event.category_profile.subtype === 'sanitized'));
   });
 
-  it('fails open and records invalid sanitizer results', async () => {
+  it('fails open and records invalid direct sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
-    lib.clearLastCallbackError();
-    lib.registerMarkSanitizeGuardrail('node-event-invalid', 0, () => 'invalid');
+    const invalidResults = {
+      scalar: () => 'invalid',
+      emptyObject: () => ({}),
+      array: () => [],
+      promise: () => Promise.resolve({ data: { changed: true } }),
+    };
     try {
-      lib.event('invalid-result', null, { kept: true });
-      lib.flushSubscribers();
-      await waitFor(events, 1);
+      for (const [kind, sanitizer] of Object.entries(invalidResults)) {
+        const name = `node-event-invalid-${kind}`;
+        lib.clearLastCallbackError();
+        lib.registerMarkSanitizeGuardrail(name, 0, sanitizer);
+        try {
+          lib.event(name, null, { kept: kind });
+          lib.flushSubscribers();
+          await waitFor(events, Object.keys(invalidResults).indexOf(kind) + 1);
+        } finally {
+          lib.deregisterMarkSanitizeGuardrail(name);
+        }
+        assert.deepEqual(events.at(-1).data, { kept: kind });
+        assert.match(lib.getLastCallbackError(), /event sanitizer callback failed/);
+      }
     } finally {
-      lib.deregisterMarkSanitizeGuardrail('node-event-invalid');
       lib.deregisterSubscriber('node-event-sanitize-invalid-sub');
     }
-    assert.deepEqual(events.at(-1).data, { kept: true });
-    assert.match(lib.getLastCallbackError(), /event sanitizer callback failed/);
   });
 
   it('uses the thread-safe callback path for managed tool events', async () => {
@@ -120,6 +132,36 @@ describe('event sanitizer registries', () => {
       (event) => event.kind === 'scope' && event.name === 'background-tool' && event.scope_category === 'start',
     );
     assert.equal(start.metadata.background, true);
+  });
+
+  it('fails open and records invalid thread-safe sanitizer results', async () => {
+    const events = capture('node-event-sanitize-background-invalid-sub');
+    const invalidResults = {
+      emptyObject: () => ({}),
+      array: () => [],
+      promise: () => Promise.resolve({ data: { changed: true } }),
+    };
+    try {
+      for (const [kind, sanitizer] of Object.entries(invalidResults)) {
+        const name = `node-background-invalid-${kind}`;
+        lib.clearLastCallbackError();
+        lib.registerScopeSanitizeStartGuardrail(name, 0, sanitizer);
+        try {
+          await lib.toolCallExecute(name, { kept: kind }, async (args) => args);
+          lib.flushSubscribers();
+          await waitFor(events, (Object.keys(invalidResults).indexOf(kind) + 1) * 2);
+        } finally {
+          lib.deregisterScopeSanitizeStartGuardrail(name);
+        }
+        const start = events.find(
+          (event) => event.kind === 'scope' && event.name === name && event.scope_category === 'start',
+        );
+        assert.deepEqual(start.data, { kept: kind });
+        assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
+      }
+    } finally {
+      lib.deregisterSubscriber('node-event-sanitize-background-invalid-sub');
+    }
   });
 
   it('inherits and cleans up scope-local mark sanitizers', async () => {

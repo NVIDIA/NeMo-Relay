@@ -36,7 +36,7 @@ use nemo_relay::error::{FlowError, Result};
 
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
-use crate::types::{EventSanitizeFields, JsEvent};
+use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_js};
 
 /// JavaScript-facing pending mark DTO.
 #[derive(Debug, Deserialize, Serialize)]
@@ -543,8 +543,8 @@ pub fn wrap_js_event_sanitize_fn(
                 serde_json::to_value(js_fields).unwrap_or(Json::Null),
             ),
             ThreadsafeFunctionCallMode::Blocking,
-            move |value: Option<Json>| {
-                let _ = tx.send(callback_json(value));
+            move |value: napi::JsUnknown| {
+                let _ = tx.send(event_sanitize_fields_from_js(value));
                 Ok(())
             },
         );
@@ -554,27 +554,30 @@ pub fn wrap_js_event_sanitize_fn(
             ));
             return fields.clone();
         }
-        serde_json::from_value::<EventSanitizeFields>(recv_json_or_null(
-            rx,
-            "nemo_relay: JS event sanitizer callback failed",
-        ))
-        .ok()
-        .and_then(|result| {
-            let category_profile = result
-                .category_profile
-                .map(serde_json::from_value)
-                .transpose()
-                .ok()?;
-            Some(CoreEventSanitizeFields {
-                data: result.data,
-                category_profile,
-                metadata: result.metadata,
+        rx.recv()
+            .map_err(|error| {
+                record_callback_error(format!(
+                    "nemo_relay: JS event sanitizer callback failed: {error}"
+                ));
             })
-        })
-        .unwrap_or_else(|| {
-            record_callback_error("nemo_relay: invalid JS event sanitizer result".to_string());
-            fields.clone()
-        })
+            .ok()
+            .and_then(|result| result.ok())
+            .and_then(|result| {
+                let category_profile = result
+                    .category_profile
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .ok()?;
+                Some(CoreEventSanitizeFields {
+                    data: result.data,
+                    category_profile,
+                    metadata: result.metadata,
+                })
+            })
+            .unwrap_or_else(|| {
+                record_callback_error("nemo_relay: invalid JS event sanitizer result".to_string());
+                fields.clone()
+            })
     })
 }
 
