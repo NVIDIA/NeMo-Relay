@@ -164,6 +164,21 @@ func TestEventSanitizerRegistrationErrorsReleaseCallbacks(t *testing.T) {
 	if err := DeregisterMarkSanitizeGuardrail("go-event-duplicate"); err != nil {
 		t.Fatal(err)
 	}
+	if err := RegisterToolSanitizeRequestGuardrail("go-tool-duplicate", 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterToolSanitizeRequestGuardrail("go-tool-duplicate", 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err == nil {
+		t.Fatal("expected duplicate tool sanitizer registration to fail")
+	}
+	closureRegistryMu.Lock()
+	afterToolDuplicate := len(closureRegistry)
+	closureRegistryMu.Unlock()
+	if afterToolDuplicate != baseline+1 {
+		t.Fatalf("duplicate tool registration leaked callback: baseline=%d current=%d", baseline, afterToolDuplicate)
+	}
+	if err := DeregisterToolSanitizeRequestGuardrail("go-tool-duplicate"); err != nil {
+		t.Fatal(err)
+	}
 
 	for name, register := range map[string]func() error{
 		"mark": func() error {
