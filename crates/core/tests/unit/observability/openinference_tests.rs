@@ -163,6 +163,118 @@ fn optimization_summary_emits_namespaced_openinference_attributes() {
         attributes["nemo_relay.llm.optimization.pricing_source"],
         "test"
     );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_cost_currency"],
+        "USD"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_cost_currency"],
+        "USD"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.estimated_cost_saved_currency"],
+        "USD"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_pricing_as_of"],
+        "2026-07-08"
+    );
+}
+
+#[test]
+fn optimization_cost_attributes_preserve_independent_currency_and_provenance() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"partial",
+            "limitations":["cost_currency_mismatch"],
+            "tokens_saved":{},
+            "baseline_cost":{"total":2.0,"currency":"EUR","source":"model_pricing","pricing_as_of":"2026-01-01"},
+            "actual_cost":{"total":1.0,"currency":"GBP","source":"provider_reported","pricing_as_of":"2026-02-02","pricing_source":"provider"},
+            "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_cost_currency"],
+        "EUR"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_cost_currency"],
+        "GBP"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_pricing_source"],
+        "provider"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_pricing_as_of"],
+        "2026-02-02"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_source"],
+        "provider"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_as_of"],
+        "2026-01-01"
+    );
+    assert!(!attributes.contains_key("nemo_relay.llm.optimization.estimated_cost_saved"));
+    assert!(!attributes.contains_key("nemo_relay.llm.optimization.estimated_cost_saved_currency"));
+}
+
+#[test]
+fn complete_non_usd_optimization_costs_keep_currency_and_independent_provenance() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"complete",
+            "tokens_saved":{},
+            "baseline_cost":{"total":2.0,"currency":"EUR","source":"model_pricing","pricing_as_of":"2026-01-01","pricing_source":"baseline-catalog"},
+            "actual_cost":{"total":1.0,"currency":"EUR","source":"provider_reported","pricing_as_of":"2026-02-02","pricing_source":"provider-meter"},
+            "estimated_cost_saved":1.0, "currency":"EUR", "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.baseline_cost_currency",
+        "EUR",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.actual_cost_currency",
+        "EUR",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.estimated_cost_saved_currency",
+        "EUR",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.baseline_pricing_source",
+        "baseline-catalog",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.actual_pricing_source",
+        "provider-meter",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.baseline_pricing_as_of",
+        "2026-01-01",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.actual_pricing_as_of",
+        "2026-02-02",
+    );
 }
 
 fn install_test_pricing(model_id: &str) {
