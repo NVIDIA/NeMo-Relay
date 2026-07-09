@@ -206,6 +206,12 @@ type FinalizerFunc func() string
 type EventSubscriberFunc func(event Event)
 
 // EventSanitizeFields contains the observability fields an event sanitizer may replace.
+//
+// A sanitizer result replaces all three fields; it does not patch the input fields.
+// Start with the provided fields and modify only the fields you intend to change.
+// A zero-value json.RawMessage serializes as JSON null and clears its corresponding
+// event field, so a newly constructed EventSanitizeFields clears every field left
+// at its zero value.
 type EventSanitizeFields struct {
 	Data            json.RawMessage `json:"data"`
 	CategoryProfile json.RawMessage `json:"category_profile"`
