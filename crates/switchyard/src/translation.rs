@@ -5,7 +5,7 @@ use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall, Usage};
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec, LlmResponseEncoder};
 use nemo_relay::error::{FlowError, Result};
@@ -152,6 +152,13 @@ fn normalize_anthropic_messages(body: &mut Json) {
                 Some("image") if block["source"]["type"] == "url" => content.push(json!({
                     "type": "image_url", "image_url": {"url": block["source"]["url"]}
                 })),
+                Some("image") if block["source"]["type"] == "base64" => {
+                    if let Some(url) = anthropic_base64_image_data_uri(&block["source"]) {
+                        content.push(json!({"type": "image_url", "image_url": {"url": url}}));
+                    } else {
+                        content.push(block.clone());
+                    }
+                }
                 Some("tool_use") => tool_calls.push(json!({
                     "id": block["id"], "type": "function",
                     "function": {"name": block["name"], "arguments": block["input"].to_string()}
@@ -318,7 +325,7 @@ fn encode_content_parts(content: &mut Json, protocol: WireProtocol) {
             }
             WireProtocol::AnthropicMessages if part["type"] == "image_url" => {
                 let url = part["image_url"]["url"].clone();
-                *part = json!({"type": "image", "source": {"type": "url", "url": url}});
+                *part = anthropic_image_source(url);
             }
             _ => {}
         }
@@ -335,6 +342,11 @@ fn ensure_portable_request(request: &AnnotatedLlmRequest) -> Result<()> {
             "request uses provider-specific fields that cannot be translated safely".into(),
         ));
     }
+    if request_contains_invalid_data_uri(request) {
+        return Err(FlowError::InvalidArgument(
+            "request uses an unsupported or malformed image data URI".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -349,6 +361,13 @@ pub(crate) fn validate_portable_request(
     protocol: WireProtocol,
     request: &LlmRequest,
 ) -> Result<()> {
+    if protocol == WireProtocol::AnthropicMessages
+        && contains_invalid_anthropic_image_source(&request.content)
+    {
+        return Err(FlowError::InvalidArgument(
+            "request uses an unsupported or malformed Anthropic image source".into(),
+        ));
+    }
     let annotated = decode_request(protocol, request)?;
     ensure_portable_request(&annotated)?;
     if contains_key_recursive(&request.content, "cache_control")
@@ -363,6 +382,69 @@ pub(crate) fn validate_portable_request(
         ));
     }
     Ok(())
+}
+
+fn anthropic_base64_image_data_uri(source: &Json) -> Option<String> {
+    let media_type = source.get("media_type")?.as_str()?;
+    let data = source.get("data")?.as_str()?;
+    (!media_type.is_empty() && !data.is_empty()).then(|| format!("data:{media_type};base64,{data}"))
+}
+
+fn base64_data_uri_parts(url: &str) -> Option<(&str, &str)> {
+    let (metadata, data) = url.strip_prefix("data:")?.split_once(',')?;
+    let media_type = metadata.strip_suffix(";base64")?;
+    (!media_type.is_empty() && !data.is_empty()).then_some((media_type, data))
+}
+
+fn anthropic_image_source(url: Json) -> Json {
+    if let Some(url) = url.as_str()
+        && let Some((media_type, data)) = base64_data_uri_parts(url)
+    {
+        return json!({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data}
+        });
+    }
+    json!({"type": "image", "source": {"type": "url", "url": url}})
+}
+
+fn request_contains_invalid_data_uri(request: &AnnotatedLlmRequest) -> bool {
+    request.messages.iter().any(|message| {
+        let content = match message {
+            Message::System { content, .. }
+            | Message::User { content, .. }
+            | Message::Tool { content, .. } => Some(content),
+            Message::Assistant { content, .. } => content.as_ref(),
+        };
+        matches!(
+            content,
+            Some(MessageContent::Parts(parts)) if parts.iter().any(|part| matches!(
+                part,
+                ContentPart::ImageUrl { image_url } if image_url.url.starts_with("data:")
+                    && base64_data_uri_parts(&image_url.url).is_none()
+            ))
+        )
+    })
+}
+
+fn contains_invalid_anthropic_image_source(value: &Json) -> bool {
+    value["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message["content"].as_array().is_some_and(|blocks| {
+                blocks.iter().any(|block| {
+                    if block["type"] != "image" {
+                        return false;
+                    }
+                    let source = &block["source"];
+                    match source["type"].as_str() {
+                        Some("url") => source["url"].as_str().is_none_or(str::is_empty),
+                        Some("base64") => anthropic_base64_image_data_uri(source).is_none(),
+                        _ => true,
+                    }
+                })
+            })
+        })
+    })
 }
 
 fn contains_key_recursive(value: &Json, key: &str) -> bool {
@@ -901,6 +983,68 @@ mod tests {
                 assert_eq!(roundtrip.stream, Some(true));
             }
         }
+    }
+
+    #[test]
+    fn anthropic_base64_images_round_trip_through_data_uris() {
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: json!({
+                "model": "source-model",
+                "messages": [{"role": "user", "content": [{
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "aGVsbG8="
+                    }
+                }]}]
+            }),
+        };
+        validate_portable_request(WireProtocol::AnthropicMessages, &request).unwrap();
+        let annotated = decode_request(WireProtocol::AnthropicMessages, &request).unwrap();
+        let expected_uri = "data:image/png;base64,aGVsbG8=";
+        assert!(matches!(
+            &annotated.messages[0],
+            Message::User { content: MessageContent::Parts(parts), .. }
+                if matches!(&parts[0], ContentPart::ImageUrl { image_url } if image_url.url == expected_uri)
+        ));
+
+        for target in [WireProtocol::OpenaiChat, WireProtocol::OpenaiResponses] {
+            let encoded = encode_request(target, &annotated, Map::new()).unwrap();
+            let url = match target {
+                WireProtocol::OpenaiChat => {
+                    encoded.content["messages"][0]["content"][0]["image_url"]["url"].as_str()
+                }
+                WireProtocol::OpenaiResponses => {
+                    encoded.content["input"][0]["content"][0]["image_url"].as_str()
+                }
+                WireProtocol::AnthropicMessages => unreachable!(),
+            };
+            assert_eq!(url, Some(expected_uri), "target={target:?}");
+        }
+
+        let encoded =
+            encode_request(WireProtocol::AnthropicMessages, &annotated, Map::new()).unwrap();
+        assert_eq!(
+            encoded.content["messages"][0]["content"][0]["source"],
+            json!({"type": "base64", "media_type": "image/png", "data": "aGVsbG8="})
+        );
+    }
+
+    #[test]
+    fn malformed_anthropic_base64_images_fail_portable_validation() {
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: json!({
+                "model": "source-model",
+                "messages": [{"role": "user", "content": [{
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/png"}
+                }]}]
+            }),
+        };
+        assert!(validate_portable_request(WireProtocol::AnthropicMessages, &request).is_err());
     }
 
     #[test]
