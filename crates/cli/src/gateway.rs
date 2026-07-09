@@ -17,9 +17,10 @@ use nemo_relay::api::llm::{
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
-use nemo_relay::codec::anthropic::{AnthropicMessagesCodec, AnthropicMessagesStreamingCodec};
-use nemo_relay::codec::openai_chat::{OpenAIChatCodec, OpenAIChatStreamingCodec};
-use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
+use nemo_relay::codec::resolve::{
+    ProviderSurface, response_codec as build_response_codec,
+    streaming_codec as build_streaming_codec,
+};
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::FlowError;
@@ -248,20 +249,14 @@ struct RouteCodecs {
 }
 
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
-    match route {
-        ProviderRoute::AnthropicMessages => RouteCodecs {
-            streaming: Some(Box::new(AnthropicMessagesStreamingCodec::new())),
-            response: Some(Arc::new(AnthropicMessagesCodec) as Arc<dyn LlmResponseCodec>),
+    // Routes with a typed provider surface get the built-in codecs from the core
+    // factory; count_tokens/models emit LLM events but have no codec.
+    match route.provider_surface() {
+        Some(surface) => RouteCodecs {
+            streaming: Some(build_streaming_codec(surface)),
+            response: Some(build_response_codec(surface)),
         },
-        ProviderRoute::OpenAiResponses => RouteCodecs {
-            streaming: Some(Box::new(OpenAIResponsesStreamingCodec::new())),
-            response: Some(Arc::new(OpenAIResponsesCodec) as Arc<dyn LlmResponseCodec>),
-        },
-        ProviderRoute::OpenAiChatCompletions => RouteCodecs {
-            streaming: Some(Box::new(OpenAIChatStreamingCodec::new())),
-            response: Some(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>),
-        },
-        ProviderRoute::AnthropicCountTokens | ProviderRoute::OpenAiModels => RouteCodecs {
+        None => RouteCodecs {
             streaming: None,
             response: None,
         },
@@ -952,6 +947,17 @@ impl ProviderRoute {
             "/v1/messages" => Some(Self::AnthropicMessages),
             "/v1/messages/count_tokens" => Some(Self::AnthropicCountTokens),
             _ => None,
+        }
+    }
+
+    // Maps a route to its built-in codec surface, or `None` for routes that emit LLM events but
+    // have no typed request/response codec (count_tokens, models).
+    const fn provider_surface(self) -> Option<ProviderSurface> {
+        match self {
+            Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),
+            Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
+            Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
+            Self::AnthropicCountTokens | Self::OpenAiModels => None,
         }
     }
 

@@ -49,6 +49,14 @@ impl RequestSurface {
         }
     }
 
+    pub(crate) fn provider_surface(self) -> ProviderSurface {
+        match self {
+            Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
+            Self::OpenAIChat => ProviderSurface::OpenAIChat,
+            Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
+        }
+    }
+
     pub(crate) fn supports_provider(self, provider: &str) -> bool {
         match provider {
             "anthropic" => matches!(self, Self::AnthropicMessages),

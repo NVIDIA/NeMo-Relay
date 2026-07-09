@@ -28,11 +28,8 @@ use nemo_relay::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmRequestInterceptFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn,
 };
-use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
-use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
-use nemo_relay::codec::traits::LlmCodec;
+use nemo_relay::codec::resolve::request_codec;
 use nemo_relay::json::Json;
 use uuid::Uuid;
 
@@ -91,21 +88,16 @@ fn decode_request_for_surface(
     request_surface: RequestSurface,
     request: &LlmRequest,
 ) -> Result<AnnotatedLlmRequest> {
-    match request_surface {
-        RequestSurface::AnthropicMessages => {
-            AnthropicMessagesCodec.decode(request).map_err(|error| {
-                AdaptiveError::Internal(format!("failed to decode anthropic request: {error}"))
-            })
-        }
-        RequestSurface::OpenAIChat => OpenAIChatCodec.decode(request).map_err(|error| {
-            AdaptiveError::Internal(format!("failed to decode openai chat request: {error}"))
-        }),
-        RequestSurface::OpenAIResponses => OpenAIResponsesCodec.decode(request).map_err(|error| {
-            AdaptiveError::Internal(format!(
-                "failed to decode openai responses request: {error}"
-            ))
-        }),
-    }
+    request_codec(request_surface.provider_surface())
+        .decode(request)
+        .map_err(|error| {
+            let surface_label = match request_surface {
+                RequestSurface::AnthropicMessages => "anthropic",
+                RequestSurface::OpenAIChat => "openai chat",
+                RequestSurface::OpenAIResponses => "openai responses",
+            };
+            AdaptiveError::Internal(format!("failed to decode {surface_label} request: {error}"))
+        })
 }
 
 fn build_semantic_request_view(request: &LlmRequest) -> Result<SemanticRequestView> {
