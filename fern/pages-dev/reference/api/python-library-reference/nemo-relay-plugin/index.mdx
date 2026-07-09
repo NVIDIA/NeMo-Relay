@@ -15,6 +15,10 @@ Author out-of-process NeMo Relay worker plugins in Python.
 
 ## Classes
 
+### `EventSanitizeFields(TypedDict)`
+
+Observability fields returned by event sanitizer callbacks.
+
 ### `WorkerSdkError(Exception)`
 
 Report a worker SDK, host-call, or protocol error to plugin code.
@@ -270,6 +274,30 @@ def register_subscriber(name: str, callback: SubscriberCallback) -> None
 ```
 
 Register a callback that receives Relay events.
+
+##### `register_mark_sanitize_guardrail`
+
+```python
+def register_mark_sanitize_guardrail(name: str, callback: EventSanitizeCallback, *, priority: int = 0) -> None
+```
+
+Register a sanitizer for mark event observability fields.
+
+##### `register_scope_sanitize_start_guardrail`
+
+```python
+def register_scope_sanitize_start_guardrail(name: str, callback: EventSanitizeCallback, *, priority: int = 0) -> None
+```
+
+Register a sanitizer for scope start event observability fields.
+
+##### `register_scope_sanitize_end_guardrail`
+
+```python
+def register_scope_sanitize_end_guardrail(name: str, callback: EventSanitizeCallback, *, priority: int = 0) -> None
+```
+
+Register a sanitizer for scope end event observability fields.
 
 ##### `register_tool_sanitize_request_guardrail`
 
@@ -527,6 +555,7 @@ Run a local `grpc-v1` worker until the Relay host shuts it down.
 - `AnnotatedLlmRequest`
 - `EVENT_SCHEMA`
 - `Event`
+- `EventSanitizeCallback`
 - `JSON_SCHEMA`
 - `Json`
 - `LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA`

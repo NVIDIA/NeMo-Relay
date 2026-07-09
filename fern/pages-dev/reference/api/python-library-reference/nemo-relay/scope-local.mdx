@@ -15,6 +15,54 @@ Scope-local middleware and subscriber registration.
 
 ## Functions
 
+### `register_mark_sanitize`
+
+```python
+def register_mark_sanitize(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local mark event sanitizer.
+
+### `deregister_mark_sanitize`
+
+```python
+def deregister_mark_sanitize(scope_handle, name)
+```
+
+Remove a scope-local mark event sanitizer.
+
+### `register_scope_sanitize_start`
+
+```python
+def register_scope_sanitize_start(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local sanitizer for scope start events.
+
+### `deregister_scope_sanitize_start`
+
+```python
+def deregister_scope_sanitize_start(scope_handle, name)
+```
+
+Remove a scope-local scope-start event sanitizer.
+
+### `register_scope_sanitize_end`
+
+```python
+def register_scope_sanitize_end(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local sanitizer for scope end events.
+
+### `deregister_scope_sanitize_end`
+
+```python
+def deregister_scope_sanitize_end(scope_handle, name)
+```
+
+Remove a scope-local scope-end event sanitizer.
+
 ### `register_tool_sanitize_request`
 
 ```python

@@ -37,6 +37,30 @@ def register_subscriber(name: str, callback: Callable[[Event], None]) -> None
 
 Register an infallible event subscriber for this component.
 
+##### `register_mark_sanitize_guardrail`
+
+```python
+def register_mark_sanitize_guardrail(name: str, priority: int, callback: EventSanitizeGuardrail) -> None
+```
+
+Register a mark event sanitizer for this component.
+
+##### `register_scope_sanitize_start_guardrail`
+
+```python
+def register_scope_sanitize_start_guardrail(name: str, priority: int, callback: EventSanitizeGuardrail) -> None
+```
+
+Register a scope-start event sanitizer for this component.
+
+##### `register_scope_sanitize_end_guardrail`
+
+```python
+def register_scope_sanitize_end_guardrail(name: str, priority: int, callback: EventSanitizeGuardrail) -> None
+```
+
+Register a scope-end event sanitizer for this component.
+
 ##### `register_tool_sanitize_request_guardrail`
 
 ```python

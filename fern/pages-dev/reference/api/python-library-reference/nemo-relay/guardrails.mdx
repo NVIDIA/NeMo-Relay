@@ -15,6 +15,54 @@ Global guardrail registration for tools and LLMs.
 
 ## Functions
 
+### `register_mark_sanitize`
+
+```python
+def register_mark_sanitize(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
+```
+
+Register a sanitizer for mark event observability fields.
+
+### `deregister_mark_sanitize`
+
+```python
+def deregister_mark_sanitize(name: str) -> bool
+```
+
+Remove a global mark event sanitizer by name.
+
+### `register_scope_sanitize_start`
+
+```python
+def register_scope_sanitize_start(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
+```
+
+Register a sanitizer for every scope start event category.
+
+### `deregister_scope_sanitize_start`
+
+```python
+def deregister_scope_sanitize_start(name: str) -> bool
+```
+
+Remove a global scope-start event sanitizer by name.
+
+### `register_scope_sanitize_end`
+
+```python
+def register_scope_sanitize_end(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None
+```
+
+Register a sanitizer for every scope end event category.
+
+### `deregister_scope_sanitize_end`
+
+```python
+def deregister_scope_sanitize_end(name: str) -> bool
+```
+
+Remove a global scope-end event sanitizer by name.
+
 ### `register_tool_sanitize_request`
 
 ```python
