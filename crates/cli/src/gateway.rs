@@ -1052,17 +1052,42 @@ fn http_failure(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> Upstrea
     UpstreamFailure {
         status: Some(status.as_u16()),
         body,
-        headers: headers
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.as_str().to_string(), value.to_string()))
-            })
-            .collect(),
+        headers: failure_headers(headers),
         class,
     }
+}
+
+// Captures only safe provider metadata for retry and fallback diagnostics. This is intentionally
+// separate from `response_headers`, which preserves response headers for ordinary downstream
+// forwarding and therefore must not apply this failure-specific credential filter.
+fn failure_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            !is_hop_by_hop(name)
+                && *name != http::header::CONTENT_LENGTH
+                && !is_sensitive_response_header(name)
+        })
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn is_sensitive_response_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "set-cookie"
+            | "www-authenticate"
+            | "authorization"
+            | "cookie"
+            | "x-api-key"
+            | "api-key"
+            | "anthropic-api-key"
+    )
 }
 
 fn bounded_error_body(body: &[u8]) -> String {

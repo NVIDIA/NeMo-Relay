@@ -336,7 +336,29 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
 
 #[test]
 fn structured_upstream_failure_classification_matches_retry_policy() {
-    let headers = HeaderMap::new();
+    let mut headers = HeaderMap::new();
+    headers.insert("set-cookie", HeaderValue::from_static("session=secret"));
+    headers.insert(
+        "www-authenticate",
+        HeaderValue::from_static("Bearer realm=provider"),
+    );
+    headers.insert(
+        "proxy-authenticate",
+        HeaderValue::from_static("Basic realm=proxy"),
+    );
+    headers.insert(
+        "proxy-authorization",
+        HeaderValue::from_static("Basic secret"),
+    );
+    headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
+    headers.insert("cookie", HeaderValue::from_static("session=secret"));
+    headers.insert("x-api-key", HeaderValue::from_static("secret"));
+    headers.insert("api-key", HeaderValue::from_static("secret"));
+    headers.insert("anthropic-api-key", HeaderValue::from_static("secret"));
+    headers.insert("connection", HeaderValue::from_static("close"));
+    headers.insert("content-length", HeaderValue::from_static("12"));
+    headers.insert("retry-after", HeaderValue::from_static("3"));
+    headers.insert("x-request-id", HeaderValue::from_static("request-123"));
     for status in [408, 429, 500, 502, 503, 504] {
         let failure = http_failure(
             StatusCode::from_u16(status).unwrap(),
@@ -345,6 +367,30 @@ fn structured_upstream_failure_classification_matches_retry_policy() {
         );
         assert!(failure.is_retryable(), "status={status}");
     }
+    let failure = http_failure(StatusCode::BAD_GATEWAY, &headers, b"temporary");
+    for name in [
+        "set-cookie",
+        "www-authenticate",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "authorization",
+        "cookie",
+        "x-api-key",
+        "api-key",
+        "anthropic-api-key",
+        "connection",
+        "content-length",
+    ] {
+        assert!(
+            !failure.headers.contains_key(name),
+            "sensitive header: {name}"
+        );
+    }
+    assert_eq!(failure.headers.get("retry-after"), Some(&"3".to_string()));
+    assert_eq!(
+        failure.headers.get("x-request-id"),
+        Some(&"request-123".to_string())
+    );
     assert_eq!(
         http_failure(
             StatusCode::BAD_REQUEST,
