@@ -195,10 +195,31 @@ pub(crate) type InterceptedLlmRequest = (
     Vec<crate::codec::optimization::LlmOptimizationContribution>,
 );
 
+#[cfg(test)]
 pub(crate) fn run_request_intercepts_with_codec(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
+) -> Result<InterceptedLlmRequest> {
+    run_request_intercepts_with_codec_inner(name, request, codec, None)
+}
+
+/// Run request intercepts and record optimization contributions directly into
+/// the managed call's bounded accumulator as each intercept completes.
+pub(crate) fn run_request_intercepts_with_codec_and_recorder(
+    name: &str,
+    request: LlmRequest,
+    codec: Option<Arc<dyn LlmCodec>>,
+    recorder: &crate::api::optimization::LlmOptimizationRecorder,
+) -> Result<InterceptedLlmRequest> {
+    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder))
+}
+
+fn run_request_intercepts_with_codec_inner(
+    name: &str,
+    request: LlmRequest,
+    codec: Option<Arc<dyn LlmCodec>>,
+    recorder: Option<&crate::api::optimization::LlmOptimizationRecorder>,
 ) -> Result<InterceptedLlmRequest> {
     let annotated = match &codec {
         Some(codec) => Some(codec.decode(&request)?),
@@ -218,13 +239,13 @@ pub(crate) fn run_request_intercepts_with_codec(
         state.llm_request_intercept_entries(&scope_locals)
     };
 
-    let outcome =
-        crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+    let outcome = crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain_with_recorder(
             name,
             request,
             annotated,
             &entries,
             codec.is_some(),
+            recorder,
         )?;
     let mut request = outcome.request;
     inject_dynamo_session_ids(&mut request);

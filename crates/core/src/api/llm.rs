@@ -16,18 +16,18 @@ use crate::api::optimization::{
     LlmOptimizationRecorder, finalize_optimization_summary, scope_llm_optimization_recorder,
 };
 use crate::api::runtime::NemoRelayContextState;
-use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
     LlmStreamExecutionNextFn,
 };
+use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_status,
-    resolve_parent_uuid, run_request_intercepts_with_codec, sanitize_event,
-    snapshot_event_subscribers,
+    resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
+    sanitize_event_with_scope_stack, snapshot_event_subscribers,
 };
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -37,6 +37,21 @@ use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+
+#[derive(Clone)]
+struct CapturedLlmScopeStack(ScopeStackHandle);
+
+impl Default for CapturedLlmScopeStack {
+    fn default() -> Self {
+        Self(current_scope_stack())
+    }
+}
+
+impl std::fmt::Debug for CapturedLlmScopeStack {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CapturedLlmScopeStack(..)")
+    }
+}
 
 /// Runtime-owned handle identifying an active or completed LLM call.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -74,6 +89,19 @@ pub struct LlmHandle {
     #[serde(skip, default)]
     #[builder(default)]
     pub optimization_recorder: LlmOptimizationRecorder,
+    /// Scope stack captured when the LLM lifecycle starts.
+    ///
+    /// Close-time work can run from a different task, especially for streams,
+    /// so optimization marks must not consult the poller's ambient scope.
+    #[serde(skip, default)]
+    #[builder(setter(skip), default)]
+    captured_scope_stack: CapturedLlmScopeStack,
+}
+
+impl LlmHandle {
+    pub(crate) fn captured_scope_stack(&self) -> &ScopeStackHandle {
+        &self.captured_scope_stack.0
+    }
 }
 
 /// Builder parameters for [`NemoRelayContextState::create_llm_handle`].
@@ -278,7 +306,7 @@ fn emit_llm_start(
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let subscribers = {
-        let scope_stack = current_scope_stack();
+        let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
@@ -300,7 +328,7 @@ fn emit_llm_start_with_subscribers(
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let entries = {
-        let scope_stack = current_scope_stack();
+        let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_sanitize_request_guardrails
@@ -330,7 +358,7 @@ fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.build_llm_start_event(handle, Some(input), annotated_request)
     };
-    if let Some(event) = sanitize_event(event) {
+    if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()) {
         NemoRelayContextState::emit_event(&event, subscribers);
     }
     Ok(())
@@ -358,22 +386,36 @@ fn emit_pending_request_marks(
             mark.category,
             mark.category_profile,
         ));
-        if let Some(event) = sanitize_event(event) {
+        if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()) {
             NemoRelayContextState::emit_event(&event, subscribers);
         }
     }
     Ok(())
 }
 
-pub(crate) fn emit_optimization_marks(
+pub(crate) fn emit_optimization_marks(handle: &LlmHandle, subscribers: &[EventSubscriberFn]) {
+    emit_optimization_marks_with(
+        handle,
+        subscribers,
+        |event| sanitize_event_with_scope_stack(event, handle.captured_scope_stack()),
+        |event, subscribers| NemoRelayContextState::try_emit_event(event, subscribers),
+    );
+}
+
+fn emit_optimization_marks_with(
     handle: &LlmHandle,
     subscribers: &[EventSubscriberFn],
-) -> Result<()> {
-    let contributions = handle.optimization_recorder.take_unemitted();
+    mut sanitize: impl FnMut(Event) -> Option<Event>,
+    mut enqueue: impl FnMut(&Event, &[EventSubscriberFn]) -> bool,
+) {
+    let contributions = handle.optimization_recorder.unemitted();
     if contributions.is_empty() {
-        return Ok(());
+        return;
     }
-    ensure_runtime_owner()?;
+    if let Err(error) = ensure_runtime_owner() {
+        eprintln!("nemo_relay: unable to emit LLM optimization marks: {error}");
+        return;
+    }
     for contribution in contributions {
         let offset = contribution.sequence.unwrap_or(0).saturating_add(2);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
@@ -396,9 +438,21 @@ pub(crate) fn emit_optimization_marks(
                     .build(),
             ),
         ));
-        NemoRelayContextState::emit_event(&event, subscribers);
+        let Some(event) = sanitize(event) else {
+            // Sanitizers currently rewrite fields rather than intentionally
+            // dropping events. `None` means the sanitizer context was
+            // unavailable, so preserve this ordered suffix for a later retry.
+            break;
+        };
+        if enqueue(&event, subscribers) {
+            handle.optimization_recorder.mark_emitted(1);
+        } else {
+            // Preserve this item and the remaining ordered suffix for a later
+            // lifecycle boundary. Accounting remains best effort and must not
+            // alter the provider result.
+            break;
+        }
     }
-    Ok(())
 }
 
 /// Start a manual LLM lifecycle span.
@@ -510,7 +564,7 @@ fn llm_call_end_with_behavior(
     } = params;
     ensure_runtime_owner()?;
     let (entries, subscribers) = {
-        let scope_stack = current_scope_stack();
+        let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.llm_sanitize_response_guardrails
@@ -553,7 +607,8 @@ fn llm_call_end_with_behavior(
             _ => None,
         },
     };
-    emit_optimization_marks(handle, &subscribers)?;
+    handle.optimization_recorder.close_for_finalization(None);
+    emit_optimization_marks(handle, &subscribers);
     let pricing = crate::codec::response::active_pricing_resolver();
     let summary = finalize_optimization_summary(
         &handle.optimization_recorder,
@@ -586,7 +641,7 @@ fn llm_call_end_with_behavior(
                 .build(),
         )
     };
-    if let Some(event) = sanitize_event(event) {
+    if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()) {
         NemoRelayContextState::emit_event(&event, &subscribers);
     }
     if let Some(error) = decode_error
@@ -605,7 +660,7 @@ fn emit_llm_end_without_output(
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let subscribers = {
-        let scope_stack = current_scope_stack();
+        let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_subscribers = scope_guard.collect_scope_local_subscribers();
         match lifecycle_subscribers {
@@ -613,7 +668,8 @@ fn emit_llm_end_without_output(
             None => snapshot_event_subscribers(scope_subscribers)?,
         }
     };
-    emit_optimization_marks(handle, &subscribers)?;
+    handle.optimization_recorder.close_for_finalization(None);
+    emit_optimization_marks(handle, &subscribers);
     let pricing = crate::codec::response::active_pricing_resolver();
     let annotated_response = finalize_optimization_summary(
         &handle.optimization_recorder,
@@ -634,7 +690,7 @@ fn emit_llm_end_without_output(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.end_llm_handle(handle, handle.data.clone(), metadata, annotated_response)
     };
-    if let Some(event) = sanitize_event(event) {
+    if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()) {
         NemoRelayContextState::emit_event(&event, &subscribers);
     }
     Ok(())
@@ -738,10 +794,19 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
+    let optimization_recorder = LlmOptimizationRecorder::default();
     let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
-        run_request_intercepts_with_codec(&name, request, codec)?;
+        scope_llm_optimization_recorder(optimization_recorder.clone(), async {
+            run_request_intercepts_with_codec_and_recorder(
+                &name,
+                request,
+                codec,
+                &optimization_recorder,
+            )
+        })
+        .await?;
 
-    let handle = create_llm_handle(
+    let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
@@ -751,8 +816,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .model_name_opt(model_name)
             .build(),
     )?;
+    handle.optimization_recorder = optimization_recorder;
     let lifecycle_subscribers = {
-        let scope_stack = current_scope_stack();
+        let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
@@ -767,26 +833,28 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     handle
         .optimization_recorder
         .record_all(optimization_contributions);
-    emit_optimization_marks(&handle, &lifecycle_subscribers)?;
+    emit_optimization_marks(&handle, &lifecycle_subscribers);
 
-    let execution = {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard
-            .collect_scope_local_registries(|registries| &registries.llm_execution_intercepts);
-        let context = global_context();
-        let state = context
-            .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.llm_build_execution_chain(&name, func, &scope_locals)
-    };
+    let execution_name = name.clone();
+    let execution =
+        scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
+            let execution = {
+                let scope_stack = current_scope_stack();
+                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+                let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+                    &registries.llm_execution_intercepts
+                });
+                let context = global_context();
+                let state = context
+                    .read()
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                state.llm_build_execution_chain(&execution_name, func, &scope_locals)
+            };
+            execution(intercepted_request).await
+        })
+        .await;
 
-    match scope_llm_optimization_recorder(
-        handle.optimization_recorder.clone(),
-        execution(intercepted_request),
-    )
-    .await
-    {
+    match execution {
         Ok(response) => {
             llm_call_end_with_behavior(
                 LlmCallEndParams::builder()
@@ -912,10 +980,19 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
+    let optimization_recorder = LlmOptimizationRecorder::default();
     let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
-        run_request_intercepts_with_codec(&name, request, codec)?;
+        scope_llm_optimization_recorder(optimization_recorder.clone(), async {
+            run_request_intercepts_with_codec_and_recorder(
+                &name,
+                request,
+                codec,
+                &optimization_recorder,
+            )
+        })
+        .await?;
 
-    let handle = create_llm_handle(
+    let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
@@ -925,8 +1002,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             .model_name_opt(model_name)
             .build(),
     )?;
+    handle.optimization_recorder = optimization_recorder;
     let lifecycle_subscribers = {
-        let scope_stack = current_scope_stack();
+        let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
@@ -941,27 +1019,28 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     handle
         .optimization_recorder
         .record_all(optimization_contributions);
-    emit_optimization_marks(&handle, &lifecycle_subscribers)?;
+    emit_optimization_marks(&handle, &lifecycle_subscribers);
 
-    let execution = {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_stream_execution_intercepts
-        });
-        let context = global_context();
-        let state = context
-            .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.llm_stream_build_execution_chain(&name, func, &scope_locals)
-    };
+    let execution_name = name.clone();
+    let execution =
+        scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
+            let execution = {
+                let scope_stack = current_scope_stack();
+                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+                let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+                    &registries.llm_stream_execution_intercepts
+                });
+                let context = global_context();
+                let state = context
+                    .read()
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                state.llm_stream_build_execution_chain(&execution_name, func, &scope_locals)
+            };
+            execution(intercepted_request).await
+        })
+        .await;
 
-    match scope_llm_optimization_recorder(
-        handle.optimization_recorder.clone(),
-        execution(intercepted_request),
-    )
-    .await
-    {
+    match execution {
         Ok(raw_stream) => {
             let wrapper = LlmStreamWrapper::new_managed(
                 raw_stream,

@@ -132,10 +132,11 @@ impl LlmStreamWrapper {
         response_codec: Option<Arc<dyn LlmResponseCodec>>,
         subscribers: Vec<EventSubscriberFn>,
     ) -> Self {
+        let scope_stack = handle.captured_scope_stack().clone();
         Self {
             inner,
             handle,
-            scope_stack: current_scope_stack(),
+            scope_stack,
             collector,
             finalizer: Some(finalizer),
             response_codec,
@@ -163,24 +164,34 @@ impl LlmStreamWrapper {
             return;
         }
         self.ended = true;
-        self.emit_end_event(self.metadata.clone());
+        let metadata = metadata_with_otel_status(
+            self.metadata.clone(),
+            "ERROR",
+            Some("stream dropped before clean completion".to_string()),
+        );
+        self.emit_end_event(metadata, true);
     }
 
-    fn finish_with_status(&mut self, status_code: &'static str, status_message: Option<String>) {
+    fn finish_with_status(
+        &mut self,
+        status_code: &'static str,
+        status_message: Option<String>,
+        interrupted: bool,
+    ) {
         if self.ended {
             return;
         }
         self.ended = true;
         let metadata =
             metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
-        self.emit_end_event(metadata);
+        self.emit_end_event(metadata, interrupted);
     }
 
     /// Emit the LLM END event with aggregated response data.
     ///
     /// Calls the finalizer to produce the aggregated response, runs sanitize
     /// response guardrails, and emits the END event.
-    fn emit_end_event(&mut self, metadata: Option<Json>) {
+    fn emit_end_event(&mut self, metadata: Option<Json>, interrupted: bool) {
         let aggregated = match self.finalizer.take() {
             Some(finalizer) => finalizer(),
             None => Json::Null,
@@ -216,7 +227,13 @@ impl LlmStreamWrapper {
                 attach_estimated_cost_for_provider(&mut decoded, Some(&self.handle.name));
                 Some(decoded)
             });
-        let _ = emit_optimization_marks(&self.handle, &self.subscribers);
+        let interruption = (interrupted
+            && !has_authoritative_final_usage(annotated_response.as_ref()))
+        .then_some("stream_interrupted");
+        self.handle
+            .optimization_recorder
+            .close_for_finalization(interruption);
+        emit_optimization_marks(&self.handle, &self.subscribers);
         let pricing = crate::codec::response::active_pricing_resolver();
         let summary = finalize_optimization_summary(
             &self.handle.optimization_recorder,
@@ -301,23 +318,33 @@ impl Stream for LlmStreamWrapper {
                     Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
                     Err(e) => {
                         let message = e.to_string();
-                        this.finish_with_status("ERROR", Some(message));
+                        this.finish_with_status("ERROR", Some(message), true);
                         Poll::Ready(Some(Err(e)))
                     }
                 }
             }
             Poll::Ready(Some(Err(e))) => {
                 let message = e.to_string();
-                this.finish_with_status("ERROR", Some(message));
+                this.finish_with_status("ERROR", Some(message), true);
                 Poll::Ready(Some(Err(e)))
             }
             Poll::Ready(None) => {
-                this.finish_with_status("OK", None);
+                this.finish_with_status("OK", None, false);
                 Poll::Ready(None)
             }
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+fn has_authoritative_final_usage(response: Option<&AnnotatedLlmResponse>) -> bool {
+    response.is_some_and(|response| {
+        response.finish_reason.is_some()
+            && response.usage.as_ref().is_some_and(|usage| {
+                usage.total_tokens.is_some()
+                    || (usage.prompt_tokens.is_some() && usage.completion_tokens.is_some())
+            })
+    })
 }
 
 fn llm_chunk_mark_data(chunk_index: u64, raw_chunk: &Json) -> Json {

@@ -11,9 +11,11 @@ use std::sync::{Arc, Mutex};
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
+use nemo_relay::api::optimization::LlmOptimizationRecorder;
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::FlowError;
 use nemo_relay::error::Result;
 use nemo_relay::json::Json;
@@ -40,6 +42,13 @@ fn make_llm_handle(name: &str) -> LlmHandle {
         .name(name.to_string())
         .attributes(LlmAttributes::STREAMING)
         .build()
+}
+
+fn make_optimized_llm_handle(name: &str, producer: &str) -> (LlmHandle, LlmOptimizationRecorder) {
+    let handle = make_llm_handle(name);
+    let recorder = handle.optimization_recorder.clone();
+    assert!(recorder.record(LlmOptimizationContribution::new(producer, "stream_test")));
+    (handle, recorder)
 }
 
 fn make_stream(items: Vec<Result<Json>>) -> Pin<Box<dyn Stream<Item = Result<Json>> + Send>> {
@@ -255,8 +264,162 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
         .find(|event| is_llm_end(event))
         .expect("expected END event when a partial stream is dropped");
     assert_eq!(end_event.output(), Some(&json!([{"token": "partial"}])));
+    assert_eq!(
+        end_event.metadata().unwrap()["otel.status_code"],
+        json!("ERROR")
+    );
+    assert!(
+        end_event.annotated_response().is_none(),
+        "an interrupted stream without optimization evidence must not manufacture a summary"
+    );
 
     deregister_subscriber("stream_drop_end_test").unwrap();
+}
+
+#[tokio::test]
+async fn stream_termination_modes_close_accounting_without_losing_evidence() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "stream_termination_accounting",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let (clean_handle, clean_recorder) = make_optimized_llm_handle("stream-clean", "test.clean");
+    let (collector, finalizer, _) = make_collector_finalizer();
+    let mut clean = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"chunk": "clean"}))]),
+        clean_handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    while let Some(item) = clean.next().await {
+        item.unwrap();
+    }
+    assert!(!clean_recorder.record(LlmOptimizationContribution::new("late", "test")));
+
+    let (before_error_handle, before_error_recorder) =
+        make_optimized_llm_handle("stream-error-before", "test.error_before");
+    let (collector, finalizer, _) = make_collector_finalizer();
+    let mut error_before = LlmStreamWrapper::new(
+        make_stream(vec![Err(FlowError::Internal("before first".into()))]),
+        before_error_handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    assert!(error_before.next().await.unwrap().is_err());
+    assert!(!before_error_recorder.record(LlmOptimizationContribution::new("late", "test")));
+
+    let (after_error_handle, after_error_recorder) =
+        make_optimized_llm_handle("stream-error-after", "test.error_after");
+    let (collector, finalizer, _) = make_collector_finalizer();
+    let mut error_after = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"chunk": "committed"})),
+            Err(FlowError::Internal("after first".into())),
+        ]),
+        after_error_handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    assert!(error_after.next().await.unwrap().is_ok());
+    assert!(error_after.next().await.unwrap().is_err());
+    assert!(!after_error_recorder.record(LlmOptimizationContribution::new("late", "test")));
+
+    let (drop_before_handle, drop_before_recorder) =
+        make_optimized_llm_handle("stream-drop-before", "test.drop_before");
+    let (collector, finalizer, _) = make_collector_finalizer();
+    let drop_before = LlmStreamWrapper::new(
+        make_stream(vec![Ok(json!({"chunk": "unread"}))]),
+        drop_before_handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    drop(drop_before);
+    assert!(!drop_before_recorder.record(LlmOptimizationContribution::new("late", "test")));
+
+    let (drop_after_handle, drop_after_recorder) =
+        make_optimized_llm_handle("stream-drop-after", "test.route_commit");
+    let drop_after_uuid = drop_after_handle.uuid;
+    let (collector, finalizer, _) = make_collector_finalizer();
+    let mut drop_after = LlmStreamWrapper::new(
+        make_stream(vec![
+            Ok(json!({"chunk": "route committed"})),
+            Ok(json!({"chunk": "unread"})),
+        ]),
+        drop_after_handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        None,
+    );
+    assert!(drop_after.next().await.unwrap().is_ok());
+    drop(drop_after);
+    assert!(!drop_after_recorder.record(LlmOptimizationContribution::new("late", "test")));
+
+    let events = captured_snapshot(&events);
+    let summary_for = |name: &str| {
+        events
+            .iter()
+            .find(|event| event.name() == name && is_llm_end(event))
+            .and_then(Event::annotated_response)
+            .and_then(|response| response.optimization_summary.as_ref())
+            .unwrap_or_else(|| panic!("missing optimization summary for {name}"))
+    };
+    assert!(
+        !summary_for("stream-clean")
+            .limitations
+            .iter()
+            .any(|item| item == "stream_interrupted")
+    );
+    for name in [
+        "stream-error-before",
+        "stream-error-after",
+        "stream-drop-before",
+        "stream-drop-after",
+    ] {
+        assert!(
+            summary_for(name)
+                .limitations
+                .iter()
+                .any(|item| item == "stream_interrupted"),
+            "{name} should be marked interrupted"
+        );
+    }
+    assert_eq!(
+        summary_for("stream-drop-after").contributions[0].producer,
+        "test.route_commit"
+    );
+    let committed_mark = events
+        .iter()
+        .find(|event| {
+            event.name() == "nemo_relay.llm.optimization"
+                && event.parent_uuid() == Some(drop_after_uuid)
+        })
+        .expect("route-commit contribution mark should survive an interrupted stream");
+    assert_eq!(
+        committed_mark.data().unwrap()["producer"],
+        "test.route_commit"
+    );
+
+    deregister_subscriber("stream_termination_accounting").unwrap();
 }
 
 #[tokio::test]

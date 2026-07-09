@@ -19,6 +19,7 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::optimization::record_llm_optimization_contribution;
 use nemo_relay::api::registry::{
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, register_llm_request_intercept,
@@ -26,16 +27,20 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
+use nemo_relay::codec::optimization::{
+    LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
+    LlmOptimizationModelTransition,
+};
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use nemo_relay::codec::response::FinishReason;
 use nemo_relay::codec::response::{
-    AnnotatedLlmResponse, PricingCatalog, PricingResolver, Usage, reset_active_pricing_resolver,
-    set_active_pricing_resolver,
+    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
+    reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
@@ -92,6 +97,41 @@ fn install_mock_response_pricing() {
     )
     .unwrap();
     set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn install_routed_response_pricing() {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {
+                    "provider": "test", "model_id": "baseline",
+                    "pricing_as_of": "2026-07-08", "pricing_source": "test",
+                    "rates": {"input_per_million": 4.0, "output_per_million": 8.0},
+                    "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+                },
+                {
+                    "provider": "test", "model_id": "effective",
+                    "pricing_as_of": "2026-07-08", "pricing_source": "test",
+                    "rates": {"input_per_million": 1.0, "output_per_million": 2.0},
+                    "prompt_cache": {"read_accounting": "included_in_prompt_tokens"}
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    set_active_pricing_resolver(PricingResolver::from_catalogs(vec![catalog])).unwrap();
+}
+
+fn routed_model_contribution() -> LlmOptimizationContribution {
+    let mut contribution =
+        LlmOptimizationContribution::new("test.router", LlmOptimizationKind::model_routing());
+    contribution.model_transition = Some(LlmOptimizationModelTransition {
+        baseline: Some(LlmOptimizationModel::new("baseline").with_provider("test")),
+        effective: Some(LlmOptimizationModel::new("effective").with_provider("test")),
+    });
+    contribution
 }
 
 // ---------------------------------------------------------------------------
@@ -1188,6 +1228,48 @@ impl LlmResponseCodec for MockResponseCodec {
     }
 }
 
+struct RoutedAliasResponseCodec {
+    cost_source: CostSource,
+}
+
+impl LlmResponseCodec for RoutedAliasResponseCodec {
+    fn decode_response(&self, _response: &Json) -> Result<AnnotatedLlmResponse> {
+        let provider_reported = self.cost_source == CostSource::ProviderReported;
+        Ok(AnnotatedLlmResponse {
+            model: Some("provider-response-alias".to_string()),
+            finish_reason: Some(FinishReason::Complete),
+            usage: Some(Usage {
+                prompt_tokens: Some(1_000),
+                completion_tokens: Some(500),
+                total_tokens: Some(1_500),
+                cost: Some(CostEstimate {
+                    total: Some(if provider_reported { 0.42 } else { 99.0 }),
+                    currency: "USD".to_string(),
+                    input: None,
+                    output: None,
+                    cache_read: None,
+                    cache_write: None,
+                    source: self.cost_source.clone(),
+                    pricing_provider: Some("test".to_string()),
+                    pricing_model: Some("provider-response-alias".to_string()),
+                    pricing_as_of: Some(if provider_reported {
+                        "2026-07-01".to_string()
+                    } else {
+                        "2020-01-01".to_string()
+                    }),
+                    pricing_source: Some(if provider_reported {
+                        "provider".to_string()
+                    } else {
+                        "stale-alias-pricing".to_string()
+                    }),
+                }),
+                ..Usage::default()
+            }),
+            ..AnnotatedLlmResponse::default()
+        })
+    }
+}
+
 /// Mock response codec that always fails.
 struct FailingResponseCodec;
 
@@ -1572,6 +1654,149 @@ async fn test_stream_response_codec_populates_annotated_response() {
     );
 
     deregister_subscriber("stream_resp_codec_sub").unwrap();
+    reset_active_pricing_resolver().unwrap();
+}
+
+#[tokio::test]
+async fn managed_buffered_and_streaming_close_price_the_committed_route_not_response_alias() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    install_routed_response_pricing();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = events.clone();
+    register_subscriber(
+        "routed_alias_pricing_sub",
+        Arc::new(move |event: &Event| captured_events.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("routed-buffered")
+            .request(make_llm_request(json!({"model": "requested"})))
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    assert!(record_llm_optimization_contribution(
+                        routed_model_contribution()
+                    ));
+                    Ok(json!({"response": "done"}))
+                })
+            }))
+            .response_codec(Arc::new(RoutedAliasResponseCodec {
+                cost_source: CostSource::ModelPricing,
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("routed-streaming")
+            .request(make_llm_request(json!({"model": "requested"})))
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    assert!(record_llm_optimization_contribution(
+                        routed_model_contribution()
+                    ));
+                    Ok(
+                        Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": "done"}))]))
+                            as LlmJsonStream,
+                    )
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"response": "done"})))
+            .response_codec(Arc::new(RoutedAliasResponseCodec {
+                cost_source: CostSource::ModelPricing,
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    while let Some(item) = stream.next().await {
+        item.unwrap();
+    }
+
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("routed-provider-reported")
+            .request(make_llm_request(json!({"model": "requested"})))
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    assert!(record_llm_optimization_contribution(
+                        routed_model_contribution()
+                    ));
+                    Ok(json!({"response": "done"}))
+                })
+            }))
+            .response_codec(Arc::new(RoutedAliasResponseCodec {
+                cost_source: CostSource::ProviderReported,
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    for name in ["routed-buffered", "routed-streaming"] {
+        let response = captured
+            .iter()
+            .find(|event| {
+                event.name() == name && is_scope_event(event, ScopeType::Llm, ScopeCategory::End)
+            })
+            .and_then(Event::annotated_response)
+            .unwrap_or_else(|| panic!("missing annotated response for {name}"));
+        let summary = response.optimization_summary.as_ref().unwrap();
+        assert_eq!(summary.effective_model.as_ref().unwrap().model, "effective");
+        assert_eq!(summary.actual_cost.as_ref().unwrap().total, Some(0.002));
+        assert_eq!(
+            summary
+                .actual_cost
+                .as_ref()
+                .unwrap()
+                .pricing_model
+                .as_deref(),
+            Some("effective")
+        );
+        assert_eq!(
+            response
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.cost.as_ref())
+                .and_then(|cost| cost.total),
+            Some(0.002)
+        );
+    }
+
+    let provider_response = captured
+        .iter()
+        .find(|event| {
+            event.name() == "routed-provider-reported"
+                && is_scope_event(event, ScopeType::Llm, ScopeCategory::End)
+        })
+        .and_then(Event::annotated_response)
+        .expect("missing provider-reported annotated response");
+    let provider_cost = provider_response
+        .optimization_summary
+        .as_ref()
+        .and_then(|summary| summary.actual_cost.as_ref())
+        .unwrap();
+    assert_eq!(provider_cost.total, Some(0.42));
+    assert_eq!(provider_cost.source, CostSource::ProviderReported);
+    assert_eq!(provider_cost.pricing_source.as_deref(), Some("provider"));
+    assert_eq!(
+        provider_response
+            .usage
+            .as_ref()
+            .and_then(|usage| usage.cost.as_ref())
+            .map(|cost| cost.source.clone()),
+        Some(CostSource::ProviderReported)
+    );
+
+    deregister_subscriber("routed_alias_pricing_sub").unwrap();
     reset_active_pricing_resolver().unwrap();
 }
 

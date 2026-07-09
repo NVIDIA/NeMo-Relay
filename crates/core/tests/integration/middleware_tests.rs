@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use nemo_relay::api::event::{
-    CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+    CategoryProfile, DataSchema, Event, EventCategory, PendingMarkSpec, ScopeCategory,
 };
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
@@ -27,20 +27,22 @@ use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
-    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
-    register_mark_sanitize_guardrail, register_tool_conditional_execution_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
+    register_scope_sanitize_end_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
     scope_register_llm_conditional_execution_guardrail, scope_register_llm_execution_intercept,
     scope_register_llm_request_intercept, scope_register_llm_sanitize_request_guardrail,
     scope_register_llm_sanitize_response_guardrail, scope_register_llm_stream_execution_intercept,
-    scope_register_tool_conditional_execution_guardrail, scope_register_tool_execution_intercept,
-    scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
+    scope_register_mark_sanitize_guardrail, scope_register_tool_conditional_execution_guardrail,
+    scope_register_tool_execution_intercept, scope_register_tool_request_intercept,
+    scope_register_tool_sanitize_request_guardrail,
     scope_register_tool_sanitize_response_guardrail,
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
@@ -61,6 +63,7 @@ use nemo_relay::codec::optimization::{
     LlmOptimizationTokens,
 };
 use nemo_relay::error::FlowError;
+use nemo_relay::json::Json;
 #[cfg(all(feature = "otel", feature = "openinference"))]
 use nemo_relay::observability::MarkProjection;
 #[cfg(all(feature = "otel", feature = "openinference"))]
@@ -697,7 +700,6 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         }),
     )
     .unwrap();
-
     let mut plugin_ctx = PluginRegistrationContext::new();
     plugin_ctx
         .register_tool_execution_intercept(
@@ -3327,7 +3329,6 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         }),
     )
     .unwrap();
-
     register_llm_request_intercept(
         "pending_managed",
         1,
@@ -3441,6 +3442,37 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
         Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
     )
     .unwrap();
+    register_mark_sanitize_guardrail(
+        "optimization_sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "nemo_relay.llm.optimization"
+                && let Some(data) = fields.data.as_mut().and_then(Json::as_object_mut)
+            {
+                data.insert("payload".to_string(), json!({"secret": "[redacted]"}));
+                data.remove("future_secret");
+            }
+            fields
+        }),
+    )
+    .unwrap();
+    register_scope_sanitize_end_guardrail(
+        "optimization_end_sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "optimized-managed-llm"
+                && let Some(profile) = fields.category_profile.as_mut()
+                && let Some(response) = profile.annotated_response.as_mut()
+                && let Some(summary) = Arc::make_mut(response).optimization_summary.as_mut()
+                && let Some(contribution) = summary.contributions.first_mut()
+            {
+                contribution.payload = Some(json!({"secret": "[scope-end-redacted]"}));
+                contribution.extra.remove("future_secret");
+            }
+            fields
+        }),
+    )
+    .unwrap();
 
     register_llm_request_intercept(
         "optimization_contributor",
@@ -3455,6 +3487,14 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
                 estimation_method: Some("test-counter".to_string()),
                 ..LlmOptimizationTokenImpact::default()
             });
+            contribution.payload_schema = Some(DataSchema {
+                name: "test.optimizer_evidence".to_string(),
+                version: "1".to_string(),
+            });
+            contribution.payload = Some(json!({"secret": "classified"}));
+            contribution
+                .extra
+                .insert("future_secret".to_string(), json!("classified"));
             Ok(LlmRequestInterceptOutcome::new(request, annotated)
                 .with_optimization_contribution(contribution))
         }),
@@ -3464,12 +3504,10 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
         "optimization_execution_contributor",
         1,
         Arc::new(|_name, request, next| {
-            Box::pin(async move {
-                let contribution =
-                    LlmOptimizationContribution::new("test.execution", "test_execution_kind");
-                assert!(record_llm_optimization_contribution(contribution));
-                next(request).await
-            })
+            let contribution =
+                LlmOptimizationContribution::new("test.execution", "test_execution_kind");
+            assert!(record_llm_optimization_contribution(contribution));
+            Box::pin(async move { next(request).await })
         }),
     )
     .unwrap();
@@ -3516,6 +3554,8 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
     );
     assert_eq!(marks[0].data().unwrap()["sequence"], 0);
     assert_eq!(marks[1].data().unwrap()["sequence"], 1);
+    assert_eq!(marks[0].data().unwrap()["payload"]["secret"], "[redacted]");
+    assert!(marks[0].data().unwrap().get("future_secret").is_none());
 
     let end = captured
         .iter()
@@ -3533,11 +3573,217 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
     assert_eq!(summary.tokens_saved.prompt_tokens, Some(12));
     assert_eq!(summary.contributions.len(), 2);
     assert_eq!(summary.contributions[0].producer, "test.optimizer");
+    assert_eq!(
+        summary.contributions[0].payload.as_ref().unwrap()["secret"],
+        "[scope-end-redacted]"
+    );
+    assert!(!summary.contributions[0].extra.contains_key("future_secret"));
     assert_eq!(summary.contributions[1].producer, "test.execution");
 
     deregister_llm_request_intercept("optimization_contributor").unwrap();
     deregister_llm_execution_intercept("optimization_execution_contributor").unwrap();
+    deregister_mark_sanitize_guardrail("optimization_sanitizer").unwrap();
+    deregister_scope_sanitize_end_guardrail("optimization_end_sanitizer").unwrap();
     deregister_subscriber("optimization_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_optimization_mark_uses_the_llm_captured_sanitizer_scope() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let original_stack = current_scope_stack();
+    let owner = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("optimization-sanitizer-owner")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_mark_sanitize_guardrail(
+        &owner.uuid,
+        "stream-optimization-sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            if event.name() == "nemo_relay.llm.optimization"
+                && let Some(data) = fields.data.as_mut().and_then(Json::as_object_mut)
+            {
+                data.insert("payload".to_string(), json!({"secret": "[redacted]"}));
+            }
+            fields
+        }),
+    )
+    .unwrap();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "stream_optimization_sanitizer_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_stream_execution_intercept(
+        "stream_optimization_sanitizer_contributor",
+        1,
+        Arc::new(|_name, request, next| {
+            let mut contribution = LlmOptimizationContribution::new("test.stream", "stream_test");
+            contribution.payload_schema = Some(DataSchema {
+                name: "test.stream_evidence".to_string(),
+                version: "1".to_string(),
+            });
+            contribution.payload = Some(json!({"secret": "classified"}));
+            assert!(record_llm_optimization_contribution(contribution));
+            Box::pin(async move { next(request).await })
+        }),
+    )
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream-optimization-sanitized")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(
+                        Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": "done"}))]))
+                            as LlmJsonStream,
+                    )
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"response": "done"})))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    // Poll under a different ambient stack. The wrapper must continue using
+    // the scope captured with the LLM handle, where the sanitizer is registered.
+    set_thread_scope_stack(create_scope_stack());
+    while let Some(item) = stream.next().await {
+        item.unwrap();
+    }
+    set_thread_scope_stack(original_stack);
+
+    let captured = captured_events_snapshot(&events);
+    let mark = captured
+        .iter()
+        .find(|event| event.name() == "nemo_relay.llm.optimization")
+        .expect("expected a canonical optimization mark");
+    assert_eq!(mark.data().unwrap()["payload"]["secret"], "[redacted]");
+
+    deregister_llm_stream_execution_intercept("stream_optimization_sanitizer_contributor").unwrap();
+    deregister_subscriber("stream_optimization_sanitizer_observer").unwrap();
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&owner.uuid)
+            .build(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn test_concurrent_managed_llm_calls_keep_optimization_evidence_isolated() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "concurrent_optimization_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        "concurrent_optimization_contributor",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            let call = request.content["call"].as_str().unwrap().to_string();
+            let saved_tokens = if call == "a" { 11 } else { 22 };
+            let mut contribution =
+                LlmOptimizationContribution::new(format!("test.{call}"), "concurrency_test");
+            contribution.token_impact = Some(LlmOptimizationTokenImpact {
+                saved: Some(LlmOptimizationTokens::saved_prompt(saved_tokens)),
+                ..LlmOptimizationTokenImpact::default()
+            });
+            Ok(LlmRequestInterceptOutcome::new(request, annotated)
+                .with_optimization_contribution(contribution))
+        }),
+    )
+    .unwrap();
+
+    let call = |name: &'static str, label: &'static str| {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name(name)
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"call": label}),
+                })
+                .func(Arc::new(move |_| {
+                    Box::pin(async move {
+                        tokio::task::yield_now().await;
+                        Ok(json!({"call": label}))
+                    })
+                }))
+                .build(),
+        )
+    };
+    let (a, b) = tokio::join!(call("concurrent-a", "a"), call("concurrent-b", "b"));
+    a.unwrap();
+    b.unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    for (name, expected_producer, expected_tokens) in [
+        ("concurrent-a", "test.a", 11),
+        ("concurrent-b", "test.b", 22),
+    ] {
+        let end = captured
+            .iter()
+            .find(|event| {
+                event.name() == name && event.scope_category() == Some(ScopeCategory::End)
+            })
+            .unwrap_or_else(|| panic!("missing end event for {name}"));
+        let contributions = &end
+            .annotated_response()
+            .and_then(|response| response.optimization_summary.as_ref())
+            .unwrap_or_else(|| panic!("missing optimization summary for {name}"))
+            .contributions;
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].producer, expected_producer);
+        assert_eq!(
+            end.annotated_response()
+                .unwrap()
+                .optimization_summary
+                .as_ref()
+                .unwrap()
+                .tokens_saved
+                .prompt_tokens,
+            Some(expected_tokens)
+        );
+
+        let mark = captured
+            .iter()
+            .find(|event| {
+                event.name() == "nemo_relay.llm.optimization"
+                    && event.parent_uuid() == Some(end.uuid())
+            })
+            .unwrap_or_else(|| panic!("missing optimization mark for {name}"));
+        assert_eq!(mark.data().unwrap()["producer"], expected_producer);
+        assert_eq!(
+            mark.data().unwrap()["token_impact"]["saved"]["prompt_tokens"],
+            expected_tokens
+        );
+    }
+
+    deregister_llm_request_intercept("concurrent_optimization_contributor").unwrap();
+    deregister_subscriber("concurrent_optimization_observer").unwrap();
 }
 
 #[tokio::test]

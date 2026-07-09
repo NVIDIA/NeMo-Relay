@@ -3,28 +3,39 @@
 
 //! Managed, bounded LLM optimization accounting.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationModel, LlmOptimizationSummary,
     LlmOptimizationSummaryStatus, LlmOptimizationTokens,
 };
-use crate::codec::response::{AnnotatedLlmResponse, PricingResolver};
+use crate::codec::response::{AnnotatedLlmResponse, CostSource, PricingResolver};
 
 /// Maximum contributions retained for one LLM call.
 pub const MAX_LLM_OPTIMIZATION_CONTRIBUTIONS: usize = 64;
-/// Maximum serialized custom payload size for one contribution.
-pub const MAX_LLM_OPTIMIZATION_PAYLOAD_BYTES: usize = 16 * 1024;
-/// Maximum aggregate serialized custom payload size for one LLM call.
-pub const MAX_LLM_OPTIMIZATION_TOTAL_PAYLOAD_BYTES: usize = 256 * 1024;
+/// Maximum serialized size of one complete contribution envelope.
+pub const MAX_LLM_OPTIMIZATION_CONTRIBUTION_BYTES: usize = 16 * 1024;
+/// Maximum aggregate serialized size of all contribution envelopes for one call.
+pub const MAX_LLM_OPTIMIZATION_TOTAL_CONTRIBUTION_BYTES: usize = 256 * 1024;
+/// Maximum contribution records inspected before the recorder seals itself.
+///
+/// Invalid records count toward this bound even though they do not consume an
+/// accepted sequence number.
+pub const MAX_LLM_OPTIMIZATION_CONTRIBUTION_ATTEMPTS: usize = 64;
 
 #[derive(Debug, Default)]
 struct AccumulatorState {
     contributions: Vec<LlmOptimizationContribution>,
-    total_payload_bytes: usize,
+    total_contribution_bytes: usize,
+    attempted_contributions: usize,
     emitted: usize,
+    closed: bool,
+    finished: bool,
+    limitations: BTreeSet<String>,
     contribution_limit_exceeded: bool,
     invalid_payload_schema: bool,
 }
@@ -42,51 +53,106 @@ impl LlmOptimizationRecorder {
     /// Record one contribution without blocking on I/O or exporter delivery.
     ///
     /// Returns `false` when the contribution is rejected by a payload/schema
-    /// invariant or a per-call bound. Rejection never affects LLM execution.
+    /// invariant, a per-call bound, or because accounting has already closed.
+    /// Rejection never affects LLM execution and does not consume a sequence.
     #[must_use]
     pub fn record(&self, mut contribution: LlmOptimizationContribution) -> bool {
-        let payload_bytes = match contribution.payload.as_ref() {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closed {
+            return false;
+        }
+        if state.attempted_contributions >= MAX_LLM_OPTIMIZATION_CONTRIBUTION_ATTEMPTS {
+            seal_for_contribution_limit(&mut state);
+            return false;
+        }
+        state.attempted_contributions += 1;
+        drop(state);
+
+        match contribution.payload.as_ref() {
             Some(_payload) if contribution.payload_schema.is_none() => {
-                if let Ok(mut state) = self.state.lock() {
+                if let Ok(mut state) = self.state.lock()
+                    && !state.closed
+                {
                     state.invalid_payload_schema = true;
                 }
                 return false;
             }
-            Some(payload) => match bounded_json_size(payload, MAX_LLM_OPTIMIZATION_PAYLOAD_BYTES) {
-                Ok(size) => size,
-                Err(PayloadSizeError::LimitExceeded) => {
-                    if let Ok(mut state) = self.state.lock() {
-                        state.contribution_limit_exceeded = true;
-                    }
-                    return false;
-                }
-                Err(PayloadSizeError::Serialization) => {
-                    if let Ok(mut state) = self.state.lock() {
-                        state.invalid_payload_schema = true;
-                    }
-                    return false;
-                }
-            },
-            None => 0,
-        };
-
-        let Ok(mut state) = self.state.lock() else {
-            return false;
-        };
-        if state.contributions.len() >= MAX_LLM_OPTIMIZATION_CONTRIBUTIONS
-            || payload_bytes > MAX_LLM_OPTIMIZATION_PAYLOAD_BYTES
-            || state.total_payload_bytes.saturating_add(payload_bytes)
-                > MAX_LLM_OPTIMIZATION_TOTAL_PAYLOAD_BYTES
-        {
-            state.contribution_limit_exceeded = true;
-            return false;
+            _ => {}
         }
 
+        // Relay always replaces producer-supplied identity. Serialization is
+        // deliberately outside the accumulator lock; if another writer wins
+        // the next sequence while we measure, retry with the new sequence.
         contribution.id = Some(Uuid::now_v7());
-        contribution.sequence = Some(state.contributions.len() as u64);
-        state.total_payload_bytes += payload_bytes;
-        state.contributions.push(contribution);
-        true
+        loop {
+            let sequence = {
+                let Ok(state) = self.state.lock() else {
+                    return false;
+                };
+                if state.closed {
+                    return false;
+                }
+                if state.contributions.len() >= MAX_LLM_OPTIMIZATION_CONTRIBUTIONS {
+                    drop(state);
+                    self.note_contribution_limit_exceeded();
+                    return false;
+                }
+                state.contributions.len() as u64
+            };
+            contribution.sequence = Some(sequence);
+
+            let contribution_bytes =
+                match bounded_json_size(&contribution, MAX_LLM_OPTIMIZATION_CONTRIBUTION_BYTES) {
+                    Ok(size) => size,
+                    Err(SerializedSizeError::LimitExceeded) => {
+                        self.note_contribution_limit_exceeded();
+                        return false;
+                    }
+                    Err(SerializedSizeError::Serialization) => {
+                        if let Ok(mut state) = self.state.lock()
+                            && !state.closed
+                        {
+                            state.invalid_payload_schema = true;
+                        }
+                        return false;
+                    }
+                };
+
+            let Ok(mut state) = self.state.lock() else {
+                return false;
+            };
+            if state.closed {
+                return false;
+            }
+            if state.contributions.len() as u64 != sequence {
+                continue;
+            }
+            let Some(total_contribution_bytes) = state
+                .total_contribution_bytes
+                .checked_add(contribution_bytes)
+            else {
+                seal_for_contribution_limit(&mut state);
+                return false;
+            };
+            if total_contribution_bytes > MAX_LLM_OPTIMIZATION_TOTAL_CONTRIBUTION_BYTES {
+                seal_for_contribution_limit(&mut state);
+                return false;
+            }
+
+            state.total_contribution_bytes = total_contribution_bytes;
+            state.contributions.push(contribution);
+            return true;
+        }
+    }
+
+    fn note_contribution_limit_exceeded(&self) {
+        if let Ok(mut state) = self.state.lock()
+            && !state.closed
+        {
+            seal_for_contribution_limit(&mut state);
+        }
     }
 
     pub(crate) fn record_all(
@@ -94,18 +160,68 @@ impl LlmOptimizationRecorder {
         contributions: impl IntoIterator<Item = LlmOptimizationContribution>,
     ) {
         for contribution in contributions {
-            let _ = self.record(contribution);
+            if !self.record(contribution) && self.is_closed() {
+                break;
+            }
         }
     }
 
-    pub(crate) fn take_unemitted(&self) -> Vec<LlmOptimizationContribution> {
-        let Ok(mut state) = self.state.lock() else {
+    fn is_closed(&self) -> bool {
+        self.state.lock().map(|state| state.closed).unwrap_or(true)
+    }
+
+    /// Snapshot contributions not yet accepted by mark delivery.
+    ///
+    /// This does not move the cursor. Call [`Self::mark_emitted`] only after
+    /// the asynchronous dispatcher accepts an item.
+    pub(crate) fn unemitted(&self) -> Vec<LlmOptimizationContribution> {
+        let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
         let start = state.emitted.min(state.contributions.len());
-        let contributions = state.contributions[start..].to_vec();
-        state.emitted = state.contributions.len();
-        contributions
+        state.contributions[start..].to_vec()
+    }
+
+    /// Advance the delivery cursor for a bounded number of accepted marks.
+    pub(crate) fn mark_emitted(&self, count: usize) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.emitted = state
+            .emitted
+            .saturating_add(count)
+            .min(state.contributions.len());
+    }
+
+    /// Add a best-effort lifecycle limitation to the eventual summary.
+    #[cfg(test)]
+    pub(crate) fn note_limitation(&self, limitation: impl Into<String>) {
+        if let Ok(mut state) = self.state.lock()
+            && !state.closed
+        {
+            state.limitations.insert(limitation.into());
+        }
+    }
+
+    /// Atomically seal contribution acceptance at an LLM close boundary.
+    ///
+    /// When `conditional_limitation` is supplied, it is added only if the call
+    /// already has optimization evidence or accounting limitations. This keeps
+    /// an interrupted but otherwise unoptimized stream from manufacturing an
+    /// optimization summary.
+    pub(crate) fn close_for_finalization(&self, conditional_limitation: Option<&str>) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.finished {
+            return false;
+        }
+        let has_evidence = state.has_evidence();
+        if has_evidence && let Some(limitation) = conditional_limitation {
+            state.limitations.insert(limitation.to_string());
+        }
+        state.closed = true;
+        has_evidence
     }
 
     fn finish(&self) -> FinishedContributions {
@@ -115,12 +231,24 @@ impl LlmOptimizationRecorder {
                 limitations: vec!["optimization_accumulator_unavailable".to_string()],
             };
         };
-        let mut limitations = Vec::new();
+        if state.finished {
+            return FinishedContributions {
+                contributions: Vec::new(),
+                limitations: Vec::new(),
+            };
+        }
+        state.closed = true;
+        state.finished = true;
+        let mut limitations = std::mem::take(&mut state.limitations)
+            .into_iter()
+            .collect::<Vec<_>>();
         if state.contribution_limit_exceeded {
             limitations.push("contribution_limit_exceeded".to_string());
+            state.contribution_limit_exceeded = false;
         }
         if state.invalid_payload_schema {
             limitations.push("invalid_contribution_payload_schema".to_string());
+            state.invalid_payload_schema = false;
         }
         FinishedContributions {
             contributions: std::mem::take(&mut state.contributions),
@@ -129,12 +257,27 @@ impl LlmOptimizationRecorder {
     }
 }
 
-enum PayloadSizeError {
+impl AccumulatorState {
+    fn has_evidence(&self) -> bool {
+        !self.contributions.is_empty()
+            || !self.limitations.is_empty()
+            || self.contribution_limit_exceeded
+            || self.invalid_payload_schema
+    }
+}
+
+fn seal_for_contribution_limit(state: &mut AccumulatorState) {
+    state.contribution_limit_exceeded = true;
+    state.closed = true;
+}
+
+#[derive(Debug)]
+enum SerializedSizeError {
     LimitExceeded,
     Serialization,
 }
 
-fn bounded_json_size(value: &serde_json::Value, limit: usize) -> Result<usize, PayloadSizeError> {
+fn bounded_json_size<T: Serialize>(value: &T, limit: usize) -> Result<usize, SerializedSizeError> {
     struct CountingWriter {
         size: usize,
         limit: usize,
@@ -145,7 +288,9 @@ fn bounded_json_size(value: &serde_json::Value, limit: usize) -> Result<usize, P
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             if self.size.saturating_add(bytes.len()) > self.limit {
                 self.exceeded = true;
-                return Err(std::io::Error::other("optimization payload limit exceeded"));
+                return Err(std::io::Error::other(
+                    "optimization contribution limit exceeded",
+                ));
             }
             self.size += bytes.len();
             Ok(bytes.len())
@@ -163,9 +308,9 @@ fn bounded_json_size(value: &serde_json::Value, limit: usize) -> Result<usize, P
     };
     if serde_json::to_writer(&mut writer, value).is_err() {
         return Err(if writer.exceeded {
-            PayloadSizeError::LimitExceeded
+            SerializedSizeError::LimitExceeded
         } else {
-            PayloadSizeError::Serialization
+            SerializedSizeError::Serialization
         });
     }
     Ok(writer.size)
@@ -205,7 +350,7 @@ pub(crate) async fn scope_llm_optimization_recorder<F: std::future::Future>(
 
 pub(crate) fn finalize_optimization_summary(
     recorder: &LlmOptimizationRecorder,
-    response: Option<&mut AnnotatedLlmResponse>,
+    mut response: Option<&mut AnnotatedLlmResponse>,
     requested_model: Option<&str>,
     pricing: &PricingResolver,
 ) -> Option<LlmOptimizationSummary> {
@@ -214,33 +359,55 @@ pub(crate) fn finalize_optimization_summary(
         return None;
     }
 
-    let mut tokens_saved = LlmOptimizationTokens::default();
-    let mut baseline_model = None;
-    let mut contributed_effective_model = None;
+    let applied_routing = finished
+        .contributions
+        .iter()
+        .filter(|contribution| contribution.applied)
+        .filter(|contribution| {
+            contribution.kind.as_str()
+                == crate::codec::optimization::LlmOptimizationKind::MODEL_ROUTING
+        })
+        .collect::<Vec<_>>();
+    let mut limitations = finished.limitations;
+    let routing_ambiguous = applied_routing.len() > 1;
+    if routing_ambiguous {
+        limitations.push("multiple_routing_contributions".to_string());
+    }
+
+    let mut token_totals = CheckedTokenTotals::default();
     for contribution in finished
         .contributions
         .iter()
         .filter(|contribution| contribution.applied)
     {
+        let is_routing = contribution.kind.as_str()
+            == crate::codec::optimization::LlmOptimizationKind::MODEL_ROUTING;
+        if routing_ambiguous && is_routing {
+            continue;
+        }
         if let Some(saved) = contribution
             .token_impact
             .as_ref()
             .and_then(|impact| impact.saved.as_ref())
         {
-            tokens_saved.add_assign(saved);
-        }
-        if contribution.kind.as_str()
-            == crate::codec::optimization::LlmOptimizationKind::MODEL_ROUTING
-            && let Some(transition) = contribution.model_transition.as_ref()
-        {
-            if baseline_model.is_none() {
-                baseline_model = transition.baseline.clone();
-            }
-            if transition.effective.is_some() {
-                contributed_effective_model = transition.effective.clone();
-            }
+            token_totals.add_contribution(saved);
         }
     }
+    let mut token_count_overflow = token_totals.overflow.any();
+    if token_totals.missing_total {
+        limitations.push("missing_token_savings_total".to_string());
+    }
+    if token_totals.inconsistent_total {
+        limitations.push("inconsistent_token_savings_total".to_string());
+    }
+    let tokens_saved = token_totals.values.clone();
+
+    let authoritative_transition = (applied_routing.len() == 1)
+        .then(|| applied_routing[0].model_transition.as_ref())
+        .flatten();
+    let mut baseline_model = authoritative_transition.and_then(|route| route.baseline.clone());
+    let contributed_effective_model =
+        authoritative_transition.and_then(|route| route.effective.clone());
 
     // An applied routing contribution names the model Relay actually
     // dispatched. Prefer it over provider response aliases or deployment
@@ -253,84 +420,159 @@ pub(crate) fn finalize_optimization_summary(
                 .map(|model| LlmOptimizationModel::new(model.clone()))
         })
         .or_else(|| requested_model.map(LlmOptimizationModel::new));
-    if baseline_model.is_none() {
+    if (applied_routing.is_empty() || routing_ambiguous) && baseline_model.is_none() {
         baseline_model = effective_model.clone();
     }
 
-    let effective_usage = response
+    let mut effective_usage = response
         .as_ref()
         .and_then(|response| response.usage.clone());
+    let mut baseline_derivation_incomplete =
+        token_totals.missing_total || token_totals.inconsistent_total;
+    if let Some(usage) = effective_usage.as_mut() {
+        if usage.prompt_tokens.is_none() {
+            limitations.push("missing_effective_prompt_tokens".to_string());
+        }
+        if usage.completion_tokens.is_none() {
+            limitations.push("missing_effective_completion_tokens".to_string());
+        }
+        if usage.total_tokens.is_none() {
+            match (usage.prompt_tokens, usage.completion_tokens) {
+                (Some(prompt), Some(completion)) => match prompt.checked_add(completion) {
+                    Some(total) => usage.total_tokens = Some(total),
+                    None => token_count_overflow = true,
+                },
+                _ => limitations.push("missing_effective_total_tokens".to_string()),
+            }
+        }
+    }
+    if let (Some(inferred), Some(response_usage)) = (
+        effective_usage
+            .as_ref()
+            .and_then(|usage| usage.total_tokens),
+        response
+            .as_mut()
+            .and_then(|response| response.usage.as_mut()),
+    ) && response_usage.total_tokens.is_none()
+    {
+        response_usage.total_tokens = Some(inferred);
+    }
     let baseline_usage = effective_usage.as_ref().map(|usage| {
         let mut baseline = usage.clone();
         baseline.cost = None;
-        add_tokens(&mut baseline.prompt_tokens, tokens_saved.prompt_tokens);
-        add_tokens(
+        token_count_overflow |= checked_add_observed_tokens(
+            &mut baseline.prompt_tokens,
+            tokens_saved.prompt_tokens,
+            token_totals.overflow.prompt,
+            "missing_effective_prompt_tokens",
+            &mut limitations,
+            &mut baseline_derivation_incomplete,
+        );
+        token_count_overflow |= checked_add_observed_tokens(
             &mut baseline.completion_tokens,
             tokens_saved.completion_tokens,
+            token_totals.overflow.completion,
+            "missing_effective_completion_tokens",
+            &mut limitations,
+            &mut baseline_derivation_incomplete,
         );
-        add_tokens(
+        token_count_overflow |= checked_add_observed_tokens(
             &mut baseline.cache_read_tokens,
             tokens_saved.cache_read_tokens,
+            token_totals.overflow.cache_read,
+            "missing_effective_cache_read_tokens",
+            &mut limitations,
+            &mut baseline_derivation_incomplete,
         );
-        add_tokens(
+        token_count_overflow |= checked_add_observed_tokens(
             &mut baseline.cache_write_tokens,
             tokens_saved.cache_write_tokens,
+            token_totals.overflow.cache_write,
+            "missing_effective_cache_write_tokens",
+            &mut limitations,
+            &mut baseline_derivation_incomplete,
         );
-        let total_saved = tokens_saved
-            .total_tokens
-            .or_else(|| option_sum([tokens_saved.prompt_tokens, tokens_saved.completion_tokens]));
-        add_tokens(&mut baseline.total_tokens, total_saved);
+        token_count_overflow |= checked_add_observed_tokens(
+            &mut baseline.total_tokens,
+            tokens_saved.total_tokens,
+            token_totals.overflow.total,
+            "missing_effective_total_tokens",
+            &mut limitations,
+            &mut baseline_derivation_incomplete,
+        );
         baseline
     });
+    if token_count_overflow {
+        limitations.push("token_count_overflow".to_string());
+    }
 
-    let actual_cost = effective_usage
+    // A provider-reported amount remains authoritative. A model-pricing
+    // estimate may have been calculated from a provider alias, so recompute
+    // it against the route Relay actually dispatched.
+    let provider_reported_cost = effective_usage
         .as_ref()
-        .and_then(|usage| usage.cost.clone())
-        .or_else(|| {
-            let model = effective_model.as_ref()?;
-            let usage = effective_usage.as_ref()?;
-            pricing.estimate_cost_for_provider(model.provider.as_deref(), &model.model, usage)
-        });
-    let baseline_cost = baseline_model.as_ref().and_then(|model| {
-        pricing.estimate_cost_for_provider(
-            model.provider.as_deref(),
-            &model.model,
-            baseline_usage.as_ref()?,
-        )
+        .and_then(|usage| usage.cost.as_ref())
+        .filter(|cost| cost.source == CostSource::ProviderReported)
+        .cloned();
+    let complete_core_usage = effective_usage
+        .as_ref()
+        .is_some_and(|usage| usage.prompt_tokens.is_some() && usage.completion_tokens.is_some());
+    let actual_cost = provider_reported_cost.or_else(|| {
+        if !complete_core_usage {
+            return None;
+        }
+        let model = effective_model.as_ref()?;
+        let usage = effective_usage.as_ref()?;
+        pricing.estimate_cost_for_provider(model.provider.as_deref(), &model.model, usage)
     });
+    if let Some(usage) = effective_usage.as_mut() {
+        usage.cost.clone_from(&actual_cost);
+    }
+    if let Some(usage) = response
+        .as_mut()
+        .and_then(|response| response.usage.as_mut())
+    {
+        usage.cost.clone_from(&actual_cost);
+    }
 
-    let mut limitations = finished.limitations;
+    let baseline_cost =
+        (!token_count_overflow && !baseline_derivation_incomplete && complete_core_usage)
+            .then_some(baseline_model.as_ref())
+            .flatten()
+            .and_then(|model| {
+                pricing.estimate_cost_for_provider(
+                    model.provider.as_deref(),
+                    &model.model,
+                    baseline_usage.as_ref()?,
+                )
+            });
+
     if effective_usage.is_none() {
         limitations.push("missing_effective_usage".to_string());
+    }
+    if effective_model.is_none() {
+        limitations.push("missing_effective_model".to_string());
     }
     if baseline_model.is_none() {
         limitations.push("missing_baseline_model".to_string());
     }
-    if baseline_cost.is_none() {
+    if baseline_cost.is_none()
+        && baseline_model.is_some()
+        && !token_count_overflow
+        && !baseline_derivation_incomplete
+        && complete_core_usage
+    {
         limitations.push("missing_baseline_pricing".to_string());
     }
     if actual_cost.is_none() {
         limitations.push("missing_actual_cost".to_string());
     }
 
-    let (estimated_cost_saved, currency) = match (&baseline_cost, &actual_cost) {
-        (Some(baseline), Some(actual))
-            if baseline.currency.eq_ignore_ascii_case(&actual.currency) =>
-        {
-            (
-                baseline
-                    .total_or_component_sum()
-                    .zip(actual.total_or_component_sum())
-                    .map(|(baseline, actual)| baseline - actual),
-                Some(baseline.currency.clone()),
-            )
-        }
-        (Some(_), Some(_)) => {
-            limitations.push("cost_currency_mismatch".to_string());
-            (None, None)
-        }
-        _ => (None, None),
-    };
+    let (estimated_cost_saved, currency) = calculate_estimated_cost_saved(
+        baseline_cost.as_ref(),
+        actual_cost.as_ref(),
+        &mut limitations,
+    );
 
     limitations.sort();
     limitations.dedup();
@@ -360,369 +602,174 @@ pub(crate) fn finalize_optimization_summary(
     Some(summary)
 }
 
-fn add_tokens(target: &mut Option<u64>, value: Option<u64>) {
-    if let Some(value) = value {
-        *target = Some(target.unwrap_or(0).saturating_add(value));
+fn calculate_estimated_cost_saved(
+    baseline_cost: Option<&crate::codec::response::CostEstimate>,
+    actual_cost: Option<&crate::codec::response::CostEstimate>,
+    limitations: &mut Vec<String>,
+) -> (Option<f64>, Option<String>) {
+    let baseline_total = baseline_cost.and_then(|cost| cost.total_or_component_sum());
+    let actual_total = actual_cost.and_then(|cost| cost.total_or_component_sum());
+    if baseline_cost.is_some() && baseline_total.is_none() {
+        limitations.push("missing_baseline_cost_total".to_string());
+    }
+    if actual_cost.is_some() && actual_total.is_none() {
+        limitations.push("missing_actual_cost_total".to_string());
+    }
+
+    match (baseline_cost, actual_cost) {
+        (Some(baseline), Some(actual))
+            if baseline.currency.eq_ignore_ascii_case(&actual.currency) =>
+        {
+            let saved = baseline_total
+                .zip(actual_total)
+                .map(|(baseline, actual)| baseline - actual);
+            let currency = saved.is_some().then(|| baseline.currency.clone());
+            (saved, currency)
+        }
+        (Some(_), Some(_)) => {
+            limitations.push("cost_currency_mismatch".to_string());
+            (None, None)
+        }
+        _ => (None, None),
     }
 }
 
-fn option_sum(values: impl IntoIterator<Item = Option<u64>>) -> Option<u64> {
+#[derive(Debug, Clone, Copy, Default)]
+struct TokenOverflow {
+    prompt: bool,
+    completion: bool,
+    cache_read: bool,
+    cache_write: bool,
+    total: bool,
+}
+
+impl TokenOverflow {
+    fn any(self) -> bool {
+        self.prompt || self.completion || self.cache_read || self.cache_write || self.total
+    }
+}
+
+#[derive(Debug, Default)]
+struct CheckedTokenTotals {
+    values: LlmOptimizationTokens,
+    overflow: TokenOverflow,
+    missing_total: bool,
+    inconsistent_total: bool,
+}
+
+impl CheckedTokenTotals {
+    fn add_contribution(&mut self, other: &LlmOptimizationTokens) {
+        checked_accumulate(
+            &mut self.values.prompt_tokens,
+            other.prompt_tokens,
+            &mut self.overflow.prompt,
+        );
+        checked_accumulate(
+            &mut self.values.completion_tokens,
+            other.completion_tokens,
+            &mut self.overflow.completion,
+        );
+        checked_accumulate(
+            &mut self.values.cache_read_tokens,
+            other.cache_read_tokens,
+            &mut self.overflow.cache_read,
+        );
+        checked_accumulate(
+            &mut self.values.cache_write_tokens,
+            other.cache_write_tokens,
+            &mut self.overflow.cache_write,
+        );
+
+        let (derived_total, derived_overflow) =
+            checked_option_sum([other.prompt_tokens, other.completion_tokens]);
+        self.overflow.total |= derived_overflow;
+        if derived_overflow {
+            self.values.total_tokens = None;
+        }
+        if let (Some(explicit), Some(prompt), Some(completion)) = (
+            other.total_tokens,
+            other.prompt_tokens,
+            other.completion_tokens,
+        ) && prompt
+            .checked_add(completion)
+            .is_some_and(|derived| derived != explicit)
+        {
+            self.inconsistent_total = true;
+        }
+        let contribution_total = other.total_tokens.or(derived_total);
+        if contribution_total.is_none() {
+            self.missing_total = true;
+        }
+        checked_accumulate(
+            &mut self.values.total_tokens,
+            contribution_total,
+            &mut self.overflow.total,
+        );
+    }
+}
+
+fn checked_accumulate(target: &mut Option<u64>, value: Option<u64>, overflowed: &mut bool) {
+    if *overflowed {
+        return;
+    }
+    let Some(value) = value else {
+        return;
+    };
+    match target.unwrap_or(0).checked_add(value) {
+        Some(total) => *target = Some(total),
+        None => {
+            *target = None;
+            *overflowed = true;
+        }
+    }
+}
+
+fn checked_add_observed_tokens(
+    target: &mut Option<u64>,
+    value: Option<u64>,
+    value_overflowed: bool,
+    missing_limitation: &'static str,
+    limitations: &mut Vec<String>,
+    baseline_derivation_incomplete: &mut bool,
+) -> bool {
+    if value_overflowed {
+        *target = None;
+        *baseline_derivation_incomplete = true;
+        return true;
+    }
+    let Some(value) = value else {
+        return false;
+    };
+    let Some(observed) = *target else {
+        limitations.push(missing_limitation.to_string());
+        *baseline_derivation_incomplete = true;
+        return false;
+    };
+    match observed.checked_add(value) {
+        Some(total) => {
+            *target = Some(total);
+            false
+        }
+        None => {
+            *target = None;
+            true
+        }
+    }
+}
+
+fn checked_option_sum(values: impl IntoIterator<Item = Option<u64>>) -> (Option<u64>, bool) {
     let mut present = false;
-    let total = values.into_iter().flatten().fold(0_u64, |total, value| {
+    let mut total = 0_u64;
+    for value in values.into_iter().flatten() {
         present = true;
-        total.saturating_add(value)
-    });
-    present.then_some(total)
+        let Some(next) = total.checked_add(value) else {
+            return (None, true);
+        };
+        total = next;
+    }
+    (present.then_some(total), false)
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-    use crate::api::event::DataSchema;
-    use crate::codec::optimization::{
-        LlmOptimizationEvidenceQuality, LlmOptimizationModelTransition, LlmOptimizationTokenImpact,
-    };
-    use crate::codec::response::{PricingCatalog, Usage};
-    use crate::json::Json;
-
-    fn resolver() -> PricingResolver {
-        resolver_with_rates(2.0, 1.0)
-    }
-
-    fn resolver_with_rates(baseline_input: f64, effective_input: f64) -> PricingResolver {
-        let catalog = PricingCatalog::from_json_str(
-            &json!({
-                "version": 1,
-                "entries": [
-                    {"provider":"test","model_id":"baseline","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":baseline_input,"output_per_million":4.0,"cache_read_per_million":0.5,"cache_write_per_million":3.0},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}},
-                    {"provider":"test","model_id":"effective","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":effective_input,"output_per_million":2.0,"cache_read_per_million":0.25,"cache_write_per_million":2.0},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}}
-                ]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        PricingResolver::from_catalogs(vec![catalog])
-    }
-
-    fn contribution() -> LlmOptimizationContribution {
-        let mut contribution = LlmOptimizationContribution::new(
-            "test.optimizer",
-            crate::codec::optimization::LlmOptimizationKind::model_routing(),
-        );
-        contribution.model_transition = Some(LlmOptimizationModelTransition {
-            baseline: Some(LlmOptimizationModel::new("baseline").with_provider("test")),
-            effective: Some(LlmOptimizationModel::new("effective").with_provider("test")),
-        });
-        contribution.token_impact = Some(LlmOptimizationTokenImpact {
-            saved: Some(LlmOptimizationTokens::saved_prompt(200)),
-            quality: Some(LlmOptimizationEvidenceQuality::Estimated),
-            estimation_method: Some("test-tokenizer".to_string()),
-            ..LlmOptimizationTokenImpact::default()
-        });
-        contribution
-    }
-
-    #[test]
-    fn combined_summary_retains_token_evidence_and_snapshot_pricing() {
-        let recorder = LlmOptimizationRecorder::default();
-        assert!(recorder.record(contribution()));
-        let mut response = AnnotatedLlmResponse {
-            model: Some("effective".to_string()),
-            usage: Some(Usage {
-                prompt_tokens: Some(800),
-                completion_tokens: Some(100),
-                total_tokens: Some(900),
-                ..Usage::default()
-            }),
-            ..AnnotatedLlmResponse::default()
-        };
-        let summary = finalize_optimization_summary(
-            &recorder,
-            Some(&mut response),
-            Some("baseline"),
-            &resolver(),
-        )
-        .unwrap();
-        assert_eq!(summary.status, LlmOptimizationSummaryStatus::Complete);
-        assert_eq!(summary.tokens_saved.prompt_tokens, Some(200));
-        assert_eq!(
-            summary.baseline_usage.as_ref().unwrap().prompt_tokens,
-            Some(1000)
-        );
-        assert_eq!(summary.baseline_cost.as_ref().unwrap().total, Some(0.0024));
-        assert_eq!(summary.actual_cost.as_ref().unwrap().total, Some(0.001));
-        assert!((summary.estimated_cost_saved.unwrap() - 0.0014).abs() < 1e-12);
-    }
-
-    #[test]
-    fn applied_route_is_the_authoritative_effective_model() {
-        let recorder = LlmOptimizationRecorder::default();
-        assert!(recorder.record(contribution()));
-        let mut response = AnnotatedLlmResponse {
-            // Providers may return an alias or deployment name rather than
-            // the exact model Relay selected and sent upstream.
-            model: Some("provider-response-alias".to_string()),
-            usage: Some(Usage {
-                prompt_tokens: Some(800),
-                completion_tokens: Some(100),
-                total_tokens: Some(900),
-                ..Usage::default()
-            }),
-            ..AnnotatedLlmResponse::default()
-        };
-        let summary = finalize_optimization_summary(
-            &recorder,
-            Some(&mut response),
-            Some("original-request-model"),
-            &resolver(),
-        )
-        .unwrap();
-        assert_eq!(summary.baseline_model.as_ref().unwrap().model, "baseline");
-        assert_eq!(summary.effective_model.as_ref().unwrap().model, "effective");
-    }
-
-    #[test]
-    fn unpriced_summary_is_partial_without_losing_tokens() {
-        let recorder = LlmOptimizationRecorder::default();
-        assert!(recorder.record(contribution()));
-        let mut response = AnnotatedLlmResponse {
-            model: Some("effective".to_string()),
-            usage: Some(Usage {
-                prompt_tokens: Some(8),
-                ..Usage::default()
-            }),
-            ..AnnotatedLlmResponse::default()
-        };
-        let summary = finalize_optimization_summary(
-            &recorder,
-            Some(&mut response),
-            None,
-            &PricingResolver::default(),
-        )
-        .unwrap();
-        assert_eq!(summary.status, LlmOptimizationSummaryStatus::Partial);
-        assert_eq!(summary.tokens_saved.prompt_tokens, Some(200));
-        assert!(summary.estimated_cost_saved.is_none());
-    }
-
-    #[test]
-    fn zero_and_negative_savings_are_preserved() {
-        for (baseline_rate, effective_rate, expected_sign) in [(0.0, 0.0, 0_i8), (0.5, 2.0, -1_i8)]
-        {
-            let recorder = LlmOptimizationRecorder::default();
-            assert!(recorder.record(contribution()));
-            let mut response = AnnotatedLlmResponse {
-                model: Some("effective".to_string()),
-                usage: Some(Usage {
-                    prompt_tokens: Some(800),
-                    total_tokens: Some(800),
-                    ..Usage::default()
-                }),
-                ..AnnotatedLlmResponse::default()
-            };
-            let summary = finalize_optimization_summary(
-                &recorder,
-                Some(&mut response),
-                None,
-                &resolver_with_rates(baseline_rate, effective_rate),
-            )
-            .unwrap();
-            let saved = summary.estimated_cost_saved.unwrap();
-            match expected_sign {
-                0 => assert_eq!(saved, 0.0),
-                -1 => assert!(saved < 0.0),
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    #[test]
-    fn multiple_contributions_and_cache_savings_aggregate_explicitly() {
-        let recorder = LlmOptimizationRecorder::default();
-        for (producer, prompt, cache_read, cache_write) in
-            [("test.one", 5, 7, 0), ("test.two", 11, 13, 17)]
-        {
-            let mut item = LlmOptimizationContribution::new(
-                producer,
-                crate::codec::optimization::LlmOptimizationKind::input_compression(),
-            );
-            item.token_impact = Some(LlmOptimizationTokenImpact {
-                saved: Some(LlmOptimizationTokens {
-                    prompt_tokens: Some(prompt),
-                    cache_read_tokens: Some(cache_read),
-                    cache_write_tokens: Some(cache_write),
-                    total_tokens: Some(prompt),
-                    ..LlmOptimizationTokens::default()
-                }),
-                ..LlmOptimizationTokenImpact::default()
-            });
-            assert!(recorder.record(item));
-        }
-        let mut response = AnnotatedLlmResponse {
-            model: Some("effective".to_string()),
-            usage: Some(Usage {
-                prompt_tokens: Some(100),
-                completion_tokens: Some(10),
-                total_tokens: Some(110),
-                cache_read_tokens: Some(20),
-                cache_write_tokens: Some(3),
-                ..Usage::default()
-            }),
-            ..AnnotatedLlmResponse::default()
-        };
-        let summary =
-            finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver())
-                .unwrap();
-        assert_eq!(summary.tokens_saved.prompt_tokens, Some(16));
-        assert_eq!(summary.tokens_saved.cache_read_tokens, Some(20));
-        assert_eq!(summary.tokens_saved.cache_write_tokens, Some(17));
-        assert_eq!(
-            summary.baseline_usage.as_ref().unwrap().cache_read_tokens,
-            Some(40)
-        );
-        assert_eq!(
-            summary.baseline_usage.as_ref().unwrap().cache_write_tokens,
-            Some(20)
-        );
-        assert_eq!(summary.contributions[0].sequence, Some(0));
-        assert_eq!(summary.contributions[1].sequence, Some(1));
-    }
-
-    #[test]
-    fn serialized_summary_can_be_repriced_with_a_new_catalog() {
-        let recorder = LlmOptimizationRecorder::default();
-        assert!(recorder.record(contribution()));
-        let mut response = AnnotatedLlmResponse {
-            model: Some("effective".to_string()),
-            usage: Some(Usage {
-                prompt_tokens: Some(800),
-                completion_tokens: Some(100),
-                total_tokens: Some(900),
-                ..Usage::default()
-            }),
-            ..AnnotatedLlmResponse::default()
-        };
-        let original =
-            finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver())
-                .unwrap();
-        let restored: LlmOptimizationSummary =
-            serde_json::from_value(serde_json::to_value(&original).unwrap()).unwrap();
-        let newer = resolver_with_rates(10.0, 5.0);
-        let baseline = newer
-            .estimate_cost_for_provider(
-                Some("test"),
-                "baseline",
-                restored.baseline_usage.as_ref().unwrap(),
-            )
-            .unwrap()
-            .total_or_component_sum()
-            .unwrap();
-        let actual = newer
-            .estimate_cost_for_provider(
-                Some("test"),
-                "effective",
-                restored.effective_usage.as_ref().unwrap(),
-            )
-            .unwrap()
-            .total_or_component_sum()
-            .unwrap();
-        assert_ne!(baseline - actual, original.estimated_cost_saved.unwrap());
-        assert_eq!(restored.tokens_saved.prompt_tokens, Some(200));
-    }
-
-    #[test]
-    fn no_usage_is_an_explicit_partial_summary() {
-        let recorder = LlmOptimizationRecorder::default();
-        assert!(recorder.record(contribution()));
-        let summary =
-            finalize_optimization_summary(&recorder, None, Some("effective"), &resolver()).unwrap();
-        assert_eq!(summary.status, LlmOptimizationSummaryStatus::Partial);
-        assert!(
-            summary
-                .limitations
-                .contains(&"missing_effective_usage".to_string())
-        );
-        assert_eq!(summary.tokens_saved.prompt_tokens, Some(200));
-    }
-
-    #[test]
-    fn payload_byte_limits_are_enforced_without_unbounded_work() {
-        let oversized = LlmOptimizationRecorder::default();
-        let mut item = LlmOptimizationContribution::new("test", "custom");
-        item.payload_schema = Some(DataSchema {
-            name: "test.payload".to_string(),
-            version: "1".to_string(),
-        });
-        item.payload = Some(Json::String("x".repeat(MAX_LLM_OPTIMIZATION_PAYLOAD_BYTES)));
-        assert!(!oversized.record(item));
-
-        let aggregate = LlmOptimizationRecorder::default();
-        for index in 0..17 {
-            let mut item = LlmOptimizationContribution::new(format!("test.{index}"), "custom");
-            item.payload_schema = Some(DataSchema {
-                name: "test.payload".to_string(),
-                version: "1".to_string(),
-            });
-            item.payload = Some(Json::String("x".repeat(15_000)));
-            assert!(aggregate.record(item));
-        }
-        let mut overflow = LlmOptimizationContribution::new("test.overflow", "custom");
-        overflow.payload_schema = Some(DataSchema {
-            name: "test.payload".to_string(),
-            version: "1".to_string(),
-        });
-        overflow.payload = Some(Json::String("x".repeat(15_000)));
-        assert!(!aggregate.record(overflow));
-        assert!(
-            aggregate
-                .finish()
-                .limitations
-                .contains(&"contribution_limit_exceeded".to_string())
-        );
-    }
-
-    #[test]
-    fn bounds_and_invalid_payloads_are_best_effort_and_visible() {
-        let recorder = LlmOptimizationRecorder::default();
-        let mut invalid = LlmOptimizationContribution::new("test", "custom");
-        invalid.payload = Some(json!({"evidence": true}));
-        assert!(!recorder.record(invalid));
-        for index in 0..MAX_LLM_OPTIMIZATION_CONTRIBUTIONS {
-            assert!(recorder.record(LlmOptimizationContribution::new(
-                format!("test.{index}"),
-                "custom"
-            )));
-        }
-        assert!(!recorder.record(LlmOptimizationContribution::new("overflow", "custom")));
-        let summary =
-            finalize_optimization_summary(&recorder, None, None, &PricingResolver::default())
-                .unwrap();
-        assert_eq!(
-            summary.contributions.len(),
-            MAX_LLM_OPTIMIZATION_CONTRIBUTIONS
-        );
-        assert!(
-            summary
-                .limitations
-                .contains(&"contribution_limit_exceeded".to_string())
-        );
-        assert!(
-            summary
-                .limitations
-                .contains(&"invalid_contribution_payload_schema".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn recorder_can_be_captured_for_stream_commit() {
-        let recorder = LlmOptimizationRecorder::default();
-        let captured = scope_llm_optimization_recorder(recorder.clone(), async {
-            current_llm_optimization_recorder().unwrap()
-        })
-        .await;
-        assert!(captured.record(LlmOptimizationContribution::new("test.stream", "commit")));
-        assert_eq!(recorder.finish().contributions.len(), 1);
-    }
-}
+#[path = "../../tests/unit/optimization_tests.rs"]
+mod tests;

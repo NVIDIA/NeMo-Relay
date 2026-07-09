@@ -11,15 +11,17 @@ use serde_json::json;
 use tokio_stream::StreamExt;
 
 use super::{
-    LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
-    llm_stream_call_execute,
+    LlmCallExecuteParams, LlmHandle, LlmRequest, LlmStreamCallExecuteParams,
+    emit_optimization_marks_with, llm_call_execute, llm_stream_call_execute,
 };
 use crate::api::event::ScopeCategory;
+use crate::api::optimization::finalize_optimization_summary;
 use crate::api::runtime::LlmJsonStream;
 use crate::api::runtime::{NemoRelayContextState, global_context};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::error::FlowError;
 use crate::json::Json;
+use crate::{codec::optimization::LlmOptimizationContribution, codec::response::PricingResolver};
 
 fn reset_global() {
     crate::shared_runtime::reset_runtime_owner_for_tests();
@@ -38,6 +40,97 @@ fn request() -> LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({"messages": [], "model": "demo"}),
     }
+}
+
+#[test]
+fn rejected_optimization_mark_queue_keeps_cursor_and_summary_evidence() {
+    let _guard = lock_global_runtime();
+    reset_global();
+
+    let handle = LlmHandle::builder().name("queue-rejection-test").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new("test", "queue_rejection"))
+    );
+    emit_optimization_marks_with(&handle, &[], Some, |_event, _subscribers| false);
+    assert_eq!(handle.optimization_recorder.unemitted().len(), 1);
+
+    let summary = finalize_optimization_summary(
+        &handle.optimization_recorder,
+        None,
+        None,
+        &PricingResolver::default(),
+    )
+    .expect("queue rejection must not discard close-time evidence");
+    assert_eq!(summary.contributions.len(), 1);
+    assert_eq!(summary.contributions[0].producer, "test");
+}
+
+#[test]
+fn unavailable_mark_sanitizer_does_not_acknowledge_the_delivery_cursor() {
+    let _guard = lock_global_runtime();
+    reset_global();
+
+    let handle = LlmHandle::builder().name("sanitizer-unavailable").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new("test", "sanitize_retry"))
+    );
+    handle.optimization_recorder.close_for_finalization(None);
+    emit_optimization_marks_with(
+        &handle,
+        &[],
+        |_event| None,
+        |_event, _subscribers| panic!("unavailable sanitization must not enqueue"),
+    );
+    assert_eq!(handle.optimization_recorder.unemitted().len(), 1);
+
+    emit_optimization_marks_with(&handle, &[], Some, |_event, _subscribers| true);
+    assert!(handle.optimization_recorder.unemitted().is_empty());
+}
+
+#[test]
+fn close_boundary_freezes_identical_mark_and_summary_contributions() {
+    let _guard = lock_global_runtime();
+    reset_global();
+
+    let handle = LlmHandle::builder().name("close-boundary").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "accepted",
+                "close_boundary"
+            ))
+    );
+    assert!(handle.optimization_recorder.close_for_finalization(None));
+    assert!(
+        !handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new("late", "close_boundary"))
+    );
+
+    let mut marks = Vec::new();
+    emit_optimization_marks_with(&handle, &[], Some, |event, _subscribers| {
+        marks.push(event.clone());
+        true
+    });
+    let summary = finalize_optimization_summary(
+        &handle.optimization_recorder,
+        None,
+        None,
+        &PricingResolver::default(),
+    )
+    .unwrap();
+    assert_eq!(marks.len(), 1);
+    assert_eq!(summary.contributions.len(), 1);
+    assert_eq!(marks[0].data().unwrap()["producer"], "accepted");
+    assert_eq!(
+        marks[0].data().unwrap()["id"],
+        json!(summary.contributions[0].id.unwrap())
+    );
 }
 
 #[test]

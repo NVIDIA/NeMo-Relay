@@ -14,6 +14,11 @@ use crate::api::event::DataSchema;
 use super::response::{CostEstimate, Usage};
 
 /// Open, forward-compatible optimization classification.
+///
+/// This is intentionally a string-backed newtype rather than a closed enum:
+/// third-party optimization kinds must deserialize and round-trip losslessly
+/// before Relay knows about them. Standard constants and constructors provide
+/// enum-like ergonomics without making new producers wait for a core release.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LlmOptimizationKind(String);
@@ -129,20 +134,6 @@ impl LlmOptimizationTokens {
             total_tokens: Some(prompt_tokens),
             ..Self::default()
         }
-    }
-
-    /// Saturating field-wise addition, preserving absent fields when neither side supplies them.
-    pub fn add_assign(&mut self, other: &Self) {
-        fn add(target: &mut Option<u64>, value: Option<u64>) {
-            if let Some(value) = value {
-                *target = Some(target.unwrap_or(0).saturating_add(value));
-            }
-        }
-        add(&mut self.prompt_tokens, other.prompt_tokens);
-        add(&mut self.completion_tokens, other.completion_tokens);
-        add(&mut self.cache_read_tokens, other.cache_read_tokens);
-        add(&mut self.cache_write_tokens, other.cache_write_tokens);
-        add(&mut self.total_tokens, other.total_tokens);
     }
 }
 
@@ -299,55 +290,4 @@ pub struct LlmOptimizationSummary {
     pub currency: Option<String>,
     /// Ordered, bounded source evidence used by the calculation.
     pub contributions: Vec<LlmOptimizationContribution>,
-}
-
-#[cfg(test)]
-mod tests {
-    use serde::Serialize;
-    use serde_json::json;
-
-    use super::*;
-
-    #[derive(Serialize)]
-    struct CustomPayload {
-        evidence: String,
-    }
-
-    impl LlmOptimizationPayload for CustomPayload {
-        const SCHEMA_NAME: &'static str = "example.custom_optimization";
-        const SCHEMA_VERSION: &'static str = "3";
-    }
-
-    #[test]
-    fn custom_kinds_payloads_and_future_fields_round_trip() {
-        let mut contribution = LlmOptimizationContribution::new("example", "energy_reduction")
-            .with_payload(&CustomPayload {
-                evidence: "measured".to_string(),
-            })
-            .unwrap();
-        contribution
-            .extra
-            .insert("future_field".to_string(), json!({"v": 2}));
-        let decoded: LlmOptimizationContribution =
-            serde_json::from_value(serde_json::to_value(&contribution).unwrap()).unwrap();
-        assert_eq!(decoded.kind.as_str(), "energy_reduction");
-        assert_eq!(
-            decoded.payload_schema.as_ref().unwrap().name,
-            "example.custom_optimization"
-        );
-        assert_eq!(decoded.extra["future_field"], json!({"v": 2}));
-    }
-
-    #[test]
-    fn saved_prompt_tokens_remain_explicit_on_the_wire() {
-        let impact = LlmOptimizationTokenImpact {
-            saved: Some(LlmOptimizationTokens::saved_prompt(42)),
-            quality: Some(LlmOptimizationEvidenceQuality::Estimated),
-            estimation_method: Some("tokenizer-v1".to_string()),
-            ..LlmOptimizationTokenImpact::default()
-        };
-        let wire = serde_json::to_value(impact).unwrap();
-        assert_eq!(wire["saved"]["prompt_tokens"], 42);
-        assert_eq!(wire["saved"]["total_tokens"], 42);
-    }
 }
