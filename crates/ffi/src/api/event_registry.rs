@@ -7,7 +7,7 @@ use super::{
 };
 
 #[derive(Clone, Copy)]
-enum Surface {
+pub(crate) enum Surface {
     Mark,
     Start,
     End,

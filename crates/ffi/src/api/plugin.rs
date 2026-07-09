@@ -17,6 +17,7 @@ use super::{
     wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
     wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
+use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 struct FfiHostedPluginUserData {
@@ -373,7 +374,7 @@ unsafe fn plugin_register_event_sanitizer(
     cb: NemoRelayEventSanitizeCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-    surface: u8,
+    surface: Surface,
 ) -> NemoRelayStatus {
     clear_last_error();
     let callback = wrap_event_sanitize_fn(cb, user_data, free_fn);
@@ -387,9 +388,11 @@ unsafe fn plugin_register_event_sanitizer(
     };
     let context = unsafe { &mut *((*ctx).0) };
     let result = match surface {
-        0 => context.register_mark_sanitize_guardrail(&name, priority, callback),
-        1 => context.register_scope_sanitize_start_guardrail(&name, priority, callback),
-        _ => context.register_scope_sanitize_end_guardrail(&name, priority, callback),
+        Surface::Mark => context.register_mark_sanitize_guardrail(&name, priority, callback),
+        Surface::Start => {
+            context.register_scope_sanitize_start_guardrail(&name, priority, callback)
+        }
+        Surface::End => context.register_scope_sanitize_end_guardrail(&name, priority, callback),
     };
     result
         .map(|()| NemoRelayStatus::Ok)
@@ -408,7 +411,9 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_mark_sanitize_guardr
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
-    unsafe { plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, 0) }
+    unsafe {
+        plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, Surface::Mark)
+    }
 }
 
 /// Register a scope-start event sanitizer into a plugin context.
@@ -423,7 +428,9 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_scope_sanitize_start
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
-    unsafe { plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, 1) }
+    unsafe {
+        plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, Surface::Start)
+    }
 }
 
 /// Register a scope-end event sanitizer into a plugin context.
@@ -438,7 +445,9 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_scope_sanitize_end_g
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
-    unsafe { plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, 2) }
+    unsafe {
+        plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, Surface::End)
+    }
 }
 
 /// Register a tool sanitize-request guardrail into the plugin registration context.
