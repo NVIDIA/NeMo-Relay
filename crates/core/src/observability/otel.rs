@@ -707,7 +707,155 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
         attributes.push(KeyValue::new("nemo_relay.llm.cost.total", cost));
         attributes.push(KeyValue::new("nemo_relay.llm.cost.currency", currency));
     }
+    if let Some(response) = event.annotated_response()
+        && let Some(summary) = response.optimization_summary.as_ref()
+    {
+        push_optimization_attributes(&mut attributes, summary);
+    }
     attributes
+}
+
+fn push_optimization_attributes(
+    attributes: &mut Vec<KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    if let Some(model) = summary.baseline_model.as_ref() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.baseline_model",
+            model.model.clone(),
+        ));
+    }
+    if let Some(model) = summary.effective_model.as_ref() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.effective_model",
+            model.model.clone(),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.prompt_tokens {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.prompt_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.total_tokens {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.total_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+    if let Some(cost) = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.total_or_component_sum())
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.baseline_cost",
+            cost,
+        ));
+    }
+    if let Some(cost) = summary.baseline_cost.as_ref() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.baseline_cost_currency",
+            cost.currency.clone(),
+        ));
+        if let Some(source) = cost.pricing_source.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.baseline_pricing_source",
+                source.clone(),
+            ));
+        }
+        if let Some(as_of) = cost.pricing_as_of.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.baseline_pricing_as_of",
+                as_of.clone(),
+            ));
+        }
+    }
+    if let Some(cost) = summary
+        .actual_cost
+        .as_ref()
+        .and_then(|cost| cost.total_or_component_sum())
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.actual_cost",
+            cost,
+        ));
+    }
+    if let Some(cost) = summary.actual_cost.as_ref() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.actual_cost_currency",
+            cost.currency.clone(),
+        ));
+        if let Some(source) = cost.pricing_source.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.actual_pricing_source",
+                source.clone(),
+            ));
+        }
+        if let Some(as_of) = cost.pricing_as_of.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.actual_pricing_as_of",
+                as_of.clone(),
+            ));
+        }
+    }
+    if let Some(cost) = summary.estimated_cost_saved {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.estimated_cost_saved",
+            cost,
+        ));
+        if let Some(currency) = summary.currency.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.estimated_cost_saved_currency",
+                currency.clone(),
+            ));
+        }
+    }
+    if let Some(currency) = summary.currency.as_ref() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.currency",
+            currency.clone(),
+        ));
+    }
+    attributes.push(KeyValue::new(
+        "nemo_relay.llm.optimization.status",
+        match summary.status {
+            crate::codec::optimization::LlmOptimizationSummaryStatus::Complete => "complete",
+            crate::codec::optimization::LlmOptimizationSummaryStatus::Partial => "partial",
+        },
+    ));
+    if let Some(source) = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_source.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_source.as_ref())
+        })
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_source",
+            source.clone(),
+        ));
+    }
+    if let Some(as_of) = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_as_of.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_as_of.as_ref())
+        })
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_as_of",
+            as_of.clone(),
+        ));
+    }
 }
 
 fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {

@@ -38,9 +38,9 @@ mod native {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
     }
 
-    pub(super) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) {
+    pub(super) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
         if subscribers.is_empty() {
-            return;
+            return true;
         }
         let message = DispatcherMessage::Deliver {
             event: Box::new(event.clone()),
@@ -51,10 +51,14 @@ mod native {
             Ok(sender) => {
                 if let Err(error) = sender.send(message) {
                     eprintln!("nemo_relay: failed to queue subscriber event: {error}");
+                    false
+                } else {
+                    true
                 }
             }
             Err(error) => {
                 eprintln!("nemo_relay: failed to start subscriber dispatcher: {error}");
+                false
             }
         }
     }
@@ -152,8 +156,8 @@ mod native {
 }
 
 /// Queue an event for subscriber delivery.
-pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) {
-    native::dispatch_event(event, subscribers);
+pub(crate) fn dispatch_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
+    native::dispatch_event(event, subscribers)
 }
 
 /// Wait for all queued subscriber callbacks submitted before this call.

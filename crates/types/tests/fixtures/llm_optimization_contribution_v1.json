@@ -1,0 +1,53 @@
+{
+  "id": "018f0e8d-8c2f-7a74-bf43-8c3e9eaa0001",
+  "sequence": 7,
+  "producer": "example.optimizer",
+  "kind": "custom_energy_optimization",
+  "applied": true,
+  "model_transition": {
+    "baseline": {
+      "model": "example-baseline",
+      "provider": "example-provider"
+    },
+    "effective": {
+      "model": "example-effective",
+      "provider": "example-provider"
+    }
+  },
+  "token_impact": {
+    "baseline": {
+      "prompt_tokens": 120,
+      "completion_tokens": 24,
+      "cache_read_tokens": 12,
+      "cache_write_tokens": 8,
+      "total_tokens": 144
+    },
+    "effective": {
+      "prompt_tokens": 80,
+      "completion_tokens": 20,
+      "cache_read_tokens": 6,
+      "cache_write_tokens": 4,
+      "total_tokens": 100
+    },
+    "saved": {
+      "prompt_tokens": 40,
+      "completion_tokens": 4,
+      "cache_read_tokens": 6,
+      "cache_write_tokens": 4,
+      "total_tokens": 44
+    },
+    "quality": "observed",
+    "estimation_method": "provider_usage_delta"
+  },
+  "payload_schema": {
+    "name": "example.optimizer.evidence",
+    "version": "1"
+  },
+  "payload": {
+    "experiment": "fixture-v1",
+    "confidence": 0.98
+  },
+  "future_top_level_field": {
+    "preserved": true
+  }
+}

@@ -623,6 +623,7 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
                 api_name: "custom".into(),
                 data: json!({"ok": true}),
             }),
+            optimization_summary: None,
             extra: serde_json::Map::from_iter([("extra".into(), json!(true))]),
         };
 
@@ -977,6 +978,33 @@ fn test_python_side_core_type_constructors_cover_exposed_entrypoints() {
             json!({"model": "demo", "messages": []})
         );
 
+        let contribution_fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../types/tests/fixtures/llm_optimization_contribution_v1.json"
+        ))
+        .unwrap();
+        let contributions = json_to_py(py, &json!([contribution_fixture.clone()])).unwrap();
+        let kwargs = PyDict::new(py);
+        kwargs
+            .set_item("optimization_contributions", contributions)
+            .unwrap();
+        let outcome = module
+            .getattr("LLMRequestInterceptOutcome")
+            .unwrap()
+            .call((request.clone(),), Some(&kwargs))
+            .unwrap();
+        let round_trip = py_to_json(
+            outcome
+                .getattr("optimization_contributions")
+                .unwrap()
+                .as_any(),
+        )
+        .unwrap();
+        assert_eq!(round_trip, json!([contribution_fixture]));
+        assert_eq!(
+            round_trip[0]["future_top_level_field"],
+            json!({"preserved": true})
+        );
+
         let bad_headers = PyList::empty(py);
         let err = module
             .getattr("LLMRequest")
@@ -1217,6 +1245,17 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                     api_name: "custom".into(),
                     data: json!({"debug": true}),
                 }),
+                optimization_summary: Some(
+                    serde_json::from_value(json!({
+                        "schema_version": "1",
+                        "calculation_version": "1",
+                        "status": "partial",
+                        "limitations": ["missing_pricing"],
+                        "tokens_saved": {"prompt_tokens": 2, "total_tokens": 2},
+                        "contributions": []
+                    }))
+                    .unwrap(),
+                ),
                 extra: serde_json::Map::from_iter([("trace".into(), json!("abc"))]),
             },
         };
@@ -1240,6 +1279,11 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
             json!("test-provider")
         );
         assert_eq!(
+            py_to_json(response.optimization_summary(py).unwrap().bind(py)).unwrap()["tokens_saved"]
+                ["prompt_tokens"],
+            json!(2)
+        );
+        assert_eq!(
             py_to_json(response.api_specific(py).unwrap().bind(py)).unwrap()["api_name"],
             json!("custom")
         );
@@ -1260,12 +1304,20 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
                 finish_reason: None,
                 usage: None,
                 api_specific: None,
+                optimization_summary: None,
                 extra: serde_json::Map::new(),
             },
         };
         assert!(
             response_without_api_specific
                 .api_specific(py)
+                .unwrap()
+                .bind(py)
+                .is_none()
+        );
+        assert!(
+            response_without_api_specific
+                .optimization_summary(py)
                 .unwrap()
                 .bind(py)
                 .is_none()
@@ -1478,6 +1530,17 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     api_name: "custom".into(),
                     data: json!({"debug": true}),
                 }),
+                optimization_summary: Some(
+                    serde_json::from_value(json!({
+                        "schema_version": "1",
+                        "calculation_version": "1",
+                        "status": "partial",
+                        "limitations": ["test"],
+                        "tokens_saved": {},
+                        "contributions": []
+                    }))
+                    .unwrap(),
+                ),
                 extra: serde_json::Map::new(),
             },
         };
@@ -1535,6 +1598,11 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                 FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
                 "forced serialization failure",
                 |py, _, _, response| response.usage(py).map(|_| ()),
+            ),
+            (
+                FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR,
+                "forced serialization failure",
+                |py, _, _, response| response.optimization_summary(py).map(|_| ()),
             ),
             (
                 FORCE_ANNOTATED_RESPONSE_API_SPECIFIC_SERIALIZATION_ERROR,

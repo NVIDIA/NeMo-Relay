@@ -410,6 +410,7 @@ class LLMRequestInterceptOutcome:
         request: LLMRequest,
         annotated_request: Optional[AnnotatedLLMRequest] = ...,
         pending_marks: list[PendingMarkSpec] = ...,
+        optimization_contributions: Optional[Sequence[Mapping[str, _JsonValue]]] = ...,
     ) -> None: ...
     @property
     def request(self) -> LLMRequest: ...
@@ -417,6 +418,10 @@ class LLMRequestInterceptOutcome:
     def annotated_request(self) -> Optional[AnnotatedLLMRequest]: ...
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
+    @property
+    def optimization_contributions(self) -> list[_JsonObject]:
+        """Return ordered plugin-neutral optimization contribution objects."""
+        ...
 
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a tool execution intercept.
@@ -599,6 +604,10 @@ class AnnotatedLLMResponse:
     @property
     def usage(self) -> Optional[_JsonObject]:
         """Return normalized usage accounting, if present."""
+        ...
+    @property
+    def optimization_summary(self) -> Optional[_JsonObject]:
+        """Return Relay's close-time optimization accounting, if present."""
         ...
     @property
     def api_specific(self) -> Optional[_JsonObject]:
