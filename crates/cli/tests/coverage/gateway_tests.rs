@@ -283,8 +283,11 @@ fn effective_upstream_request_skips_invalid_runtime_headers() {
 fn gateway_session_id_prefers_headers_and_has_fallbacks() {
     let mut headers = HeaderMap::new();
     let codex_body = json!({
-        "prompt_cache_key": "codex-session",
-        "client_metadata": { "x-codex-installation-id": "install-1" },
+        "prompt_cache_key": "codex-thread",
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "session_id": "codex-session"
+        },
         "session_id": "body-session"
     });
     headers.insert(
@@ -422,7 +425,11 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
         "model": "gpt-test",
         "stream": true,
         "prompt_cache_key": "codex-thread",
-        "client_metadata": { "x-codex-installation-id": "install-1" },
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "session_id": "codex-session",
+            "thread_id": "codex-thread"
+        },
         "conversation_id": "conversation-1",
         "generation": { "id": "generation-1" }
     });
@@ -439,7 +446,7 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
 
     let start = build_llm_gateway_start(&prepared);
 
-    assert_eq!(start.session_id.as_deref(), Some("codex-thread"));
+    assert_eq!(start.session_id.as_deref(), Some("codex-session"));
     assert_eq!(start.provider, "openai.responses");
     assert_eq!(start.model_name.as_deref(), Some("gpt-test"));
     assert_eq!(start.subagent_id.as_deref(), Some("worker-1"));
@@ -453,6 +460,35 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
         !start.request.headers.contains_key("authorization"),
         "observable headers should not leak auth secrets"
     );
+}
+
+#[test]
+fn build_llm_gateway_start_uses_codex_0142_shared_session_and_subagent_ids() {
+    let request_json = json!({
+        "model": "gpt-test",
+        "prompt_cache_key": "child-thread",
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "x-openai-subagent": "collab_spawn",
+            "session_id": "root-session",
+            "thread_id": "child-thread"
+        }
+    });
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/responses".into(),
+        provider: ProviderRoute::OpenAiResponses,
+        upstream_url: "http://openai/v1/responses".into(),
+        body_bytes: axum::body::Bytes::new(),
+        request_json,
+        streaming: false,
+    };
+
+    let start = build_llm_gateway_start(&prepared);
+
+    assert_eq!(start.session_id.as_deref(), Some("root-session"));
+    assert_eq!(start.subagent_id.as_deref(), Some("child-thread"));
 }
 
 #[test]

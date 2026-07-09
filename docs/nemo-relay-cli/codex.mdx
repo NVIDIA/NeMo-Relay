@@ -14,13 +14,13 @@ local gateway cannot observe provider traffic that never reaches the machine.
 
 ## Requirements
 
-`codex-cli >= 0.129.0`. The gateway uses the `features.hooks` flag and the
-`nemo-relay-openai` provider alias, both of which require this version. Earlier
-versions either reject the provider override or do not recognize the hooks
-feature flag.
+`codex-cli >= 0.142.0`. This version provides the subagent hook lifecycle and
+Responses client metadata that Relay uses for deterministic root, subagent,
+tool, and LLM correlation. Relay retains compatibility fallbacks for older
+payloads, but earlier Codex releases are outside the supported version floor.
 
 <Warning>
-As of Codex 0.129, Codex requires hooks to be manually reviewed and activated
+Codex requires hooks to be manually reviewed and activated
 before they run. Generated NeMo Relay hook configuration is not enough on its own
 if Codex leaves those hooks inactive. Review and activate the installed or
 injected hooks in Codex before expecting NeMo Relay events. This is being tracked
@@ -179,12 +179,16 @@ traffic to pass through the gateway.
 
 ## Captured Events
 
-Generated Codex hooks include `SessionStart`, `SessionEnd`, `SubagentStart`,
-`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-`Notification`, and `PreCompact` for scope, tool, and mark events.
-`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
-retained as private LLM correlation hints and are not emitted as standalone
-NeMo Relay events.
+Codex 0.142 delivers `SessionStart`, `SubagentStart`, `SubagentStop`,
+`PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact`,
+`UserPromptSubmit`, and `Stop`. Thread-spawned subagents share the root
+`session_id`; their `agent_id` identifies the child scope. `UserPromptSubmit`
+and `Stop` also provide private LLM correlation hints, and `Stop` creates the
+turn boundary used for incremental ATIF snapshots.
+
+The generated cross-host hook bundle also contains `SessionEnd`,
+`PostToolUseFailure`, and `Notification` compatibility entries. Codex 0.142
+ignores those unsupported events.
 
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. Persistent install writes

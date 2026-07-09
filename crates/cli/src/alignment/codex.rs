@@ -40,22 +40,43 @@ pub(crate) fn owns_gateway_provider(provider: &str) -> bool {
     provider == "openai.responses"
 }
 
-// Codex currently does not forward a stable session header on OpenAI Responses requests. When the
-// request carries Codex client metadata, the `prompt_cache_key` is the rollout/thread id. The
-// metadata check prevents treating arbitrary application prompt-cache keys as session ids.
-pub(crate) fn prompt_cache_session_id(body: &Value, route: GatewayRouteKind) -> Option<String> {
+// Codex 0.131+ sends the hook-compatible root session id in Responses client metadata while
+// retaining the rollout/thread id as `prompt_cache_key`. Older versions only expose the latter.
+// Prefer the shared session id so root and subagent provider traffic joins the hook session, then
+// retain the prompt-cache fallback for compatibility with older Codex releases. The installation
+// metadata check prevents treating arbitrary OpenAI client metadata or cache keys as Codex ids.
+pub(crate) fn responses_session_id(body: &Value, route: GatewayRouteKind) -> Option<String> {
     if route != GatewayRouteKind::OpenAiResponses {
         return None;
     }
-    let has_codex_metadata = body
-        .get("client_metadata")
-        .and_then(|metadata| metadata.get("x-codex-installation-id"))
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty());
-    if !has_codex_metadata {
+    if !has_codex_client_metadata(body) {
         return None;
     }
-    json_string_at(body, &[&["prompt_cache_key"][..]])
+    json_string_at(
+        body,
+        &[
+            &["client_metadata", "session_id"][..],
+            &["prompt_cache_key"][..],
+        ],
+    )
+}
+
+// Codex 0.142 identifies thread-spawned subagent provider calls with canonical client metadata.
+// `session_id` remains shared with the root, while `thread_id` matches the `agent_id` carried by
+// SubagentStart/SubagentStop hooks. Restrict the fallback to `collab_spawn` so internal review,
+// compaction, and memory calls do not masquerade as user-visible subagents.
+pub(crate) fn responses_subagent_id(body: &Value, route: GatewayRouteKind) -> Option<String> {
+    if route != GatewayRouteKind::OpenAiResponses || !has_codex_client_metadata(body) {
+        return None;
+    }
+    let subagent_kind = json_string_at(body, &[&["client_metadata", "x-openai-subagent"][..]]);
+    (subagent_kind.as_deref() == Some("collab_spawn"))
+        .then(|| json_string_at(body, &[&["client_metadata", "thread_id"][..]]))
+        .flatten()
+}
+
+fn has_codex_client_metadata(body: &Value) -> bool {
+    json_string_at(body, &[&["client_metadata", "x-codex-installation-id"][..]]).is_some()
 }
 
 // Gives the gateway a Codex-native upstream only when the inbound token is a recognized ChatGPT

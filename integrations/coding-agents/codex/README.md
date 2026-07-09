@@ -13,8 +13,9 @@ supported only when they run locally and honor the same hook/plugin config and
 provider routing. Cloud or remote Codex tasks are partial or unsupported for
 local gateway LLM capture.
 
-Requires `codex-cli >= 0.129.0` (introduced the `features.hooks` flag and the
-provider alias surface the gateway relies on).
+Requires `codex-cli >= 0.142.0`. Relay retains payload and prompt-cache
+fallbacks for older Codex releases, but versions before 0.142 are outside the
+supported compatibility floor.
 
 ## Files
 
@@ -27,15 +28,17 @@ provider alias surface the gateway relies on).
 
 ## Captured Events
 
-With `codex-cli >= 0.129.0`, the minimum supported installed hooks are
-`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`PermissionRequest`, `Stop`, `PreCompact`, and `PostCompact`.
+With `codex-cli >= 0.142.0`, the supported installed hooks are `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`.
+Thread-spawned subagents share the root `session_id` and use `agent_id` as the
+child identity. Relay uses those fields to keep concurrent subagent tool and
+LLM activity attached to the correct scope.
 
-The hook template also documents events used by newer or broader host hook
-surfaces, including `SessionEnd`, `PostToolUseFailure`, `SubagentStart`,
-`SubagentStop`, and `Notification`. Relay forwards any delivered supported hook
-as scope, tool, mark, or private LLM correlation events, but the v1 plugin
-manifest does not depend on Codex exposing those broader events.
+The shared hook template also contains `SessionEnd`, `PostToolUseFailure`, and
+`Notification` compatibility entries for broader host hook surfaces. Codex
+0.142 ignores those events. Relay still snapshots each turn on `Stop` because
+Codex does not expose a `SessionEnd`-equivalent event.
 
 Transparent setup injects these hooks with CLI config overrides. Plugin setup
 does not install hooks from the package template directly. It writes

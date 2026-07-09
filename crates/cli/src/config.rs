@@ -51,7 +51,7 @@ pub(crate) enum Command {
                       gateway; the gateway then forwards to `--openai-base-url` (defaults to \
                       api.openai.com) with `OPENAI_API_KEY` injected on the codex route (see \
                       NMF-86 — codex's own auth.json JWT is stripped). Requires codex-cli >= \
-                      0.129.0.",
+                      0.142.0.",
         after_help = "Examples:\n  \
                       nemo-relay codex\n  \
                       nemo-relay codex -- exec \"fix the bug in foo.rs\"\n  \

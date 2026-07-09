@@ -166,13 +166,30 @@ fn gateway_session_id_uses_explicit_claude_then_codex_fallbacks() {
     let mut headers = HeaderMap::new();
     let codex_body = json!({
         "prompt_cache_key": "codex-thread",
-        "client_metadata": { "x-codex-installation-id": "install-1" },
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "session_id": "codex-session"
+        },
         "session_id": "body-thread"
     });
 
     assert_eq!(
         gateway_session_id(&headers, &codex_body, GatewayRouteKind::OpenAiResponses).as_deref(),
-        Some("codex-thread")
+        Some("codex-session")
+    );
+
+    let legacy_codex_body = json!({
+        "prompt_cache_key": "legacy-codex-thread",
+        "client_metadata": { "x-codex-installation-id": "install-1" }
+    });
+    assert_eq!(
+        gateway_session_id(
+            &headers,
+            &legacy_codex_body,
+            GatewayRouteKind::OpenAiResponses
+        )
+        .as_deref(),
+        Some("legacy-codex-thread")
     );
 
     headers.insert(
@@ -250,7 +267,10 @@ fn gateway_subagent_and_identifier_helpers_respect_header_precedence() {
         "object": { "id": { "nested": true } }
     });
 
-    assert_eq!(gateway_subagent_id(&headers).as_deref(), Some("worker-1"));
+    assert_eq!(
+        gateway_subagent_id(&headers, &body, GatewayRouteKind::OpenAiResponses).as_deref(),
+        Some("worker-1")
+    );
     assert_eq!(
         gateway_identifier(
             &headers,
@@ -273,6 +293,47 @@ fn gateway_subagent_and_identifier_helpers_respect_header_precedence() {
     );
     assert_eq!(
         gateway_identifier(&HeaderMap::new(), &body, "missing", &[&["object", "id"]]),
+        None
+    );
+}
+
+#[test]
+fn gateway_subagent_id_reads_codex_0142_client_metadata() {
+    let body = json!({
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "x-openai-subagent": "collab_spawn",
+            "session_id": "root-session",
+            "thread_id": "child-thread"
+        }
+    });
+
+    assert_eq!(
+        gateway_subagent_id(&HeaderMap::new(), &body, GatewayRouteKind::OpenAiResponses).as_deref(),
+        Some("child-thread")
+    );
+    assert_eq!(
+        gateway_subagent_id(
+            &HeaderMap::new(),
+            &body,
+            GatewayRouteKind::OpenAiChatCompletions
+        ),
+        None
+    );
+
+    let internal = json!({
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "x-openai-subagent": "review",
+            "thread_id": "review-thread"
+        }
+    });
+    assert_eq!(
+        gateway_subagent_id(
+            &HeaderMap::new(),
+            &internal,
+            GatewayRouteKind::OpenAiResponses
+        ),
         None
     );
 }

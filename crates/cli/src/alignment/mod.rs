@@ -132,7 +132,7 @@ static ANTHROPIC_COUNT_TOKENS_REQUEST_EXTRACTOR: AnthropicCountTokensRequestExtr
 impl ProviderRequestExtractor for OpenAiResponsesRequestExtractor {
     fn gateway_session_id(&self, headers: &HeaderMap, body: &Value) -> Option<String> {
         gateway_header_session_id(headers)
-            .or_else(|| codex::prompt_cache_session_id(body, GatewayRouteKind::OpenAiResponses))
+            .or_else(|| codex::responses_session_id(body, GatewayRouteKind::OpenAiResponses))
             .or_else(|| openai_body_session_id(body, GatewayRouteKind::OpenAiResponses))
     }
 
@@ -551,13 +551,17 @@ pub(crate) fn gateway_forward_headers(
     codex::strip_chatgpt_auth_for_openai_route(headers, route, has_openai_replacement_key)
 }
 
-/// Read the explicit subagent header from a gateway request.
+/// Resolve subagent ownership from an explicit Relay header or trusted provider metadata.
 ///
-/// Unlike session ids, there is intentionally no body fallback here: subagent
-/// body fields are provider-specific and easy to confuse with tool-call payload
-/// content.
-pub(crate) fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
+/// Generic body fields remain intentionally unsupported because they are easy to confuse with
+/// tool-call content. The only body fallback is Codex's namespaced Responses client metadata.
+pub(crate) fn gateway_subagent_id(
+    headers: &HeaderMap,
+    body: &Value,
+    route: GatewayRouteKind,
+) -> Option<String> {
     header_string(headers, "x-nemo-relay-subagent-id")
+        .or_else(|| codex::responses_subagent_id(body, route))
 }
 
 /// Resolve a correlation identifier from a header or known JSON body paths.

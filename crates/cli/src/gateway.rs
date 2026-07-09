@@ -127,7 +127,7 @@ fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart 
     LlmGatewayStart {
         // Explicit NeMo Relay headers still win, but alignment can recover agent-native session
         // signals when available. Applies to Claude Code's session header and Codex's Responses
-        // prompt-cache thread id today.
+        // client metadata, with a prompt-cache fallback for older Codex releases.
         session_id: gateway_session_id(&request.headers, &request.request_json, request.provider),
         provider: request.provider.name().to_string(),
         model_name: request
@@ -135,10 +135,10 @@ fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart 
             .get("model")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        // Subagent ownership is intentionally header-only at the gateway layer. Body fields can be
-        // provider payload content rather than scope identity, so the session layer handles other
-        // ownership hints.
-        subagent_id: gateway_subagent_id(&request.headers),
+        // Explicit Relay ownership wins. Codex's namespaced Responses client metadata supplies a
+        // safe fallback for 0.142 thread-spawned subagents; generic provider body fields remain
+        // intentionally ignored.
+        subagent_id: gateway_subagent_id(&request.headers, &request.request_json, request.provider),
         conversation_id: gateway_identifier(
             &request.headers,
             &request.request_json,
@@ -1077,8 +1077,8 @@ fn gateway_session_id(headers: &HeaderMap, body: &Value, route: ProviderRoute) -
     alignment::gateway_session_id(headers, body, route.alignment_route())
 }
 
-fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
-    alignment::gateway_subagent_id(headers)
+fn gateway_subagent_id(headers: &HeaderMap, body: &Value, route: ProviderRoute) -> Option<String> {
+    alignment::gateway_subagent_id(headers, body, route.alignment_route())
 }
 
 // Keeps the gateway-facing helper local for tests while the generic extraction pattern lives in

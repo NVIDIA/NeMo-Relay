@@ -146,6 +146,108 @@ fn maps_claude_subagent_stop() {
 }
 
 #[test]
+fn maps_codex_0142_subagent_and_tool_payloads() {
+    let headers = HeaderMap::new();
+    let start = codex::adapt(
+        json!({
+            "session_id": "root-session",
+            "hook_event_name": "SubagentStart",
+            "agent_id": "child-thread",
+            "agent_type": "worker",
+            "turn_id": "turn-1"
+        }),
+        &headers,
+    );
+    match &start.events[0] {
+        NormalizedEvent::SubagentStarted(event) => {
+            assert_eq!(event.session_id, "root-session");
+            assert_eq!(event.subagent_id, "child-thread");
+            assert_eq!(event.metadata["agent_type"], json!("worker"));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    let tool_start = codex::adapt(
+        json!({
+            "session_id": "root-session",
+            "hook_event_name": "PreToolUse",
+            "agent_id": "child-thread",
+            "agent_type": "worker",
+            "tool_use_id": "tool-1",
+            "tool_name": "exec_command",
+            "tool_input": { "command": "cargo test" }
+        }),
+        &headers,
+    );
+    match &tool_start.events[0] {
+        NormalizedEvent::ToolStarted(event) => {
+            assert_eq!(event.session_id, "root-session");
+            assert_eq!(event.subagent_id.as_deref(), Some("child-thread"));
+            assert_eq!(event.tool_call_id, "tool-1");
+            assert_eq!(event.arguments, json!({ "command": "cargo test" }));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    let tool_end = codex::adapt(
+        json!({
+            "session_id": "root-session",
+            "hook_event_name": "PostToolUse",
+            "agent_id": "child-thread",
+            "agent_type": "worker",
+            "tool_use_id": "tool-1",
+            "tool_name": "exec_command",
+            "tool_input": { "command": "cargo test" },
+            "tool_response": { "output": "ok" }
+        }),
+        &headers,
+    );
+    match &tool_end.events[0] {
+        NormalizedEvent::ToolEnded(event) => {
+            assert_eq!(event.subagent_id.as_deref(), Some("child-thread"));
+            assert_eq!(event.tool_call_id, "tool-1");
+            assert_eq!(event.result, json!({ "output": "ok" }));
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+
+    let stop = codex::adapt(
+        json!({
+            "session_id": "root-session",
+            "hook_event_name": "SubagentStop",
+            "agent_id": "child-thread",
+            "agent_type": "worker",
+            "last_assistant_message": "done"
+        }),
+        &headers,
+    );
+    match &stop.events[0] {
+        NormalizedEvent::SubagentEnded(event) => {
+            assert_eq!(event.session_id, "root-session");
+            assert_eq!(event.subagent_id, "child-thread");
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn maps_codex_0142_compact_session_start_without_closing_the_session() {
+    let outcome = codex::adapt(
+        json!({
+            "session_id": "codex-session",
+            "hook_event_name": "SessionStart",
+            "source": "compact"
+        }),
+        &HeaderMap::new(),
+    );
+
+    assert!(matches!(
+        outcome.events[0],
+        NormalizedEvent::AgentStarted(_)
+    ));
+}
+
+#[test]
 fn maps_claude_stop_response_shape() {
     let outcome = claude_code::adapt(
         json!({
