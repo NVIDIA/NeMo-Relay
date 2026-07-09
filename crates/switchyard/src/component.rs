@@ -1535,6 +1535,7 @@ mod tests {
             decision_profile_id: "stage_router".into(),
             request_materialization: RequestMaterialization::SummaryOnly,
             context_mode: ContextMode::PayloadOnly,
+            decision_timeout_millis: 1_000,
             targets: BTreeMap::from([
                 (
                     "selected-chat".into(),
