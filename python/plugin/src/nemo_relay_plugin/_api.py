@@ -413,7 +413,7 @@ class LlmOptimizationContribution:
 
     producer: str
     kind: str
-    applied: bool = True
+    applied: bool = False
     id: str | None = None
     sequence: int | None = None
     model_transition: LlmOptimizationModelTransition | None = None
@@ -474,7 +474,7 @@ class LlmOptimizationContribution:
         transition = value.get("model_transition")
         impact = value.get("token_impact")
         schema = value.get("payload_schema")
-        applied = value.get("applied", True)
+        applied = value.get("applied", False)
         if not isinstance(applied, bool):
             raise WorkerSdkError("optimization contribution applied must be a boolean")
         contribution = cls(

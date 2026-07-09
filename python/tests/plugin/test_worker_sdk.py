@@ -112,10 +112,10 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     direct = LlmOptimizationContribution(producer="test", kind="custom")
     decoded = LlmOptimizationContribution.from_json({"producer": "test", "kind": "custom"})
 
-    assert direct.applied is True
-    assert decoded.applied is True
-    assert direct.to_json()["applied"] is True
-    assert decoded.to_json()["applied"] is True
+    assert direct.applied is False
+    assert decoded.applied is False
+    assert direct.to_json()["applied"] is False
+    assert decoded.to_json()["applied"] is False
 
 
 def test_optimization_contribution_preserves_future_quality_strings():
@@ -129,7 +129,7 @@ def test_optimization_contribution_preserves_future_quality_strings():
 
     assert contribution.token_impact is not None
     assert contribution.token_impact.quality == "provider_observed_v2"
-    assert contribution.to_json() == {**fixture, "applied": True}
+    assert contribution.to_json() == {**fixture, "applied": False}
 
 
 def test_optimization_contribution_drops_known_fields_from_extra():
@@ -150,7 +150,7 @@ def test_optimization_contribution_drops_known_fields_from_extra():
     assert contribution.to_json() == {
         "producer": "test",
         "kind": "custom",
-        "applied": True,
+        "applied": False,
         "future_field": "preserved",
     }
 

@@ -85,6 +85,19 @@ func TestLLMOptimizationContributionRequiresPayloadSchema(t *testing.T) {
 	}
 }
 
+func TestLLMOptimizationContributionOmittedAppliedIsNonApplied(t *testing.T) {
+	var contribution LLMOptimizationContribution
+	if err := json.Unmarshal(
+		[]byte(`{"producer":"test","kind":"custom"}`),
+		&contribution,
+	); err != nil {
+		t.Fatalf("decode optimization contribution: %v", err)
+	}
+	if contribution.Applied {
+		t.Fatal("omitted applied must decode as false")
+	}
+}
+
 func TestLLMRequestInterceptOptimizationContributionsRoundTrip(t *testing.T) {
 	fixture, contribution := optimizationContributionFixture(t)
 	const interceptName = "go_optimization_fixture"

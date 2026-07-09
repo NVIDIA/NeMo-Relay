@@ -68,6 +68,21 @@ fn saved_prompt_tokens_remain_explicit_on_the_wire() {
 }
 
 #[test]
+fn omitted_applied_is_non_applied() {
+    let contribution: LlmOptimizationContribution = serde_json::from_value(json!({
+        "producer": "example",
+        "kind": "custom"
+    }))
+    .unwrap();
+
+    assert!(!contribution.applied);
+    assert_eq!(
+        serde_json::to_value(contribution).unwrap()["applied"],
+        false
+    );
+}
+
+#[test]
 fn canonical_all_fields_fixture_is_lossless_and_open() {
     let fixture: Value = serde_json::from_str(include_str!(
         "fixtures/llm_optimization_contribution_v1.json"
