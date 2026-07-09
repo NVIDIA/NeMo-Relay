@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_llm_request_intercept_outcome_json_new_v2"
+sidebar-title: "nemo_relay_llm_request_intercept_outcome_json_new_v2"
+description: "Allocate canonical JSON for a C LLM request-intercept callback result, including optional plugin-neutral optimization contributions."
+position: 53
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_llm_request_intercept_outcome_json_new_v2(\n    request: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>,\n    annotated_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pending_marks_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    optimization_contributions_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    out_outcome_json: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.93.0/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Allocate canonical JSON for a C LLM request-intercept callback result, including optional plugin-neutral optimization contributions.
+
+`annotated_json`, `pending_marks_json`, and `optimization_contributions_json` may be null. Null list pointers serialize as empty lists. Contributions use the canonical `LlmOptimizationContribution` JSON shape; custom `kind` strings and unknown top-level fields are preserved. The existing unversioned helper remains ABI-compatible and behaves as though this function received a null `optimization_contributions_json` pointer.
+
+## Safety
+
+`request` must point to a live `FfiLLMRequest`, optional JSON inputs must be valid null-terminated strings when non-null, and `out_outcome_json` must be writable. A successful output must either be transferred through a callback's `out_outcome_json` or freed by its caller with `nemo_relay_string_free`.

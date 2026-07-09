@@ -92,6 +92,107 @@ export interface PendingMarkSpec {
 }
 ```
 
+### `LlmOptimizationDataSchema`
+
+Schema tag attached to an opaque optimization contribution payload.
+
+```ts
+export interface LlmOptimizationDataSchema {
+  name: string;
+  version: string;
+}
+```
+
+### `LlmOptimizationModel`
+
+Model identity retained for counterfactual pricing and downstream repricing.
+
+```ts
+export interface LlmOptimizationModel {
+  model: string;
+  provider?: string;
+}
+```
+
+### `LlmOptimizationModelTransition`
+
+Baseline and effective model identities for a routing optimization.
+
+```ts
+export interface LlmOptimizationModelTransition {
+  baseline?: LlmOptimizationModel;
+  effective?: LlmOptimizationModel;
+}
+```
+
+### `LlmOptimizationTokens`
+
+Explicit token evidence, independent from a pricing catalog.
+
+```ts
+export interface LlmOptimizationTokens {
+  /** Token counts must be non-negative JavaScript safe integers. */
+  prompt_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  completion_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  cache_read_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  cache_write_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  total_tokens?: number;
+}
+```
+
+### `LlmOptimizationTokenImpact`
+
+Baseline, effective, and saved token evidence for one optimization.
+
+```ts
+export interface LlmOptimizationTokenImpact {
+  baseline?: LlmOptimizationTokens;
+  effective?: LlmOptimizationTokens;
+  saved?: LlmOptimizationTokens;
+  quality?: 'observed' | 'estimated';
+  estimation_method?: string;
+}
+```
+
+### `LlmOptimizationContribution`
+
+One plugin's optimization evidence.
+
+`kind` is deliberately an open string so new optimizer categories round-trip without a Relay release. Unknown top-level fields are retained by the wire contract and represented by this interface's JSON extension surface.
+
+```ts
+export interface LlmOptimizationContribution {
+  id?: string;
+  /** Relay ordering must remain within JavaScript's safe-integer range. */
+  sequence?: number;
+  producer: string;
+  kind: 'input_compression' | 'model_routing' | (string & {});
+  applied: boolean;
+  model_transition?: LlmOptimizationModelTransition;
+  token_impact?: LlmOptimizationTokenImpact;
+  payload_schema?: LlmOptimizationDataSchema;
+  payload?: Json;
+  [key: string]: Json | undefined;
+}
+```
+
+### `LlmRequestInterceptOutcome`
+
+Canonical result returned by an LLM request intercept.
+
+```ts
+export interface LlmRequestInterceptOutcome {
+  request: Json;
+  annotated?: Json | null;
+  pendingMarks?: PendingMarkSpec[];
+  optimizationContributions?: LlmOptimizationContribution[];
+}
+```
+
 ### `ToolExecutionInterceptOutcome`
 
 Canonical result returned by a tool execution intercept.
@@ -146,11 +247,7 @@ export interface PluginContext {
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (args: { name: string; request: Json; annotated: Json | null }) => {
-      request: Json;
-      annotated?: Json | null;
-      pendingMarks?: PendingMarkSpec[];
-    },
+    callback: (args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome,
   ): void;
   /** Register an LLM execution intercept for this component. */
   registerLlmExecutionIntercept(

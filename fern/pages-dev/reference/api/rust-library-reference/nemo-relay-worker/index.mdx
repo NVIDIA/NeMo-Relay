@@ -19,9 +19,19 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 
 ## Structs
 
+- [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay-worker/struct-annotatedllmrequest): Structured view of an LLM request, produced by a Codec from opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmrequest) content.
+- [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-worker/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
+- [DataSchema](/reference/api/rust-library-reference/nemo-relay-worker/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-worker/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
 - [LlmNext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmnext): Continuation handle for LLM execution intercepts.
+- [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
+- [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
+- [LlmOptimizationModel](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationmodel): Model identity used for counterfactual and effective pricing.
+- [LlmOptimizationModelTransition](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationmodeltransition): A model change proposed or applied by an optimizer.
+- [LlmOptimizationSummary](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationsummary): Close-time accounting attached to the normalized LLM response.
+- [LlmOptimizationTokenImpact](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationtokenimpact): Shared token evidence that Relay can aggregate without understanding a plugin payload.
+- [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmoptimizationtokens): Token quantities retained independently from pricing arithmetic.
 - [LlmRequest](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
 - [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
 - [LlmStreamNext](/reference/api/rust-library-reference/nemo-relay-worker/struct-llmstreamnext): Continuation handle for LLM stream execution intercepts.
@@ -36,11 +46,14 @@ Cancellation is cooperative. Dropping an async callback future releases its Rust
 
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-worker/enum-diagnosticlevel): Diagnostic severity returned by plugin validation.
 - [Event](/reference/api/rust-library-reference/nemo-relay-worker/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
+- [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay-worker/enum-llmoptimizationevidencequality): Whether token evidence was observed directly or estimated.
+- [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay-worker/enum-llmoptimizationsummarystatus): Completeness of close-time optimization accounting.
 - [ScopeType](/reference/api/rust-library-reference/nemo-relay-worker/enum-scopetype): Semantic category attached to a scope lifecycle span.
 - [WorkerSdkError](/reference/api/rust-library-reference/nemo-relay-worker/enum-workersdkerror): Error returned by worker SDK callbacks and runtime helpers.
 
 ## Traits
 
+- [LlmOptimizationPayload](/reference/api/rust-library-reference/nemo-relay-worker/trait-llmoptimizationpayload): Trait implemented by typed plugin payloads embedded in an optimization contribution.
 - [WorkerPlugin](/reference/api/rust-library-reference/nemo-relay-worker/trait-workerplugin): Trait implemented by Rust out-of-process worker plugins.
 
 ## Functions

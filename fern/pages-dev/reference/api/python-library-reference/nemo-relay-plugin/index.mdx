@@ -51,6 +51,142 @@ def to_json() -> dict[str, Json]
 
 Convert this pending mark to its canonical JSON object.
 
+### `LlmOptimizationDataSchema`
+
+Identify the schema of an opaque optimization contribution payload.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert the schema tag to its canonical wire representation.
+
+##### `from_json`
+
+```python
+def from_json(value: Mapping[str, Json]) -> LlmOptimizationDataSchema
+```
+
+Decode a canonical schema tag.
+
+### `LlmOptimizationModel`
+
+Identify one model for optimization accounting and repricing.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert the model identity to canonical JSON.
+
+##### `from_json`
+
+```python
+def from_json(value: Mapping[str, Json]) -> LlmOptimizationModel
+```
+
+Decode a canonical model identity.
+
+### `LlmOptimizationModelTransition`
+
+Describe the counterfactual and effective models for one optimization.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert the model transition to canonical JSON.
+
+##### `from_json`
+
+```python
+def from_json(value: Mapping[str, Json]) -> LlmOptimizationModelTransition
+```
+
+Decode a canonical model transition.
+
+### `LlmOptimizationTokens`
+
+Retain token evidence independently from monetary pricing.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert populated token fields to canonical JSON.
+
+##### `from_json`
+
+```python
+def from_json(value: Mapping[str, Json]) -> LlmOptimizationTokens
+```
+
+Decode canonical token evidence.
+
+### `LlmOptimizationEvidenceQuality(str, Enum)`
+
+Classify token evidence as directly observed or estimated.
+
+### `LlmOptimizationTokenImpact`
+
+Describe baseline, effective, and explicitly saved token evidence.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert the token impact to canonical JSON.
+
+##### `from_json`
+
+```python
+def from_json(value: Mapping[str, Json]) -> LlmOptimizationTokenImpact
+```
+
+Decode a canonical token impact.
+
+### `LlmOptimizationContribution`
+
+One plugin's lossless, forward-compatible optimization evidence.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert this contribution while flattening unknown top-level fields.
+
+##### `from_json`
+
+```python
+def from_json(value: Mapping[str, Json]) -> LlmOptimizationContribution
+```
+
+Decode all known fields and retain unknown top-level fields in `extra`.
+
 ### `LlmRequestInterceptOutcome`
 
 Canonical result returned by a Python worker LLM request intercept.

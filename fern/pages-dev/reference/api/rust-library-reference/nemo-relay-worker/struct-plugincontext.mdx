@@ -2,7 +2,7 @@
 title: "Struct Plugin Context"
 sidebar-title: "PluginContext"
 description: "Registration context passed to `WorkerPlugin::register`."
-position: 8
+position: 18
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -115,7 +115,7 @@ Registers an LLM conditional-execution guardrail.
 
 #### `register_llm_request_intercept`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;AnnotatedLlmRequest&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
 
 Registers an LLM request intercept.
 

@@ -23,10 +23,18 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-plugin/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
+- [DataSchema](/reference/api/rust-library-reference/nemo-relay-plugin/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
 - [LlmAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
 - [LlmNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmnext): Typed continuation passed to LLM execution intercepts.
+- [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
+- [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
+- [LlmOptimizationModel](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationmodel): Model identity used for counterfactual and effective pricing.
+- [LlmOptimizationModelTransition](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationmodeltransition): A model change proposed or applied by an optimizer.
+- [LlmOptimizationSummary](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationsummary): Close-time accounting attached to the normalized LLM response.
+- [LlmOptimizationTokenImpact](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationtokenimpact): Shared token evidence that Relay can aggregate without understanding a plugin payload.
+- [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationtokens): Token quantities retained independently from pricing arithmetic.
 - [LlmRequest](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
 - [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
 - [LlmStream](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmstream): Host- or plugin-owned stream returned across the native LLM stream ABI.
@@ -57,6 +65,8 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-plugin/enum-diagnosticlevel): Diagnostic severity returned by plugin validation.
 - [Event](/reference/api/rust-library-reference/nemo-relay-plugin/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
 - [HandleAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.
+- [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmoptimizationevidencequality): Whether token evidence was observed directly or estimated.
+- [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmoptimizationsummarystatus): Completeness of close-time optimization accounting.
 - [NemoRelayNativeScopeType](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativescopetype): Scope category used by native plugins when opening scopes.
 - [NemoRelayStatus](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus): Status codes returned by stable native ABI functions.
 - [ScopeCategory](/reference/api/rust-library-reference/nemo-relay-plugin/enum-scopecategory): Agent Trajectory Observability Format (ATOF) lifecycle phase for a scope event.
@@ -68,6 +78,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 
 ## Traits
 
+- [LlmOptimizationPayload](/reference/api/rust-library-reference/nemo-relay-plugin/trait-llmoptimizationpayload): Trait implemented by typed plugin payloads embedded in an optimization contribution.
 - [NativePlugin](/reference/api/rust-library-reference/nemo-relay-plugin/trait-nativeplugin): Trait implemented by Rust native plugins.
 
 ## Functions
