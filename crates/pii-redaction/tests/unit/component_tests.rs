@@ -34,6 +34,7 @@ use nemo_relay::observability::openinference::OpenInferenceSubscriber;
 use nemo_relay::observability::otel::OpenTelemetrySubscriber;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -161,6 +162,42 @@ fn event_sanitizer_transforms_data_category_profile_and_metadata_independently()
         Some("[REDACTED]")
     );
     assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+}
+
+#[test]
+fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some("person@example\\.com".into()),
+            replacement: Some("[REDACTED]".into()),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let callback = crate::builtin::event_sanitize_callback(backend);
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("mark").build(),
+        None,
+        None,
+    ));
+    let sanitized = callback(
+        &event,
+        EventSanitizeFields {
+            data: None,
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([(
+                    "annotated_request".to_string(),
+                    json!("invalid annotation"),
+                )]),
+                ..CategoryProfile::default()
+            }),
+            metadata: None,
+        },
+    );
+
+    assert!(sanitized.category_profile.is_none());
 }
 
 #[test]
@@ -676,7 +713,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
             "action": "regex_replace",
             "pattern": "sk-[A-Za-z0-9_-]+",
             "replacement": "[REDACTED]",
-            "target_paths": ["/api_key", "/nested/token", "/result/secret"]
+            "target_paths": ["/api_key", "/nested/token", "/result/secret", "/owner", "/reviewer"]
         }
     }))))
     .unwrap();
@@ -692,7 +729,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
                     "note": "leave me"
                 }
             }))
-            .metadata(json!({"owner": "person@example.com"}))
+            .metadata(json!({"owner": "sk-universal-metadata"}))
             .build(),
     )
     .unwrap();
@@ -705,7 +742,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
                     "public": "ok"
                 }
             }))
-            .metadata(json!({"reviewer": "person@example.com"}))
+            .metadata(json!({"reviewer": "sk-universal-metadata"}))
             .build(),
     )
     .unwrap();
@@ -733,11 +770,11 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
     );
     assert_eq!(
         captured_events[0].metadata().unwrap()["owner"],
-        "person@example.com"
+        "sk-universal-metadata"
     );
     assert_eq!(
         captured_events[1].metadata().unwrap()["reviewer"],
-        "person@example.com"
+        "sk-universal-metadata"
     );
 
     deregister_subscriber("pii-redaction-tool-events").unwrap();
@@ -2320,7 +2357,7 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
             "action": "regex_replace",
             "pattern": "sk-[A-Za-z0-9_-]+",
             "replacement": "[REDACTED]",
-            "target_paths": ["/messages/0/content", "/messages/1/content"]
+            "target_paths": ["/messages/0/content", "/messages/1/content", "/audit_owner"]
         }
     }))))
     .unwrap();
@@ -2389,7 +2426,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
             "action": "regex_replace",
             "pattern": "sk-[A-Za-z0-9_-]+",
             "replacement": "[REDACTED]",
-            "target_paths": ["/choices/0/message/content"]
+            "target_paths": ["/choices/0/message/content", "/audit_owner"]
         }
     })))
     .await

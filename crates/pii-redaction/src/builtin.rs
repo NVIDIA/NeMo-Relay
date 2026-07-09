@@ -275,9 +275,8 @@ pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventS
         fields.metadata = fields
             .metadata
             .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
-        fields.category_profile = fields.category_profile.map(|profile| {
-            sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile.clone())
-                .unwrap_or(profile)
+        fields.category_profile = fields.category_profile.and_then(|profile| {
+            sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
         });
         fields
     })
