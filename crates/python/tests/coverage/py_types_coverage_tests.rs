@@ -1530,7 +1530,17 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     api_name: "custom".into(),
                     data: json!({"debug": true}),
                 }),
-                optimization_summary: None,
+                optimization_summary: Some(
+                    serde_json::from_value(json!({
+                        "schema_version": "1",
+                        "calculation_version": "1",
+                        "status": "partial",
+                        "limitations": ["test"],
+                        "tokens_saved": {},
+                        "contributions": []
+                    }))
+                    .unwrap(),
+                ),
                 extra: serde_json::Map::new(),
             },
         };
@@ -1588,6 +1598,11 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                 FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
                 "forced serialization failure",
                 |py, _, _, response| response.usage(py).map(|_| ()),
+            ),
+            (
+                FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR,
+                "forced serialization failure",
+                |py, _, _, response| response.optimization_summary(py).map(|_| ()),
             ),
             (
                 FORCE_ANNOTATED_RESPONSE_API_SPECIFIC_SERIALIZATION_ERROR,

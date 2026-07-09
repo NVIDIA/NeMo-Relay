@@ -52,6 +52,14 @@ use nemo_relay::json::Json;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
+struct ResetPricingResolverGuard;
+
+impl Drop for ResetPricingResolverGuard {
+    fn drop(&mut self) {
+        let _ = reset_active_pricing_resolver();
+    }
+}
+
 fn is_scope_event(event: &Event, scope_type: ScopeType, scope_category: ScopeCategory) -> bool {
     event.scope_type() == Some(scope_type) && event.scope_category() == Some(scope_category)
 }
@@ -1282,6 +1290,7 @@ impl LlmResponseCodec for FailingResponseCodec {
 #[tokio::test]
 async fn test_response_codec_populates_annotated_response() {
     let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
     reset_global();
     setup_isolated_thread();
     install_mock_response_pricing();
@@ -1330,7 +1339,6 @@ async fn test_response_codec_populates_annotated_response() {
     );
 
     deregister_subscriber("resp_codec_sub").unwrap();
-    reset_active_pricing_resolver().unwrap();
 }
 
 #[tokio::test]
@@ -1597,6 +1605,7 @@ async fn test_request_codec_annotation_uses_sanitized_start_payload() {
 #[tokio::test]
 async fn test_stream_response_codec_populates_annotated_response() {
     let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
     reset_global();
     setup_isolated_thread();
     install_mock_response_pricing();
@@ -1654,12 +1663,12 @@ async fn test_stream_response_codec_populates_annotated_response() {
     );
 
     deregister_subscriber("stream_resp_codec_sub").unwrap();
-    reset_active_pricing_resolver().unwrap();
 }
 
 #[tokio::test]
 async fn managed_buffered_and_streaming_close_price_the_committed_route_not_response_alias() {
     let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
     reset_global();
     setup_isolated_thread();
     install_routed_response_pricing();
@@ -1797,7 +1806,6 @@ async fn managed_buffered_and_streaming_close_price_the_committed_route_not_resp
     );
 
     deregister_subscriber("routed_alias_pricing_sub").unwrap();
-    reset_active_pricing_resolver().unwrap();
 }
 
 #[tokio::test]

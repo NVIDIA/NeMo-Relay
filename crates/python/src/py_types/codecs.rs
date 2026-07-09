@@ -18,6 +18,7 @@ use super::{
     FORCE_ANNOTATED_REQUEST_TOOLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_API_SPECIFIC_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_MESSAGE_SERIALIZATION_ERROR,
+    FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_TOOL_CALLS_SERIALIZATION_ERROR,
     FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR,
 };
@@ -623,11 +624,12 @@ impl PyAnnotatedLLMResponse {
     pub(crate) fn optimization_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner.optimization_summary {
             Some(summary) => {
-                let value = serde_json::to_value(summary).map_err(|error| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "optimization summary serialization error: {error}"
-                    ))
-                })?;
+                let value = to_python_json_value(
+                    summary,
+                    "serialization error",
+                    #[cfg(test)]
+                    FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR,
+                )?;
                 json_to_py(py, &value)
             }
             None => Ok(py.None()),

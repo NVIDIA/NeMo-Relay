@@ -4,10 +4,9 @@
 //! Conformance tests for the worker SDK optimization contribution surface.
 
 use nemo_relay_worker::{
-    DataSchema, LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
-    LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationSummary,
-    LlmOptimizationSummaryStatus, LlmOptimizationTokenImpact, LlmOptimizationTokens, LlmRequest,
-    LlmRequestInterceptOutcome,
+    DataSchema, LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationModel,
+    LlmOptimizationModelTransition, LlmOptimizationSummary, LlmOptimizationSummaryStatus,
+    LlmOptimizationTokenImpact, LlmOptimizationTokens, LlmRequest, LlmRequestInterceptOutcome,
 };
 use serde_json::{Value as Json, json};
 
@@ -20,8 +19,7 @@ fn worker_sdk_round_trips_the_canonical_contribution_contract() {
     let contribution: LlmOptimizationContribution =
         serde_json::from_value(fixture.clone()).unwrap();
 
-    assert_ne!(contribution.kind, LlmOptimizationKind::input_compression());
-    assert_ne!(contribution.kind, LlmOptimizationKind::model_routing());
+    assert_eq!(contribution.kind.as_str(), "custom_energy_optimization");
     assert_eq!(
         contribution.extra["future_top_level_field"],
         fixture["future_top_level_field"]

@@ -6,6 +6,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -30,6 +31,7 @@ pub const MAX_LLM_OPTIMIZATION_CONTRIBUTION_ATTEMPTS: usize = 64;
 #[derive(Debug, Default)]
 struct AccumulatorState {
     contributions: Vec<LlmOptimizationContribution>,
+    recorded_at: Vec<DateTime<Utc>>,
     total_contribution_bytes: usize,
     attempted_contributions: usize,
     emitted: usize,
@@ -143,6 +145,7 @@ impl LlmOptimizationRecorder {
 
             state.total_contribution_bytes = total_contribution_bytes;
             state.contributions.push(contribution);
+            state.recorded_at.push(Utc::now());
             return true;
         }
     }
@@ -174,12 +177,31 @@ impl LlmOptimizationRecorder {
     ///
     /// This does not move the cursor. Call [`Self::mark_emitted`] only after
     /// the asynchronous dispatcher accepts an item.
+    #[cfg(test)]
     pub(crate) fn unemitted(&self) -> Vec<LlmOptimizationContribution> {
+        self.unemitted_with_timestamps()
+            .into_iter()
+            .map(|(contribution, _)| contribution)
+            .collect()
+    }
+
+    /// Snapshot unacknowledged contributions with their acceptance time.
+    ///
+    /// The timestamp is captured only after the contribution wins its final
+    /// sequence and size checks, so execution-time marks retain commit-time
+    /// ordering even when they are emitted at the LLM close boundary.
+    pub(crate) fn unemitted_with_timestamps(
+        &self,
+    ) -> Vec<(LlmOptimizationContribution, DateTime<Utc>)> {
         let Ok(state) = self.state.lock() else {
             return Vec::new();
         };
         let start = state.emitted.min(state.contributions.len());
-        state.contributions[start..].to_vec()
+        state.contributions[start..]
+            .iter()
+            .cloned()
+            .zip(state.recorded_at[start..].iter().copied())
+            .collect()
     }
 
     /// Advance the delivery cursor for a bounded number of accepted marks.
@@ -250,6 +272,7 @@ impl LlmOptimizationRecorder {
             limitations.push("invalid_contribution_payload_schema".to_string());
             state.invalid_payload_schema = false;
         }
+        state.recorded_at.clear();
         FinishedContributions {
             contributions: std::mem::take(&mut state.contributions),
             limitations,

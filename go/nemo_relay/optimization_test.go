@@ -6,6 +6,7 @@ package nemo_relay
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -56,6 +57,32 @@ func TestLLMOptimizationContributionFixtureRoundTrip(t *testing.T) {
 		t.Fatalf("encode optimization fixture: %v", err)
 	}
 	assertSemanticJSONEqual(t, fixture, wire)
+}
+
+func TestLLMOptimizationContributionRequiresPayloadSchema(t *testing.T) {
+	contribution := LLMOptimizationContribution{
+		Producer: "test",
+		Kind:     "custom",
+		Payload:  json.RawMessage(`{"value":1}`),
+	}
+	if _, err := json.Marshal(contribution); err == nil || !strings.Contains(err.Error(), "payload_schema") {
+		t.Fatalf("expected marshal payload_schema error, got %v", err)
+	}
+
+	var decoded LLMOptimizationContribution
+	if err := json.Unmarshal(
+		[]byte(`{"producer":"test","kind":"custom","payload":{"value":1}}`),
+		&decoded,
+	); err == nil || !strings.Contains(err.Error(), "payload_schema") {
+		t.Fatalf("expected unmarshal payload_schema error, got %v", err)
+	}
+
+	if err := json.Unmarshal(
+		[]byte(`{"producer":"test","kind":"custom","payload":null}`),
+		&decoded,
+	); err != nil {
+		t.Fatalf("null payload should behave like an absent payload: %v", err)
+	}
 }
 
 func TestLLMRequestInterceptOptimizationContributionsRoundTrip(t *testing.T) {

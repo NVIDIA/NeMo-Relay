@@ -107,6 +107,16 @@ def test_optimization_contribution_requires_schema_for_payload():
         LlmOptimizationContribution.from_json({"producer": 1, "kind": "custom"})
 
 
+def test_optimization_contribution_omitted_applied_defaults_consistently():
+    direct = LlmOptimizationContribution(producer="test", kind="custom")
+    decoded = LlmOptimizationContribution.from_json({"producer": "test", "kind": "custom"})
+
+    assert direct.applied is True
+    assert decoded.applied is True
+    assert direct.to_json()["applied"] is True
+    assert decoded.to_json()["applied"] is True
+
+
 class GrpcAbort(Exception):
     def __init__(self, code: object, details: str) -> None:
         super().__init__(f"{code}: {details}")

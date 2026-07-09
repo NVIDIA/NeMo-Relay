@@ -4,6 +4,7 @@
 package nemo_relay
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -105,8 +106,16 @@ var llmOptimizationContributionKnownFields = [...]string{
 	"payload",
 }
 
+func hasLLMOptimizationPayload(payload json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(payload)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
 // MarshalJSON preserves and flattens forward-compatible top-level fields.
 func (c LLMOptimizationContribution) MarshalJSON() ([]byte, error) {
+	if hasLLMOptimizationPayload(c.Payload) && c.PayloadSchema == nil {
+		return nil, errors.New("LLM optimization contribution payload requires payload_schema")
+	}
 	known, err := json.Marshal(llmOptimizationContributionWire{
 		ID:              c.ID,
 		Sequence:        c.Sequence,
@@ -152,6 +161,9 @@ func (c *LLMOptimizationContribution) UnmarshalJSON(data []byte) error {
 	}
 	if _, ok := extra["kind"]; !ok {
 		return errors.New("LLM optimization contribution requires kind")
+	}
+	if hasLLMOptimizationPayload(known.Payload) && known.PayloadSchema == nil {
+		return errors.New("LLM optimization contribution payload requires payload_schema")
 	}
 	for _, name := range llmOptimizationContributionKnownFields {
 		delete(extra, name)

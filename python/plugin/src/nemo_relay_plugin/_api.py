@@ -464,7 +464,7 @@ class LlmOptimizationContribution:
         transition = value.get("model_transition")
         impact = value.get("token_impact")
         schema = value.get("payload_schema")
-        applied = value.get("applied", False)
+        applied = value.get("applied", True)
         if not isinstance(applied, bool):
             raise WorkerSdkError("optimization contribution applied must be a boolean")
         contribution = cls(

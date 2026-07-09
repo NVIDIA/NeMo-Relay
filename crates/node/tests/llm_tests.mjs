@@ -868,6 +868,13 @@ describe('LLM intercepts', () => {
     deregisterLlmRequestIntercept('node_llm_req_helper');
   });
 
+  it('generated request-intercept declarations preserve the open optimization kind', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
+
+    assert.equal(declarations.split(openKind).length - 1, 3);
+  });
+
   it('standalone conditional execution helper throws on rejection', async () => {
     registerLlmConditionalExecutionGuardrail('node_llm_cond_helper', 10, () => 'llm blocked by helper');
     try {

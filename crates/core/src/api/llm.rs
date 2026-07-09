@@ -408,7 +408,7 @@ fn emit_optimization_marks_with(
     mut sanitize: impl FnMut(Event) -> Option<Event>,
     mut enqueue: impl FnMut(&Event, &[EventSubscriberFn]) -> bool,
 ) {
-    let contributions = handle.optimization_recorder.unemitted();
+    let contributions = handle.optimization_recorder.unemitted_with_timestamps();
     if contributions.is_empty() {
         return;
     }
@@ -416,15 +416,17 @@ fn emit_optimization_marks_with(
         eprintln!("nemo_relay: unable to emit LLM optimization marks: {error}");
         return;
     }
-    for contribution in contributions {
+    for (contribution, recorded_at) in contributions {
         let offset = contribution.sequence.unwrap_or(0).saturating_add(2);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let request_ordered_timestamp = handle.started_at + TimeDelta::microseconds(offset);
+        let timestamp = recorded_at.max(request_ordered_timestamp);
         let data = serde_json::to_value(&contribution).unwrap_or(Json::Null);
         let event = Event::Mark(MarkEvent::new(
             BaseEvent::builder()
                 .name("nemo_relay.llm.optimization")
                 .parent_uuid(handle.uuid)
-                .timestamp(handle.started_at + TimeDelta::microseconds(offset))
+                .timestamp(timestamp)
                 .data(data)
                 .data_schema(DataSchema {
                     name: "nemo.relay.llm_optimization_contribution".to_string(),

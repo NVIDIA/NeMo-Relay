@@ -51,7 +51,7 @@ use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{create_scope_stack, current_scope_stack, set_thread_scope_stack};
-use nemo_relay::api::scope::{ScopeHandle, ScopeType};
+use nemo_relay::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event};
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{
@@ -3564,6 +3564,9 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
                 && event.scope_category() == Some(ScopeCategory::End)
         })
         .unwrap();
+    assert!(marks[0].timestamp() > start.timestamp());
+    assert!(marks[0].timestamp() <= marks[1].timestamp());
+    assert!(marks[1].timestamp() <= end.timestamp());
     let summary = end
         .annotated_response()
         .unwrap()
@@ -3585,6 +3588,93 @@ async fn test_managed_llm_materializes_optimization_mark_and_end_summary() {
     deregister_mark_sanitize_guardrail("optimization_sanitizer").unwrap();
     deregister_scope_sanitize_end_guardrail("optimization_end_sanitizer").unwrap();
     deregister_subscriber("optimization_observer").unwrap();
+}
+
+#[tokio::test]
+async fn execution_optimization_mark_keeps_decision_commit_timestamp_order() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "optimization_timestamp_observer",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_execution_intercept(
+        "optimization_timestamp_contributor",
+        1,
+        Arc::new(|_name, request, next| {
+            Box::pin(async move {
+                event(
+                    EmitMarkEventParams::builder()
+                        .name("test.router.requested")
+                        .build(),
+                )?;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                event(
+                    EmitMarkEventParams::builder()
+                        .name("test.router.decision")
+                        .build(),
+                )?;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                assert!(record_llm_optimization_contribution(
+                    LlmOptimizationContribution::new("test.execution.timestamp", "model_routing")
+                ));
+                next(request).await
+            })
+        }),
+    )
+    .unwrap();
+
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("optimized-timestamp-llm")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async { Ok(json!({"response": "done"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let requested = captured
+        .iter()
+        .find(|event| event.name() == "test.router.requested")
+        .unwrap();
+    let decision = captured
+        .iter()
+        .find(|event| event.name() == "test.router.decision")
+        .unwrap();
+    let contribution = captured
+        .iter()
+        .find(|event| {
+            event.name() == "nemo_relay.llm.optimization"
+                && event.data().and_then(|data| data["producer"].as_str())
+                    == Some("test.execution.timestamp")
+        })
+        .unwrap();
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "optimized-timestamp-llm"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+
+    assert!(requested.timestamp() < decision.timestamp());
+    assert!(decision.timestamp() < contribution.timestamp());
+    assert!(contribution.timestamp() <= end.timestamp());
+
+    deregister_llm_execution_intercept("optimization_timestamp_contributor").unwrap();
+    deregister_subscriber("optimization_timestamp_observer").unwrap();
 }
 
 #[tokio::test]
