@@ -1,9 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Provider-surface detection and best-effort normalization: the preferred path
-//! for turning raw provider JSON into normalized types when no codec annotation
-//! is present.
+//! Provider-surface detection, best-effort normalization, and construction of
+//! the matching built-in codecs: the preferred path for turning raw provider
+//! JSON into normalized types, and the single source of truth for resolving a
+//! surface or codec name to a codec instance, when no codec annotation is
+//! present.
+
+use std::sync::Arc;
 
 use crate::api::llm::LlmRequest;
 use crate::error::Result;
@@ -11,6 +15,8 @@ use crate::json::Json;
 
 use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
+use super::streaming::StreamingCodec;
+use super::traits::{LlmCodec, LlmResponseCodec};
 use super::{anthropic, openai_chat, openai_responses};
 
 /// A built-in provider request/response surface.
@@ -48,6 +54,16 @@ pub(crate) struct ProviderSurfaceDescriptor {
     pub(crate) detect_response: ResponseSurfaceDetector,
     pub(crate) decode_request: fn(&LlmRequest) -> Result<AnnotatedLlmRequest>,
     pub(crate) decode_response: fn(&Json) -> Result<AnnotatedLlmResponse>,
+    /// Canonical codec name for this surface (the `codec` config value and the
+    /// string key used by name-based codec dispatch in downstream crates). This
+    /// descriptor is the single source of truth for the name<->surface mapping.
+    pub(crate) codec_name: &'static str,
+    /// Constructs the bidirectional request codec ([`LlmCodec`]) for this surface.
+    pub(crate) request_codec: fn() -> Arc<dyn LlmCodec>,
+    /// Constructs the decode-only response codec ([`LlmResponseCodec`]) for this surface.
+    pub(crate) response_codec: fn() -> Arc<dyn LlmResponseCodec>,
+    /// Constructs a fresh, single-use streaming codec ([`StreamingCodec`]) for this surface.
+    pub(crate) streaming_codec: fn() -> Box<dyn StreamingCodec>,
 }
 
 /// Built-in provider surfaces in request-detection priority order.
@@ -138,6 +154,71 @@ pub fn normalize_request_with_hint(
 pub fn normalize_response(raw: &Json) -> Option<AnnotatedLlmResponse> {
     let descriptor = response_descriptor(raw)?;
     (descriptor.decode_response)(raw).ok()
+}
+
+/// The built-in descriptor for a surface. Every [`ProviderSurface`] variant has
+/// exactly one descriptor, so the match is total.
+fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescriptor {
+    match surface {
+        ProviderSurface::OpenAIChat => &openai_chat::PROVIDER_SURFACE,
+        ProviderSurface::OpenAIResponses => &openai_responses::PROVIDER_SURFACE,
+        ProviderSurface::AnthropicMessages => &anthropic::PROVIDER_SURFACE,
+    }
+}
+
+impl ProviderSurface {
+    /// The canonical codec name for this surface (e.g. `"openai_chat"`).
+    ///
+    /// This is the string used by the `codec` config knob and by name-based
+    /// codec dispatch across crates; it round-trips with [`Self::from_codec_name`].
+    #[must_use]
+    pub fn codec_name(self) -> &'static str {
+        descriptor_for(self).codec_name
+    }
+
+    /// Resolves a canonical codec name to its surface, or `None` when `name` is
+    /// not a built-in provider codec.
+    #[must_use]
+    pub fn from_codec_name(name: &str) -> Option<Self> {
+        BUILTIN_PROVIDER_SURFACES
+            .iter()
+            .find(|descriptor| descriptor.codec_name == name)
+            .map(|descriptor| descriptor.surface)
+    }
+}
+
+/// The canonical codec names of every built-in provider surface, in
+/// request-detection priority order.
+///
+/// Use this for config validation and user-facing "supported codec" messages so
+/// the accepted set never drifts from the codecs the runtime can construct.
+#[must_use]
+pub fn supported_codec_names() -> Vec<&'static str> {
+    BUILTIN_PROVIDER_SURFACES
+        .iter()
+        .map(|descriptor| descriptor.codec_name)
+        .collect()
+}
+
+/// Constructs the built-in bidirectional request codec ([`LlmCodec`]) for a surface.
+#[must_use]
+pub fn request_codec(surface: ProviderSurface) -> Arc<dyn LlmCodec> {
+    (descriptor_for(surface).request_codec)()
+}
+
+/// Constructs the built-in decode-only response codec ([`LlmResponseCodec`]) for a surface.
+#[must_use]
+pub fn response_codec(surface: ProviderSurface) -> Arc<dyn LlmResponseCodec> {
+    (descriptor_for(surface).response_codec)()
+}
+
+/// Constructs a fresh, single-use streaming codec ([`StreamingCodec`]) for a surface.
+///
+/// A [`StreamingCodec`] finalizer consumes its accumulator, so callers must
+/// construct one instance per managed streaming call.
+#[must_use]
+pub fn streaming_codec(surface: ProviderSurface) -> Box<dyn StreamingCodec> {
+    (descriptor_for(surface).streaming_codec)()
 }
 
 #[cfg(test)]

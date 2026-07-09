@@ -56,6 +56,10 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
     },
     decode_request: |request| AnthropicMessagesCodec.decode(request),
     decode_response: |raw| AnthropicMessagesCodec.decode_response(raw),
+    codec_name: "anthropic_messages",
+    request_codec: || std::sync::Arc::new(AnthropicMessagesCodec),
+    response_codec: || std::sync::Arc::new(AnthropicMessagesCodec),
+    streaming_codec: || Box::new(AnthropicMessagesStreamingCodec::new()),
 };
 
 // ---------------------------------------------------------------------------
