@@ -69,7 +69,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 grpc: Any = importlib.import_module("grpc")
@@ -487,6 +487,12 @@ class PluginContext:
             context without host access, primarily for tests.
     """
 
+    _EVENT_SANITIZER_HANDLER_ATTRIBUTES: ClassVar[dict[int, str]] = {
+        pb.MARK_SANITIZE_GUARDRAIL: "mark_sanitizers",
+        pb.SCOPE_SANITIZE_START_GUARDRAIL: "scope_start_sanitizers",
+        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitizers",
+    }
+
     def __init__(self, runtime: PluginRuntime | None = None) -> None:
         self._runtime = runtime
         self._handlers = _Handlers.empty()
@@ -525,9 +531,12 @@ class PluginContext:
         callback: EventSanitizeCallback,
         surface: int,
         priority: int,
-        handlers: dict[str, EventSanitizeCallback],
     ) -> None:
         self._push_registration(name, surface, priority, False)
+        handlers: dict[str, EventSanitizeCallback] = getattr(
+            self._handlers,
+            self._EVENT_SANITIZER_HANDLER_ATTRIBUTES[surface],
+        )
         handlers[name] = callback
 
     def register_mark_sanitize_guardrail(
@@ -549,7 +558,6 @@ class PluginContext:
             callback,
             pb.MARK_SANITIZE_GUARDRAIL,
             priority,
-            self._handlers.mark_sanitizers,
         )
 
     def register_scope_sanitize_start_guardrail(
@@ -571,7 +579,6 @@ class PluginContext:
             callback,
             pb.SCOPE_SANITIZE_START_GUARDRAIL,
             priority,
-            self._handlers.scope_start_sanitizers,
         )
 
     def register_scope_sanitize_end_guardrail(
@@ -593,7 +600,6 @@ class PluginContext:
             callback,
             pb.SCOPE_SANITIZE_END_GUARDRAIL,
             priority,
-            self._handlers.scope_end_sanitizers,
         )
 
     def register_tool_sanitize_request_guardrail(
@@ -1519,19 +1525,18 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 await _maybe_await(self._handler(self._handlers.subscribers, request.registration_name)(event))
                 return pb.InvokeResponse(empty=pb.EmptyResult())
-            event_sanitizer_handlers = {
-                pb.MARK_SANITIZE_GUARDRAIL: self._handlers.mark_sanitizers,
-                pb.SCOPE_SANITIZE_START_GUARDRAIL: self._handlers.scope_start_sanitizers,
-                pb.SCOPE_SANITIZE_END_GUARDRAIL: self._handlers.scope_end_sanitizers,
-            }
-            if request.surface in event_sanitizer_handlers:
+            if request.surface in PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES:
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 fields: EventSanitizeFields = {
                     "data": event.get("data"),
                     "category_profile": event.get("category_profile"),
                     "metadata": event.get("metadata"),
                 }
-                handler = self._handler(event_sanitizer_handlers[request.surface], request.registration_name)
+                handlers = getattr(
+                    self._handlers,
+                    PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES[request.surface],
+                )
+                handler = self._handler(handlers, request.registration_name)
                 return _json_response(await _maybe_await(handler(event, fields)))
             if request.surface == pb.TOOL_SANITIZE_REQUEST_GUARDRAIL:
                 return _json_response(
