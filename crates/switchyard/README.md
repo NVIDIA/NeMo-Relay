@@ -12,24 +12,9 @@ crates or start the Switchyard service.
 
 ## Experimental setup
 
-The current integration runs Switchyard as a separate service. The included scripts expect a
-Switchyard checkout at the latest commit on
-[`topic/nemo-relay-integration`](https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration):
-
-```text
-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4
-```
-
-Create or update the adjacent worktree before running an example:
-
-```bash
-git fetch upstream topic/nemo-relay-integration
-git worktree add --detach ../Switchyard-topic-nemo-relay-integration \
-  5e61cb71ea94fe4f0d365bbc788c9011d42af2e4
-```
-
-The scripts verify this commit before launching `switchyard-server`. To intentionally test a
-different revision, set both `SWITCHYARD_ROOT` and `SWITCHYARD_EXPECTED_COMMIT`.
+The current integration runs Switchyard as a separate service. See the
+[example guide](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/switchyard) for the
+pinned Switchyard revision, worktree setup, E2E commands, and artifact handling.
 
 ## Configuration
 
