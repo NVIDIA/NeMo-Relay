@@ -391,12 +391,11 @@ class LlmOptimizationTokenImpact:
 
         quality = value.get("quality")
         if quality is not None:
+            quality_string = _optimization_string(quality, "token_impact.quality")
             try:
-                quality = LlmOptimizationEvidenceQuality(_optimization_string(quality, "token_impact.quality"))
-            except ValueError as exc:
-                raise WorkerSdkError(
-                    "optimization contribution token_impact.quality must be 'observed' or 'estimated'"
-                ) from exc
+                quality = LlmOptimizationEvidenceQuality(quality_string)
+            except ValueError:
+                quality = quality_string
         return cls(
             baseline=tokens("baseline"),
             effective=tokens("effective"),
@@ -430,7 +429,18 @@ class LlmOptimizationContribution:
         """Convert this contribution while flattening unknown top-level fields."""
         if self.payload is not None and self.payload_schema is None:
             raise WorkerSdkError("optimization contribution payload requires payload_schema")
-        value = dict(self.extra)
+        known_fields = {
+            "id",
+            "sequence",
+            "producer",
+            "kind",
+            "applied",
+            "model_transition",
+            "token_impact",
+            "payload_schema",
+            "payload",
+        }
+        value = {name: item for name, item in self.extra.items() if name not in known_fields}
         value.update({"producer": self.producer, "kind": self.kind, "applied": self.applied})
         if self.id is not None:
             value["id"] = self.id

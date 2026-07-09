@@ -65,7 +65,8 @@ ACTIVATION_ID = "act"
 AUTH_TOKEN = "token"
 
 
-def _optimization_contribution_fixture() -> Json:
+@pytest.fixture(name="optimization_contribution_fixture")
+def optimization_contribution_fixture_fixture() -> Json:
     fixture_path = (
         Path(__file__).resolve().parents[3]
         / "crates"
@@ -77,8 +78,8 @@ def _optimization_contribution_fixture() -> Json:
     return json.loads(fixture_path.read_text(encoding="utf-8"))
 
 
-def test_optimization_contribution_fixture_round_trips_losslessly():
-    fixture = _optimization_contribution_fixture()
+def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json):
+    fixture = optimization_contribution_fixture
     contribution = LlmOptimizationContribution.from_json(fixture)
 
     outcome = LlmRequestInterceptOutcome(
@@ -115,6 +116,43 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     assert decoded.applied is True
     assert direct.to_json()["applied"] is True
     assert decoded.to_json()["applied"] is True
+
+
+def test_optimization_contribution_preserves_future_quality_strings():
+    fixture = {
+        "producer": "test",
+        "kind": "custom",
+        "token_impact": {"quality": "provider_observed_v2"},
+    }
+
+    contribution = LlmOptimizationContribution.from_json(fixture)
+
+    assert contribution.token_impact is not None
+    assert contribution.token_impact.quality == "provider_observed_v2"
+    assert contribution.to_json() == {**fixture, "applied": True}
+
+
+def test_optimization_contribution_drops_known_fields_from_extra():
+    contribution = LlmOptimizationContribution(
+        producer="test",
+        kind="custom",
+        extra={
+            "id": "stale-id",
+            "sequence": 99,
+            "model_transition": {"baseline": {"model_id": "stale"}},
+            "token_impact": {"quality": "stale"},
+            "payload_schema": {"name": "stale", "version": "1"},
+            "payload": {"stale": True},
+            "future_field": "preserved",
+        },
+    )
+
+    assert contribution.to_json() == {
+        "producer": "test",
+        "kind": "custom",
+        "applied": True,
+        "future_field": "preserved",
+    }
 
 
 class GrpcAbort(Exception):
@@ -1264,8 +1302,10 @@ async def test_llm_request_intercept_can_return_request_without_annotation():
     assert outcome["pending_marks"] == []
 
 
-async def test_llm_request_intercept_preserves_optimization_contribution_worker_envelope():
-    fixture = _optimization_contribution_fixture()
+async def test_llm_request_intercept_preserves_optimization_contribution_worker_envelope(
+    optimization_contribution_fixture: Json,
+):
+    fixture = optimization_contribution_fixture
 
     class OptimizationPlugin(WorkerPlugin):
         plugin_id = "tests.optimization_contribution"
