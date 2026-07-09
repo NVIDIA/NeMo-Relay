@@ -630,28 +630,71 @@ mod tests {
             WireProtocol::OpenaiResponses,
             "selected-model",
         );
-        transcoder
+        let mut output = transcoder
             .transcode(&json!({
                 "choices": [{"delta": {"tool_calls": [{
-                    "index": 0, "id": "call-z", "function": {"name": "first", "arguments": "{}"}
+                    "index": 0, "id": "call-z", "function": {"name": "first", "arguments": ""}
                 }]}, "finish_reason": null}]
             }))
             .unwrap();
-        transcoder
-            .transcode(&json!({
-                "choices": [{"delta": {"tool_calls": [{
-                    "index": 1, "id": "call-a", "function": {"name": "second", "arguments": "{}"}
-                }]}, "finish_reason": null}]
-            }))
-            .unwrap();
+        output.extend(
+            transcoder
+                .transcode(&json!({
+                    "choices": [{"delta": {"tool_calls": [{
+                        "index": 1, "id": "call-a", "function": {"name": "second", "arguments": ""}
+                    }]}, "finish_reason": null}]
+                }))
+                .unwrap(),
+        );
+        output.extend(
+            transcoder
+                .transcode(&json!({
+                    "choices": [{"delta": {"tool_calls": [{
+                        "index": 1, "function": {"arguments": "{\"second\":2}"}
+                    }]}, "finish_reason": null}]
+                }))
+                .unwrap(),
+        );
+        output.extend(
+            transcoder
+                .transcode(&json!({
+                    "choices": [{"delta": {"tool_calls": [{
+                        "index": 0, "function": {"arguments": "{\"first\":1}"}
+                    }]}, "finish_reason": null}]
+                }))
+                .unwrap(),
+        );
 
-        let completed = transcoder
-            .transcode(&json!({
-                "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-            }))
-            .unwrap();
-        let response = completed
+        output.extend(
+            transcoder
+                .transcode(&json!({
+                    "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                }))
+                .unwrap(),
+        );
+
+        let added = output
+            .iter()
+            .filter(|event| event["type"] == "response.output_item.added")
+            .collect::<Vec<_>>();
+        assert_eq!(added[0]["output_index"], 0);
+        assert_eq!(added[0]["item"]["id"], "call-z");
+        assert_eq!(added[1]["output_index"], 1);
+        assert_eq!(added[1]["item"]["id"], "call-a");
+
+        let deltas = output
+            .iter()
+            .filter(|event| event["type"] == "response.function_call_arguments.delta")
+            .collect::<Vec<_>>();
+        assert_eq!(deltas[0]["item_id"], "call-a");
+        assert_eq!(deltas[0]["output_index"], 1);
+        assert_eq!(deltas[0]["delta"], "{\"second\":2}");
+        assert_eq!(deltas[1]["item_id"], "call-z");
+        assert_eq!(deltas[1]["output_index"], 0);
+        assert_eq!(deltas[1]["delta"], "{\"first\":1}");
+
+        let response = output
             .iter()
             .find(|event| event["type"] == "response.completed")
             .expect("response.completed event");
@@ -662,6 +705,14 @@ mod tests {
             .map(|item| item["id"].as_str().expect("tool id"))
             .collect::<Vec<_>>();
         assert_eq!(ids, ["call-z", "call-a"]);
+        assert_eq!(
+            response["response"]["output"][0]["arguments"],
+            "{\"first\":1}"
+        );
+        assert_eq!(
+            response["response"]["output"][1]["arguments"],
+            "{\"second\":2}"
+        );
     }
 
     #[test]
