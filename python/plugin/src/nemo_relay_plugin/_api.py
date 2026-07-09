@@ -17,6 +17,13 @@ Public data types:
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
+    LlmOptimizationContribution: Plugin-neutral LLM optimization evidence.
+    LlmOptimizationDataSchema: Schema tag for custom optimization evidence.
+    LlmOptimizationEvidenceQuality: Whether token evidence was observed or estimated.
+    LlmOptimizationModel: Model identity used by optimization accounting.
+    LlmOptimizationModelTransition: Baseline and effective model identities.
+    LlmOptimizationTokens: Explicit token evidence by category.
+    LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
@@ -118,6 +125,32 @@ class WorkerSdkError(Exception):
     """
 
 
+def _optimization_object(value: Json, field_name: str) -> Mapping[str, Json]:
+    if not isinstance(value, Mapping):
+        raise WorkerSdkError(f"optimization contribution {field_name} must be a JSON object")
+    return value
+
+
+def _optimization_string(value: Json, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise WorkerSdkError(f"optimization contribution {field_name} must be a string")
+    return value
+
+
+def _optimization_optional_string(value: Json, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _optimization_string(value, field_name)
+
+
+def _optimization_optional_u64(value: Json, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 2**64 - 1:
+        raise WorkerSdkError(f"optimization contribution {field_name} must be an unsigned 64-bit integer")
+    return value
+
+
 def _sdk_version() -> str:
     try:
         return metadata.version("nemo-relay-plugin")
@@ -201,12 +234,276 @@ class PendingMarkSpec:
 
 
 @dataclass(slots=True)
+class LlmOptimizationDataSchema:
+    """Identify the schema of an opaque optimization contribution payload."""
+
+    name: str
+    version: str
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert the schema tag to its canonical wire representation."""
+        return {"name": self.name, "version": self.version}
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Json]) -> LlmOptimizationDataSchema:
+        """Decode a canonical schema tag."""
+        return cls(
+            name=_optimization_string(value.get("name"), "payload_schema.name"),
+            version=_optimization_string(value.get("version"), "payload_schema.version"),
+        )
+
+
+@dataclass(slots=True)
+class LlmOptimizationModel:
+    """Identify one model for optimization accounting and repricing."""
+
+    model: str
+    provider: str | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert the model identity to canonical JSON."""
+        value: dict[str, Json] = {"model": self.model}
+        if self.provider is not None:
+            value["provider"] = self.provider
+        return value
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Json]) -> LlmOptimizationModel:
+        """Decode a canonical model identity."""
+        return cls(
+            model=_optimization_string(value.get("model"), "model"),
+            provider=_optimization_optional_string(value.get("provider"), "provider"),
+        )
+
+
+@dataclass(slots=True)
+class LlmOptimizationModelTransition:
+    """Describe the counterfactual and effective models for one optimization."""
+
+    baseline: LlmOptimizationModel | None = None
+    effective: LlmOptimizationModel | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert the model transition to canonical JSON."""
+        value: dict[str, Json] = {}
+        if self.baseline is not None:
+            value["baseline"] = self.baseline.to_json()
+        if self.effective is not None:
+            value["effective"] = self.effective.to_json()
+        return value
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Json]) -> LlmOptimizationModelTransition:
+        """Decode a canonical model transition."""
+        baseline = value.get("baseline")
+        effective = value.get("effective")
+        return cls(
+            baseline=(
+                LlmOptimizationModel.from_json(_optimization_object(baseline, "model_transition.baseline"))
+                if baseline is not None
+                else None
+            ),
+            effective=(
+                LlmOptimizationModel.from_json(_optimization_object(effective, "model_transition.effective"))
+                if effective is not None
+                else None
+            ),
+        )
+
+
+@dataclass(slots=True)
+class LlmOptimizationTokens:
+    """Retain token evidence independently from monetary pricing."""
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    total_tokens: int | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert populated token fields to canonical JSON."""
+        return {
+            name: value
+            for name, value in (
+                ("prompt_tokens", self.prompt_tokens),
+                ("completion_tokens", self.completion_tokens),
+                ("cache_read_tokens", self.cache_read_tokens),
+                ("cache_write_tokens", self.cache_write_tokens),
+                ("total_tokens", self.total_tokens),
+            )
+            if value is not None
+        }
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Json]) -> LlmOptimizationTokens:
+        """Decode canonical token evidence."""
+        return cls(
+            prompt_tokens=_optimization_optional_u64(value.get("prompt_tokens"), "prompt_tokens"),
+            completion_tokens=_optimization_optional_u64(value.get("completion_tokens"), "completion_tokens"),
+            cache_read_tokens=_optimization_optional_u64(value.get("cache_read_tokens"), "cache_read_tokens"),
+            cache_write_tokens=_optimization_optional_u64(value.get("cache_write_tokens"), "cache_write_tokens"),
+            total_tokens=_optimization_optional_u64(value.get("total_tokens"), "total_tokens"),
+        )
+
+
+class LlmOptimizationEvidenceQuality(str, Enum):
+    """Classify token evidence as directly observed or estimated."""
+
+    OBSERVED = "observed"
+    ESTIMATED = "estimated"
+
+
+@dataclass(slots=True)
+class LlmOptimizationTokenImpact:
+    """Describe baseline, effective, and explicitly saved token evidence."""
+
+    baseline: LlmOptimizationTokens | None = None
+    effective: LlmOptimizationTokens | None = None
+    saved: LlmOptimizationTokens | None = None
+    quality: LlmOptimizationEvidenceQuality | str | None = None
+    estimation_method: str | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert the token impact to canonical JSON."""
+        value: dict[str, Json] = {}
+        if self.baseline is not None:
+            value["baseline"] = self.baseline.to_json()
+        if self.effective is not None:
+            value["effective"] = self.effective.to_json()
+        if self.saved is not None:
+            value["saved"] = self.saved.to_json()
+        if self.quality is not None:
+            value["quality"] = self.quality.value if isinstance(self.quality, Enum) else self.quality
+        if self.estimation_method is not None:
+            value["estimation_method"] = self.estimation_method
+        return value
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Json]) -> LlmOptimizationTokenImpact:
+        """Decode a canonical token impact."""
+
+        def tokens(name: str) -> LlmOptimizationTokens | None:
+            item = value.get(name)
+            if item is None:
+                return None
+            return LlmOptimizationTokens.from_json(_optimization_object(item, f"token_impact.{name}"))
+
+        quality = value.get("quality")
+        if quality is not None:
+            try:
+                quality = LlmOptimizationEvidenceQuality(_optimization_string(quality, "token_impact.quality"))
+            except ValueError as exc:
+                raise WorkerSdkError(
+                    "optimization contribution token_impact.quality must be 'observed' or 'estimated'"
+                ) from exc
+        return cls(
+            baseline=tokens("baseline"),
+            effective=tokens("effective"),
+            saved=tokens("saved"),
+            quality=quality,
+            estimation_method=_optimization_optional_string(
+                value.get("estimation_method"), "token_impact.estimation_method"
+            ),
+        )
+
+
+@dataclass(slots=True)
+class LlmOptimizationContribution:
+    """One plugin's lossless, forward-compatible optimization evidence."""
+
+    producer: str
+    kind: str
+    applied: bool = True
+    id: str | None = None
+    sequence: int | None = None
+    model_transition: LlmOptimizationModelTransition | None = None
+    token_impact: LlmOptimizationTokenImpact | None = None
+    payload_schema: LlmOptimizationDataSchema | None = None
+    payload: Json | None = None
+    extra: dict[str, Json] = field(default_factory=dict)
+
+    INPUT_COMPRESSION = "input_compression"
+    MODEL_ROUTING = "model_routing"
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this contribution while flattening unknown top-level fields."""
+        if self.payload is not None and self.payload_schema is None:
+            raise WorkerSdkError("optimization contribution payload requires payload_schema")
+        value = dict(self.extra)
+        value.update({"producer": self.producer, "kind": self.kind, "applied": self.applied})
+        if self.id is not None:
+            value["id"] = self.id
+        if self.sequence is not None:
+            value["sequence"] = self.sequence
+        if self.model_transition is not None:
+            value["model_transition"] = self.model_transition.to_json()
+        if self.token_impact is not None:
+            value["token_impact"] = self.token_impact.to_json()
+        if self.payload_schema is not None:
+            value["payload_schema"] = self.payload_schema.to_json()
+        if self.payload is not None:
+            value["payload"] = self.payload
+        return value
+
+    @classmethod
+    def from_json(cls, value: Mapping[str, Json]) -> LlmOptimizationContribution:
+        """Decode all known fields and retain unknown top-level fields in ``extra``."""
+        value = _optimization_object(value, "value")
+        known = {
+            "id",
+            "sequence",
+            "producer",
+            "kind",
+            "applied",
+            "model_transition",
+            "token_impact",
+            "payload_schema",
+            "payload",
+        }
+        transition = value.get("model_transition")
+        impact = value.get("token_impact")
+        schema = value.get("payload_schema")
+        applied = value.get("applied", False)
+        if not isinstance(applied, bool):
+            raise WorkerSdkError("optimization contribution applied must be a boolean")
+        contribution = cls(
+            id=_optimization_optional_string(value.get("id"), "id"),
+            sequence=_optimization_optional_u64(value.get("sequence"), "sequence"),
+            producer=_optimization_string(value.get("producer"), "producer"),
+            kind=_optimization_string(value.get("kind"), "kind"),
+            applied=applied,
+            model_transition=(
+                LlmOptimizationModelTransition.from_json(_optimization_object(transition, "model_transition"))
+                if transition is not None
+                else None
+            ),
+            token_impact=(
+                LlmOptimizationTokenImpact.from_json(_optimization_object(impact, "token_impact"))
+                if impact is not None
+                else None
+            ),
+            payload_schema=(
+                LlmOptimizationDataSchema.from_json(_optimization_object(schema, "payload_schema"))
+                if schema is not None
+                else None
+            ),
+            payload=value.get("payload"),
+            extra={name: item for name, item in value.items() if name not in known},
+        )
+        if contribution.payload is not None and contribution.payload_schema is None:
+            raise WorkerSdkError("optimization contribution payload requires payload_schema")
+        return contribution
+
+
+@dataclass(slots=True)
 class LlmRequestInterceptOutcome:
     """Canonical result returned by a Python worker LLM request intercept."""
 
     request: LlmRequest
     annotated_request: AnnotatedLlmRequest | None = None
     pending_marks: list[PendingMarkSpec] = field(default_factory=list)
+    optimization_contributions: list[LlmOptimizationContribution] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Json]:
         """Convert this outcome to the canonical worker-envelope payload."""
@@ -219,10 +516,19 @@ class LlmRequestInterceptOutcome:
             if not isinstance(mark, PendingMarkSpec):
                 raise WorkerSdkError("LLM request intercept outcome pending_marks must contain PendingMarkSpec values")
             marks.append(mark.to_json())
+        contributions = []
+        for contribution in self.optimization_contributions:
+            if not isinstance(contribution, LlmOptimizationContribution):
+                raise WorkerSdkError(
+                    "LLM request intercept outcome optimization_contributions must contain "
+                    "LlmOptimizationContribution values"
+                )
+            contributions.append(contribution.to_json())
         return {
             "request": self.request,
             "annotated_request": self.annotated_request,
             "pending_marks": marks,
+            "optimization_contributions": contributions,
         }
 
 

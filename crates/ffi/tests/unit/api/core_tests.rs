@@ -30,6 +30,45 @@ fn test_ffi_llm_request_intercept_outcome_json_allocation_and_validation() {
     assert_eq!(outcome["annotated_request"], Json::Null);
     assert_eq!(outcome["pending_marks"][0]["name"], "first");
     assert_eq!(outcome["pending_marks"][1]["data"]["order"], 2);
+    assert_eq!(outcome["optimization_contributions"], json!([]));
+
+    let malformed_contributions = cstring(r#"[{"producer":1}]"#);
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_llm_request_intercept_outcome_json_new_v2(
+                request,
+                ptr::null(),
+                ptr::null(),
+                malformed_contributions.as_ptr(),
+                &mut outcome_json,
+            )
+        },
+        NemoRelayStatus::InvalidJson
+    );
+    assert!(outcome_json.is_null());
+
+    let contributions = cstring(&format!(
+        "[{}]",
+        include_str!("../../../../types/tests/fixtures/llm_optimization_contribution_v1.json")
+    ));
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_llm_request_intercept_outcome_json_new_v2(
+                request,
+                ptr::null(),
+                ptr::null(),
+                contributions.as_ptr(),
+                &mut outcome_json,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let outcome = unsafe { returned_json(outcome_json) };
+    let expected: Json = serde_json::from_str(include_str!(
+        "../../../../types/tests/fixtures/llm_optimization_contribution_v1.json"
+    ))
+    .unwrap();
+    assert_eq!(outcome["optimization_contributions"], json!([expected]));
 
     let malformed_marks = cstring(r#"{"name":"not-an-array"}"#);
     assert_eq!(

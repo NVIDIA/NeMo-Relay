@@ -17,7 +17,8 @@ use std::sync::Mutex;
 
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
-    CategoryProfile, Event, EventCategory, EventSanitizeFields, PendingMarkSpec, ScopeCategory,
+    CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields, PendingMarkSpec,
+    ScopeCategory,
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
@@ -25,7 +26,8 @@ pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutc
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
     LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
-    LlmOptimizationTokenImpact, LlmOptimizationTokens,
+    LlmOptimizationSummary, LlmOptimizationSummaryStatus, LlmOptimizationTokenImpact,
+    LlmOptimizationTokens,
 };
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;

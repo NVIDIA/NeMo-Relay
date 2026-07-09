@@ -27,6 +27,7 @@ from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
     DiagnosticLevel,
     Json,
+    LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
     PendingMarkSpec,
     PluginContext,
@@ -62,6 +63,48 @@ from nemo_relay_plugin._api import (  # noqa: E402
 
 ACTIVATION_ID = "act"
 AUTH_TOKEN = "token"
+
+
+def _optimization_contribution_fixture() -> Json:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "crates"
+        / "types"
+        / "tests"
+        / "fixtures"
+        / "llm_optimization_contribution_v1.json"
+    )
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def test_optimization_contribution_fixture_round_trips_losslessly():
+    fixture = _optimization_contribution_fixture()
+    contribution = LlmOptimizationContribution.from_json(fixture)
+
+    outcome = LlmRequestInterceptOutcome(
+        request={"headers": {}, "content": {"model": "test"}},
+        optimization_contributions=[contribution],
+    ).to_json()
+
+    assert outcome["optimization_contributions"] == [fixture]
+    assert contribution.kind == fixture["kind"]
+    assert contribution.kind not in {
+        LlmOptimizationContribution.INPUT_COMPRESSION,
+        LlmOptimizationContribution.MODEL_ROUTING,
+    }
+    assert contribution.extra["future_top_level_field"] == fixture["future_top_level_field"]
+    assert (
+        LlmRequestInterceptOutcome(request={"headers": {}, "content": {}}).to_json()["optimization_contributions"] == []
+    )
+
+
+def test_optimization_contribution_requires_schema_for_payload():
+    with pytest.raises(WorkerSdkError, match="payload_schema"):
+        LlmOptimizationContribution.from_json(
+            {"producer": "test", "kind": "custom", "applied": True, "payload": {"value": 1}}
+        )
+    with pytest.raises(WorkerSdkError, match="producer must be a string"):
+        LlmOptimizationContribution.from_json({"producer": 1, "kind": "custom"})
 
 
 class GrpcAbort(Exception):
@@ -1209,6 +1252,43 @@ async def test_llm_request_intercept_can_return_request_without_annotation():
     assert outcome["request"]["content"]["request_only"]
     assert outcome["annotated_request"] is None
     assert outcome["pending_marks"] == []
+
+
+async def test_llm_request_intercept_preserves_optimization_contribution_worker_envelope():
+    fixture = _optimization_contribution_fixture()
+
+    class OptimizationPlugin(WorkerPlugin):
+        plugin_id = "tests.optimization_contribution"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def llm_request(name: str, request: Json, annotated: Json | None) -> LlmRequestInterceptOutcome:
+                del name
+                return LlmRequestInterceptOutcome(
+                    request=request,
+                    annotated_request=annotated,
+                    optimization_contributions=[LlmOptimizationContribution.from_json(fixture)],
+                )
+
+            ctx.register_llm_request_intercept("optimization", llm_request)
+
+    service = _service(OptimizationPlugin(), RecordingHostStub())
+    await _register(service)
+    response = await service.Invoke(
+        _invoke_request(
+            "optimization",
+            pb.LLM_REQUEST_INTERCEPT,
+            llm=_llm_payload(request={"content": {"prompt": "hello"}}),
+        ),
+        AbortContext(),
+    )
+
+    assert response.WhichOneof("result") == "llm_request"
+    assert response.llm_request.outcome.schema == LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA
+    outcome = _envelope_value(response.llm_request.outcome)
+    assert outcome["optimization_contributions"] == [fixture]
+    assert outcome["optimization_contributions"][0]["future_top_level_field"] == {"preserved": True}
 
 
 async def test_stream_invoke_success_and_failures(service: _WorkerService, host_stub: RecordingHostStub):

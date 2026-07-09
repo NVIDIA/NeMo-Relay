@@ -256,7 +256,7 @@ pub fn wrap_js_tool_exec_fn(
 ///
 /// The JS callback receives a single JSON object
 /// `{ name: string, request: LlmRequest, annotated: AnnotatedLlmRequest | null }`
-/// and must return `{ request, annotated?, pendingMarks? }`.
+/// and must return `{ request, annotated?, pendingMarks?, optimizationContributions? }`.
 /// When `annotated` is non-null, request content is read-only and provider-body
 /// edits must be made through the returned annotation; headers remain writable.
 pub fn wrap_js_llm_request_intercept_fn(

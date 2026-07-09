@@ -618,6 +618,22 @@ impl PyAnnotatedLLMResponse {
         }
     }
 
+    /// Return Relay's plugin-neutral optimization accounting, if present.
+    #[getter]
+    pub(crate) fn optimization_summary(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.inner.optimization_summary {
+            Some(summary) => {
+                let value = serde_json::to_value(summary).map_err(|error| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "optimization summary serialization error: {error}"
+                    ))
+                })?;
+                json_to_py(py, &value)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
     #[getter]
     pub(crate) fn api_specific(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.inner.api_specific {
