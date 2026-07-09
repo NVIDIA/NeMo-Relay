@@ -35,12 +35,11 @@ examples/switchyard/run-real-e2e.sh
 ```
 
 The real-service script starts the pinned Switchyard server and Relay against deterministic fake
-providers. The optional Hermes, Ollama, and InferenceHub scripts generate longer trajectories and
-export ATOF/ATIF/OTEL artifacts:
+providers. The optional Hermes/Ollama script generates a longer trajectory and exports
+ATOF/ATIF/OTEL artifacts:
 
 ```bash
 examples/switchyard/run-hermes-ollama-smoke.sh
-examples/switchyard/run-inferencehub-stage-router-smoke.sh
 ```
 
 The scripts generate ephemeral bearer tokens; no credential values are stored in the repository.

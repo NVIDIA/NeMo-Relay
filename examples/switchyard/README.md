@@ -60,25 +60,11 @@ produces ATOF, ATIF, and OTEL artifacts and can leave Phoenix running with
 examples/switchyard/run-hermes-ollama-smoke.sh
 ```
 
-### InferenceHub StageRouter trajectory
-
-`run-inferencehub-stage-router-smoke.sh` runs the Claude Sonnet/Opus trajectory against
-InferenceHub. It requires Docker, the Claude CLI, and a secrets file containing
-`NV_INFERENCEHUB_KEY`. The key is read from the environment and is never written to the
-repository or trajectory payloads.
-
-```bash
-INFERENCEHUB_SECRETS_FILE=/path/to/.inference_secrets \
-  examples/switchyard/run-inferencehub-stage-router-smoke.sh
-```
-
 ## Configuration files
 
 - `plugins.toml`: minimal plugin configuration example.
 - `real-e2e-plugins.toml` and `real-e2e-profiles.yaml`: deterministic fake-provider E2E.
 - `hermes-ollama-plugins.toml` and `hermes-ollama-profiles.yaml`: local Ollama trajectory.
-- `inferencehub-stage-router-plugins.toml.in` and `inferencehub-stage-router-profiles.yaml`:
-  InferenceHub trajectory templates.
 - `fake_upstream.py`: deterministic provider used by the service E2E.
 - `otel-collector.yaml`: local OTEL artifact export configuration.
 
