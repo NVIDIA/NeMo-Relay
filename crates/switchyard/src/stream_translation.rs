@@ -459,7 +459,9 @@ impl StreamTranscoder {
                     output.push(json!({"type": "response.output_item.done", "output_index": index, "item": item}));
                     items.push(item);
                 }
-                for (id, index) in &self.target_tools {
+                let mut target_tools = self.target_tools.iter().collect::<Vec<_>>();
+                target_tools.sort_by_key(|(_, index)| **index);
+                for (id, index) in target_tools {
                     let arguments = self
                         .target_tool_arguments
                         .get(id)
@@ -619,6 +621,47 @@ mod tests {
         transcoder.transcode(&start).unwrap();
         let output = transcoder.transcode(&delta).unwrap();
         assert_eq!(output.last().unwrap()["delta"]["partial_json"], "{\"key\":");
+    }
+
+    #[test]
+    fn responses_completion_preserves_tool_creation_order() {
+        let mut transcoder = StreamTranscoder::new(
+            WireProtocol::OpenaiChat,
+            WireProtocol::OpenaiResponses,
+            "selected-model",
+        );
+        transcoder
+            .transcode(&json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": 0, "id": "call-z", "function": {"name": "first", "arguments": "{}"}
+                }]}, "finish_reason": null}]
+            }))
+            .unwrap();
+        transcoder
+            .transcode(&json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": 1, "id": "call-a", "function": {"name": "second", "arguments": "{}"}
+                }]}, "finish_reason": null}]
+            }))
+            .unwrap();
+
+        let completed = transcoder
+            .transcode(&json!({
+                "choices": [{"delta": {}, "finish_reason": "tool_calls"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            }))
+            .unwrap();
+        let response = completed
+            .iter()
+            .find(|event| event["type"] == "response.completed")
+            .expect("response.completed event");
+        let ids = response["response"]["output"]
+            .as_array()
+            .expect("completed output items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("tool id"))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["call-z", "call-a"]);
     }
 
     #[test]
