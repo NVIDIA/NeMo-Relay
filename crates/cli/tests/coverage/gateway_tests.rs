@@ -11,6 +11,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use reqwest::Client;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_http_client() -> Client {
     Client::new()
@@ -277,6 +278,155 @@ fn effective_upstream_request_skips_invalid_runtime_headers() {
     assert_eq!(headers.get("x-good").unwrap(), "ok");
     assert!(headers.get("x-invalid-value").is_none());
     assert!(headers.keys().all(|name| name.as_str() != "bad header"));
+}
+
+#[test]
+fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
+    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert(
+        INTERNAL_DISPATCH_URL_HEADER,
+        HeaderValue::from_static("http://attacker.invalid"),
+    );
+    original_headers.insert(
+        INTERNAL_RETRY_AWARE_HEADER,
+        HeaderValue::from_static("true"),
+    );
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            (
+                INTERNAL_DISPATCH_URL_HEADER.to_string(),
+                json!("http://127.0.0.1:9000/v1/responses"),
+            ),
+            (
+                INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
+                json!("openai_responses"),
+            ),
+            (INTERNAL_RETRY_AWARE_HEADER.to_string(), json!("true")),
+            ("x-backend".to_string(), json!("selected")),
+        ]),
+        content: json!({"model": "selected"}),
+    };
+
+    let effective = effective_dispatch_request(
+        &original_body,
+        &original_headers,
+        Some(&request),
+        "http://default.invalid/v1/chat/completions",
+        ProviderRoute::OpenAiChatCompletions,
+    );
+    assert_eq!(effective.url, "http://127.0.0.1:9000/v1/responses");
+    assert_eq!(effective.route, ProviderRoute::OpenAiResponses);
+    assert_eq!(effective.headers.get("x-backend").unwrap(), "selected");
+    assert!(
+        effective
+            .headers
+            .get(INTERNAL_DISPATCH_URL_HEADER)
+            .is_none()
+    );
+    assert!(
+        effective
+            .headers
+            .get(INTERNAL_DISPATCH_ROUTE_HEADER)
+            .is_none()
+    );
+    assert!(effective.headers.get(INTERNAL_RETRY_AWARE_HEADER).is_none());
+    assert!(retry_aware_dispatch(&request));
+}
+
+#[test]
+fn structured_upstream_failure_classification_matches_retry_policy() {
+    let headers = HeaderMap::new();
+    for status in [408, 429, 500, 502, 503, 504] {
+        let failure = http_failure(
+            StatusCode::from_u16(status).unwrap(),
+            &headers,
+            b"temporary",
+        );
+        assert!(failure.is_retryable(), "status={status}");
+    }
+    assert_eq!(
+        http_failure(
+            StatusCode::BAD_REQUEST,
+            &headers,
+            b"context_length_exceeded"
+        )
+        .class,
+        UpstreamFailureClass::ContextWindow
+    );
+    assert_eq!(
+        http_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &headers,
+            b"model unavailable"
+        )
+        .class,
+        UpstreamFailureClass::ModelUnavailable
+    );
+    assert!(!http_failure(StatusCode::UNAUTHORIZED, &headers, b"bad token").is_retryable());
+    assert!(!http_failure(StatusCode::BAD_REQUEST, &headers, b"invalid request").is_retryable());
+    assert_eq!(
+        bounded_error_body(&vec![b'x'; MAX_UPSTREAM_ERROR_BODY_BYTES + 10]).len(),
+        MAX_UPSTREAM_ERROR_BODY_BYTES
+    );
+}
+
+#[tokio::test]
+async fn retry_aware_buffered_body_read_failure_stays_structured() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 64\r\nconnection: close\r\n\r\n{}",
+            )
+            .await
+            .unwrap();
+    });
+
+    let config = GatewayConfig::default();
+    let state = AppState {
+        config: config.clone(),
+        http: test_http_client(),
+        sessions: SessionManager::new(config),
+        last_activity: Arc::new(Mutex::new(std::time::Instant::now())),
+    };
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/chat/completions".into(),
+        provider: ProviderRoute::OpenAiChatCompletions,
+        upstream_url: format!("http://{address}/v1/chat/completions"),
+        body_bytes: Bytes::from_static(b"{}"),
+        request_json: json!({}),
+        streaming: false,
+    };
+    let upstream_info = Arc::new(Mutex::new(None));
+    let upstream_error = Arc::new(Mutex::new(None));
+    let response_bytes = Arc::new(Mutex::new(None));
+    let func = build_buffered_func(
+        state,
+        &prepared,
+        upstream_info,
+        upstream_error.clone(),
+        response_bytes,
+    );
+    let error = func(LlmRequest {
+        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        content: json!({}),
+    })
+    .await
+    .unwrap_err();
+
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure, got {error:?}");
+    };
+    assert_eq!(failure.class, UpstreamFailureClass::Connection);
+    assert!(upstream_error.lock().unwrap().is_none());
+    server.await.unwrap();
 }
 
 #[test]

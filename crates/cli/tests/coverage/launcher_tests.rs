@@ -624,6 +624,14 @@ fn prepares_hermes_hook_environment() {
 }
 
 #[test]
+fn hermes_openai_base_url_normalizes_trailing_slashes() {
+    assert_eq!(
+        hermes_openai_base_url("http://127.0.0.1:1234///"),
+        "http://127.0.0.1:1234/v1"
+    );
+}
+
+#[test]
 fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();

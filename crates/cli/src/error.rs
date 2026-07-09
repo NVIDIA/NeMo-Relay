@@ -87,8 +87,9 @@ impl CliError {
 
 impl IntoResponse for CliError {
     // Maps gateway errors into a compact JSON HTTP response. Bad hook payloads are client errors,
-    // upstream gateway failures are bad gateway responses, and local install/config/runtime faults
-    // remain internal errors so callers do not mistake them for agent policy decisions.
+    // network-level upstream failures are bad gateway responses, provider failures mirror the
+    // upstream status when available, and local install/config/runtime faults remain internal
+    // errors so callers do not mistake them for agent policy decisions.
     fn into_response(self) -> Response {
         let message = self.to_string();
         let guardrail_reason = self.guardrail_rejection_reason().map(ToOwned::to_owned);

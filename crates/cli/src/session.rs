@@ -38,6 +38,18 @@ const TOOL_HINT_TTL: Duration = Duration::from_secs(300);
 const LAST_OWNER_TTL: Duration = Duration::from_secs(300);
 const AGENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const AGENT_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const ROUTING_IDENTITY_HEADERS: &[&str] = &[
+    "x-nemo-relay-session-id",
+    "x-nemo-relay-agent-kind",
+    "x-nemo-relay-turn-id",
+    "x-nemo-relay-request-id",
+    "x-nemo-relay-owner-id",
+    "x-nemo-relay-subagent-id",
+    "x-nemo-relay-parent-scope-id",
+    "x-nemo-relay-root-scope-id",
+    "x-nemo-relay-identity-quality",
+    "x-nemo-relay-source",
+];
 
 #[derive(Clone)]
 pub(crate) struct SessionManager {
@@ -94,6 +106,86 @@ pub(crate) struct GatewayCallPrep {
     pub(crate) owner_subagent_id: Option<String>,
     pub(crate) bypass_managed_pipeline: bool,
     pub(crate) prune_empty_session_on_finish: bool,
+}
+
+struct RoutingIdentityHeaderContext<'a> {
+    session_id: &'a str,
+    agent_kind: AgentKind,
+    turn_index: u64,
+    request_id: Option<&'a str>,
+    owner_id: Option<&'a str>,
+    parent: Option<&'a ScopeHandle>,
+    root: Option<&'a ScopeHandle>,
+    metadata: &'a Value,
+}
+
+fn enrich_routing_identity_headers(
+    request: &mut LlmRequest,
+    context: RoutingIdentityHeaderContext<'_>,
+) {
+    request.headers.retain(|name, _| {
+        !ROUTING_IDENTITY_HEADERS
+            .iter()
+            .any(|reserved| name.eq_ignore_ascii_case(reserved))
+    });
+    insert_routing_identity_header(
+        &mut request.headers,
+        "x-nemo-relay-session-id",
+        context.session_id,
+    );
+    insert_routing_identity_header(
+        &mut request.headers,
+        "x-nemo-relay-agent-kind",
+        context.agent_kind.as_str(),
+    );
+    insert_routing_identity_header(
+        &mut request.headers,
+        "x-nemo-relay-turn-id",
+        &context.turn_index.to_string(),
+    );
+    let request_id = context
+        .request_id
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            json_string_at(
+                context.metadata,
+                &[
+                    &["llm_correlation_request_id"][..],
+                    &["request_id"][..],
+                    &["requestId"][..],
+                ],
+            )
+        })
+        .unwrap_or_else(|| format!("relay-request-{}", uuid::Uuid::now_v7()));
+    insert_routing_identity_header(&mut request.headers, "x-nemo-relay-request-id", &request_id);
+    if let Some(owner_id) = context.owner_id {
+        insert_routing_identity_header(&mut request.headers, "x-nemo-relay-owner-id", owner_id);
+        insert_routing_identity_header(&mut request.headers, "x-nemo-relay-subagent-id", owner_id);
+    }
+    if let Some(parent) = context.parent {
+        insert_routing_identity_header(
+            &mut request.headers,
+            "x-nemo-relay-parent-scope-id",
+            &parent.uuid.to_string(),
+        );
+    }
+    if let Some(root) = context.root {
+        insert_routing_identity_header(
+            &mut request.headers,
+            "x-nemo-relay-root-scope-id",
+            &root.uuid.to_string(),
+        );
+    }
+    insert_routing_identity_header(
+        &mut request.headers,
+        "x-nemo-relay-identity-quality",
+        "native",
+    );
+    insert_routing_identity_header(&mut request.headers, "x-nemo-relay-source", "gateway");
+}
+
+fn insert_routing_identity_header(headers: &mut Map<String, Value>, name: &str, value: &str) {
+    headers.insert(name.to_string(), json!(value));
 }
 
 struct Session {
@@ -1050,11 +1142,25 @@ impl Session {
                     ),
                     owner.metadata,
                 );
+                let mut request = start.request;
+                enrich_routing_identity_headers(
+                    &mut request,
+                    RoutingIdentityHeaderContext {
+                        session_id: &self.session_id,
+                        agent_kind: self.agent_kind,
+                        turn_index: self.turn_index,
+                        request_id: start.request_id.as_deref(),
+                        owner_id: owner.subagent_id.as_deref(),
+                        parent: owner.parent.as_ref(),
+                        root: self.agent_scope.as_ref().or(self.turn_scope.as_ref()),
+                        metadata: &metadata,
+                    },
+                );
                 Ok(GatewayCallPrep {
                     scope_stack: stack.clone(),
                     session_id: self.session_id.clone(),
                     provider_name: start.provider,
-                    request: start.request,
+                    request,
                     parent: owner.parent,
                     attributes,
                     metadata,

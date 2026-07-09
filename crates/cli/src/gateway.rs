@@ -390,6 +390,9 @@ fn build_buffered_func(
                 Ok(bytes) => bytes,
                 Err(error) => {
                     let message = error.to_string();
+                    if retry_aware {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
                     *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
                     return Err(FlowError::Internal(message));
                 }
