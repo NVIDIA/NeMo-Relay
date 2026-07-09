@@ -34,9 +34,9 @@ cargo test -p nemo-relay-switchyard
 examples/switchyard/run-real-e2e.sh
 ```
 
-The real-service script starts the pinned Switchyard server and Relay against deterministic fake
-providers. The optional Hermes/Ollama script generates a longer trajectory and exports
-ATOF/ATIF/OTEL artifacts:
+The manual compatibility smoke test starts the pinned Switchyard server and Relay against
+deterministic fake providers. The optional Hermes/Ollama script generates a longer trajectory and
+exports ATOF/ATIF/OTEL artifacts:
 
 ```bash
 examples/switchyard/run-hermes-ollama-smoke.sh

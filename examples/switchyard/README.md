@@ -39,11 +39,14 @@ SWITCHYARD_EXPECTED_COMMIT=<commit> \
 
 Run these commands from the root of the NeMo Relay checkout.
 
-### Deterministic service E2E
+### Manual Switchyard compatibility smoke test
 
-`run-real-e2e.sh` starts Switchyard, Relay, and a fake provider. It verifies cold and warm
-StageRouter decisions, buffered routing, SSE routing, and the selected model sequence. It requires
-Rust tooling, Python, and `curl`; its temporary logs are removed after a successful run.
+`run-real-e2e.sh` is a manual compatibility smoke test. It starts the pinned Switchyard server,
+Relay, and a fake provider, then verifies cold and warm StageRouter decisions, buffered routing,
+SSE routing, and the selected model sequence. It is intended to catch cross-repository service
+contract regressions; the CI-safe Relay process regression test covers the faster local behavior
+checks. The script requires Rust tooling, Python, and `curl`; its temporary logs are removed after
+a successful run.
 
 ```bash
 examples/switchyard/run-real-e2e.sh
