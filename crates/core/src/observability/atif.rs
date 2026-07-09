@@ -1512,8 +1512,12 @@ impl LlmSpanCandidate {
             request_signature,
             request_correlation_keys: llm_request_correlation_keys(start, end),
             response_signature,
-            model_name: effective_response_model_name(end)
-                .or_else(|| model_name_for_llm_event(start)),
+            model_name: start
+                .model_name()
+                .or_else(|| end.model_name())
+                .map(ToOwned::to_owned)
+                .or_else(|| model_name_for_llm_event(start))
+                .or_else(|| model_name_for_llm_event(end)),
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
             end_metrics: end.data().and_then(|output| {
                 let normalized_response = end.normalized_llm_response();
@@ -2373,7 +2377,7 @@ impl StepConversionState {
                 .and_then(|response| atif_message_from_annotated_response(response))
                 .unwrap_or_else(|| extract_llm_response_message(output)),
             timestamp: Some(event.timestamp().to_rfc3339()),
-            model_name: effective_response_model_name(event),
+            model_name: model_name_for_llm_event(event),
             reasoning_effort,
             reasoning_content,
             tool_calls,
@@ -2696,13 +2700,6 @@ impl StepConversionState {
         renumber_steps(&mut self.steps);
         self.steps
     }
-}
-
-fn effective_response_model_name(event: &Event) -> Option<String> {
-    event
-        .normalized_llm_response()
-        .and_then(|response| response.as_ref().model.clone())
-        .or_else(|| model_name_for_llm_event(event))
 }
 
 fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
