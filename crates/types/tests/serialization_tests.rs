@@ -48,6 +48,7 @@ fn event_round_trips_with_annotated_llm_profiles() {
         tool_calls: None,
         finish_reason: None,
         usage: None,
+        optimization_summary: None,
         api_specific: None,
         extra: Map::new(),
     };

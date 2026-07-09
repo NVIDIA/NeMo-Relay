@@ -34,11 +34,18 @@ use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::{Event, EventSanitizeFields, PendingMarkSpec};
+pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
 pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
-use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+pub use nemo_relay_types::codec::optimization::{
+    LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
+    LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
+    LlmOptimizationSummary, LlmOptimizationSummaryStatus, LlmOptimizationTokenImpact,
+    LlmOptimizationTokens,
+};
+pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;

@@ -126,9 +126,155 @@ fn empty_annotated_response() -> AnnotatedLlmResponse {
         tool_calls: None,
         finish_reason: None,
         usage: None,
+        optimization_summary: None,
         api_specific: None,
         extra: serde_json::Map::new(),
     }
+}
+
+#[test]
+fn optimization_summary_emits_namespaced_openinference_attributes() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"complete",
+            "baseline_model":{"model":"baseline"}, "effective_model":{"model":"effective"},
+            "tokens_saved":{"prompt_tokens":12,"total_tokens":12},
+            "baseline_cost":{"total":0.02,"currency":"USD","source":"model_pricing","pricing_as_of":"2026-07-08","pricing_source":"test"},
+            "actual_cost":{"total":0.01,"currency":"USD","source":"model_pricing"},
+            "estimated_cost_saved":0.01, "currency":"USD", "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.effective_model"],
+        "effective"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.total_tokens_saved"],
+        "12"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_cost"],
+        "0.01"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_source"],
+        "test"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_cost_currency"],
+        "USD"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_cost_currency"],
+        "USD"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.estimated_cost_saved_currency"],
+        "USD"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_pricing_as_of"],
+        "2026-07-08"
+    );
+}
+
+#[test]
+fn optimization_cost_attributes_preserve_independent_currency_and_provenance() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"partial",
+            "limitations":["cost_currency_mismatch"],
+            "tokens_saved":{},
+            "baseline_cost":{"total":2.0,"currency":"EUR","source":"model_pricing","pricing_as_of":"2026-01-01"},
+            "actual_cost":{"total":1.0,"currency":"GBP","source":"provider_reported","pricing_as_of":"2026-02-02","pricing_source":"provider"},
+            "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.baseline_cost_currency"],
+        "EUR"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_cost_currency"],
+        "GBP"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_pricing_source"],
+        "provider"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.actual_pricing_as_of"],
+        "2026-02-02"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_source"],
+        "provider"
+    );
+    assert_eq!(
+        attributes["nemo_relay.llm.optimization.pricing_as_of"],
+        "2026-01-01"
+    );
+    assert!(!attributes.contains_key("nemo_relay.llm.optimization.estimated_cost_saved"));
+    assert!(!attributes.contains_key("nemo_relay.llm.optimization.estimated_cost_saved_currency"));
+}
+
+#[test]
+fn complete_non_usd_optimization_costs_keep_currency_and_independent_provenance() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version":"1", "calculation_version":"1", "status":"complete",
+            "tokens_saved":{},
+            "baseline_cost":{"total":2.0,"currency":"EUR","source":"model_pricing","pricing_as_of":"2026-01-01","pricing_source":"baseline-catalog"},
+            "actual_cost":{"total":1.0,"currency":"EUR","source":"provider_reported","pricing_as_of":"2026-02-02","pricing_source":"provider-meter"},
+            "estimated_cost_saved":1.0, "currency":"EUR", "contributions":[]
+        }))
+        .unwrap();
+    let mut attributes = Vec::new();
+    push_optimization_attributes(&mut attributes, &summary);
+    let attributes = attr_map(&attributes);
+
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.baseline_cost_currency",
+        "EUR",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.actual_cost_currency",
+        "EUR",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.estimated_cost_saved_currency",
+        "EUR",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.baseline_pricing_source",
+        "baseline-catalog",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.actual_pricing_source",
+        "provider-meter",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.baseline_pricing_as_of",
+        "2026-01-01",
+    );
+    assert_attr(
+        &attributes,
+        "nemo_relay.llm.optimization.actual_pricing_as_of",
+        "2026-02-02",
+    );
 }
 
 fn install_test_pricing(model_id: &str) {
@@ -2939,6 +3085,7 @@ fn llm_end_with_usage_emits_token_count_attributes() {
                         cache_write_tokens: Some(10),
                         cost: None,
                     }),
+                    optimization_summary: None,
                     api_specific: None,
                     extra: serde_json::Map::new(),
                 }))
@@ -3909,6 +4056,7 @@ fn llm_end_with_partial_usage_emits_only_present_fields() {
                         cache_write_tokens: None,
                         cost: None,
                     }),
+                    optimization_summary: None,
                     api_specific: None,
                     extra: serde_json::Map::new(),
                 }))

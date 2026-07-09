@@ -438,6 +438,32 @@ NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new(const struct F
                                                                   char **out_outcome_json);
 
 /**
+ * Allocate canonical JSON for a C LLM request-intercept callback result,
+ * including optional plugin-neutral optimization contributions.
+ *
+ * `annotated_json`, `pending_marks_json`, and
+ * `optimization_contributions_json` may be null. Null list pointers serialize
+ * as empty lists. Contributions use the canonical
+ * `LlmOptimizationContribution` JSON shape; custom `kind` strings and unknown
+ * top-level fields are preserved. The existing unversioned helper remains
+ * ABI-compatible and behaves as though this function received a null
+ * `optimization_contributions_json` pointer.
+ *
+ * # Safety
+ *
+ * `request` must point to a live `FfiLLMRequest`, optional JSON inputs must
+ * be valid null-terminated strings when non-null, and `out_outcome_json` must
+ * be writable. A successful output must either be transferred through a
+ * callback's `out_outcome_json` or freed by its caller with
+ * `nemo_relay_string_free`.
+ */
+NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new_v2(const struct FfiLLMRequest *request,
+                                                                     const char *annotated_json,
+                                                                     const char *pending_marks_json,
+                                                                     const char *optimization_contributions_json,
+                                                                     char **out_outcome_json);
+
+/**
  * Run the registered LLM conditional execution guardrail chain.
  *
  * Returns `NemoRelayStatus::Ok` if all guardrails pass, or

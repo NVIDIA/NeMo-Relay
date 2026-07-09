@@ -410,6 +410,7 @@ impl LlmResponseCodec for AnthropicMessagesCodec {
             tool_calls,
             finish_reason,
             usage,
+            optimization_summary: None,
             api_specific,
             extra: raw.extra,
         })

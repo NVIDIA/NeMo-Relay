@@ -123,6 +123,7 @@ fn annotated_response(id: &str, model: &str, text: &str) -> AnnotatedLlmResponse
         tool_calls: None,
         finish_reason: None,
         usage: None,
+        optimization_summary: None,
         api_specific: None,
         extra: Map::new(),
     }

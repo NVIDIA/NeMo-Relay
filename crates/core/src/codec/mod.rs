@@ -18,6 +18,7 @@ pub mod anthropic;
 pub mod model_pricing;
 pub mod openai_chat;
 pub mod openai_responses;
+pub mod optimization;
 pub mod request;
 pub mod resolve;
 pub mod response;

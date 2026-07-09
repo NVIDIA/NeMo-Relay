@@ -23,6 +23,13 @@ Public data types:
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
+    LlmOptimizationContribution: Plugin-neutral LLM optimization evidence.
+    LlmOptimizationDataSchema: Schema tag for custom optimization evidence.
+    LlmOptimizationEvidenceQuality: Whether token evidence was observed or estimated.
+    LlmOptimizationModel: Model identity used by optimization accounting.
+    LlmOptimizationModelTransition: Baseline and effective model identities.
+    LlmOptimizationTokens: Explicit token evidence by category.
+    LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
@@ -67,6 +74,13 @@ from ._api import (
     LlmConditionalCallback,
     LlmExecutionCallback,
     LlmNext,
+    LlmOptimizationContribution,
+    LlmOptimizationDataSchema,
+    LlmOptimizationEvidenceQuality,
+    LlmOptimizationModel,
+    LlmOptimizationModelTransition,
+    LlmOptimizationTokenImpact,
+    LlmOptimizationTokens,
     LlmRequest,
     LlmRequestCallback,
     LlmRequestInterceptOutcome,
@@ -100,6 +114,13 @@ __all__ = [
     "Json",
     "LlmConditionalCallback",
     "LlmExecutionCallback",
+    "LlmOptimizationContribution",
+    "LlmOptimizationDataSchema",
+    "LlmOptimizationEvidenceQuality",
+    "LlmOptimizationModel",
+    "LlmOptimizationModelTransition",
+    "LlmOptimizationTokenImpact",
+    "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
     "LlmRequestCallback",
