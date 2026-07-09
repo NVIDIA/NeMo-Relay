@@ -10,6 +10,7 @@ use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+#[cfg(feature = "switchyard")]
 use nemo_relay_switchyard::{
     register_switchyard_component, validate_switchyard_atof_configuration,
 };
@@ -721,9 +722,11 @@ pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
     register_pii_redaction_component().map_err(|error| {
         CliError::Config(format!("PII redaction plugin registration failed: {error}"))
     })?;
+    #[cfg(feature = "switchyard")]
     register_switchyard_component().map_err(|error| {
         CliError::Config(format!("Switchyard plugin registration failed: {error}"))
     })?;
+    #[cfg(feature = "switchyard")]
     validate_switchyard_atof_configuration(config)
         .map_err(|error| CliError::Config(format!("Switchyard ATOF validation failed: {error}")))?;
     let report = validate_plugin_config(config);

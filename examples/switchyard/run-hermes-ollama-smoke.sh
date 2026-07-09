@@ -7,7 +7,7 @@ set -euo pipefail
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$relay_root/examples/switchyard/e2e-common.sh"
 switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-topic-nemo-relay-integration}"
-switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4}"
+switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 artifact_dir="${SWITCHYARD_TRAJECTORY_DIR:-$relay_root/artifacts/hermes-switchyard-$run_id}"
 token="$(e2e_random_token)"
@@ -113,7 +113,8 @@ run_query() {
     HERMES_HOME="$artifact_dir/hermes" \
     OPENAI_API_KEY=ollama \
     SWITCHYARD_AUTHORIZATION="Bearer $token" \
-      cargo run --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli -- \
+      cargo run --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli \
+        --features switchyard -- \
         run --agent hermes \
         --plugin-config-path "$relay_root/examples/switchyard/hermes-ollama-plugins.toml" \
         -- chat --provider custom --model llama3.2:latest \

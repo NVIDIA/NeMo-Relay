@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # Switchyard integration examples
 
 These examples exercise the experimental Relay integration with a separately running Switchyard
-Decision API service. They are manual, local validation workflows rather than production startup
-orchestration.
+Decision API service and the in-process Switchyard translation library. They are manual, local
+validation workflows rather than production startup orchestration.
 
 ## Required Switchyard revision
 
@@ -15,7 +15,7 @@ The scripts default to the latest commit currently pinned for the public topic b
 
 ```text
 https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration
-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4
+8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8
 ```
 
 Create the adjacent checkout from the Relay repository root:
@@ -23,7 +23,7 @@ Create the adjacent checkout from the Relay repository root:
 ```bash
 git fetch upstream topic/nemo-relay-integration
 git worktree add --detach ../Switchyard-topic-nemo-relay-integration \
-  5e61cb71ea94fe4f0d365bbc788c9011d42af2e4
+  8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8
 ```
 
 Every real-service script verifies this commit before launching `switchyard-server`. To test a
@@ -38,6 +38,9 @@ SWITCHYARD_EXPECTED_COMMIT=<commit> \
 ## Examples
 
 Run these commands from the root of the NeMo Relay checkout.
+
+The Relay CLI's Switchyard support is compile-time optional. The scripts enable the `switchyard`
+feature automatically; custom builds must pass `--features switchyard`.
 
 ### Manual Switchyard compatibility smoke test
 
@@ -75,8 +78,9 @@ examples/switchyard/run-hermes-ollama-smoke.sh
 
 The scripts launch Switchyard as a separate local process on port `4000`. Relay sends routing
 requests to `/v1/routing/decision` and, for ATOF-backed profiles, sends events to
-`/v1/atof/events`. Relay owns provider credentials, target bindings, retries, and fallback
-behavior; Switchyard owns ATOF accumulation and routing decisions.
+`/v1/atof/events`. Relay owns provider credentials, target bindings, dispatch, retries, and
+fallback behavior; Switchyard owns ATOF accumulation, routing decisions, and provider-protocol
+translation.
 
 The service is not started automatically by Relay outside these examples. A production deployment
 must provide a reachable Decision API and configure the Relay plugin with its URL.

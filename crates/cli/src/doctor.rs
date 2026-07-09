@@ -20,6 +20,7 @@ use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+#[cfg(feature = "switchyard")]
 use nemo_relay_switchyard::{
     register_switchyard_component, validate_switchyard_atof_configuration,
 };
@@ -645,6 +646,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         });
         return checks;
     }
+    #[cfg(feature = "switchyard")]
     if let Err(error) = register_switchyard_component() {
         checks.push(Check {
             name: "Switchyard plugin",
@@ -653,6 +655,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         });
         return checks;
     }
+    #[cfg(feature = "switchyard")]
     if let Err(error) = validate_switchyard_atof_configuration(&plugin_config) {
         checks.push(Check {
             name: "Switchyard ATOF",

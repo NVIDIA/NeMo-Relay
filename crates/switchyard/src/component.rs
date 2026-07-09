@@ -38,7 +38,7 @@ use crate::contract::{
 use crate::stream_translation::StreamTranscoder;
 use crate::translation::{
     decode_request, encode_request, latest_user_prompt, recent_message_window, translate_response,
-    validate_portable_request,
+    translation_engine, validate_portable_request,
 };
 
 /// Plugin kind used in Relay plugin configuration.
@@ -468,6 +468,7 @@ struct SwitchyardRuntime {
     config: SwitchyardConfig,
     client: reqwest::Client,
     target_headers: BTreeMap<String, Map<String, Json>>,
+    translation: switchyard_translation::TranslationEngine,
 }
 
 impl SwitchyardRuntime {
@@ -491,6 +492,7 @@ impl SwitchyardRuntime {
             config,
             client,
             target_headers,
+            translation: translation_engine(),
         })
     }
 
@@ -506,7 +508,7 @@ impl SwitchyardRuntime {
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if let Err(error) = validate_portable_request(inbound, &original) {
+        if let Err(error) = validate_portable_request(&self.translation, inbound, &original) {
             self.emit_error(
                 None,
                 0,
@@ -552,28 +554,31 @@ impl SwitchyardRuntime {
             };
             let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
             match next(routed).await {
-                Ok(response) => match translate_response(target_protocol, inbound, &response) {
-                    Ok(response) => {
-                        self.record_routing_contribution(&decision, attempt, true);
-                        return Ok(response);
+                Ok(response) => {
+                    match translate_response(&self.translation, target_protocol, inbound, &response)
+                    {
+                        Ok(response) => {
+                            self.record_routing_contribution(&decision, attempt, true);
+                            return Ok(response);
+                        }
+                        Err(error) => {
+                            self.emit_error(
+                                Some(&routing_request),
+                                attempt,
+                                "response_translation",
+                                &error.to_string(),
+                            );
+                            return self
+                                .dispatch_fallback_buffered(
+                                    inbound,
+                                    original,
+                                    next,
+                                    "translation_error",
+                                )
+                                .await;
+                        }
                     }
-                    Err(error) => {
-                        self.emit_error(
-                            Some(&routing_request),
-                            attempt,
-                            "response_translation",
-                            &error.to_string(),
-                        );
-                        return self
-                            .dispatch_fallback_buffered(
-                                inbound,
-                                original,
-                                next,
-                                "translation_error",
-                            )
-                            .await;
-                    }
-                },
+                }
                 Err(error) if error_is_retryable(&error) && attempt < max_attempts => {
                     let retry_reason = provider_error_summary(&error);
                     self.emit_error(Some(&routing_request), attempt, "provider", &retry_reason);
@@ -613,7 +618,7 @@ impl SwitchyardRuntime {
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if let Err(error) = validate_portable_request(inbound, &original) {
+        if let Err(error) = validate_portable_request(&self.translation, inbound, &original) {
             self.emit_error(
                 None,
                 0,
@@ -818,8 +823,8 @@ impl SwitchyardRuntime {
         let synthetic_session = format!("request-{}", Uuid::now_v7());
         let session_id = session.unwrap_or_else(|| synthetic_session.clone());
         let request_id = stable_request_id.unwrap_or_else(|| format!("request-{}", Uuid::now_v7()));
-        let annotated = decode_request(inbound, request)
-            .map_err(|error| format!("request codec failed: {error}"))?;
+        let annotated = decode_request(&self.translation, inbound, request)
+            .map_err(|error| format!("request translation decode failed: {error}"))?;
         let current_request = self.materialize(inbound, request, &annotated)?;
         let (previous_route, retry_reason) = previous.unzip();
         Ok(RoutingRequest {
@@ -864,9 +869,14 @@ impl SwitchyardRuntime {
                     .get("tools")
                     .and_then(Json::as_array)
                     .map(|tools| tools.len() as u64),
-                has_system_prompt: Some(annotated.messages.iter().any(|message| {
-                    matches!(message, nemo_relay::codec::request::Message::System { .. })
-                })),
+                has_system_prompt: Some(
+                    annotated.instructions.iter().any(|instruction| {
+                        instruction.role == switchyard_translation::Role::System
+                    }) || annotated
+                        .messages
+                        .iter()
+                        .any(|message| message.role == switchyard_translation::Role::System),
+                ),
             },
             current_request,
             attempt: DecisionAttempt {
@@ -882,7 +892,7 @@ impl SwitchyardRuntime {
         &self,
         inbound: WireProtocol,
         request: &LlmRequest,
-        annotated: &nemo_relay::codec::request::AnnotatedLlmRequest,
+        annotated: &switchyard_translation::ConversationRequest,
     ) -> Result<Option<Json>, String> {
         match self.config.request_materialization {
             RequestMaterialization::None | RequestMaterialization::SummaryOnly => Ok(None),
@@ -895,14 +905,14 @@ impl SwitchyardRuntime {
                 let prompt = latest_user_prompt(annotated)
                     .ok_or_else(|| "latest_user_prompt requires a user message".to_string())?;
                 let latest = recent_message_window(annotated, 1);
-                let body = encode_request(inbound, &latest, Map::new())
+                let body = encode_request(&self.translation, inbound, &latest, Map::new())
                     .map_err(|error| format!("latest user prompt encode failed: {error}"))?
                     .content;
                 Ok(Some(json!({"body": body, "latest_user_prompt": prompt})))
             }
             RequestMaterialization::RecentMessageWindow => {
                 let window = recent_message_window(annotated, self.config.recent_message_count);
-                let body = encode_request(inbound, &window, Map::new())
+                let body = encode_request(&self.translation, inbound, &window, Map::new())
                     .map_err(|error| format!("recent window encode failed: {error}"))?
                     .content;
                 Ok(Some(json!({"body": body, "annotated_request": window})))
@@ -994,13 +1004,18 @@ impl SwitchyardRuntime {
             .targets
             .get(&decision.route.backend_id)
             .ok_or_else(|| format!("unknown backend_id {:?}", decision.route.backend_id))?;
-        let annotated = decode_request(inbound, &request)
+        let annotated = decode_request(&self.translation, inbound, &request)
             .map_err(|error| format!("request decode failed: {error}"))?;
         let mut routed = if inbound == binding.protocol {
             request
         } else {
-            encode_request(binding.protocol, &annotated, request.headers)
-                .map_err(|error| format!("request translation failed: {error}"))?
+            encode_request(
+                &self.translation,
+                binding.protocol,
+                &annotated,
+                request.headers,
+            )
+            .map_err(|error| format!("request translation failed: {error}"))?
         };
         let object = routed
             .content
@@ -1492,8 +1507,13 @@ fn translated_stream(
                 }
             }
         }
-        for chunk in transcoder.finish() {
-            yield Ok(chunk);
+        match transcoder.finish() {
+            Ok(chunks) => {
+                for chunk in chunks {
+                    yield Ok(chunk);
+                }
+            }
+            Err(error) => yield Err(error),
         }
     })
 }
@@ -2126,6 +2146,7 @@ mod tests {
                         assert_eq!(current["latest_user_prompt"], "latest");
                         let body = current["body"].clone();
                         decode_request(
+                            &runtime.translation,
                             protocol,
                             &LlmRequest {
                                 headers: Map::new(),
@@ -2137,6 +2158,7 @@ mod tests {
                     RequestMaterialization::RecentMessageWindow => {
                         let current = routing.current_request.unwrap();
                         decode_request(
+                            &runtime.translation,
                             protocol,
                             &LlmRequest {
                                 headers: Map::new(),

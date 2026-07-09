@@ -7,7 +7,7 @@ set -euo pipefail
 relay_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$relay_root/examples/switchyard/e2e-common.sh"
 switchyard_root="${SWITCHYARD_ROOT:-$(cd "$relay_root/.." && pwd)/Switchyard-topic-nemo-relay-integration}"
-switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4}"
+switchyard_expected_commit="${SWITCHYARD_EXPECTED_COMMIT:-8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8}"
 work_dir="$(mktemp -d)"
 upstream_log="$work_dir/upstream.jsonl"
 token="$(e2e_random_token)"
@@ -41,7 +41,7 @@ e2e_add_pid "$!"
 (
   cd "$work_dir"
   SWITCHYARD_AUTHORIZATION="Bearer $token" cargo run \
-    --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli -- \
+    --manifest-path "$relay_root/Cargo.toml" -p nemo-relay-cli --features switchyard -- \
     --plugin-config-path "$relay_root/examples/switchyard/real-e2e-plugins.toml" \
     --bind 127.0.0.1:4041
 ) >"$work_dir/relay.log" 2>&1 &

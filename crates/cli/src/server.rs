@@ -21,6 +21,7 @@ use nemo_relay::plugin::{
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+#[cfg(feature = "switchyard")]
 use nemo_relay_switchyard::{
     register_switchyard_component, validate_switchyard_atof_configuration,
 };
@@ -344,6 +345,7 @@ impl PluginActivation {
         register_pii_redaction_component().map_err(|error| {
             CliError::Config(format!("PII redaction plugin registration failed: {error}"))
         })?;
+        #[cfg(feature = "switchyard")]
         register_switchyard_component().map_err(|error| {
             CliError::Config(format!("Switchyard plugin registration failed: {error}"))
         })?;
@@ -414,6 +416,7 @@ impl PluginActivation {
                         config: plugin.config,
                     }),
             );
+        #[cfg(feature = "switchyard")]
         validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
             CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
         })?;

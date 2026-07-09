@@ -5,10 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Switchyard Plugin
 
-`nemo-relay-switchyard` is an experimental Relay integration for the
-[Switchyard Decision API](https://github.com/NVIDIA-NeMo/Switchyard). Relay calls the
-Decision API at request time; the plugin does not currently link against Switchyard Rust
-crates or start the Switchyard service.
+`nemo-relay-switchyard` is an experimental Relay integration for
+[Switchyard](https://github.com/NVIDIA-NeMo/Switchyard). Relay calls the Decision API at request
+time and uses Switchyard's `switchyard-translation` Rust library for request, buffered-response,
+and SSE protocol translation. The plugin does not start the Switchyard service.
 
 ## Experimental setup
 
@@ -18,9 +18,15 @@ pinned Switchyard revision, worktree setup, E2E commands, and artifact handling.
 
 ## Configuration
 
-Enable the plugin in the Relay configuration. Relay owns provider URLs, credentials, exact target
-bindings, protocol translation, retries, and the trusted fallback. Switchyard returns a selected
-backend ID and routing metadata.
+Build the Relay CLI with the optional integration enabled:
+
+```bash
+cargo build -p nemo-relay-cli --features switchyard
+```
+
+Then enable the plugin in Relay configuration. Relay owns provider URLs, credentials, exact target
+bindings, dispatch, retries, and the trusted fallback. Switchyard owns routing decisions and
+provider-protocol translation.
 
 For ATOF-backed routing, configure an enabled HTTP ATOF exporter pointing at the Switchyard
 `/v1/atof/events` endpoint. `payload_only` profiles do not require ATOF history.
@@ -31,6 +37,7 @@ Run commands from the root of the NeMo Relay checkout:
 
 ```bash
 cargo test -p nemo-relay-switchyard
+cargo test -p nemo-relay-cli --features switchyard switchyard
 examples/switchyard/run-real-e2e.sh
 ```
 
@@ -46,6 +53,6 @@ The scripts generate ephemeral bearer tokens; no credential values are stored in
 
 ## Future direction
 
-This service boundary is intentional for the current experimental integration. A future
-Switchyard library-only implementation can provide an in-process DecisionProvider while retaining
-the same versioned request and decision contracts.
+The current routing boundary remains service-based because ATOF accumulation and the Decision API
+run in Switchyard. Translation is already library-based. A future in-process DecisionProvider can
+replace the service call while retaining the same versioned request and decision contracts.

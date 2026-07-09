@@ -54,7 +54,7 @@ e2e_random_token() {
 # another revision.
 e2e_verify_switchyard_checkout() {
   local root="$1"
-  local expected="${2:-5e61cb71ea94fe4f0d365bbc788c9011d42af2e4}"
+  local expected="${2:-8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8}"
   local actual
   actual="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || {
     echo "Switchyard worktree is not a git checkout: $root" >&2
