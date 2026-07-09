@@ -114,9 +114,6 @@ impl CompiledBuiltinBackend {
             }
         };
 
-        // Resolve the configured codec name to a provider surface once, then build
-        // the request/response codecs and the response-overlay key from it, so the
-        // accepted names stay in lockstep with the core factory.
         let surface = match codec_name.as_deref() {
             Some(name) => Some(ProviderSurface::from_codec_name(name).ok_or_else(|| {
                 PluginError::InvalidConfig(format!("unsupported codec '{name}'"))

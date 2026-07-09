@@ -2,10 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Provider-surface detection, best-effort normalization, and construction of
-//! the matching built-in codecs: the preferred path for turning raw provider
-//! JSON into normalized types, and the single source of truth for resolving a
-//! surface or codec name to a codec instance, when no codec annotation is
-//! present.
+//! the matching built-in codecs from a raw payload, surface, or codec name.
 
 use std::sync::Arc;
 
@@ -54,15 +51,9 @@ pub(crate) struct ProviderSurfaceDescriptor {
     pub(crate) detect_response: ResponseSurfaceDetector,
     pub(crate) decode_request: fn(&LlmRequest) -> Result<AnnotatedLlmRequest>,
     pub(crate) decode_response: fn(&Json) -> Result<AnnotatedLlmResponse>,
-    /// Canonical codec name for this surface (the `codec` config value and the
-    /// string key used by name-based codec dispatch in downstream crates). This
-    /// descriptor is the single source of truth for the name<->surface mapping.
     pub(crate) codec_name: &'static str,
-    /// Constructs the bidirectional request codec ([`LlmCodec`]) for this surface.
     pub(crate) request_codec: fn() -> Arc<dyn LlmCodec>,
-    /// Constructs the decode-only response codec ([`LlmResponseCodec`]) for this surface.
     pub(crate) response_codec: fn() -> Arc<dyn LlmResponseCodec>,
-    /// Constructs a fresh, single-use streaming codec ([`StreamingCodec`]) for this surface.
     pub(crate) streaming_codec: fn() -> Box<dyn StreamingCodec>,
 }
 
@@ -156,8 +147,6 @@ pub fn normalize_response(raw: &Json) -> Option<AnnotatedLlmResponse> {
     (descriptor.decode_response)(raw).ok()
 }
 
-/// The built-in descriptor for a surface. Every [`ProviderSurface`] variant has
-/// exactly one descriptor, so the match is total.
 fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescriptor {
     match surface {
         ProviderSurface::OpenAIChat => &openai_chat::PROVIDER_SURFACE,
@@ -167,10 +156,8 @@ fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescripto
 }
 
 impl ProviderSurface {
-    /// The canonical codec name for this surface (e.g. `"openai_chat"`).
-    ///
-    /// This is the string used by the `codec` config knob and by name-based
-    /// codec dispatch across crates; it round-trips with [`Self::from_codec_name`].
+    /// The canonical codec name for this surface (e.g. `"openai_chat"`), the
+    /// inverse of [`Self::from_codec_name`].
     #[must_use]
     pub fn codec_name(self) -> &'static str {
         descriptor_for(self).codec_name
@@ -187,11 +174,8 @@ impl ProviderSurface {
     }
 }
 
-/// The canonical codec names of every built-in provider surface, in
-/// request-detection priority order.
-///
-/// Use this for config validation and user-facing "supported codec" messages so
-/// the accepted set never drifts from the codecs the runtime can construct.
+/// The canonical codec names of every built-in provider surface, for config
+/// validation and "supported codec" messages.
 #[must_use]
 pub fn supported_codec_names() -> Vec<&'static str> {
     BUILTIN_PROVIDER_SURFACES

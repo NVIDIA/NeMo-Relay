@@ -249,8 +249,6 @@ struct RouteCodecs {
 }
 
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
-    // Routes with a typed provider surface get the built-in codecs from the core
-    // factory; count_tokens/models emit LLM events but have no codec.
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
             streaming: Some(build_streaming_codec(surface)),
@@ -950,8 +948,6 @@ impl ProviderRoute {
         }
     }
 
-    // Maps a route to its built-in codec surface, or `None` for routes that emit LLM events but
-    // have no typed request/response codec (count_tokens, models).
     const fn provider_surface(self) -> Option<ProviderSurface> {
         match self {
             Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),

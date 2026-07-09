@@ -427,7 +427,6 @@ fn codec_name_uses_canonical_spellings() {
 
 #[test]
 fn from_codec_name_is_none_for_unknown_names() {
-    // Unknown providers, empty strings, and non-canonical spellings do not match.
     assert_eq!(ProviderSurface::from_codec_name("gemini"), None);
     assert_eq!(ProviderSurface::from_codec_name(""), None);
     assert_eq!(ProviderSurface::from_codec_name("OpenAIChat"), None);
@@ -435,9 +434,6 @@ fn from_codec_name_is_none_for_unknown_names() {
 
 #[test]
 fn supported_codec_names_track_the_builtin_registry() {
-    // The advertised set is exactly the built-in surfaces' names, in the same
-    // request-detection priority order, so it never drifts from the codecs the
-    // factory can actually construct.
     assert_eq!(
         supported_codec_names(),
         vec!["openai_responses", "anthropic_messages", "openai_chat"]
@@ -527,9 +523,6 @@ fn response_codec_decodes_each_surface() {
 
 #[test]
 fn streaming_codec_round_trips_through_its_response_codec() {
-    // The streaming codec must assemble a payload the matching response codec can
-    // decode, proving the factory wires the streaming and response codecs of the
-    // same surface together.
     let codec = streaming_codec(ProviderSurface::OpenAIChat);
     let mut collect = codec.collector();
     collect(json!({
