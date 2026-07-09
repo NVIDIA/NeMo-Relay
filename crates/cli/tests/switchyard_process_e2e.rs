@@ -268,6 +268,8 @@ base_url = "{provider_url}"
     let decisions = decision_requests.lock().unwrap();
     assert_eq!(decisions.len(), 3);
     for (headers, body) in decisions.iter() {
+        assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
+        assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
         assert_eq!(
             headers
                 .get("x-nemo-relay-session-id")
