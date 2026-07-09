@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import cast
 
 import pytest
@@ -11,15 +12,17 @@ import nemo_relay
 from nemo_relay import EventSanitizeFields, guardrails, plugin, scope, scope_local, subscribers
 
 
-def _capture_events():
-    events = []
+@pytest.fixture(name="capture_events")
+def capture_events_fixture() -> Iterator[tuple[str, list[nemo_relay.Event]]]:
+    events: list[nemo_relay.Event] = []
     name = "test-event-sanitizer-capture"
     subscribers.register(name, events.append)
-    return name, events
+    yield name, events
+    subscribers.deregister(name)
 
 
-def test_global_mark_sanitizers_order_convert_fields_and_remove_values() -> None:
-    capture_name, events = _capture_events()
+def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_events):
+    _capture_name, events = capture_events
     calls: list[tuple[str, object]] = []
 
     def first(event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
@@ -46,7 +49,6 @@ def test_global_mark_sanitizers_order_convert_fields_and_remove_values() -> None
     finally:
         guardrails.deregister_mark_sanitize("python-mark-first")
         guardrails.deregister_mark_sanitize("python-mark-second")
-        subscribers.deregister(capture_name)
 
     mark = events[-1]
     assert mark.data == {"stage": "second"}
@@ -54,8 +56,8 @@ def test_global_mark_sanitizers_order_convert_fields_and_remove_values() -> None
     assert calls == [("checkpoint", {"secret": "raw"}), ("mark", {"stage": "first"})]
 
 
-def test_invalid_mark_sanitizer_result_fails_open() -> None:
-    capture_name, events = _capture_events()
+def test_invalid_mark_sanitizer_result_fails_open(capture_events):
+    _capture_name, events = capture_events
     guardrails.register_mark_sanitize(
         "python-mark-invalid",
         0,
@@ -66,13 +68,12 @@ def test_invalid_mark_sanitizer_result_fails_open() -> None:
         subscribers.flush()
     finally:
         guardrails.deregister_mark_sanitize("python-mark-invalid")
-        subscribers.deregister(capture_name)
 
     assert events[-1].data == {"kept": True}
 
 
-def test_scope_start_and_end_sanitizers_cover_category_profile() -> None:
-    capture_name, events = _capture_events()
+def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):
+    _capture_name, events = capture_events
 
     def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
         profile = dict(fields["category_profile"] or {})
@@ -94,7 +95,6 @@ def test_scope_start_and_end_sanitizers_cover_category_profile() -> None:
     finally:
         guardrails.deregister_scope_sanitize_start("python-scope-start")
         guardrails.deregister_scope_sanitize_end("python-scope-end")
-        subscribers.deregister(capture_name)
 
     lifecycle = [event for event in events if event.name == "generic"]
     assert len(lifecycle) == 2
@@ -103,8 +103,8 @@ def test_scope_start_and_end_sanitizers_cover_category_profile() -> None:
     assert all(event.category_profile["subtype"] == "sanitized" for event in lifecycle)
 
 
-def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up() -> None:
-    capture_name, events = _capture_events()
+def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up(capture_events):
+    _capture_name, events = capture_events
 
     def sanitize(_event: nemo_relay.Event, fields: EventSanitizeFields) -> EventSanitizeFields:
         return {
@@ -114,15 +114,18 @@ def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up() -> None:
         }
 
     owner = scope.push("owner", nemo_relay.ScopeType.Agent)
-    scope_local.register_mark_sanitize(owner, "python-local-mark", 0, sanitize)
-    scope.event("inside", data={"raw": True})
-    child = scope.push("child", nemo_relay.ScopeType.Function)
-    scope.event("inherited", data={"raw": True})
-    scope.pop(child)
-    scope.pop(owner)
+    try:
+        scope_local.register_mark_sanitize(owner, "python-local-mark", 0, sanitize)
+        scope.event("inside", data={"raw": True})
+        child = scope.push("child", nemo_relay.ScopeType.Function)
+        try:
+            scope.event("inherited", data={"raw": True})
+        finally:
+            scope.pop(child)
+    finally:
+        scope.pop(owner)
     scope.event("outside", data={"raw": True})
     subscribers.flush()
-    subscribers.deregister(capture_name)
 
     marks = {event.name: event for event in events if event.kind == "mark"}
     assert marks["inside"].data == {"scope_local": True}
@@ -130,7 +133,7 @@ def test_scope_local_event_sanitizers_are_inherited_and_cleaned_up() -> None:
     assert marks["outside"].data == {"raw": True}
 
 
-async def test_in_process_plugin_event_sanitizers_are_removed_on_clear() -> None:
+async def test_in_process_plugin_event_sanitizers_are_removed_on_clear(capture_events):
     class EventPlugin:
         def validate(self, _config):
             return None
@@ -146,7 +149,7 @@ async def test_in_process_plugin_event_sanitizers_are_removed_on_clear() -> None
             context.register_mark_sanitize_guardrail("mark", 0, sanitize)
 
     kind = "python.test_event_sanitizer"
-    capture_name, events = _capture_events()
+    _capture_name, events = capture_events
     plugin.register(kind, cast(plugin.Plugin, EventPlugin()))
     try:
         await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
@@ -158,14 +161,13 @@ async def test_in_process_plugin_event_sanitizers_are_removed_on_clear() -> None
     finally:
         plugin.clear()
         plugin.deregister(kind)
-        subscribers.deregister(capture_name)
 
     marks = {event.name: event for event in events if event.kind == "mark"}
     assert marks["configured"].data == {"plugin": True}
     assert marks["cleared"].data == {"raw": True}
 
 
-async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fails() -> None:
+async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fails(capture_events):
     class FailingPlugin:
         def validate(self, _config):
             return None
@@ -183,15 +185,12 @@ async def test_in_process_plugin_rolls_back_event_sanitizer_when_registration_fa
 
     kind = "python.test_event_sanitizer_rollback"
     plugin.register(kind, cast(plugin.Plugin, FailingPlugin()))
+    _capture_name, events = capture_events
     try:
         with pytest.raises(RuntimeError, match="registration failed"):
             await plugin.initialize(plugin.PluginConfig(components=[plugin.ComponentSpec(kind=kind)]))
-        capture_name, events = _capture_events()
-        try:
-            scope.event("after-failure", data={"raw": True})
-            subscribers.flush()
-        finally:
-            subscribers.deregister(capture_name)
+        scope.event("after-failure", data={"raw": True})
+        subscribers.flush()
         assert events[-1].data == {"raw": True}
     finally:
         plugin.clear()

@@ -432,7 +432,9 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
 class _Handlers:
     registrations: list[Any]
     subscribers: dict[str, SubscriberCallback]
-    event_sanitizers: dict[str, EventSanitizeCallback]
+    mark_sanitizers: dict[str, EventSanitizeCallback]
+    scope_start_sanitizers: dict[str, EventSanitizeCallback]
+    scope_end_sanitizers: dict[str, EventSanitizeCallback]
     tool_sanitize_requests: dict[str, ToolSanitizeCallback]
     tool_sanitize_responses: dict[str, ToolSanitizeCallback]
     tool_conditionals: dict[str, ToolConditionalCallback]
@@ -450,7 +452,9 @@ class _Handlers:
         return cls(
             registrations=[],
             subscribers={},
-            event_sanitizers={},
+            mark_sanitizers={},
+            scope_start_sanitizers={},
+            scope_end_sanitizers={},
             tool_sanitize_requests={},
             tool_sanitize_responses={},
             tool_conditionals={},
@@ -521,27 +525,76 @@ class PluginContext:
         callback: EventSanitizeCallback,
         surface: int,
         priority: int,
+        handlers: dict[str, EventSanitizeCallback],
     ) -> None:
         self._push_registration(name, surface, priority, False)
-        self._handlers.event_sanitizers[name] = callback
+        handlers[name] = callback
 
     def register_mark_sanitize_guardrail(
         self, name: str, callback: EventSanitizeCallback, *, priority: int = 0
     ) -> None:
-        """Register a sanitizer for mark event observability fields."""
-        self._register_event_sanitizer(name, callback, pb.MARK_SANITIZE_GUARDRAIL, priority)
+        """Register a sanitizer for mark event observability fields.
+
+        Args:
+            name: Component-local registration name.
+            callback: Function receiving the event and its observability fields.
+                It can return sanitized fields directly or through an awaitable.
+            priority: Execution order. Lower values run first.
+
+        Callback errors:
+            An exception becomes a structured worker invocation error.
+        """
+        self._register_event_sanitizer(
+            name,
+            callback,
+            pb.MARK_SANITIZE_GUARDRAIL,
+            priority,
+            self._handlers.mark_sanitizers,
+        )
 
     def register_scope_sanitize_start_guardrail(
         self, name: str, callback: EventSanitizeCallback, *, priority: int = 0
     ) -> None:
-        """Register a sanitizer for scope start event observability fields."""
-        self._register_event_sanitizer(name, callback, pb.SCOPE_SANITIZE_START_GUARDRAIL, priority)
+        """Register a sanitizer for scope start event observability fields.
+
+        Args:
+            name: Component-local registration name.
+            callback: Function receiving the event and its observability fields.
+                It can return sanitized fields directly or through an awaitable.
+            priority: Execution order. Lower values run first.
+
+        Callback errors:
+            An exception becomes a structured worker invocation error.
+        """
+        self._register_event_sanitizer(
+            name,
+            callback,
+            pb.SCOPE_SANITIZE_START_GUARDRAIL,
+            priority,
+            self._handlers.scope_start_sanitizers,
+        )
 
     def register_scope_sanitize_end_guardrail(
         self, name: str, callback: EventSanitizeCallback, *, priority: int = 0
     ) -> None:
-        """Register a sanitizer for scope end event observability fields."""
-        self._register_event_sanitizer(name, callback, pb.SCOPE_SANITIZE_END_GUARDRAIL, priority)
+        """Register a sanitizer for scope end event observability fields.
+
+        Args:
+            name: Component-local registration name.
+            callback: Function receiving the event and its observability fields.
+                It can return sanitized fields directly or through an awaitable.
+            priority: Execution order. Lower values run first.
+
+        Callback errors:
+            An exception becomes a structured worker invocation error.
+        """
+        self._register_event_sanitizer(
+            name,
+            callback,
+            pb.SCOPE_SANITIZE_END_GUARDRAIL,
+            priority,
+            self._handlers.scope_end_sanitizers,
+        )
 
     def register_tool_sanitize_request_guardrail(
         self,
@@ -1466,22 +1519,20 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 await _maybe_await(self._handler(self._handlers.subscribers, request.registration_name)(event))
                 return pb.InvokeResponse(empty=pb.EmptyResult())
-            if request.surface in {
-                pb.MARK_SANITIZE_GUARDRAIL,
-                pb.SCOPE_SANITIZE_START_GUARDRAIL,
-                pb.SCOPE_SANITIZE_END_GUARDRAIL,
-            }:
+            event_sanitizer_handlers = {
+                pb.MARK_SANITIZE_GUARDRAIL: self._handlers.mark_sanitizers,
+                pb.SCOPE_SANITIZE_START_GUARDRAIL: self._handlers.scope_start_sanitizers,
+                pb.SCOPE_SANITIZE_END_GUARDRAIL: self._handlers.scope_end_sanitizers,
+            }
+            if request.surface in event_sanitizer_handlers:
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 fields: EventSanitizeFields = {
                     "data": event.get("data"),
                     "category_profile": event.get("category_profile"),
                     "metadata": event.get("metadata"),
                 }
-                return _json_response(
-                    await _maybe_await(
-                        self._handler(self._handlers.event_sanitizers, request.registration_name)(event, fields)
-                    )
-                )
+                handler = self._handler(event_sanitizer_handlers[request.surface], request.registration_name)
+                return _json_response(await _maybe_await(handler(event, fields)))
             if request.surface == pb.TOOL_SANITIZE_REQUEST_GUARDRAIL:
                 return _json_response(
                     await _maybe_await(
