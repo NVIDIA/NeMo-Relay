@@ -15,10 +15,9 @@ use crate::error::CliError;
 // (the transparent-run temp plugin and the marketplace plugin) are plugin hooks.json, so every
 // event here must exist in the oldest supported Claude Code. UserPromptExpansion sets that
 // floor: 2.1.116 (verified empirically; 2.1.114 rejects it — see `claude_hook_floor_warning`
-// in doctor.rs). Codex 0.129 has a smaller subset (SessionStart, UserPromptSubmit, PreToolUse,
-// PostToolUse, Stop, PreCompact, PostCompact, PermissionRequest) and silently ignores events
-// it doesn't recognize, so the union list is safe for both agents.
-const HOOK_EVENTS: &[&str] = &[
+// in doctor.rs). Codex receives a separate event schema because ignored unknown events would make
+// generated hooks impossible to discover and trust exhaustively.
+const CLAUDE_HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
     "UserPromptExpansion",
@@ -33,6 +32,19 @@ const HOOK_EVENTS: &[&str] = &[
     "PreCompact",
     "PostCompact",
     "SessionEnd",
+];
+
+const CODEX_HOOK_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PermissionRequest",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "PreCompact",
+    "PostCompact",
 ];
 
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
@@ -219,11 +231,11 @@ pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> Stri
 }
 
 fn claude_hooks(command: &str) -> Value {
-    hooks_for_events(HOOK_EVENTS, command, true)
+    hooks_for_events(CLAUDE_HOOK_EVENTS, command, true)
 }
 
 fn codex_hooks(command: &str) -> Value {
-    hooks_for_events(HOOK_EVENTS, command, true)
+    hooks_for_events(CODEX_HOOK_EVENTS, command, true)
 }
 
 // Generates Hermes YAML-compatible hook groups. Hermes expects direct command entries rather than

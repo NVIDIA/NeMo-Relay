@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -319,10 +318,11 @@ fn verify_signature(
     let signature_path = resolve_artifact_path(manifest_ref, signature_ref);
     let signature_bytes = read_signature_bytes(&signature_path)?;
     let artifact_bytes =
-        fs::read(artifact_path).map_err(|error| DynamicPluginTrustFailure::ArtifactRead {
-            path: artifact_path.to_path_buf(),
-            error: error.to_string(),
-        })?;
+        crate::config::read_bounded_regular_file(artifact_path, "dynamic plugin artifact")
+            .map_err(|error| DynamicPluginTrustFailure::ArtifactRead {
+                path: artifact_path.to_path_buf(),
+                error,
+            })?;
 
     let mut parse_errors = Vec::new();
     for trusted_public_key in trusted_public_keys {
@@ -348,10 +348,12 @@ fn verify_signature(
 }
 
 fn read_signature_bytes(path: &Path) -> TrustResult<Vec<u8>> {
-    let raw = fs::read(path).map_err(|error| DynamicPluginTrustFailure::SignatureRead {
-        path: path.to_path_buf(),
-        error: error.to_string(),
-    })?;
+    let raw = crate::config::read_bounded_regular_file(path, "dynamic plugin signature").map_err(
+        |error| DynamicPluginTrustFailure::SignatureRead {
+            path: path.to_path_buf(),
+            error,
+        },
+    )?;
     let trimmed = String::from_utf8_lossy(&raw).trim().to_owned();
     if trimmed.is_empty() {
         return Err(DynamicPluginTrustFailure::SignatureRead {
@@ -400,9 +402,11 @@ fn resolve_artifact_path(manifest_ref: &str, artifact_ref: &str) -> PathBuf {
 }
 
 fn file_sha256(path: &Path) -> Result<String, std::io::Error> {
-    let bytes = fs::read(path)?;
     let mut digest = Sha256::new();
-    digest.update(&bytes);
+    crate::config::stream_bounded_regular_file(path, "dynamic plugin artifact", |bytes| {
+        digest.update(bytes);
+    })
+    .map_err(std::io::Error::other)?;
     Ok(format!(
         "sha256:{}",
         digest

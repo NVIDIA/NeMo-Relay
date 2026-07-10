@@ -14,10 +14,91 @@ use crate::config::{
 };
 use crate::error::PluginLifecycleFailureKind;
 use base64::Engine;
-use nemo_relay::plugin::dynamic::DynamicPluginFailurePhase;
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginFailurePhase, WorkerPluginLoadSpec, load_worker_plugins,
+};
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
+
+#[cfg(unix)]
+#[test]
+fn python_venv_launcher_detection_only_preserves_bin_python_links() {
+    assert!(is_python_venv_launcher(Path::new("env/bin/python")));
+    assert!(is_python_venv_launcher(Path::new("env/bin/python3.11")));
+    assert!(!is_python_venv_launcher(Path::new("env/bin/pip")));
+    assert!(!is_python_venv_launcher(Path::new("env/lib/python3.11")));
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_protection_does_not_follow_python_launcher_symlink() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("external-python");
+    std::fs::write(&target, b"python").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let root = temp.path().join("snapshot");
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    symlink(&target, bin.join("python")).unwrap();
+
+    protect_snapshot_tree(&root).unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(bin.join("python"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    make_snapshot_removable(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_digest_hashes_python_launcher_symlink_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("snapshot");
+    let bin = root
+        .join(MANAGED_ENVIRONMENTS_DIR)
+        .join("environment")
+        .join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let launcher = bin.join("python");
+    symlink("/missing/python-a", &launcher).unwrap();
+
+    let first_verification = snapshot_tree_digest(&root, false).unwrap();
+    let first_identity = snapshot_tree_digest(&root, true).unwrap();
+
+    std::fs::remove_file(&launcher).unwrap();
+    std::fs::write(&launcher, b"/missing/python-a").unwrap();
+    assert_ne!(
+        first_verification,
+        snapshot_tree_digest(&root, false).unwrap(),
+        "a regular file must not collide with an equivalent symlink target"
+    );
+
+    std::fs::remove_file(&launcher).unwrap();
+    symlink("/missing/python-b", &launcher).unwrap();
+
+    assert_ne!(
+        first_verification,
+        snapshot_tree_digest(&root, false).unwrap(),
+        "verification must include the exact launcher target"
+    );
+    assert_eq!(
+        first_identity,
+        snapshot_tree_digest(&root, true).unwrap(),
+        "managed environment contents are excluded from stable gateway identity"
+    );
+}
 
 struct CurrentDirGuard {
     original: PathBuf,
@@ -592,6 +673,450 @@ fn tracked_native_plugin_example_rejects_tampered_artifact() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn activation_snapshot_never_rereads_replaced_or_oversized_worker_code() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    let worker_dir = temp.path().join("worker-runtime");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&worker_dir).unwrap();
+    let artifact_path = worker_dir.join("worker.sh");
+    let safe_worker = "#!/bin/sh\nexit 1\n".to_string();
+    std::fs::write(&artifact_path, &safe_worker).unwrap();
+    std::fs::write(worker_dir.join("resource.txt"), b"expected\n").unwrap();
+    std::fs::set_permissions(&artifact_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let digest = Sha256::digest(safe_worker.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let manifest_path = plugin_dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = "acme.snapshot-race"
+kind = "worker"
+
+[compat]
+relay = "0.5"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+artifact = "../worker-runtime/worker.sh"
+
+[integrity]
+sha256 = "sha256:{digest}"
+
+[load]
+runtime = "command"
+entrypoint = "../worker-runtime/worker.sh"
+"#
+        ),
+    )
+    .unwrap();
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.snapshot-race",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(snapshot.root.join("external-entrypoint/resource.txt")).unwrap(),
+        b"expected\n"
+    );
+    let (activation_manifest, _) =
+        DynamicPluginManifest::load_from_path(PathBuf::from(snapshot.activation_manifest_ref()))
+            .unwrap();
+    let activation_artifact = activation_manifest
+        .source
+        .as_ref()
+        .and_then(|source| source.artifact.as_deref())
+        .unwrap();
+    let DynamicPluginManifestLoad::Worker(activation_load) = &activation_manifest.load else {
+        panic!("command activation must retain a worker load contract");
+    };
+    assert_eq!(
+        Some(activation_artifact),
+        activation_load.entrypoint.as_deref(),
+        "the integrity-checked artifact and executed entrypoint must be one snapshot file"
+    );
+    let source_closure_digest =
+        dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None)
+            .unwrap();
+    assert_eq!(snapshot.closure_digest(), source_closure_digest);
+
+    let marker = temp.path().join("replaced-worker-executed");
+    std::fs::write(
+        &artifact_path,
+        format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&artifact_path)
+        .unwrap()
+        .set_len(crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .unwrap();
+    std::fs::set_permissions(&artifact_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(&manifest_path, b"not valid TOML").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&manifest_path)
+        .unwrap()
+        .set_len(crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .unwrap();
+
+    let error = match load_worker_plugins(vec![WorkerPluginLoadSpec {
+        plugin_id: "acme.snapshot-race".into(),
+        manifest_ref: snapshot.activation_manifest_ref(),
+        environment_ref: None,
+        config: Map::new(),
+    }]) {
+        Ok(_) => panic!("safe snapshot worker unexpectedly activated"),
+        Err(error) => error.to_string(),
+    };
+
+    assert!(
+        !marker.exists(),
+        "the replaced original worker was executed"
+    );
+    assert!(!error.contains("invalid relay-plugin.toml"), "{error}");
+    assert!(!error.contains("exceeds the"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn activation_snapshot_detects_mutation_of_the_runtime_copy() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let manifest_path = write_native_dynamic_manifest(temp.path(), "acme.snapshot-mutation");
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.snapshot-mutation",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&snapshot.root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(
+        snapshot.activation_manifest.parent().unwrap(),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &snapshot.activation_manifest,
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    std::fs::write(&snapshot.activation_manifest, b"replaced").unwrap();
+
+    let error = snapshot.verify_current().unwrap_err().to_string();
+    assert!(error.contains("changed before code load"), "{error}");
+}
+
+#[test]
+fn activation_snapshot_keeps_adjacent_native_dependencies_for_external_load_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let manifest_dir = temp.path().join("plugin");
+    let native_dir = temp.path().join("native-runtime");
+    std::fs::create_dir_all(&manifest_dir).unwrap();
+    std::fs::create_dir_all(&native_dir).unwrap();
+    let library = native_dir.join("libfixture_native.so");
+    let library_bytes = b"native plugin fixture";
+    std::fs::write(&library, library_bytes).unwrap();
+    std::fs::write(
+        native_dir.join("libadjacent_dependency.so"),
+        b"adjacent dependency",
+    )
+    .unwrap();
+    let digest = Sha256::digest(library_bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let manifest_path = manifest_dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = "acme.external-native-closure"
+kind = "rust_dynamic"
+
+[compat]
+relay = "0.5"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native"]
+
+[source]
+artifact = "../native-runtime/libfixture_native.so"
+
+[integrity]
+sha256 = "sha256:{digest}"
+
+[load]
+library = "../native-runtime/libfixture_native.so"
+symbol = "nemo_relay_fixture_native_plugin"
+"#,
+        ),
+    )
+    .unwrap();
+
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.external-native-closure",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+
+    assert!(
+        snapshot
+            .root
+            .join("external-library/libadjacent_dependency.so")
+            .is_file()
+    );
+    assert_eq!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None)
+            .unwrap()
+    );
+}
+
+#[test]
+fn activation_snapshot_and_python_attestation_enforce_exact_directory_depth_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugin_dir = temp.path().join("deep-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, "acme.deep-closure");
+    let mut deep_plugin_path = plugin_dir.clone();
+    for _ in 1..MAX_SNAPSHOT_DEPTH {
+        deep_plugin_path.push("d");
+    }
+    std::fs::create_dir_all(&deep_plugin_path).unwrap();
+
+    dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None).unwrap();
+    DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.deep-closure",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+
+    deep_plugin_path.push("too-deep");
+    std::fs::create_dir(&deep_plugin_path).unwrap();
+
+    let error =
+        dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None)
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("traversal depth"), "{error}");
+
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.deep-closure",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("traversal depth"), "{error}");
+
+    let environment_path = temp.path().join("deep-environment");
+    let mut deep_environment_path = environment_path.clone();
+    for _ in 1..environment::MAX_ENVIRONMENT_DEPTH {
+        deep_environment_path.push("d");
+    }
+    std::fs::create_dir_all(&deep_environment_path).unwrap();
+    environment::write_environment_attestation(&environment_path, "sha256:fixture-source-artifact")
+        .unwrap();
+
+    deep_environment_path.push("too-deep");
+    std::fs::create_dir(&deep_environment_path).unwrap();
+    let error = environment::write_environment_attestation(
+        &environment_path,
+        "sha256:fixture-source-artifact",
+    )
+    .unwrap_err();
+    assert!(error.contains("traversal depth"), "{error}");
+}
+
+#[test]
+fn runtime_directory_collection_rejects_before_exceeding_bounded_sort_capacity() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["one", "two", "three"] {
+        std::fs::write(temp.path().join(name), name).unwrap();
+    }
+
+    let error = bounded_runtime_directory_entries(temp.path(), 2)
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("entry activation snapshot budget"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_environment_entry_budget_counts_skipped_cache_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(temp.path().join("ignored.pyc"), b"cache").unwrap();
+    std::fs::write(temp.path().join("module.py"), b"module").unwrap();
+    std::fs::write(temp.path().join("metadata.txt"), b"metadata").unwrap();
+
+    let error =
+        environment::test_environment_tree_digest_with_entry_limit(temp.path(), 2).unwrap_err();
+
+    assert!(error.contains("2-entry attestation budget"), "{error}");
+}
+
+#[test]
+fn python_activation_snapshot_is_attested_copied_and_tamper_evident() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let plugin_dir = temp.path().join("python-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_python_dynamic_manifest(&plugin_dir, "acme.python-snapshot");
+    let environment_name = Sha256::digest(b"acme.python-snapshot")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let environment_path = temp
+        .path()
+        .join(environment::MANAGED_ENVIRONMENTS_DIR)
+        .join(environment_name);
+    let interpreter = environment::environment_python_path(&environment_path);
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    std::fs::write(&interpreter, b"attested interpreter").unwrap();
+    let installed_module = environment_path
+        .join("site-packages")
+        .join("plugin-data.txt");
+    std::fs::create_dir_all(installed_module.parent().unwrap()).unwrap();
+    std::fs::write(&installed_module, b"safe installed module").unwrap();
+    let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+    let source_artifact_sha256 = manifest
+        .integrity
+        .as_ref()
+        .and_then(|integrity| integrity.sha256.as_deref())
+        .unwrap();
+    environment::write_environment_attestation(&environment_path, source_artifact_sha256).unwrap();
+
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.python-snapshot",
+        DynamicPluginKind::Worker,
+        Some(environment_path.to_string_lossy().as_ref()),
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+    let source_closure_digest = dynamic_plugin_runtime_closure_digest(
+        manifest_path.to_string_lossy().as_ref(),
+        Some(environment_path.to_string_lossy().as_ref()),
+    )
+    .unwrap();
+    assert_eq!(snapshot.closure_digest(), source_closure_digest);
+    let copied_environment = PathBuf::from(snapshot.activation_environment_ref().unwrap());
+    assert_ne!(copied_environment, environment_path);
+    assert_eq!(
+        copied_environment.parent().unwrap().file_name(),
+        Some(OsStr::new(environment::MANAGED_ENVIRONMENTS_DIR))
+    );
+    assert_eq!(copied_environment.file_name(), environment_path.file_name());
+    assert_eq!(
+        std::fs::read(copied_environment.join("site-packages/plugin-data.txt")).unwrap(),
+        b"safe installed module"
+    );
+    let load_error = match load_worker_plugins(vec![WorkerPluginLoadSpec {
+        plugin_id: "acme.python-snapshot".into(),
+        manifest_ref: snapshot.activation_manifest_ref(),
+        environment_ref: snapshot.activation_environment_ref().map(ToOwned::to_owned),
+        config: Map::new(),
+    }]) {
+        Ok(_) => panic!("fixture Python worker unexpectedly activated"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        !load_error.contains("not the lifecycle-managed path"),
+        "{load_error}"
+    );
+
+    std::fs::write(&installed_module, b"tampered installed module").unwrap();
+
+    assert!(
+        environment::verify_environment_attestation(&environment_path, source_artifact_sha256)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(copied_environment.join("site-packages/plugin-data.txt")).unwrap(),
+        b"safe installed module"
+    );
+    snapshot.verify_current().unwrap();
+    dynamic_plugin_runtime_closure_digest(
+        manifest_path.to_string_lossy().as_ref(),
+        Some(environment_path.to_string_lossy().as_ref()),
+    )
+    .expect("hook preflight should authenticate the attestation without rehashing the environment");
+    let changed_error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.python-snapshot",
+        DynamicPluginKind::Worker,
+        Some(environment_path.to_string_lossy().as_ref()),
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        changed_error.contains("changed after provisioning"),
+        "{changed_error}"
+    );
+    let attestation_path = environment_path.join(environment::ENVIRONMENT_ATTESTATION_FILE);
+    let mut forged: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&attestation_path).unwrap()).unwrap();
+    forged["environment_sha256"] =
+        serde_json::json!(environment::environment_tree_digest(&environment_path).unwrap());
+    std::fs::write(
+        &attestation_path,
+        serde_json::to_vec_pretty(&forged).unwrap(),
+    )
+    .unwrap();
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.python-snapshot",
+        DynamicPluginKind::Worker,
+        Some(environment_path.to_string_lossy().as_ref()),
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("failed authentication"), "{error}");
+}
+
 #[test]
 fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
@@ -1097,6 +1622,72 @@ fn add_requires_manifest_root_for_python_workers() {
     assert_eq!(code, Some("environment_failed"));
     assert!(message.contains("source.manifest_root"));
     assert!(runner.calls().is_empty());
+}
+
+#[test]
+fn add_rejects_python_entrypoint_module_that_is_not_integrity_checked_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("python");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_python_dynamic_manifest(&plugin_dir, "acme.unsigned-entrypoint");
+    std::fs::write(
+        plugin_dir.join("unsigned_sibling.py"),
+        b"def main(): pass\n",
+    )
+    .unwrap();
+    let contents = std::fs::read_to_string(&manifest).unwrap().replace(
+        "entrypoint = \"plugin:main\"",
+        "entrypoint = \"unsigned_sibling:main\"",
+    );
+    std::fs::write(&manifest, contents).unwrap();
+    let runner = FakePythonEnvironmentRunner::default();
+
+    let error = add_with_environment_runner(
+        PluginsAddCommand {
+            scope: PluginsScopeArgs {
+                project: true,
+                ..PluginsScopeArgs::default()
+            },
+            path: plugin_dir,
+        },
+        &ServerArgs::default(),
+        &runner,
+    )
+    .expect_err("an unsigned sibling module must not become the executed entrypoint");
+
+    let (_, _, kind, code, message) = error
+        .as_plugin_lifecycle_error_context()
+        .expect("environment refusal should be structured");
+    assert_eq!(kind, PluginLifecycleFailureKind::Failed);
+    assert_eq!(code, Some("environment_failed"));
+    assert!(message.contains("executed entrypoint module"), "{message}");
+    assert!(message.contains("integrity-checked artifact"), "{message}");
+    assert!(runner.calls().is_empty());
+}
+
+#[test]
+fn activation_snapshot_rejects_ambiguous_python_entrypoint_module() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("python-plugin");
+    std::fs::create_dir_all(plugin_dir.join("plugin")).unwrap();
+    let manifest = write_python_dynamic_manifest(&plugin_dir, "acme.ambiguous-entrypoint");
+    std::fs::write(plugin_dir.join("plugin/__init__.py"), b"def main(): pass\n").unwrap();
+
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.ambiguous-entrypoint",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("exactly one source module"), "{error}");
+    assert!(error.contains("plugin.py"), "{error}");
+    assert!(error.contains("__init__.py"), "{error}");
 }
 
 #[test]

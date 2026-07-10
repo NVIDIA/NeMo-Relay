@@ -7,6 +7,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use semver::Version;
 use serde_json::Value;
 
 #[cfg(test)]
@@ -14,12 +15,12 @@ use serde_json::json;
 
 use crate::config::PluginHost;
 
-use super::state::{PluginInstallOptions, PluginLayout};
+use super::state::PluginInstallOptions;
 use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND, host_cli};
 
 pub(super) fn run_host_marketplace_registration(
     host: PluginHost,
-    layout: &PluginLayout,
+    marketplace_root: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
@@ -29,7 +30,7 @@ pub(super) fn run_host_marketplace_registration(
             "plugin".into(),
             "marketplace".into(),
             "add".into(),
-            layout.marketplace_root.display().to_string(),
+            marketplace_root.display().to_string(),
         ],
         options,
         runner,
@@ -291,8 +292,9 @@ pub(super) fn require_relay(
         return Ok(PathBuf::from(RELAY_COMMAND));
     }
     runner
-        .resolve_executable(RELAY_COMMAND)?
-        .ok_or_else(|| "required `nemo-relay` executable was not found on PATH".into())
+        .current_executable()
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(crate::plugin_shim::portable_executable_path)
 }
 
 pub(super) fn validate_relay_plugin_shim(
@@ -315,6 +317,26 @@ pub(super) fn validate_relay_plugin_shim(
     }
 }
 
+pub(super) fn validate_relay_mcp(
+    relay: &Path,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<(), String> {
+    if options.dry_run {
+        return Ok(());
+    }
+    let args = ["mcp".into(), "--help".into()];
+    let status = runner.run_quiet(relay, &args)?;
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} failed with exit code {status}; the Codex plugin requires native `nemo-relay mcp` support",
+            format_command(&relay.display().to_string(), &args)
+        ))
+    }
+}
+
 pub(super) fn require_host_cli(
     host: PluginHost,
     options: &PluginInstallOptions,
@@ -328,6 +350,33 @@ pub(super) fn require_host_cli(
         .resolve_executable(cli)?
         .map(|_| ())
         .ok_or_else(|| format!("required `{cli}` CLI was not found on PATH"))
+}
+
+pub(super) fn validate_codex_version(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<(), String> {
+    if options.dry_run {
+        return Ok(());
+    }
+    let output = run_capture_command("codex", &["--version".into()], options, runner)?;
+    let version = parse_codex_version(&output.stdout).ok_or_else(|| {
+        format!(
+            "could not parse `codex --version` output {:?}; the Relay plugin requires codex-cli 0.143.0 or newer",
+            output.stdout.trim()
+        )
+    })?;
+    if version >= Version::new(0, 143, 0) {
+        Ok(())
+    } else {
+        Err(format!(
+            "codex-cli {version} is unsupported; the Relay plugin requires codex-cli 0.143.0 or newer"
+        ))
+    }
+}
+
+fn parse_codex_version(raw: &str) -> Option<Version> {
+    Version::parse(raw.trim().strip_prefix("codex-cli ")?).ok()
 }
 
 pub(super) fn run_command(
@@ -448,6 +497,7 @@ impl CommandOutput {
 }
 
 pub(super) trait CommandRunner {
+    fn current_executable(&self) -> Result<PathBuf, String>;
     fn resolve_executable(&self, command: &str) -> Result<Option<PathBuf>, String>;
     fn run(&self, program: &Path, args: &[String]) -> Result<i32, String>;
     fn run_quiet(&self, program: &Path, args: &[String]) -> Result<i32, String>;
@@ -457,6 +507,11 @@ pub(super) trait CommandRunner {
 pub(super) struct RealCommandRunner;
 
 impl CommandRunner for RealCommandRunner {
+    fn current_executable(&self) -> Result<PathBuf, String> {
+        env::current_exe()
+            .map_err(|error| format!("failed to resolve current nemo-relay executable: {error}"))
+    }
+
     fn resolve_executable(&self, command: &str) -> Result<Option<PathBuf>, String> {
         Ok(find_executable(command))
     }

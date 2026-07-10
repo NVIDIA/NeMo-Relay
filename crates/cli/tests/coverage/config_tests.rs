@@ -25,6 +25,10 @@ struct PluginConfigDiscoveryScope {
     _guard: MutexGuard<'static, ()>,
     previous_cwd: PathBuf,
     previous_xdg_config_home: Option<OsString>,
+    previous_config_scope: Option<OsString>,
+    previous_openai_api_key: Option<OsString>,
+    previous_bootstrap_fingerprint: Option<OsString>,
+    previous_plugin_idle_timeout: Option<OsString>,
 }
 
 impl PluginConfigDiscoveryScope {
@@ -34,14 +38,40 @@ impl PluginConfigDiscoveryScope {
             .unwrap_or_else(|error| error.into_inner());
         let previous_cwd = std::env::current_dir().unwrap();
         let previous_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_config_scope = std::env::var_os("NEMO_RELAY_CONFIG_SCOPE");
+        let previous_openai_api_key = std::env::var_os("OPENAI_API_KEY");
+        let previous_bootstrap_fingerprint = std::env::var_os(BOOTSTRAP_FINGERPRINT_ENV);
+        let previous_plugin_idle_timeout = std::env::var_os(PLUGIN_IDLE_TIMEOUT_ENV);
         unsafe {
             std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
+            std::env::remove_var("NEMO_RELAY_CONFIG_SCOPE");
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV);
+            std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV);
         }
         std::env::set_current_dir(cwd).unwrap();
         Self {
             _guard: guard,
             previous_cwd,
             previous_xdg_config_home,
+            previous_config_scope,
+            previous_openai_api_key,
+            previous_bootstrap_fingerprint,
+            previous_plugin_idle_timeout,
+        }
+    }
+
+    fn enable_user_scope(&self) {
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe {
+            std::env::set_var("NEMO_RELAY_CONFIG_SCOPE", "user");
+        }
+    }
+
+    fn set_bootstrap_fingerprint(&self, fingerprint: &str) {
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe {
+            std::env::set_var(BOOTSTRAP_FINGERPRINT_ENV, fingerprint);
         }
     }
 }
@@ -53,6 +83,22 @@ impl Drop for PluginConfigDiscoveryScope {
             match self.previous_xdg_config_home.take() {
                 Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
                 None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match self.previous_config_scope.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_CONFIG_SCOPE", value),
+                None => std::env::remove_var("NEMO_RELAY_CONFIG_SCOPE"),
+            }
+            match self.previous_openai_api_key.take() {
+                Some(value) => std::env::set_var("OPENAI_API_KEY", value),
+                None => std::env::remove_var("OPENAI_API_KEY"),
+            }
+            match self.previous_bootstrap_fingerprint.take() {
+                Some(value) => std::env::set_var(BOOTSTRAP_FINGERPRINT_ENV, value),
+                None => std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV),
+            }
+            match self.previous_plugin_idle_timeout.take() {
+                Some(value) => std::env::set_var(PLUGIN_IDLE_TIMEOUT_ENV, value),
+                None => std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV),
             }
         }
     }
@@ -113,6 +159,27 @@ fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
     temp.path().join("config.toml")
 }
 
+fn write_attested_python_environment(path: &std::path::Path, manifest_path: &std::path::Path) {
+    let interpreter = if cfg!(windows) {
+        path.join("Scripts/python.exe")
+    } else {
+        path.join("bin/python")
+    };
+    std::fs::create_dir_all(interpreter.parent().unwrap()).unwrap();
+    std::fs::write(interpreter, b"fixture interpreter").unwrap();
+    let installed = path.join("site-packages/fixture.py");
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(installed, b"fixture = True\n").unwrap();
+    let (manifest, _) = DynamicPluginManifest::load_from_path(manifest_path).unwrap();
+    let source_artifact_sha256 = manifest
+        .integrity
+        .as_ref()
+        .and_then(|integrity| integrity.sha256.as_deref())
+        .unwrap();
+    crate::plugins::lifecycle::attest_test_python_environment(path, source_artifact_sha256)
+        .unwrap();
+}
+
 fn write_dynamic_manifest(dir: &std::path::Path, plugin_id: &str) -> std::path::PathBuf {
     write_dynamic_manifest_with_options(dir, plugin_id, &["plugin_worker"], None)
 }
@@ -162,6 +229,7 @@ enabled = false
 items = [{capabilities}]
 
 [source]
+manifest_root = "."
 artifact = "plugin.py"
 
 [integrity]
@@ -170,7 +238,7 @@ sha256 = "{digest}"
 
 [load]
 runtime = "python"
-entrypoint = "{plugin_id}.plugin:register"
+entrypoint = "plugin:register"
 "#,
             capabilities = capabilities,
             signature_line = signature_line,
@@ -594,6 +662,35 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
     assert_eq!(
         project_plugin_config_path(&nested),
         project.join(".nemo-relay/plugins.toml")
+    );
+}
+
+#[test]
+fn persistent_user_scope_excludes_project_gateway_and_plugin_layers() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(project.join(".nemo-relay/config.toml"), "").unwrap();
+    std::fs::write(project.join(".nemo-relay/plugins.toml"), "version = 1\n").unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(&nested, &xdg);
+    scope.enable_user_scope();
+
+    assert_eq!(
+        config_paths(None),
+        vec![
+            PathBuf::from("/etc/nemo-relay/config.toml"),
+            xdg.join("nemo-relay/config.toml"),
+        ]
+    );
+    assert_eq!(
+        plugin_config_paths(None, None),
+        vec![
+            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            xdg.join("nemo-relay/plugins.toml"),
+        ]
     );
 }
 
@@ -1425,6 +1522,9 @@ openai_base_url = "http://file-openai"
 #[test]
 fn server_resolution_applies_all_server_overrides() {
     let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
     let args = ServerArgs {
@@ -1433,6 +1533,7 @@ fn server_resolution_applies_all_server_overrides() {
         openai_base_url: Some("http://cli-openai".into()),
         anthropic_base_url: Some("http://cli-anthropic".into()),
         plugin_config_path: None,
+        ready_file: None,
         max_hook_payload_bytes: Some(222),
         max_passthrough_body_bytes: Some(333),
     };
@@ -1445,7 +1546,524 @@ fn server_resolution_applies_all_server_overrides() {
     assert_eq!(resolved.gateway.max_hook_payload_bytes, 222);
     assert_eq!(resolved.gateway.max_passthrough_body_bytes, 333);
     assert_eq!(resolved.gateway.plugin_config, None);
+    assert_eq!(resolved.bootstrap_fingerprint, None);
+    assert!(
+        !xdg.join("nemo-relay/bootstrap/fingerprint-hmac.key")
+            .exists()
+    );
     assert!(args.requested_daemon_mode());
+}
+
+#[test]
+fn ordinary_server_ignores_managed_bootstrap_fingerprint_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    scope.set_bootstrap_fingerprint("opaque-parent-fingerprint");
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(&config_path, "").unwrap();
+
+    let args = ServerArgs {
+        config: Some(config_path),
+        bind: Some("127.0.0.1:0".parse().unwrap()),
+        ..ServerArgs::default()
+    };
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(resolved.bootstrap_fingerprint, None);
+    assert!(
+        managed_bootstrap_identity(&args, &resolved, &[])
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !xdg.join("nemo-relay/bootstrap/fingerprint-hmac.key")
+            .exists()
+    );
+}
+
+#[test]
+fn managed_bootstrap_environment_is_not_forwarded_from_codex() {
+    let names = crate::mcp_environment::forwarded_names(
+        [
+            "NEMO_RELAY_BOOTSTRAP_AGENT".to_string(),
+            "NEMO_RELAY_BOOTSTRAP_FINGERPRINT".to_string(),
+            "NEMO_RELAY_BOOTSTRAP_STATE_DIR".to_string(),
+            "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN".to_string(),
+        ],
+        None,
+    );
+
+    assert!(!names.iter().any(|name| name.contains("BOOTSTRAP")));
+}
+
+#[test]
+fn persistent_server_resolution_excludes_project_config_and_fingerprints_credentials() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::write(
+        project.join(".nemo-relay/config.toml"),
+        "[upstream]\nopenai_base_url = \"http://project-only\"\n",
+    )
+    .unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+    let args = ServerArgs {
+        bind: Some("127.0.0.1:47632".parse().unwrap()),
+        ..ServerArgs::default()
+    };
+
+    unsafe { std::env::set_var("OPENAI_API_KEY", "credential-one") };
+    let first = resolve_persistent_server_config(&args).unwrap();
+    assert_ne!(first.gateway.openai_base_url, "http://project-only");
+    assert!(
+        first
+            .bootstrap_fingerprint
+            .as_deref()
+            .unwrap()
+            .starts_with("hmac-sha256:")
+    );
+    let key_path = xdg
+        .join("nemo-relay")
+        .join("bootstrap")
+        .join("fingerprint-hmac.key");
+    assert_eq!(std::fs::metadata(&key_path).unwrap().len(), 32);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    unsafe { std::env::set_var("OPENAI_API_KEY", "credential-two") };
+    let second = resolve_persistent_server_config(&args).unwrap();
+    assert_ne!(first.bootstrap_fingerprint, second.bootstrap_fingerprint);
+}
+
+#[test]
+fn managed_bootstrap_canonicalizes_unset_and_zero_padded_default_idle_timeout() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let parent = resolve_persistent_server_config(&ServerArgs::default()).unwrap();
+    let expected = parent.bootstrap_fingerprint.unwrap();
+    scope.set_bootstrap_fingerprint(&expected);
+    unsafe {
+        std::env::set_var(PLUGIN_IDLE_TIMEOUT_ENV, "0300");
+    }
+    let child_args = ServerArgs {
+        ready_file: Some(temp.path().join("managed.ready.json")),
+        ..ServerArgs::default()
+    };
+    let child = resolve_server_config(&child_args).unwrap();
+    let active = active_dynamic_plugin_components(None, &child).unwrap();
+    let identity = managed_bootstrap_identity(&child_args, &child, &active)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(identity.fingerprint(), expected);
+    identity.verify_current().unwrap();
+}
+
+#[test]
+fn codex_launch_carries_effective_hook_limit_below_and_above_default() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let user_config = xdg.join("nemo-relay/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let bind = "127.0.0.1:47632".parse().unwrap();
+
+    for limit in [1024, DEFAULT_MAX_HOOK_PAYLOAD_BYTES + 4096] {
+        std::fs::write(
+            &user_config,
+            format!("[gateway]\nmax_hook_payload_bytes = {limit}\n"),
+        )
+        .unwrap();
+        let launch = crate::sidecar::resolve_codex_gateway(&ServerArgs::default(), bind).unwrap();
+        assert_eq!(launch.max_hook_payload_bytes, limit);
+    }
+}
+
+#[test]
+fn bootstrap_hmac_key_creation_is_concurrency_safe_and_stable() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state/fingerprint-hmac.key");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+    let handles = (0..8)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                load_or_create_bootstrap_hmac_key_at(&path).unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    let keys = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(keys.windows(2).all(|pair| pair[0] == pair[1]));
+    assert_eq!(std::fs::metadata(path).unwrap().len(), 32);
+}
+
+#[test]
+fn bootstrap_hmac_key_lock_wait_is_bounded_under_synchronized_contention() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state/fingerprint-hmac.key");
+    load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+    let owner = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    fs2::FileExt::lock_exclusive(&owner).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let waiter = {
+        let barrier = barrier.clone();
+        let path = path.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            load_or_create_bootstrap_hmac_key_at_with_timeout(&path, Duration::from_millis(75))
+                .unwrap_err()
+        })
+    };
+    barrier.wait();
+
+    let error = waiter.join().unwrap();
+
+    assert!(error.to_string().contains("timed out waiting"));
+    drop(owner);
+}
+
+#[test]
+fn persistent_fingerprint_tracks_active_dynamic_plugin_and_file_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.bootstrap-identity");
+    let environment_a = temp.path().join("managed/environment-a");
+    let environment_b = temp.path().join("managed/environment-b");
+    write_attested_python_environment(&environment_a, &manifest_path);
+    write_attested_python_environment(&environment_b, &manifest_path);
+    let resolved = ResolvedConfig {
+        gateway: config(),
+        ..ResolvedConfig::default()
+    };
+    let active = ActiveDynamicPluginComponent {
+        plugin_id: "acme.bootstrap-identity".into(),
+        kind: DynamicPluginKind::Worker,
+        lifecycle_generation: 7,
+        manifest_ref: Some(manifest_path.to_string_lossy().into_owned()),
+        environment_ref: Some(environment_a.to_string_lossy().into_owned()),
+        config: Map::new(),
+        activation_snapshot: None,
+    };
+
+    let inactive = persistent_bootstrap_fingerprint(&resolved, &[]).unwrap();
+    let enabled =
+        persistent_bootstrap_fingerprint(&resolved, std::slice::from_ref(&active)).unwrap();
+    assert_ne!(
+        inactive, enabled,
+        "enable/disable or tombstone must conflict"
+    );
+
+    std::fs::write(plugin_dir.join("plugin.py"), b"changed artifact").unwrap();
+    let artifact_changed =
+        persistent_bootstrap_fingerprint(&resolved, std::slice::from_ref(&active)).unwrap();
+    assert_ne!(enabled, artifact_changed);
+
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        &manifest_path,
+        manifest.replace(
+            "id = \"acme.bootstrap-identity\"",
+            "id = \"acme.bootstrap-identity\"\nname = \"changed manifest\"",
+        ),
+    )
+    .unwrap();
+    let manifest_changed =
+        persistent_bootstrap_fingerprint(&resolved, std::slice::from_ref(&active)).unwrap();
+    assert_ne!(artifact_changed, manifest_changed);
+
+    let mut rebuilt_environment = active.clone();
+    rebuilt_environment.lifecycle_generation += 1;
+    let rebuilt_environment_fingerprint =
+        persistent_bootstrap_fingerprint(&resolved, &[rebuilt_environment]).unwrap();
+    assert_ne!(
+        manifest_changed, rebuilt_environment_fingerprint,
+        "a same-path managed environment rebuild must conflict through lifecycle generation"
+    );
+
+    let mut environment_changed = active;
+    environment_changed.environment_ref = Some(environment_b.to_string_lossy().into_owned());
+    let environment_changed =
+        persistent_bootstrap_fingerprint(&resolved, &[environment_changed]).unwrap();
+    assert_ne!(manifest_changed, environment_changed);
+}
+
+#[test]
+fn persistent_hook_identity_authenticates_python_marker_without_rehashing_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let xdg = temp.path().join("xdg");
+    let user_config = xdg.join("nemo-relay");
+    let plugin_dir = temp.path().join("python-plugin");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&user_config).unwrap();
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+    let plugin_id = "acme.read-only-hook-identity";
+    let manifest_path = write_dynamic_manifest(&plugin_dir, plugin_id);
+    let plugins_toml = user_config.join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "version = 1\n\n[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest_path.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let environment_name = Sha256::digest(plugin_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let environment = user_config
+        .join(".dynamic-plugin-environments")
+        .join(environment_name);
+    write_attested_python_environment(&environment, &manifest_path);
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+    let mut record = manifest.into_record(Some(manifest_ref)).unwrap();
+    record.spec.enabled = true;
+    record.source.environment_ref = Some(environment.to_string_lossy().into_owned());
+    std::fs::write(
+        user_config.join(".dynamic-plugins.json"),
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "records": [record],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    crate::plugins::lifecycle::reset_test_python_environment_digest_calls();
+    let before = resolve_persistent_server_config(&ServerArgs::default()).unwrap();
+    assert_eq!(
+        crate::plugins::lifecycle::test_python_environment_digest_calls(),
+        0,
+        "persistent hook identity must trust only the authenticated environment marker"
+    );
+
+    std::fs::write(
+        environment.join("site-packages/fixture.py"),
+        b"fixture = 'mutated'\n",
+    )
+    .unwrap();
+    let after = resolve_persistent_server_config(&ServerArgs::default()).unwrap();
+    assert_eq!(
+        crate::plugins::lifecycle::test_python_environment_digest_calls(),
+        0,
+        "mutating environment content must not make hook preflight traverse it"
+    );
+    assert_eq!(before.bootstrap_fingerprint, after.bootstrap_fingerprint);
+
+    let resolved = load_shared_config_scoped(None, None, true).unwrap();
+    let error = active_dynamic_plugin_components(None, &resolved)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("changed after provisioning"), "{error}");
+    assert!(
+        crate::plugins::lifecycle::test_python_environment_digest_calls() > 0,
+        "sidecar activation must still perform the full environment verification"
+    );
+}
+
+#[test]
+fn managed_server_rejects_config_and_artifact_changes_after_parent_resolution() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.bootstrap-race");
+    let environment = temp.path().join("managed/environment");
+    write_attested_python_environment(&environment, &manifest_path);
+    let resolved = ResolvedConfig {
+        gateway: config(),
+        ..ResolvedConfig::default()
+    };
+    let active = ActiveDynamicPluginComponent {
+        plugin_id: "acme.bootstrap-race".into(),
+        kind: DynamicPluginKind::Worker,
+        lifecycle_generation: 3,
+        manifest_ref: Some(manifest_path.to_string_lossy().into_owned()),
+        environment_ref: Some(environment.to_string_lossy().into_owned()),
+        config: Map::new(),
+        activation_snapshot: None,
+    };
+    let expected =
+        persistent_bootstrap_fingerprint(&resolved, std::slice::from_ref(&active)).unwrap();
+    scope.set_bootstrap_fingerprint(&expected);
+    let args = ServerArgs {
+        ready_file: Some(temp.path().join("managed.ready.json")),
+        ..ServerArgs::default()
+    };
+
+    let identity = managed_bootstrap_identity(&args, &resolved, std::slice::from_ref(&active))
+        .unwrap()
+        .unwrap();
+    assert_eq!(identity.fingerprint(), expected);
+
+    let mut changed_config = resolved.clone();
+    changed_config.gateway.openai_base_url = "https://changed.invalid/v1".into();
+    let config_error =
+        managed_bootstrap_identity(&args, &changed_config, std::slice::from_ref(&active))
+            .unwrap_err();
+    assert!(config_error.to_string().contains("identity changed"));
+
+    std::fs::write(plugin_dir.join("plugin.py"), b"changed during bootstrap").unwrap();
+    let artifact_error = identity.verify_current().unwrap_err();
+    assert!(artifact_error.to_string().contains("identity changed"));
+}
+
+#[test]
+fn bootstrap_file_digest_streams_across_internal_buffer_boundaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("large-artifact.bin");
+    let bytes = (0..(128 * 1024 + 17))
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    std::fs::write(&path, &bytes).unwrap();
+    let expected = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    assert_eq!(
+        bootstrap_file_digest(&path, "test artifact").unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn bootstrap_file_digest_rejects_non_regular_and_oversized_inputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let non_regular = bootstrap_file_digest(temp.path(), "test artifact").unwrap_err();
+    assert!(non_regular.to_string().contains("must be a regular file"));
+
+    let oversized = temp.path().join("oversized-artifact.bin");
+    let file = std::fs::File::create(&oversized).unwrap();
+    file.set_len(MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1).unwrap();
+    let oversized = bootstrap_file_digest(&oversized, "test artifact").unwrap_err();
+    assert!(oversized.to_string().contains("identity budget"));
+}
+
+#[test]
+fn persistent_server_resolution_rejects_oversized_sparse_dynamic_plugin_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let user_config_dir = xdg.join("nemo-relay");
+    let plugin_dir = user_config_dir.join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.worker");
+    std::fs::write(
+        user_config_dir.join("plugins.toml"),
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+"#,
+    )
+    .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&manifest_path)
+        .unwrap()
+        .set_len(MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .unwrap();
+
+    let error = resolve_persistent_server_config(&ServerArgs::default())
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("dynamic plugin manifest"));
+    assert!(error.contains("identity budget"));
+}
+
+#[test]
+fn persistent_server_resolution_rejects_oversized_sparse_dynamic_plugin_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let user_config_dir = xdg.join("nemo-relay");
+    let plugin_dir = user_config_dir.join("plugins/acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    write_dynamic_manifest(&plugin_dir, "acme.worker");
+    let plugins_toml_path = user_config_dir.join("plugins.toml");
+    std::fs::write(
+        &plugins_toml_path,
+        r#"
+[[plugins.dynamic]]
+manifest = "plugins/acme/relay-plugin.toml"
+
+[plugins.policy.defaults]
+startup = "required"
+"#,
+    )
+    .unwrap();
+    write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
+    std::fs::File::options()
+        .write(true)
+        .open(plugin_dir.join("plugin.py"))
+        .unwrap()
+        .set_len(MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .unwrap();
+
+    let error = resolve_persistent_server_config(&ServerArgs::default())
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("dynamic plugin artifact"));
+    assert!(error.contains("identity budget"));
+}
+
+#[test]
+fn bootstrap_hmac_key_rejects_corrupt_persistent_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state/fingerprint-hmac.key");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"short").unwrap();
+
+    let error = load_or_create_bootstrap_hmac_key_at(&path).unwrap_err();
+
+    assert!(error.to_string().contains("invalid length 5"));
+}
+
+#[test]
+fn persistent_server_resolution_rejects_project_specific_flags() {
+    let args = ServerArgs {
+        config: Some(PathBuf::from("project-config.toml")),
+        ..ServerArgs::default()
+    };
+
+    assert!(
+        resolve_persistent_server_config(&args)
+            .unwrap_err()
+            .to_string()
+            .contains("nemo-relay run")
+    );
 }
 
 #[test]

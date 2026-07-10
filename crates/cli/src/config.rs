@@ -2,21 +2,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashSet;
+use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use nemo_relay::plugin::dynamic::DynamicPluginManifest;
+use nemo_relay::plugin::dynamic::{
+    DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
+};
 use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
+use ring::rand::{SecureRandom, SystemRandom};
+use ring::{digest, hmac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
 use crate::error::CliError;
+use crate::file_io::{LockAttempt, try_lock_exclusive};
 use crate::plugin_shim::PluginShimCommand;
-use crate::plugins::lifecycle::enforce_required_dynamic_plugin_startup;
+#[cfg(test)]
+use crate::plugins::lifecycle::active_dynamic_plugin_components;
+use crate::plugins::lifecycle::{
+    ActiveDynamicPluginComponent, active_dynamic_plugin_components_for_identity,
+    dynamic_plugin_runtime_closure_digest, enforce_required_dynamic_plugin_startup,
+};
 use crate::plugins::policy::DynamicPluginHostPolicy;
+
+pub(crate) const BOOTSTRAP_FINGERPRINT_ENV: &str = "NEMO_RELAY_BOOTSTRAP_FINGERPRINT";
+pub(crate) const PLUGIN_IDLE_TIMEOUT_ENV: &str = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
+/// Maximum regular-file size hashed into persistent gateway identity (512 MiB).
+pub(crate) const MAX_BOOTSTRAP_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "nemo-relay")]
@@ -51,7 +71,7 @@ pub(crate) enum Command {
                       gateway; the gateway then forwards to `--openai-base-url` (defaults to \
                       api.openai.com) with `OPENAI_API_KEY` injected on the codex route (see \
                       NMF-86 — codex's own auth.json JWT is stripped). Requires codex-cli >= \
-                      0.129.0.",
+                      0.143.0.",
         after_help = "Examples:\n  \
                       nemo-relay codex\n  \
                       nemo-relay codex -- exec \"fix the bug in foo.rs\"\n  \
@@ -69,6 +89,19 @@ pub(crate) enum Command {
                       nemo-relay hermes -- chat --provider custom"
     )]
     Hermes(EasyPathCommand),
+    /// Keep a shared Relay gateway ready for an MCP client.
+    #[command(
+        long_about = "Start or reuse a shared native NeMo Relay gateway for an MCP stdio \
+                      connection. The gateway binds 127.0.0.1:47632 by default and MCP \
+                      initialization completes only after Relay identity and readiness are \
+                      verified. Multiple MCP clients share the gateway; it remains available \
+                      until its idle timeout after the final client closes. This command \
+                      advertises no MCP tools.",
+        after_help = "Examples:\n  \
+                      nemo-relay mcp\n  \
+                      nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
+    )]
+    Mcp,
     /// Run the interactive setup (writes `.nemo-relay/config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -426,6 +459,9 @@ pub(crate) struct ServerArgs {
     /// Internal override for the plugin configuration file.
     #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
     pub(crate) plugin_config_path: Option<PathBuf>,
+    /// Internal readiness file used by plugin sidecar bootstrap.
+    #[arg(long, hide = true)]
+    pub(crate) ready_file: Option<PathBuf>,
     /// Maximum accepted coding-agent hook payload size, in bytes.
     #[arg(long, env = "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES")]
     pub(crate) max_hook_payload_bytes: Option<usize>,
@@ -445,6 +481,7 @@ impl ServerArgs {
             || self.openai_base_url.is_some()
             || self.anthropic_base_url.is_some()
             || self.plugin_config_path.is_some()
+            || self.ready_file.is_some()
             || self.max_hook_payload_bytes.is_some()
             || self.max_passthrough_body_bytes.is_some()
             || self.config.is_some()
@@ -579,6 +616,7 @@ pub(crate) struct ResolvedConfig {
     pub(crate) agents: AgentConfigs,
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
+    pub(crate) bootstrap_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -690,6 +728,673 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
     Ok(resolved)
 }
 
+/// Resolves the shared Codex MCP gateway from system and user layers only.
+pub(crate) fn resolve_persistent_server_config(
+    args: &ServerArgs,
+) -> Result<ResolvedConfig, CliError> {
+    if args.config.is_some() || args.plugin_config_path.is_some() || args.ready_file.is_some() {
+        return Err(CliError::Config(
+            "nemo-relay mcp uses system and user configuration only; use `nemo-relay run` for explicit or project configuration"
+                .into(),
+        ));
+    }
+    let mut resolved = load_shared_config_scoped(None, None, true)?;
+    apply_server_overrides(&mut resolved.gateway, args)?;
+    let active_dynamic_plugins = active_dynamic_plugin_components_for_identity(None, &resolved)?;
+    resolved.bootstrap_fingerprint = Some(persistent_bootstrap_fingerprint(
+        &resolved,
+        &active_dynamic_plugins,
+    )?);
+    Ok(resolved)
+}
+
+/// Parent-computed identity and inputs needed to reverify a managed persistent gateway child.
+#[derive(Debug, Clone)]
+pub(crate) struct ManagedBootstrapIdentity {
+    expected: String,
+    persistent_args: ServerArgs,
+    resolved: ResolvedConfig,
+    active_dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+}
+
+impl ManagedBootstrapIdentity {
+    pub(crate) fn fingerprint(&self) -> &str {
+        &self.expected
+    }
+
+    pub(crate) fn verify_current(&self) -> Result<(), CliError> {
+        let snapshot_actual =
+            persistent_bootstrap_fingerprint(&self.resolved, &self.active_dynamic_plugins)?;
+        verify_managed_bootstrap_fingerprint(&self.expected, &snapshot_actual)?;
+        let resolved = resolve_persistent_server_config(&self.persistent_args)?;
+        let actual = resolved
+            .bootstrap_fingerprint
+            .expect("persistent gateway resolution sets a bootstrap fingerprint");
+        verify_managed_bootstrap_fingerprint(&self.expected, &actual)
+    }
+}
+
+/// Verifies and retains the parent-computed identity for a managed persistent gateway child.
+///
+/// Ordinary daemon launches remain stateless: the internal ready-file contract identifies a child
+/// spawned by the plugin bootstrap path. The child recomputes identity from the configuration and
+/// active lifecycle records it is about to activate before publishing ownership or readiness.
+pub(crate) fn managed_bootstrap_identity(
+    args: &ServerArgs,
+    resolved: &ResolvedConfig,
+    active_dynamic_plugins: &[ActiveDynamicPluginComponent],
+) -> Result<Option<ManagedBootstrapIdentity>, CliError> {
+    if args.ready_file.is_none() {
+        return Ok(None);
+    }
+    let Some(expected) = env::var(BOOTSTRAP_FINGERPRINT_ENV)
+        .ok()
+        .filter(|fingerprint| !fingerprint.is_empty())
+    else {
+        return Ok(None);
+    };
+    let actual = persistent_bootstrap_fingerprint(resolved, active_dynamic_plugins)?;
+    verify_managed_bootstrap_fingerprint(&expected, &actual)?;
+    let mut persistent_args = args.clone();
+    persistent_args.ready_file = None;
+    Ok(Some(ManagedBootstrapIdentity {
+        expected,
+        persistent_args,
+        resolved: resolved.clone(),
+        active_dynamic_plugins: active_dynamic_plugins.to_vec(),
+    }))
+}
+
+fn verify_managed_bootstrap_fingerprint(expected: &str, actual: &str) -> Result<(), CliError> {
+    if actual == expected {
+        return Ok(());
+    }
+    Err(CliError::Config(
+        "persistent gateway identity changed during managed bootstrap; retry so the parent can resolve the current configuration"
+            .into(),
+    ))
+}
+
+fn persistent_bootstrap_fingerprint(
+    resolved: &ResolvedConfig,
+    active_dynamic_plugins: &[ActiveDynamicPluginComponent],
+) -> Result<String, CliError> {
+    let dynamic_plugins = active_dynamic_plugins
+        .iter()
+        .map(dynamic_plugin_bootstrap_identity)
+        .collect::<Result<Vec<_>, _>>()?;
+    let gateway = &resolved.gateway;
+    let idle_timeout_secs = crate::sidecar::plugin_idle_timeout()
+        .map_err(CliError::Config)?
+        .as_secs();
+    let document = serde_json::json!({
+        "bootstrap_protocol": 1,
+        "relay_version": env!("CARGO_PKG_VERSION"),
+        "openai_base_url": gateway.openai_base_url,
+        "anthropic_base_url": gateway.anthropic_base_url,
+        "metadata": gateway.metadata,
+        "plugin_config": gateway.plugin_config,
+        "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
+        "max_passthrough_body_bytes": gateway.max_passthrough_body_bytes,
+        "plugin_idle_timeout_secs": idle_timeout_secs,
+        "dynamic_plugins": dynamic_plugins,
+        "dynamic_plugin_policy": format!("{:?}", resolved.dynamic_plugin_policy),
+    });
+    let key = load_or_create_bootstrap_hmac_key()?;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
+    let mut digest = hmac::Context::with_key(&key);
+    digest.update(
+        &serde_json::to_vec(&document).expect("persistent gateway fingerprint serializes to JSON"),
+    );
+    let environment = env::vars_os().filter_map(|(name, _)| name.into_string().ok());
+    for name in crate::mcp_environment::forwarded_names(environment, gateway.plugin_config.as_ref())
+    {
+        if name == PLUGIN_IDLE_TIMEOUT_ENV {
+            continue;
+        }
+        digest.update(&[0]);
+        digest.update(name.as_bytes());
+        digest.update(&[0]);
+        if let Some(value) = env::var_os(&name) {
+            digest.update(value.to_string_lossy().as_bytes());
+        }
+    }
+    let tag = digest.sign();
+    Ok(format!(
+        "hmac-sha256:{}",
+        tag.as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+fn dynamic_plugin_bootstrap_identity(
+    plugin: &ActiveDynamicPluginComponent,
+) -> Result<Value, CliError> {
+    let manifest_identity = match (&plugin.activation_snapshot, plugin.manifest_ref.as_deref()) {
+        (Some(snapshot), _) => Some(dynamic_plugin_snapshot_identity(snapshot)?),
+        (None, Some(manifest_ref)) => Some(dynamic_plugin_manifest_identity(
+            manifest_ref,
+            plugin.environment_ref.as_deref(),
+        )?),
+        (None, None) => None,
+    };
+    Ok(serde_json::json!({
+        "plugin_id": plugin.plugin_id,
+        "kind": format!("{:?}", plugin.kind),
+        "lifecycle_generation": plugin.lifecycle_generation,
+        "manifest": manifest_identity,
+        "environment_ref": plugin.environment_ref,
+        "config": plugin.config,
+    }))
+}
+
+fn dynamic_plugin_snapshot_identity(
+    snapshot: &crate::plugins::lifecycle::DynamicPluginActivationSnapshot,
+) -> Result<Value, CliError> {
+    let (manifest, _) = load_bounded_dynamic_plugin_manifest(snapshot.identity_manifest())?;
+    let manifest_path = PathBuf::from(snapshot.original_manifest_ref());
+    let manifest_digest = bootstrap_file_digest(
+        snapshot.identity_manifest(),
+        "dynamic plugin manifest snapshot",
+    )?;
+    let artifact_ref = manifest
+        .source
+        .as_ref()
+        .and_then(|source| source.artifact.as_deref())
+        .or(match &manifest.load {
+            DynamicPluginManifestLoad::RustDynamic(load) => load.library.as_deref(),
+            DynamicPluginManifestLoad::Worker(_) => None,
+        });
+    let artifact = artifact_ref
+        .map(|artifact_ref| {
+            let logical_path = resolve_dynamic_plugin_relative_path(&manifest_path, artifact_ref);
+            let snapshot_path = snapshot.identity_file(&logical_path).ok_or_else(|| {
+                CliError::Config(format!(
+                    "dynamic plugin activation snapshot is missing artifact {}",
+                    logical_path.display()
+                ))
+            })?;
+            bootstrap_file_digest(snapshot_path, "dynamic plugin artifact snapshot")
+                .map(|digest| serde_json::json!({ "path": logical_path, "sha256": digest }))
+        })
+        .transpose()?;
+    let signature = manifest
+        .integrity
+        .as_ref()
+        .and_then(|integrity| integrity.signature.as_deref())
+        .map(|signature_ref| {
+            let logical_path = resolve_dynamic_plugin_relative_path(&manifest_path, signature_ref);
+            let snapshot_path = snapshot.identity_file(&logical_path).ok_or_else(|| {
+                CliError::Config(format!(
+                    "dynamic plugin activation snapshot is missing signature {}",
+                    logical_path.display()
+                ))
+            })?;
+            bootstrap_file_digest(snapshot_path, "dynamic plugin signature snapshot")
+                .map(|digest| serde_json::json!({ "path": logical_path, "sha256": digest }))
+        })
+        .transpose()?;
+    Ok(serde_json::json!({
+        "path": snapshot.original_manifest_ref(),
+        "sha256": manifest_digest,
+        "artifact": artifact,
+        "signature": signature,
+        "runtime_closure_sha256": snapshot.closure_digest(),
+    }))
+}
+
+fn dynamic_plugin_manifest_identity(
+    manifest_ref: &str,
+    environment_ref: Option<&str>,
+) -> Result<Value, CliError> {
+    let (manifest, normalized_ref) = load_bounded_dynamic_plugin_manifest(manifest_ref)?;
+    let manifest_path = PathBuf::from(&normalized_ref);
+    let manifest_digest = bootstrap_file_digest(&manifest_path, "dynamic plugin manifest")?;
+    let artifact_ref = manifest
+        .source
+        .as_ref()
+        .and_then(|source| source.artifact.as_deref())
+        .or(match &manifest.load {
+            DynamicPluginManifestLoad::RustDynamic(load) => load.library.as_deref(),
+            DynamicPluginManifestLoad::Worker(_) => None,
+        });
+    let artifact = artifact_ref
+        .map(|artifact_ref| {
+            let path = resolve_dynamic_plugin_relative_path(&manifest_path, artifact_ref);
+            bootstrap_file_digest(&path, "dynamic plugin artifact")
+                .map(|digest| serde_json::json!({ "path": path, "sha256": digest }))
+        })
+        .transpose()?;
+    let signature = manifest
+        .integrity
+        .as_ref()
+        .and_then(|integrity| integrity.signature.as_deref())
+        .map(|signature_ref| {
+            let path = resolve_dynamic_plugin_relative_path(&manifest_path, signature_ref);
+            bootstrap_file_digest(&path, "dynamic plugin signature")
+                .map(|digest| serde_json::json!({ "path": path, "sha256": digest }))
+        })
+        .transpose()?;
+    let closure_digest = dynamic_plugin_runtime_closure_digest(&normalized_ref, environment_ref)?;
+    Ok(serde_json::json!({
+        "path": normalized_ref,
+        "sha256": manifest_digest,
+        "artifact": artifact,
+        "signature": signature,
+        "runtime_closure_sha256": closure_digest,
+    }))
+}
+
+fn resolve_dynamic_plugin_relative_path(manifest_path: &Path, reference: &str) -> PathBuf {
+    let path = PathBuf::from(reference);
+    if path.is_absolute() {
+        path
+    } else {
+        manifest_path
+            .parent()
+            .map(|parent| parent.join(&path))
+            .unwrap_or(path)
+    }
+}
+
+fn bootstrap_file_digest(path: &Path, description: &str) -> Result<String, CliError> {
+    let mut context = digest::Context::new(&digest::SHA256);
+    stream_bounded_regular_file(path, description, |bytes| context.update(bytes))
+        .map_err(CliError::Config)?;
+    Ok(context
+        .finish()
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+pub(crate) fn load_bounded_dynamic_plugin_manifest(
+    path: impl AsRef<Path>,
+) -> Result<(DynamicPluginManifest, String), CliError> {
+    let (manifest, normalized, _) = load_bounded_dynamic_plugin_manifest_bytes(path)?;
+    Ok((manifest, normalized))
+}
+
+pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
+    path: impl AsRef<Path>,
+) -> Result<(DynamicPluginManifest, String, Vec<u8>), CliError> {
+    let path = path.as_ref();
+    let manifest_path = if path.is_dir() {
+        path.join(DYNAMIC_PLUGIN_MANIFEST_FILENAME)
+    } else {
+        path.to_path_buf()
+    };
+    let normalized = fs::canonicalize(&manifest_path).map_err(|error| {
+        CliError::Config(format!(
+            "failed to normalize dynamic plugin manifest {}: {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let bytes = read_bounded_regular_file(&normalized, "dynamic plugin manifest")
+        .map_err(CliError::Config)?;
+    let contents = std::str::from_utf8(&bytes).map_err(|error| {
+        CliError::Config(format!(
+            "dynamic plugin manifest {} is not UTF-8: {error}",
+            normalized.display()
+        ))
+    })?;
+    let manifest = DynamicPluginManifest::parse_toml(contents)
+        .map_err(|error| CliError::Config(error.to_string()))?;
+    Ok((manifest, normalized.to_string_lossy().into_owned(), bytes))
+}
+
+pub(crate) fn read_bounded_regular_file(path: &Path, description: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    stream_bounded_regular_file(path, description, |chunk| bytes.extend_from_slice(chunk))?;
+    Ok(bytes)
+}
+
+pub(crate) fn stream_bounded_regular_file(
+    path: &Path,
+    description: &str,
+    mut consume: impl FnMut(&[u8]),
+) -> Result<(), String> {
+    const BUFFER_BYTES: usize = 64 * 1024;
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect {description} {} for persistent gateway identity: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "{description} {} must be a regular file for persistent gateway identity",
+            path.display()
+        ));
+    }
+    if metadata.len() > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
+        return Err(format!(
+            "{description} {} exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte persistent gateway identity budget",
+            path.display()
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        format!(
+            "failed to read {description} {} for persistent gateway identity: {error}",
+            path.display()
+        )
+    })?;
+    let opened_metadata = file.metadata().map_err(|error| {
+        format!(
+            "failed to inspect {description} {} for persistent gateway identity: {error}",
+            path.display()
+        )
+    })?;
+    if !opened_metadata.file_type().is_file() {
+        return Err(format!(
+            "{description} {} must be a regular file for persistent gateway identity",
+            path.display()
+        ));
+    }
+    if opened_metadata.len() > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
+        return Err(format!(
+            "{description} {} exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte persistent gateway identity budget",
+            path.display()
+        ));
+    }
+    let mut buffer = [0_u8; BUFFER_BYTES];
+    let mut total = 0_u64;
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            format!(
+                "failed to read {description} {} for persistent gateway identity: {error}",
+                path.display()
+            )
+        })?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if total > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
+            return Err(format!(
+                "{description} {} exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte persistent gateway identity budget",
+                path.display()
+            ));
+        }
+        consume(&buffer[..read]);
+    }
+    Ok(())
+}
+
+const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
+const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
+const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
+    b"nemo-relay/python-environment-attestation/v1\0";
+
+/// Per-user secret used to authenticate a managed bootstrap listener without exposing key bytes.
+#[derive(Clone)]
+pub(crate) struct BootstrapChallengeKey(hmac::Key);
+
+impl BootstrapChallengeKey {
+    pub(crate) fn load() -> Result<Self, CliError> {
+        Ok(Self(hmac::Key::new(
+            hmac::HMAC_SHA256,
+            &load_or_create_bootstrap_hmac_key()?,
+        )))
+    }
+
+    pub(crate) fn proof(&self, fingerprint: &str, nonce: &str) -> String {
+        let mut context = hmac::Context::with_key(&self.0);
+        context.update(BOOTSTRAP_CHALLENGE_DOMAIN);
+        context.update(fingerprint.as_bytes());
+        context.update(&[0]);
+        context.update(nonce.as_bytes());
+        let tag = context.sign();
+        format!(
+            "hmac-sha256:{}",
+            tag.as_ref()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )
+    }
+
+    pub(crate) fn verify(&self, fingerprint: &str, nonce: &str, proof: &str) -> bool {
+        let Some(encoded) = proof.strip_prefix("hmac-sha256:") else {
+            return false;
+        };
+        let Some(tag) = decode_fixed_hex::<32>(encoded) else {
+            return false;
+        };
+        let mut message = Vec::with_capacity(
+            BOOTSTRAP_CHALLENGE_DOMAIN.len() + fingerprint.len() + nonce.len() + 1,
+        );
+        message.extend_from_slice(BOOTSTRAP_CHALLENGE_DOMAIN);
+        message.extend_from_slice(fingerprint.as_bytes());
+        message.push(0);
+        message.extend_from_slice(nonce.as_bytes());
+        hmac::verify(&self.0, &message, &tag).is_ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
+        Self(hmac::Key::new(hmac::HMAC_SHA256, bytes))
+    }
+}
+
+fn decode_fixed_hex<const N: usize>(encoded: &str) -> Option<[u8; N]> {
+    if encoded.len() != N * 2 || !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut decoded = [0_u8; N];
+    for (index, byte) in decoded.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&encoded[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(decoded)
+}
+
+pub(crate) fn sign_python_environment_attestation(
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+) -> Result<String, CliError> {
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &load_or_create_bootstrap_hmac_key()?);
+    let message =
+        python_environment_attestation_message(source_artifact_sha256, environment_sha256);
+    let tag = hmac::sign(&key, &message);
+    Ok(format!(
+        "hmac-sha256:{}",
+        tag.as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+pub(crate) fn verify_python_environment_attestation(
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+    authentication: &str,
+) -> Result<bool, CliError> {
+    let Some(encoded) = authentication.strip_prefix("hmac-sha256:") else {
+        return Ok(false);
+    };
+    let Some(tag) = decode_fixed_hex::<32>(encoded) else {
+        return Ok(false);
+    };
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &load_or_create_bootstrap_hmac_key()?);
+    Ok(hmac::verify(
+        &key,
+        &python_environment_attestation_message(source_artifact_sha256, environment_sha256),
+        &tag,
+    )
+    .is_ok())
+}
+
+fn python_environment_attestation_message(
+    source_artifact_sha256: &str,
+    environment_sha256: &str,
+) -> Vec<u8> {
+    let mut message = Vec::with_capacity(
+        PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN.len()
+            + source_artifact_sha256.len()
+            + environment_sha256.len()
+            + 1,
+    );
+    message.extend_from_slice(PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN);
+    message.extend_from_slice(source_artifact_sha256.trim().as_bytes());
+    message.push(0);
+    message.extend_from_slice(environment_sha256.as_bytes());
+    message
+}
+
+fn load_or_create_bootstrap_hmac_key() -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
+    let path = user_config_dir()
+        .map(|directory| directory.join("bootstrap").join("fingerprint-hmac.key"))
+        .ok_or_else(|| {
+            CliError::Config(
+                "cannot determine the per-user NeMo Relay bootstrap state directory; set HOME or USERPROFILE"
+                    .into(),
+            )
+        })?;
+    load_or_create_bootstrap_hmac_key_at(&path)
+}
+
+fn load_or_create_bootstrap_hmac_key_at(
+    path: &Path,
+) -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
+    load_or_create_bootstrap_hmac_key_at_with_timeout(path, BOOTSTRAP_HMAC_LOCK_TIMEOUT)
+}
+
+fn load_or_create_bootstrap_hmac_key_at_with_timeout(
+    path: &Path,
+    lock_timeout: Duration,
+) -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
+    let parent = path.parent().ok_or_else(|| {
+        CliError::Config(format!(
+            "bootstrap HMAC key path {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        CliError::Config(format!(
+            "failed to create bootstrap state directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    fs::set_permissions(parent, {
+        use std::os::unix::fs::PermissionsExt;
+        fs::Permissions::from_mode(0o700)
+    })
+    .map_err(|error| {
+        CliError::Config(format!(
+            "failed to protect bootstrap state directory {}: {error}",
+            parent.display()
+        ))
+    })?;
+
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        CliError::Config(format!(
+            "failed to open bootstrap HMAC key {}: {error}",
+            path.display()
+        ))
+    })?;
+    let lock_deadline = Instant::now() + lock_timeout;
+    loop {
+        match try_lock_exclusive(&file) {
+            Ok(LockAttempt::Acquired) => break,
+            Ok(LockAttempt::Contended) => {
+                if Instant::now() >= lock_deadline {
+                    return Err(CliError::Config(format!(
+                        "timed out waiting for bootstrap HMAC key lock {}",
+                        path.display()
+                    )));
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => {
+                return Err(CliError::Config(format!(
+                    "failed to lock bootstrap HMAC key {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    #[cfg(unix)]
+    file.set_permissions({
+        use std::os::unix::fs::PermissionsExt;
+        fs::Permissions::from_mode(0o600)
+    })
+    .map_err(|error| {
+        CliError::Config(format!(
+            "failed to protect bootstrap HMAC key {}: {error}",
+            path.display()
+        ))
+    })?;
+
+    let length = file
+        .metadata()
+        .map_err(|error| {
+            CliError::Config(format!(
+                "failed to inspect bootstrap HMAC key {}: {error}",
+                path.display()
+            ))
+        })?
+        .len();
+    if length == 0 {
+        let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+        SystemRandom::new()
+            .fill(&mut key)
+            .map_err(|_| CliError::Config("failed to generate bootstrap HMAC key".into()))?;
+        file.write_all(&key).map_err(|error| {
+            CliError::Config(format!(
+                "failed to write bootstrap HMAC key {}: {error}",
+                path.display()
+            ))
+        })?;
+        file.sync_all().map_err(|error| {
+            CliError::Config(format!(
+                "failed to persist bootstrap HMAC key {}: {error}",
+                path.display()
+            ))
+        })?;
+        return Ok(key);
+    }
+    if length != BOOTSTRAP_HMAC_KEY_BYTES as u64 {
+        return Err(CliError::Config(format!(
+            "bootstrap HMAC key {} has invalid length {length}; expected {BOOTSTRAP_HMAC_KEY_BYTES} bytes",
+            path.display()
+        )));
+    }
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read bootstrap HMAC key {}: {error}",
+            path.display()
+        ))
+    })?;
+    let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+    file.read_exact(&mut key).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read bootstrap HMAC key {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(key)
+}
+
 /// Resolves shared config for plugin-facing CLI commands without mutating gateway runtime fields.
 pub(crate) fn resolve_plugins_config(
     explicit: Option<&PathBuf>,
@@ -791,8 +1496,16 @@ fn load_shared_config(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
+    load_shared_config_scoped(explicit, plugin_config_path, user_config_scope())
+}
+
+fn load_shared_config_scoped(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+    user_only: bool,
+) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths(explicit) {
+    for path in config_paths_scoped(explicit, user_only) {
         let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
             continue;
         };
@@ -819,7 +1532,7 @@ fn load_shared_config(
         }
         merge_toml(&mut merged, parsed);
     }
-    let plugin_toml = load_plugin_toml_config(explicit, plugin_config_path)?;
+    let plugin_toml = load_plugin_toml_config_scoped(explicit, plugin_config_path, user_only)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
@@ -864,11 +1577,16 @@ pub(crate) fn any_config_file_exists() -> bool {
 // Returns the config search path. An explicit path disables implicit discovery; otherwise system
 // config is lowest priority, the nearest project config is next, and user config is merged last.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
+    config_paths_scoped(explicit, user_config_scope())
+}
+
+fn config_paths_scoped(explicit: Option<&PathBuf>, user_only: bool) -> Vec<PathBuf> {
     if let Some(path) = explicit {
         return vec![path.clone()];
     }
     let mut paths = vec![PathBuf::from("/etc/nemo-relay/config.toml")];
-    if let Ok(cwd) = std::env::current_dir()
+    if !user_only
+        && let Ok(cwd) = std::env::current_dir()
         && let Some(project) = find_project_config(&cwd)
     {
         paths.push(project);
@@ -886,6 +1604,14 @@ fn plugin_config_paths(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Vec<PathBuf> {
+    plugin_config_paths_scoped(explicit, plugin_config_path, user_config_scope())
+}
+
+fn plugin_config_paths_scoped(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+    user_only: bool,
+) -> Vec<PathBuf> {
     if let Some(path) = plugin_config_path {
         return vec![path.clone()];
     }
@@ -895,7 +1621,14 @@ fn plugin_config_paths(
             .map(|parent| vec![parent.join(PLUGINS_TOML)])
             .unwrap_or_default();
     }
+    if user_only {
+        return implicit_plugin_config_paths(None, user_config_dir());
+    }
     implicit_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir())
+}
+
+fn user_config_scope() -> bool {
+    std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user")
 }
 
 /// Returns the implicit `plugins.toml` discovery paths used by the gateway and doctor.
@@ -930,6 +1663,13 @@ fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
     user_config_dir().map(|dir| dir.join(PLUGINS_TOML))
+}
+
+pub(crate) fn user_plugin_runtime_config() -> Result<Option<Value>, CliError> {
+    Ok(
+        load_plugin_toml_config_from_paths(implicit_plugin_config_paths(None, user_config_dir()))?
+            .and_then(|config| config.value),
+    )
 }
 
 pub(crate) fn project_plugin_config_path(start: &std::path::Path) -> PathBuf {
@@ -1029,7 +1769,19 @@ fn load_plugin_toml_config(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Result<Option<PluginTomlConfig>, CliError> {
-    load_plugin_toml_config_from_paths(plugin_config_paths(explicit, plugin_config_path))
+    load_plugin_toml_config_scoped(explicit, plugin_config_path, user_config_scope())
+}
+
+fn load_plugin_toml_config_scoped(
+    explicit: Option<&PathBuf>,
+    plugin_config_path: Option<&PathBuf>,
+    user_only: bool,
+) -> Result<Option<PluginTomlConfig>, CliError> {
+    load_plugin_toml_config_from_paths(plugin_config_paths_scoped(
+        explicit,
+        plugin_config_path,
+        user_only,
+    ))
 }
 
 /// Returns the physical `plugins.toml` files that contribute effective runtime or dynamic
@@ -1167,7 +1919,7 @@ fn resolve_dynamic_plugin_refs(
     let mut resolved = Vec::with_capacity(plugins.dynamic.len());
     for dynamic in plugins.dynamic {
         let manifest_path = resolve_dynamic_manifest_path(source, &dynamic.manifest);
-        let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path)
+        let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest(&manifest_path)
             .map_err(|error| {
                 CliError::Config(format!(
                     "invalid dynamic plugin manifest referenced by {}: {error}",

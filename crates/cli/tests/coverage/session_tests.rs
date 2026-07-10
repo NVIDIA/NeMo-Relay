@@ -7,7 +7,7 @@ use nemo_relay::api::runtime::EventSubscriberFn;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig, AtofExporterMode};
 use nemo_relay::observability::openinference::OpenInferenceSubscriber;
-use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins};
+use nemo_relay::plugin::{PluginConfig, clear_plugin_configuration, initialize_plugins_exact};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
@@ -42,7 +42,63 @@ async fn install_test_atif_plugin(output_directory: &Path) {
         ]
     }))
     .unwrap();
-    initialize_plugins(config).await.unwrap();
+    initialize_plugins_exact(config).await.unwrap();
+}
+
+#[tokio::test]
+async fn atif_test_plugin_ignores_discovered_atof_configuration() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let project_config = temp.path().join(".nemo-relay/plugins.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &project_config,
+        r#"version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+"#,
+    )
+    .unwrap();
+    let _cwd = crate::test_support::CwdTestScope::enter(temp.path());
+    let atif_dir = temp.path().join("atif");
+    install_test_atif_plugin(&atif_dir).await;
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(session_event("hermetic-atif", "SessionStart")),
+                NormalizedEvent::PromptSubmitted(session_event(
+                    "hermetic-atif",
+                    "UserPromptSubmit",
+                )),
+                NormalizedEvent::AgentEnded(session_event("hermetic-atif", "SessionEnd")),
+            ],
+        )
+        .await
+        .unwrap();
+    let _trajectory = read_atif_for_session(&atif_dir, "hermetic-atif");
+    clear_plugin_configuration().unwrap();
+
+    let leaked = std::fs::read_dir(temp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name())
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| name.starts_with("nemo-relay-events-") && name.ends_with(".jsonl"))
+        .collect::<Vec<_>>();
+    assert!(
+        leaked.is_empty(),
+        "test plugin setup must not activate ambient ATOF exporters: {leaked:?}"
+    );
 }
 
 fn make_atof_test_exporter(output_directory: &Path, filename: &str) -> AtofExporter {
@@ -885,6 +941,121 @@ async fn turn_output_uses_last_root_owned_llm_response() {
 
     flush_subscribers().unwrap();
     assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+#[tokio::test]
+async fn turn_end_metadata_comes_only_from_the_real_turn_boundary() {
+    let subscriber_name = "cli-turn-boundary-metadata-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(HashMap::<String, (Value, Value)>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() != Some(ScopeCategory::End) || event.name() != "codex-turn" {
+                return;
+            }
+            let Some(session_id) = event
+                .metadata()
+                .and_then(|metadata| metadata.get("session_id"))
+                .and_then(Value::as_str)
+            else {
+                return;
+            };
+            events.lock().unwrap().insert(
+                session_id.to_string(),
+                (
+                    event.output().cloned().unwrap_or(Value::Null),
+                    event.metadata().cloned().unwrap_or(Value::Null),
+                ),
+            );
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    for session_id in [
+        "explicit-turn-end",
+        "fallback-turn-end",
+        "shutdown-turn-end",
+    ] {
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::AgentStarted(codex_session_event(
+                        session_id,
+                        "SessionStart",
+                        json!({ "session_id": session_id }),
+                    )),
+                    NormalizedEvent::PromptSubmitted(codex_session_event(
+                        session_id,
+                        "UserPromptSubmit",
+                        json!({ "session_id": session_id }),
+                    )),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+    let llm = manager
+        .start_llm(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: Some("explicit-turn-end".into()),
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    manager
+        .end_llm(llm, json!({ "message": "pong" }), json!({}))
+        .await
+        .unwrap();
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::TurnEnded(codex_session_event(
+                "explicit-turn-end",
+                "Stop",
+                json!({
+                    "session_id": "explicit-turn-end",
+                    "hook_event_name": "Stop",
+                    "boundary_processed": true
+                }),
+            ))],
+        )
+        .await
+        .unwrap();
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentEnded(codex_session_event(
+                "fallback-turn-end",
+                "SessionEnd",
+                json!({
+                    "session_id": "fallback-turn-end",
+                    "boundary_processed": "must-not-leak"
+                }),
+            ))],
+        )
+        .await
+        .unwrap();
+    manager.close_all("gateway_shutdown").await.unwrap();
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let (output, metadata) = captured.get("explicit-turn-end").unwrap();
+    assert_eq!(output, &json!({ "message": "pong" }));
+    assert_eq!(metadata["hook_event_name"], "Stop");
+    assert_eq!(metadata["boundary_processed"], true);
+    let (_, fallback_metadata) = captured.get("fallback-turn-end").unwrap();
+    assert!(fallback_metadata.get("boundary_processed").is_none());
+    let (shutdown_output, shutdown_metadata) = captured.get("shutdown-turn-end").unwrap();
+    assert_eq!(shutdown_output["status"], "gateway_shutdown");
+    assert!(shutdown_metadata.get("boundary_processed").is_none());
+    drop(captured);
     deregister_subscriber(subscriber_name).unwrap();
 }
 

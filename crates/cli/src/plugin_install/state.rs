@@ -11,12 +11,14 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::config::PluginHost;
+use crate::install_generation::GENERATION_FILE_NAME;
 
 use super::{PLUGIN_NAME, host_arg};
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginInstallOptions {
     pub(super) install_dir: PathBuf,
+    pub(super) operation_lock_dir: PathBuf,
     pub(super) force: bool,
     pub(super) dry_run: bool,
     pub(super) skip_doctor: bool,
@@ -47,6 +49,8 @@ pub(super) struct PluginLayout {
     pub(super) marketplace_manifest: PathBuf,
     pub(super) plugin_root: PathBuf,
     pub(super) plugin_manifest: PathBuf,
+    pub(super) mcp_config: PathBuf,
+    pub(super) generation_fence: PathBuf,
     pub(super) hooks_path: PathBuf,
     pub(super) state_path: PathBuf,
 }
@@ -70,6 +74,8 @@ impl PluginLayout {
             PluginHost::ClaudeCode => plugin_root.join(".claude-plugin").join("plugin.json"),
             PluginHost::All => unreachable!("all is expanded before layout resolution"),
         };
+        let mcp_config = plugin_root.join(".mcp.json");
+        let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
         let hooks_path = plugin_root.join("hooks").join("hooks.json");
         let state_path = state_path(host, install_dir);
         Self {
@@ -78,6 +84,8 @@ impl PluginLayout {
             marketplace_manifest,
             plugin_root,
             plugin_manifest,
+            mcp_config,
+            generation_fence,
             hooks_path,
             state_path,
         }

@@ -10,10 +10,14 @@ mod completions_install;
 mod config;
 mod doctor;
 mod error;
+mod file_io;
 mod gateway;
+mod install_generation;
 mod installer;
 mod json_path;
 mod launcher;
+mod mcp;
+mod mcp_environment;
 mod model;
 mod model_pricing;
 mod plugin_install;
@@ -22,6 +26,7 @@ mod plugins;
 mod server;
 mod session;
 mod setup;
+mod sidecar;
 
 use std::process::ExitCode;
 
@@ -37,6 +42,10 @@ use crate::config::{
 // exit. Errors are printed once here so subcommands can return structured errors without also
 // owning process-level reporting.
 async fn main() -> ExitCode {
+    if let Err(error) = sidecar::join_sidecar_job_from_env() {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
     match run().await {
         Ok(code) => code,
         Err(error) => {
@@ -80,6 +89,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Hermes(command) => {
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
+        Command::Mcp => mcp::run(server).await,
         Command::Config(command) => run_config(command).await,
         Command::Plugins(command) => run_plugins(command, server),
         Command::ModelPricing(command) => run_pricing(command),
@@ -198,7 +208,15 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
             server_args.config.as_ref(),
             &resolved,
         )?;
-        server::serve_with_dynamic(resolved.gateway, dynamic_plugins).await?;
+        let managed_bootstrap =
+            config::managed_bootstrap_identity(server_args, &resolved, &dynamic_plugins)?;
+        server::serve_with_dynamic(
+            resolved.gateway,
+            dynamic_plugins,
+            managed_bootstrap,
+            server_args.ready_file.as_deref(),
+        )
+        .await?;
         Ok(ExitCode::SUCCESS)
     } else if config::any_config_file_exists() {
         doctor::run_doctor(None, false).await

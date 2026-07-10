@@ -84,6 +84,17 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 }
 
 #[test]
+fn cli_parses_native_mcp_subcommand_and_bind_override() {
+    let cli = Cli::try_parse_from(["nemo-relay", "mcp"]).unwrap();
+    assert!(matches!(cli.command, Some(Command::Mcp)));
+    assert!(cli.server.bind.is_none());
+
+    let cli = Cli::try_parse_from(["nemo-relay", "--bind", "127.0.0.1:4041", "mcp"]).unwrap();
+    assert!(matches!(cli.command, Some(Command::Mcp)));
+    assert_eq!(cli.server.bind.unwrap().to_string(), "127.0.0.1:4041");
+}
+
+#[test]
 fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);

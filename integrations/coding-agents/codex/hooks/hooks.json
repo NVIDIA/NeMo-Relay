@@ -1,5 +1,5 @@
 {
-  "SPDX-License-Identifier": "Apache-2.0",
+  "description": "SPDX-License-Identifier: Apache-2.0",
   "hooks": {
     "SessionStart": [
       {
@@ -47,18 +47,6 @@
         ]
       }
     ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "PermissionRequest": [
       {
         "matcher": "*",
@@ -93,17 +81,6 @@
         ]
       }
     ],
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
@@ -127,17 +104,6 @@
       }
     ],
     "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
       {
         "hooks": [
           {

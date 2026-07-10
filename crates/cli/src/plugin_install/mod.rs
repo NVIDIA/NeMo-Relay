@@ -5,9 +5,11 @@
 
 mod host;
 mod marketplace;
+mod operation_lock;
 mod setup;
 mod state;
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver};
@@ -18,16 +20,21 @@ use serde_json::{Value, json};
 
 use crate::config::{InstallCommand, PluginHost, UninstallCommand};
 use crate::error::CliError;
+use crate::install_generation::{GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration};
 
 use host::{
     CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,
     run_host_marketplace_registration, run_host_marketplace_removal, run_host_plugin_registration,
-    run_host_plugin_removal, validate_relay_plugin_shim,
+    run_host_plugin_removal, validate_relay_mcp, validate_relay_plugin_shim,
 };
-use marketplace::{marketplace_manifest, plugin_manifest, write_plugin_marketplace};
+use marketplace::{
+    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config,
+    write_plugin_marketplace, write_plugin_marketplace_for_generation,
+};
+use operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
 use setup::{
-    PluginSetupRunner, RealPluginSetupRunner, run_plugin_doctor, run_plugin_doctor_json,
-    run_plugin_setup, run_plugin_uninstall,
+    PluginSetupRunner, PluginSetupSnapshot, RealPluginSetupRunner, run_plugin_doctor,
+    run_plugin_doctor_json, run_plugin_setup, run_plugin_uninstall,
 };
 use state::{
     CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, PluginInstallOptions,
@@ -40,6 +47,18 @@ pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
 pub(super) const RELAY_COMMAND: &str = "nemo-relay";
 const DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn default_operation_lock_dir() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .map(CanonicalizeOrSelf::canonicalize_or_self)
+        .map(|home| home.join(".nemo-relay").join("plugin-operations"))
+        .ok_or_else(|| {
+            "cannot determine the per-user plugin operation lock directory; set HOME or USERPROFILE"
+                .into()
+        })
+}
 
 /// One non-mutating readiness check for an installed coding-agent plugin.
 ///
@@ -132,6 +151,7 @@ fn spawn_default_host_plugin_readiness(
     std::thread::spawn(move || {
         let options = PluginInstallOptions {
             install_dir,
+            operation_lock_dir: PathBuf::new(),
             force: false,
             dry_run: false,
             skip_doctor: true,
@@ -190,11 +210,17 @@ fn failed_host_plugin_readiness(
 }
 
 pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
+    let operation_lock_dir = if command.dry_run {
+        PathBuf::new()
+    } else {
+        default_operation_lock_dir().map_err(CliError::Install)?
+    };
     let options = PluginInstallOptions {
         install_dir: command
             .install_dir
             .unwrap_or_else(default_install_dir)
             .canonicalize_or_self(),
+        operation_lock_dir,
         force: command.force,
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
@@ -208,11 +234,17 @@ pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
 }
 
 pub(crate) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
+    let operation_lock_dir = if command.dry_run {
+        PathBuf::new()
+    } else {
+        default_operation_lock_dir().map_err(CliError::Install)?
+    };
     let options = PluginInstallOptions {
         install_dir: command
             .install_dir
             .unwrap_or_else(default_install_dir)
             .canonicalize_or_self(),
+        operation_lock_dir,
         force: false,
         dry_run: command.dry_run,
         skip_doctor: true,
@@ -234,6 +266,7 @@ pub(crate) fn doctor(
         install_dir: install_dir
             .unwrap_or_else(default_install_dir)
             .canonicalize_or_self(),
+        operation_lock_dir: PathBuf::new(),
         force: false,
         dry_run: false,
         skip_doctor: true,
@@ -354,53 +387,206 @@ fn install_host(
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
+    install_host_with_operation_timeout(
+        host,
+        options,
+        runner,
+        setup_runner,
+        DEFAULT_OPERATION_LOCK_TIMEOUT,
+    )
+}
+
+fn install_host_with_operation_timeout(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+    lock_timeout: Duration,
+) -> Result<(), String> {
+    let _operation_lock = (!options.dry_run)
+        .then(|| {
+            PluginOperationLock::acquire(
+                host,
+                &options.operation_lock_dir,
+                &options.install_dir,
+                lock_timeout,
+            )
+        })
+        .transpose()?;
+    install_host_locked(host, options, runner, setup_runner)
+}
+
+fn install_host_locked(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
     let relay = require_relay(options, runner)?;
     validate_relay_plugin_shim(&relay, options, runner)?;
+    if matches!(host, PluginHost::Codex) {
+        validate_relay_mcp(&relay, options, runner)?;
+    }
     require_host_cli(host, options, runner)?;
+    if matches!(host, PluginHost::Codex) {
+        host::validate_codex_version(options, runner)?;
+    }
     let layout = PluginLayout::new(host, &options.install_dir);
-    if options.force {
+    let codex_preflight = if !options.dry_run && matches!(host, PluginHost::Codex) {
+        Some(prepare_codex_install(&layout, options, runner)?)
+    } else {
+        None
+    };
+    if !options.force
+        && codex_preflight
+            .as_ref()
+            .is_some_and(|preflight| preflight.previous_install_exists)
+    {
+        return Err(existing_codex_install_requires_force_error());
+    }
+    let mut force_snapshot = None;
+    let staged = if options.force && !options.dry_run && matches!(host, PluginHost::Codex) {
+        let preflight = codex_preflight.expect("Codex force install has preflight state");
+        let staged = stage_plugin_marketplace(host, &relay, &layout, options)?;
+        match begin_force_replacement(host, &layout, preflight, options, runner, setup_runner) {
+            Ok(mut snapshot) => {
+                if let Err(error) = setup_runner.refresh_gateway(host) {
+                    staged.cleanup();
+                    return restore_force_replacement_after_error(
+                        host,
+                        &layout,
+                        &mut snapshot,
+                        options,
+                        runner,
+                        setup_runner,
+                        error,
+                    );
+                }
+                force_snapshot = Some(snapshot);
+                Some(staged)
+            }
+            Err(error) => {
+                staged.cleanup();
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    if options.force && staged.is_none() {
+        if !options.dry_run && matches!(host, PluginHost::Codex) {
+            setup_runner.refresh_gateway(host)?;
+        }
         force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
     }
-    write_plugin_marketplace(host, &layout, options)?;
+    if let Some(staged) = staged.as_ref() {
+        if let Err(error) = staged.promote(&layout) {
+            return restore_force_replacement_after_error(
+                host,
+                &layout,
+                force_snapshot.as_mut().expect("force snapshot exists"),
+                options,
+                runner,
+                setup_runner,
+                error,
+            );
+        }
+        force_snapshot
+            .as_mut()
+            .expect("force snapshot exists")
+            .replacement_promoted = true;
+        staged.cleanup();
+    } else {
+        write_plugin_marketplace(host, &layout, &relay, options)?;
+    }
     if let Err(error) = write_state(&layout, options) {
-        if let Err(cleanup_error) = remove_path(&layout.marketplace_root, options) {
-            return Err(format!(
-                "{error}; additionally failed to remove generated marketplace {}: {cleanup_error}",
-                layout.marketplace_root.display()
-            ));
+        let _replacement_retirement = if force_snapshot.is_some() {
+            match retire_replacement_before_rollback(host, &layout, options, setup_runner) {
+                Ok(retirement) => retirement,
+                Err(retirement_error) => {
+                    return Err(format!(
+                        "{error}; refusing destructive rollback because the replacement MCP generation could not be retired: {retirement_error}"
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let cleanup_error = remove_path(&layout.marketplace_root, options).err();
+        let restore_error = force_snapshot.as_mut().and_then(|snapshot| {
+            restore_force_replacement(host, &layout, snapshot, options, runner, setup_runner).err()
+        });
+        let errors = [cleanup_error, restore_error]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Err(format!("{error}; additionally {}", errors.join("; ")));
         }
         return Err(error);
     }
     let mut registration = HostRegistrationProgress::default();
-    let mut setup_attempted = false;
+    let mut setup_installed = false;
     let result = (|| {
-        run_host_marketplace_registration(host, &layout, options, runner)?;
+        run_host_marketplace_registration(host, &layout.marketplace_root, options, runner)?;
         registration.host_marketplace_added = true;
         run_host_plugin_registration(host, options, runner)?;
         registration.host_plugin_added = true;
-        setup_attempted = true;
-        run_plugin_setup(host, options, setup_runner)?;
+        if !matches!(host, PluginHost::Codex) {
+            setup_installed = true;
+        }
+        run_plugin_setup(host, &layout, options, setup_runner)?;
+        setup_installed = true;
         mark_plugin_setup_installed(host, &layout, options)?;
         if !options.skip_doctor {
-            run_plugin_doctor(host, options, setup_runner)?;
+            run_plugin_doctor(host, &layout.plugin_root, options, setup_runner)?;
         }
         Ok(())
     })();
     if let Err(error) = result {
-        if let Err(rollback_error) = rollback_install(
+        let replacement_may_be_live = force_snapshot.is_some() || registration.host_plugin_added;
+        let _replacement_retirement = if replacement_may_be_live {
+            match retire_replacement_before_rollback(host, &layout, options, setup_runner) {
+                Ok(retirement) => retirement,
+                Err(retirement_error) => {
+                    return Err(format!(
+                        "{error}; refusing destructive rollback because the replacement MCP generation could not be retired: {retirement_error}"
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let rollback_error = rollback_install(
             host,
             &layout,
             registration,
-            setup_attempted,
+            setup_installed,
             options,
             runner,
             setup_runner,
-        ) {
+        )
+        .err();
+        let restore_error = force_snapshot.as_mut().and_then(|snapshot| {
+            restore_force_replacement(host, &layout, snapshot, options, runner, setup_runner).err()
+        });
+        let rollback_errors = [
+            rollback_error.map(|error| format!("failed to roll back install: {error}")),
+            restore_error.map(|error| format!("failed to restore previous install: {error}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !rollback_errors.is_empty() {
             return Err(format!(
-                "{error}; additionally failed to roll back install: {rollback_error}"
+                "{error}; additionally {}",
+                rollback_errors.join("; ")
             ));
         }
         return Err(error);
+    }
+    if let Some(snapshot) = force_snapshot {
+        snapshot.commit();
     }
     println!(
         "installed {} plugin marketplace at {}",
@@ -416,7 +602,144 @@ fn uninstall_host(
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
+    uninstall_host_with_operation_timeout(
+        host,
+        options,
+        runner,
+        setup_runner,
+        DEFAULT_OPERATION_LOCK_TIMEOUT,
+    )
+}
+
+fn uninstall_host_with_operation_timeout(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+    lock_timeout: Duration,
+) -> Result<(), String> {
+    let _operation_lock = (!options.dry_run)
+        .then(|| {
+            PluginOperationLock::acquire(
+                host,
+                &options.operation_lock_dir,
+                &options.install_dir,
+                lock_timeout,
+            )
+        })
+        .transpose()?;
+    uninstall_host_locked(host, options, runner, setup_runner)
+}
+
+fn uninstall_host_locked(
+    host: PluginHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
+    let state = read_state(host, &options.install_dir);
+    let layout = PluginLayout::new(host, &options.install_dir);
+    let plugin_root = state
+        .as_ref()
+        .map(|state| state.plugin_root.as_path())
+        .unwrap_or(&layout.plugin_root);
+    let local_install_exists = state.is_some() || layout.marketplace_root.exists();
+    let mut generation_retirement = retire_installed_generation(
+        host,
+        plugin_root,
+        local_install_exists,
+        options,
+        runner,
+        setup_runner,
+    )?;
+    if let Some(retirement) = generation_retirement.as_mut() {
+        retirement.invalidate_for_replacement().map_err(|error| {
+            format!(
+                "failed to retire installed MCP generation before uninstalling {}: {error}",
+                plugin_root.display()
+            )
+        })?;
+    }
     uninstall_host_with_setup_override(host, options, runner, setup_runner, false)
+}
+
+fn retire_installed_generation(
+    host: PluginHost,
+    plugin_root: &Path,
+    local_install_exists: bool,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<Option<GenerationRetirement>, String> {
+    if options.dry_run || !matches!(host, PluginHost::Codex) {
+        return Ok(None);
+    }
+    let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
+    let mut existing_install = local_install_exists;
+    if !generation_fence.exists() {
+        let registration = host_registration_report(host, options, runner)?;
+        existing_install |=
+            registration.host_plugin_registered || registration.host_marketplace_registered;
+        if existing_install {
+            return Err(missing_generation_fence_error(&generation_fence));
+        }
+    }
+    let retirement = GenerationRetirement::acquire(&generation_fence)
+        .map_err(|cause| invalid_generation_fence_error(&generation_fence, &cause))?;
+    if retirement.is_none() && !existing_install {
+        let registration = host_registration_report(host, options, runner)?;
+        existing_install =
+            registration.host_plugin_registered || registration.host_marketplace_registered;
+    }
+    if retirement.is_none() && existing_install {
+        return Err(missing_generation_fence_error(&generation_fence));
+    }
+    setup_runner.refresh_gateway(host)?;
+    Ok(retirement)
+}
+
+fn retire_replacement_before_rollback(
+    host: PluginHost,
+    layout: &PluginLayout,
+    options: &PluginInstallOptions,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<Option<GenerationRetirement>, String> {
+    if options.dry_run || !matches!(host, PluginHost::Codex) {
+        return Ok(None);
+    }
+    let mut retirement = GenerationRetirement::acquire(&layout.generation_fence)
+        .map_err(|cause| invalid_generation_fence_error(&layout.generation_fence, &cause))?
+        .ok_or_else(|| missing_generation_fence_error(&layout.generation_fence))?;
+    setup_runner.refresh_gateway(host)?;
+    retirement.invalidate_for_replacement().map_err(|error| {
+        format!(
+            "failed to retire replacement MCP generation {} before rollback: {error}",
+            layout.generation_fence.display()
+        )
+    })?;
+    Ok(Some(retirement))
+}
+
+fn existing_codex_install_requires_force_error() -> String {
+    "an existing fenced Codex plugin install was found; rerun `nemo-relay install codex --force` to replace it safely"
+        .into()
+}
+
+fn missing_generation_fence_error(generation_fence: &Path) -> String {
+    unsafe_generation_fence_error(&format!("is missing at {}", generation_fence.display()))
+}
+
+fn invalid_generation_fence_error(generation_fence: &Path, cause: &str) -> String {
+    unsafe_generation_fence_error(&format!(
+        "at {} is invalid or unreadable: {cause}",
+        generation_fence.display()
+    ))
+}
+
+fn unsafe_generation_fence_error(problem: &str) -> String {
+    format!(
+        "cannot safely replace or uninstall an existing Codex plugin because its MCP generation marker {problem}; close all Codex clients and standalone `nemo-relay mcp` processes, run `codex plugin remove nemo-relay-plugin@nemo-relay-local` and `codex plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install codex --force` to create a fenced install (and `nemo-relay uninstall codex` afterward if removal was intended)"
+    )
 }
 
 fn uninstall_host_with_setup_override(
@@ -446,12 +769,12 @@ fn uninstall_host_with_setup_override(
         state.plugin_setup_installed = true;
         write_state_for_host(host, &state, &options.install_dir, options)?;
     }
-    run_host_unregistration(host, &mut state, &options.install_dir, options, runner)?;
     if force_plugin_setup_uninstall || state.plugin_setup_installed {
-        run_plugin_uninstall(host, options, setup_runner)?;
+        run_plugin_uninstall(host, &state.plugin_root, options, setup_runner)?;
         state.plugin_setup_installed = false;
         write_state_for_host(host, &state, &options.install_dir, options)?;
     }
+    run_host_unregistration(host, &mut state, &options.install_dir, options, runner)?;
     remove_path(&state.marketplace_root, options)?;
     remove_path(&state_path(host, &options.install_dir), options)?;
     println!("uninstalled {} plugin", host_label(host));
@@ -479,9 +802,9 @@ fn doctor_host(
     }
     readiness.ok().then_some(()).ok_or_else(|| {
         format!(
-            "{} plugin doctor checks failed; run `nemo-relay install {} --force` to repair the installation",
+            "{} plugin doctor checks failed; remediation: {}",
             host_label(host),
-            host_arg(host)
+            readiness.remediation
         )
     })
 }
@@ -522,6 +845,10 @@ fn collect_host_plugin_readiness(
     let state_path = state_path(host, &options.install_dir);
     let state = read_state(host, &options.install_dir);
     let layout = PluginLayout::new(host, &options.install_dir);
+    let setup_plugin_root = state
+        .as_ref()
+        .map(|state| state.plugin_root.clone())
+        .unwrap_or_else(|| layout.plugin_root.clone());
     let marketplace = state
         .as_ref()
         .map(|state| state.marketplace_root.clone())
@@ -580,6 +907,38 @@ fn collect_host_plugin_readiness(
             validate_relay_plugin_shim(&relay, options, runner)
                 .map(|_| "plugin-shim hook is supported".into()),
         );
+        if let Some(plugin) = readiness.plugin.as_ref() {
+            readiness.push(
+                "Generated hooks",
+                generated_manifest_check(
+                    &plugin.join("hooks").join("hooks.json"),
+                    &plugin_hooks(host, &relay),
+                    "hooks",
+                ),
+            );
+        }
+        if matches!(host, PluginHost::Codex) {
+            readiness.push(
+                "Relay MCP support",
+                validate_relay_mcp(&relay, options, runner)
+                    .map(|_| "native mcp subcommand is supported".into()),
+            );
+            if let Some(plugin) = readiness.plugin.as_ref() {
+                let generation_fence = plugin.join(crate::install_generation::GENERATION_FILE_NAME);
+                let mcp_config = plugin_mcp_config_path(plugin);
+                readiness.push(
+                    "MCP generation fence",
+                    InstallGeneration::capture(generation_fence.clone())
+                        .map(|_| format!("valid generation at {}", generation_fence.display())),
+                );
+                let check = plugin_mcp_config(host, &relay, &generation_fence)
+                    .and_then(|expected| {
+                        expected.ok_or_else(|| "Codex MCP configuration was not generated".into())
+                    })
+                    .and_then(|expected| generated_mcp_config_check(&mcp_config, &expected));
+                readiness.push("Generated MCP server", check);
+            }
+        }
     }
 
     let host_cli_check = require_host_cli(host, options, runner);
@@ -591,6 +950,18 @@ fn collect_host_plugin_readiness(
             .map_err(Clone::clone),
     );
     if host_cli_check.is_ok() {
+        if matches!(host, PluginHost::Codex) {
+            let version = host::validate_codex_version(options, runner);
+            if version.is_err() {
+                readiness.remediation =
+                    "upgrade Codex to codex-cli 0.143.0 or newer, then run `nemo-relay install codex --force`"
+                        .into();
+            }
+            readiness.push(
+                "Codex version",
+                version.map(|_| "codex-cli 0.143.0 or newer is installed".into()),
+            );
+        }
         match host_registration_report(host, options, runner) {
             Ok(report) => {
                 readiness.host_plugin_registered = Some(report.host_plugin_registered);
@@ -621,7 +992,7 @@ fn collect_host_plugin_readiness(
         }
     }
 
-    match run_plugin_doctor_json(host, setup_runner) {
+    match run_plugin_doctor_json(host, &setup_plugin_root, setup_runner) {
         Ok(plugin_report) => {
             append_plugin_setup_checks(&mut readiness, &plugin_report);
             readiness.plugin_setup = Some(plugin_report);
@@ -679,6 +1050,47 @@ fn generated_manifest_check(path: &Path, expected: &Value, label: &str) -> Resul
     }
 }
 
+fn generated_mcp_config_check(path: &Path, expected: &Value) -> Result<String, String> {
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "missing or unreadable MCP server manifest {}: {error}",
+            path.display()
+        )
+    })?;
+    let actual = serde_json::from_str::<Value>(&raw)
+        .map_err(|error| format!("invalid MCP server manifest {}: {error}", path.display()))?;
+    if actual == *expected {
+        return Ok(format!("valid at {}", path.display()));
+    }
+    let expected_vars = expected["nemo-relay"]["env_vars"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual_vars = actual["nemo-relay"]["env_vars"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let missing = expected_vars
+        .difference(&actual_vars)
+        .copied()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(format!(
+            "MCP server at {} is missing forwarded environment variables: {}; run `nemo-relay install codex --force`",
+            path.display(),
+            missing.join(", ")
+        ));
+    }
+    Err(format!(
+        "unexpected MCP server manifest contents at {}",
+        path.display()
+    ))
+}
+
 fn marketplace_manifest_path(host: PluginHost, root: &Path) -> PathBuf {
     match host {
         PluginHost::Codex => root
@@ -698,6 +1110,448 @@ fn plugin_manifest_path(host: PluginHost, root: &Path) -> PathBuf {
     }
 }
 
+fn plugin_mcp_config_path(root: &Path) -> PathBuf {
+    root.join(".mcp.json")
+}
+
+struct StagedPluginMarketplace {
+    layout: PluginLayout,
+    parent: PathBuf,
+}
+
+impl StagedPluginMarketplace {
+    fn promote(&self, target: &PluginLayout) -> Result<(), String> {
+        fs::rename(&self.layout.marketplace_root, &target.marketplace_root).map_err(|error| {
+            format!(
+                "failed to promote staged marketplace {} to {}: {error}",
+                self.layout.marketplace_root.display(),
+                target.marketplace_root.display()
+            )
+        })
+    }
+
+    fn cleanup(&self) {
+        let _ = fs::remove_dir_all(&self.parent);
+    }
+}
+
+struct CodexInstallPreflight {
+    persisted: Option<PluginState>,
+    state_bytes: Option<Vec<u8>>,
+    previous_marketplace_root: PathBuf,
+    previous_plugin_root: PathBuf,
+    previous_generation_fence: PathBuf,
+    plugin_registered: bool,
+    marketplace_registered: bool,
+    previous_setup_installed: bool,
+    previous_install_exists: bool,
+    generation_retirement: Option<GenerationRetirement>,
+}
+
+fn prepare_codex_install(
+    layout: &PluginLayout,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<CodexInstallPreflight, String> {
+    let persisted = read_state(PluginHost::Codex, &options.install_dir);
+    let registration = host_registration_report(PluginHost::Codex, options, runner)?;
+    let plugin_registered = registration.host_plugin_registered;
+    let marketplace_registered = registration.host_marketplace_registered;
+    let state_bytes = match fs::read(&layout.state_path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "failed to snapshot {}: {error}",
+                layout.state_path.display()
+            ));
+        }
+    };
+    let previous_setup_installed = persisted
+        .as_ref()
+        .is_some_and(|state| state.plugin_setup_installed)
+        || plugin_registered;
+    let previous_marketplace_root = persisted
+        .as_ref()
+        .map(|state| state.marketplace_root.clone())
+        .unwrap_or_else(|| layout.marketplace_root.clone());
+    let previous_plugin_root = persisted
+        .as_ref()
+        .map(|state| state.plugin_root.clone())
+        .unwrap_or_else(|| layout.plugin_root.clone());
+    let previous_generation_fence = previous_plugin_root.join(GENERATION_FILE_NAME);
+    let previous_install_exists = state_bytes.is_some()
+        || layout.marketplace_root.exists()
+        || plugin_registered
+        || marketplace_registered;
+    let generation_retirement = if previous_install_exists {
+        if !previous_generation_fence.exists() {
+            return Err(missing_generation_fence_error(&previous_generation_fence));
+        }
+        Some(
+            GenerationRetirement::acquire(&previous_generation_fence)
+                .map_err(|cause| {
+                    invalid_generation_fence_error(&previous_generation_fence, &cause)
+                })?
+                .ok_or_else(|| missing_generation_fence_error(&previous_generation_fence))?,
+        )
+    } else {
+        None
+    };
+    Ok(CodexInstallPreflight {
+        persisted,
+        state_bytes,
+        previous_marketplace_root,
+        previous_plugin_root,
+        previous_generation_fence,
+        plugin_registered,
+        marketplace_registered,
+        previous_setup_installed,
+        previous_install_exists,
+        generation_retirement,
+    })
+}
+
+struct ForceInstallSnapshot {
+    state_bytes: Option<Vec<u8>>,
+    setup_snapshot: Option<PluginSetupSnapshot>,
+    original_marketplace_root: PathBuf,
+    original_plugin_root: PathBuf,
+    original_generation_fence: PathBuf,
+    plugin_registered: bool,
+    marketplace_registered: bool,
+    backup_marketplace_root: PathBuf,
+    backup_plugin_root: Option<PathBuf>,
+    marketplace_moved: bool,
+    plugin_moved: bool,
+    replacement_promoted: bool,
+    generation_retirement: Option<GenerationRetirement>,
+}
+
+impl ForceInstallSnapshot {
+    fn plugin_moves_with_marketplace(&self) -> bool {
+        self.original_plugin_root
+            .starts_with(&self.original_marketplace_root)
+    }
+
+    fn commit(self) {
+        if self.marketplace_moved {
+            match fs::remove_dir_all(&self.backup_marketplace_root) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => eprintln!(
+                    "warning: failed to remove replaced marketplace backup {}: {error}",
+                    self.backup_marketplace_root.display()
+                ),
+            }
+        }
+        if self.plugin_moved
+            && let Some(backup_plugin_root) = self.backup_plugin_root.as_ref()
+        {
+            match fs::remove_dir_all(backup_plugin_root) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => eprintln!(
+                    "warning: failed to remove replaced plugin backup {}: {error}",
+                    backup_plugin_root.display()
+                ),
+            }
+        }
+    }
+}
+
+fn stage_plugin_marketplace(
+    host: PluginHost,
+    relay: &Path,
+    target: &PluginLayout,
+    options: &PluginInstallOptions,
+) -> Result<StagedPluginMarketplace, String> {
+    let parent = options.install_dir.join(format!(
+        ".{}-install-stage-{}",
+        host_arg(host),
+        uuid::Uuid::now_v7()
+    ));
+    let layout = PluginLayout::new(host, &parent);
+    if let Err(error) = write_plugin_marketplace_for_generation(
+        host,
+        &layout,
+        relay,
+        &target.generation_fence,
+        options,
+    ) {
+        let _ = fs::remove_dir_all(&parent);
+        return Err(error);
+    }
+    Ok(StagedPluginMarketplace { layout, parent })
+}
+
+fn begin_force_replacement(
+    host: PluginHost,
+    layout: &PluginLayout,
+    preflight: CodexInstallPreflight,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<ForceInstallSnapshot, String> {
+    let CodexInstallPreflight {
+        persisted,
+        state_bytes,
+        previous_marketplace_root,
+        previous_plugin_root,
+        previous_generation_fence,
+        plugin_registered,
+        marketplace_registered,
+        previous_setup_installed,
+        previous_install_exists: _,
+        generation_retirement,
+    } = preflight;
+    let setup_snapshot = setup_runner.snapshot(host)?;
+    let backup_parent = previous_marketplace_root
+        .parent()
+        .unwrap_or(&options.install_dir);
+    let backup_marketplace_root = backup_parent.join(format!(
+        ".{}-marketplace-backup-{}",
+        host_arg(host),
+        uuid::Uuid::now_v7()
+    ));
+    let backup_plugin_root =
+        (!previous_plugin_root.starts_with(&previous_marketplace_root)).then(|| {
+            previous_plugin_root
+                .parent()
+                .unwrap_or(&options.install_dir)
+                .join(format!(
+                    ".{}-plugin-backup-{}",
+                    host_arg(host),
+                    uuid::Uuid::now_v7()
+                ))
+        });
+    let mut snapshot = ForceInstallSnapshot {
+        state_bytes,
+        setup_snapshot,
+        original_marketplace_root: previous_marketplace_root,
+        original_plugin_root: previous_plugin_root,
+        original_generation_fence: previous_generation_fence,
+        plugin_registered,
+        marketplace_registered,
+        backup_marketplace_root,
+        backup_plugin_root,
+        marketplace_moved: false,
+        plugin_moved: false,
+        replacement_promoted: false,
+        generation_retirement,
+    };
+    let mut cleanup_state = persisted.unwrap_or_else(|| PluginState {
+        marketplace_root: layout.marketplace_root.clone(),
+        plugin_root: layout.plugin_root.clone(),
+        host_plugin_removed: !plugin_registered,
+        host_marketplace_removed: !marketplace_registered,
+        plugin_setup_installed: previous_setup_installed,
+    });
+    cleanup_state.host_plugin_removed = !plugin_registered;
+    cleanup_state.host_marketplace_removed = !marketplace_registered;
+    let result = run_host_unregistration(
+        host,
+        &mut cleanup_state,
+        &options.install_dir,
+        options,
+        runner,
+    )
+    .and_then(|()| {
+        if let Some(retirement) = snapshot.generation_retirement.as_mut() {
+            retirement.invalidate_for_replacement().map_err(|error| {
+                format!(
+                    "failed to retire previous MCP generation {} before replacement: {error}",
+                    snapshot.original_generation_fence.display()
+                )
+            })?;
+        }
+        if snapshot.original_marketplace_root.exists() {
+            fs::rename(
+                &snapshot.original_marketplace_root,
+                &snapshot.backup_marketplace_root,
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to preserve existing marketplace {}: {error}",
+                    snapshot.original_marketplace_root.display()
+                )
+            })?;
+            snapshot.marketplace_moved = true;
+        }
+        if !snapshot.plugin_moves_with_marketplace() && snapshot.original_plugin_root.exists() {
+            let backup_plugin_root = snapshot
+                .backup_plugin_root
+                .as_ref()
+                .expect("separate original plugin root has a backup path");
+            fs::rename(&snapshot.original_plugin_root, backup_plugin_root).map_err(|error| {
+                format!(
+                    "failed to preserve existing plugin root {} containing generation marker {}: {error}",
+                    snapshot.original_plugin_root.display(),
+                    snapshot.original_generation_fence.display()
+                )
+            })?;
+            snapshot.plugin_moved = true;
+        }
+        Ok(())
+    });
+    if let Err(error) = result {
+        return restore_force_replacement_after_error(
+            host,
+            layout,
+            &mut snapshot,
+            options,
+            runner,
+            setup_runner,
+            error,
+        );
+    }
+    Ok(snapshot)
+}
+
+fn restore_force_replacement_after_error<T>(
+    host: PluginHost,
+    layout: &PluginLayout,
+    snapshot: &mut ForceInstallSnapshot,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+    original_error: String,
+) -> Result<T, String> {
+    match restore_force_replacement(host, layout, snapshot, options, runner, setup_runner) {
+        Ok(()) => Err(original_error),
+        Err(rollback_error) => Err(format!(
+            "{original_error}; additionally failed to restore previous install: {rollback_error}"
+        )),
+    }
+}
+
+fn restore_force_replacement(
+    host: PluginHost,
+    layout: &PluginLayout,
+    snapshot: &mut ForceInstallSnapshot,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if snapshot.replacement_promoted {
+        match host_registration_report(host, options, runner) {
+            Ok(report) => {
+                if report.host_plugin_registered
+                    && let Err(error) = run_host_plugin_removal(host, options, runner)
+                {
+                    errors.push(error);
+                }
+                if report.host_marketplace_registered
+                    && let Err(error) = run_host_marketplace_removal(host, options, runner)
+                {
+                    errors.push(error);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+        if let Err(error) = remove_path(&layout.marketplace_root, options) {
+            errors.push(error);
+        }
+        snapshot.replacement_promoted = false;
+    }
+    if snapshot.marketplace_moved {
+        if let Err(error) = fs::rename(
+            &snapshot.backup_marketplace_root,
+            &snapshot.original_marketplace_root,
+        ) {
+            errors.push(format!(
+                "failed to restore marketplace {}: {error}",
+                snapshot.original_marketplace_root.display()
+            ));
+        } else {
+            snapshot.marketplace_moved = false;
+        }
+    }
+    if snapshot.plugin_moved
+        && let Some(backup_plugin_root) = snapshot.backup_plugin_root.as_ref()
+    {
+        if let Err(error) = fs::rename(backup_plugin_root, &snapshot.original_plugin_root) {
+            errors.push(format!(
+                "failed to restore plugin root {} containing generation marker {}: {error}",
+                snapshot.original_plugin_root.display(),
+                snapshot.original_generation_fence.display()
+            ));
+        } else {
+            snapshot.plugin_moved = false;
+        }
+    }
+    if let Some(retirement) = snapshot.generation_retirement.as_mut()
+        && let Err(error) = retirement.restore_after_rollback()
+    {
+        errors.push(error);
+    }
+    match host_registration_report(host, options, runner) {
+        Ok(report) => {
+            if report.host_plugin_registered
+                && !snapshot.plugin_registered
+                && let Err(error) = run_host_plugin_removal(host, options, runner)
+            {
+                errors.push(error);
+            }
+            if report.host_marketplace_registered
+                && !snapshot.marketplace_registered
+                && let Err(error) = run_host_marketplace_removal(host, options, runner)
+            {
+                errors.push(error);
+            }
+            if snapshot.marketplace_registered
+                && !report.host_marketplace_registered
+                && let Err(error) = run_host_marketplace_registration(
+                    host,
+                    &snapshot.original_marketplace_root,
+                    options,
+                    runner,
+                )
+            {
+                errors.push(error);
+            }
+            if snapshot.plugin_registered
+                && !report.host_plugin_registered
+                && let Err(error) = run_host_plugin_registration(host, options, runner)
+            {
+                errors.push(error);
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    if let Some(setup_snapshot) = snapshot.setup_snapshot.as_ref()
+        && let Err(error) = setup_runner.restore_snapshot(setup_snapshot)
+    {
+        errors.push(error);
+    }
+    if let Some(bytes) = snapshot.state_bytes.as_deref() {
+        if let Some(parent) = layout.state_path.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            errors.push(format!("failed to create {}: {error}", parent.display()));
+        }
+        if let Err(error) = fs::write(&layout.state_path, bytes) {
+            errors.push(format!(
+                "failed to restore {}: {error}",
+                layout.state_path.display()
+            ));
+        }
+    } else if let Err(error) = fs::remove_file(&layout.state_path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        errors.push(format!(
+            "failed to remove {}: {error}",
+            layout.state_path.display()
+        ));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
 fn force_cleanup_existing_install(
     host: PluginHost,
     layout: &PluginLayout,
@@ -706,7 +1560,7 @@ fn force_cleanup_existing_install(
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
     if layout.state_path.exists() {
-        uninstall_host(host, options, runner, setup_runner)?;
+        uninstall_host_locked(host, options, runner, setup_runner)?;
     } else {
         let mut state = PluginState {
             marketplace_root: layout.marketplace_root.clone(),
@@ -726,12 +1580,12 @@ fn rollback_install(
     host: PluginHost,
     layout: &PluginLayout,
     registration: HostRegistrationProgress,
-    setup_attempted: bool,
+    setup_installed: bool,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
-    if setup_attempted {
+    if setup_installed {
         return uninstall_host_with_setup_override(host, options, runner, setup_runner, true);
     }
     let mut state = read_state(host, &options.install_dir).unwrap_or_else(|| PluginState {

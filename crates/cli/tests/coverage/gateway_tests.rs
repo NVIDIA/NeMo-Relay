@@ -745,9 +745,12 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
     };
     let state = AppState {
         config: config.clone(),
+        bootstrap_fingerprint: None,
+        bootstrap_challenge_key: None,
         http: test_http_client(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        bootstrap_shutdown: None,
     };
     let request = Request::builder()
         .method(Method::POST)
@@ -774,9 +777,12 @@ async fn models_rejects_non_get_requests_directly() {
     };
     let state = AppState {
         config: config.clone(),
+        bootstrap_fingerprint: None,
+        bootstrap_challenge_key: None,
         http: test_http_client(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
+        bootstrap_shutdown: None,
     };
     let request = Request::builder()
         .method(Method::POST)

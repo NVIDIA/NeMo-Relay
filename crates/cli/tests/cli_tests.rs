@@ -3,13 +3,17 @@
 
 //! CLI-level gateway coverage tests.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
+use ring::hmac;
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
@@ -159,6 +163,646 @@ fn cli_version_exits_successfully() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("nemo-relay "));
+}
+
+#[test]
+fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
+    let output = Command::new(gateway_bin())
+        .args(["mcp", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Multiple MCP clients share the gateway"));
+    assert!(stdout.contains("127.0.0.1:47632"));
+}
+
+#[test]
+fn cli_mcp_initializes_and_exits_cleanly_when_stdio_closes() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(gateway_bin())
+        .args(["--bind", "127.0.0.1:0", "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        )
+        .unwrap();
+
+    let output = wait_child_with_output(child);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response = serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    assert_eq!(response["id"], serde_json::json!(1));
+    assert_eq!(
+        response["result"]["serverInfo"]["name"],
+        serde_json::json!("nemo-relay")
+    );
+    let log = std::fs::read_to_string(
+        find_runtime_file(temp.path(), "codex-sidecar.log")
+            .expect("Codex sidecar log should exist"),
+    )
+    .unwrap();
+    assert!(log.contains("Gateway        http://127.0.0.1:"));
+}
+
+#[test]
+fn cli_mcp_does_not_launch_gateway_when_stdio_closes_before_request() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut child = Command::new(gateway_bin())
+        .args(["mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdin.take());
+
+    let output = wait_child_with_output(child);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(find_runtime_file(temp.path(), "codex-sidecar.log").is_none());
+}
+
+fn start_mcp_client(temp: &std::path::Path, bind: SocketAddr) -> (Child, ChildStdin) {
+    start_mcp_client_with_idle_timeout(temp, bind, "1")
+}
+
+fn start_mcp_client_with_idle_timeout(
+    temp: &std::path::Path,
+    bind: SocketAddr,
+    idle_timeout_secs: &str,
+) -> (Child, ChildStdin) {
+    let mut child = Command::new(gateway_bin())
+        .args(["--bind", &bind.to_string(), "mcp"])
+        .env("HOME", temp)
+        .env("XDG_CONFIG_HOME", temp.join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.join("runtime"))
+        .env("TMPDIR", temp)
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    stdin
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        )
+        .unwrap();
+    let (response_tx, response_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut response = String::new();
+        let result = BufReader::new(stdout)
+            .read_line(&mut response)
+            .map(|_| response);
+        let _ = response_tx.send(result);
+    });
+    let response = match response_rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(response) => response.unwrap(),
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("MCP initialization response timed out: {error}");
+        }
+    };
+    let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(response["result"]["serverInfo"]["name"], "nemo-relay");
+    (child, stdin)
+}
+
+#[test]
+fn cli_codex_hook_cold_recovery_uses_the_mcp_persistent_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let gateway_url = format!("http://{address}");
+    let mut hook = Command::new(gateway_bin())
+        .args([
+            "plugin-shim",
+            "hook",
+            "codex",
+            "--gateway-url",
+            &gateway_url,
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "10")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hook.stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"session_id\":\"cold-hook\",\"hook_event_name\":\"SessionStart\"}")
+        .unwrap();
+    let hook_output = wait_child_with_output(hook);
+    assert!(
+        hook_output.status.success(),
+        "cold hook recovery failed: {}",
+        String::from_utf8_lossy(&hook_output.stderr)
+    );
+
+    let (mut mcp, mcp_stdin) = start_mcp_client_with_idle_timeout(temp.path(), address, "10");
+    drop(mcp_stdin);
+    assert!(wait_child(&mut mcp).success());
+
+    let owner = wait_for_owned_sidecar(temp.path(), None);
+    assert_eq!(owner["url"], gateway_url);
+    stop_owned_sidecar(&owner);
+    wait_for_port_closed(address);
+}
+
+#[derive(Clone, Copy)]
+enum FakeBootstrapProof {
+    Missing,
+    Wrong,
+    Valid,
+}
+
+fn bootstrap_request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+    request.lines().find_map(|line| {
+        let (candidate, value) = line.split_once(':')?;
+        candidate.eq_ignore_ascii_case(name).then(|| value.trim())
+    })
+}
+
+fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
+    let key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    let mut context = hmac::Context::with_key(&key);
+    context.update(b"nemo-relay/bootstrap-health/v1\0");
+    context.update(fingerprint.as_bytes());
+    context.update(&[0]);
+    context.update(nonce.as_bytes());
+    format!(
+        "hmac-sha256:{}",
+        context
+            .sign()
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
+    let temp = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server_stopped = stopped.clone();
+    let server_requests = requests.clone();
+    let key_path = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("bootstrap")
+        .join("fingerprint-hmac.key");
+    let server = thread::spawn(move || {
+        while !server_stopped.load(Ordering::Relaxed) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+                Err(error) => panic!("fake bootstrap listener failed: {error}"),
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let request = read_http_request(&mut stream);
+            server_requests.lock().unwrap().push(request.clone());
+            if request.starts_with("GET /healthz ") {
+                let fingerprint =
+                    bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint")
+                        .unwrap();
+                let nonce =
+                    bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce").unwrap();
+                let proof_header = match proof {
+                    FakeBootstrapProof::Missing => String::new(),
+                    FakeBootstrapProof::Wrong => {
+                        "X-NeMo-Relay-Bootstrap-Proof: hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000\r\n".into()
+                    }
+                    FakeBootstrapProof::Valid => {
+                        let key = std::fs::read(&key_path).unwrap();
+                        format!(
+                            "X-NeMo-Relay-Bootstrap-Proof: {}\r\n",
+                            fake_bootstrap_proof(&key, fingerprint, nonce)
+                        )
+                    }
+                };
+                let body = format!(
+                    r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":1}}"#,
+                    env!("CARGO_PKG_VERSION")
+                );
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\n{proof_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+            } else {
+                let body = r#"{"continue":true}"#;
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+            }
+        }
+    });
+
+    let mut child = Command::new(gateway_bin())
+        .args([
+            "plugin-shim",
+            "hook",
+            "codex",
+            "--gateway-url",
+            &format!("http://{address}"),
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_FAIL_CLOSED", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"session_id\":\"challenge\",\"hook_event_name\":\"SessionStart\"}")
+        .unwrap();
+    let output = wait_child_with_output(child);
+    stopped.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    let requests = Arc::try_unwrap(requests).unwrap().into_inner().unwrap();
+    (output, requests)
+}
+
+#[test]
+fn cli_codex_hook_rejects_compatible_json_without_bootstrap_proof() {
+    let (output, requests) = run_fake_bootstrap_listener(FakeBootstrapProof::Missing);
+    assert!(!output.status.success());
+    assert!(requests.iter().all(|request| !request.starts_with("POST ")));
+}
+
+#[test]
+fn cli_codex_hook_rejects_an_invalid_bootstrap_proof() {
+    let (output, requests) = run_fake_bootstrap_listener(FakeBootstrapProof::Wrong);
+    assert!(!output.status.success());
+    assert!(requests.iter().all(|request| !request.starts_with("POST ")));
+}
+
+#[test]
+fn cli_codex_hook_reuses_a_listener_with_a_valid_bootstrap_proof() {
+    let (output, requests) = run_fake_bootstrap_listener(FakeBootstrapProof::Valid);
+    assert!(
+        output.status.success(),
+        "authenticated hook failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /hooks/codex "))
+    );
+}
+
+fn run_codex_hook_with_launch_resolution_error(
+    temp: &std::path::Path,
+    fail_closed: bool,
+    payload: &[u8],
+) -> Output {
+    let mut command = Command::new(gateway_bin());
+    command
+        .args([
+            "plugin-shim",
+            "hook",
+            "codex",
+            "--gateway-url",
+            "http://127.0.0.1:1",
+        ])
+        .env("HOME", temp)
+        .env("XDG_CONFIG_HOME", temp.join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.join("runtime"))
+        .env("TMPDIR", temp)
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "not-a-number")
+        .env_remove("NEMO_RELAY_FAIL_CLOSED")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if fail_closed {
+        command.env("NEMO_RELAY_FAIL_CLOSED", "1");
+    }
+    let mut child = command.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(payload).unwrap();
+    wait_child_with_output(child)
+}
+
+#[test]
+fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
+    let temp = tempfile::tempdir().unwrap();
+
+    for fail_closed in [false, true] {
+        let output = run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, b"{}");
+        assert_eq!(output.status.success(), !fail_closed);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("gateway identity preflight failed"));
+        assert!(stderr.contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS"));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+#[test]
+fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
+    const DEFAULT_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
+    let temp = tempfile::tempdir().unwrap();
+    let payload = vec![b'x'; DEFAULT_HOOK_PAYLOAD_BYTES + 1];
+
+    for fail_closed in [false, true] {
+        let output =
+            run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, &payload);
+
+        assert_eq!(output.status.success(), !fail_closed);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("hook payload exceeds the 20971520-byte limit"));
+        assert!(!stderr.contains("gateway identity preflight failed"));
+        assert!(output.stdout.is_empty());
+    }
+}
+
+fn sidecar_address(temp: &std::path::Path) -> SocketAddr {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let log_path = find_runtime_file(temp, "codex-sidecar.log");
+        if let Some(log_path) = log_path.as_ref()
+            && let Ok(log) = std::fs::read_to_string(log_path)
+            && let Some(address) = log.lines().find_map(|line| {
+                line.split("Gateway        http://")
+                    .nth(1)
+                    .and_then(|value| value.split_whitespace().next())
+                    .and_then(|value| value.parse().ok())
+            })
+        {
+            return address;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "sidecar address was not logged under {}; log: {:?}",
+            temp.display(),
+            log_path.and_then(|path| std::fs::read_to_string(path).ok())
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn find_runtime_file(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(directory).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.file_name().and_then(|value| value.to_str()) == Some(name) {
+                return Some(path);
+            }
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+    None
+}
+
+fn find_runtime_files_matching(
+    root: &std::path::Path,
+    prefix: &str,
+    suffix: &str,
+) -> Vec<std::path::PathBuf> {
+    let mut matches = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
+            {
+                matches.push(path);
+            }
+        }
+    }
+    matches
+}
+
+fn wait_child(child: &mut Child) -> ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let mut stderr = String::new();
+            if let Some(mut child_stderr) = child.stderr.take() {
+                let _ = child_stderr.read_to_string(&mut stderr);
+            }
+            panic!("child process did not exit within 10 seconds; stderr: {stderr}");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_child_with_output(mut child: Child) -> Output {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().unwrap();
+            panic!(
+                "child process did not exit within 10 seconds; stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_port_closed(address: SocketAddr) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "shared gateway remained bound after the final MCP client and idle timeout"
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_owned_sidecar(temp: &std::path::Path, previous_pid: Option<u64>) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        for path in find_runtime_files_matching(temp, "codex-sidecar", ".owner.json") {
+            if let Ok(raw) = std::fs::read(path)
+                && let Ok(owner) = serde_json::from_slice::<serde_json::Value>(&raw)
+                && owner["pid"]
+                    .as_u64()
+                    .is_some_and(|pid| Some(pid) != previous_pid)
+            {
+                return owner;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "owned Codex sidecar was not published under {}",
+            temp.display()
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn stop_owned_sidecar(owner: &serde_json::Value) {
+    let address = owner["url"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("http://")
+        .unwrap()
+        .parse::<SocketAddr>()
+        .unwrap();
+    let token = owner["shutdown_token"].as_str().unwrap();
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /bootstrap/shutdown HTTP/1.1\r\nHost: {address}\r\nX-NeMo-Relay-Bootstrap-Token: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 204"), "{response}");
+}
+
+fn relay_health(address: SocketAddr) -> serde_json::Value {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(
+            format!("GET /healthz HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap()
+}
+
+#[test]
+fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut first, first_stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
+    let address = sidecar_address(temp.path());
+    let (mut second, second_stdin) = start_mcp_client(temp.path(), address);
+
+    drop(first_stdin);
+    assert!(wait_child(&mut first).success());
+    let health = relay_health(address);
+    assert_eq!(health["service"], "nemo-relay");
+    assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(health["bootstrap_protocol"], 1);
+
+    drop(second_stdin);
+    assert!(wait_child(&mut second).success());
+    wait_for_port_closed(address);
+}
+
+#[test]
+fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut client, _stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
+    let first = wait_for_owned_sidecar(temp.path(), None);
+    let first_pid = first["pid"].as_u64().unwrap();
+
+    stop_owned_sidecar(&first);
+    let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
+    assert_ne!(second["pid"], first["pid"]);
+
+    stop_owned_sidecar(&second);
+    let status = wait_child(&mut client);
+    assert!(
+        !status.success(),
+        "MCP client unexpectedly restarted the shared gateway twice"
+    );
 }
 
 #[test]
@@ -1272,7 +1916,7 @@ fn cli_install_dry_run_plans_local_codex_marketplace() {
         "stdout was:\n{stdout}"
     );
     assert!(
-        stdout.contains("configure Codex provider and hook-supervised lazy startup"),
+        stdout.contains("configure Codex provider and trust plugin-owned hooks"),
         "stdout was:\n{stdout}"
     );
 }

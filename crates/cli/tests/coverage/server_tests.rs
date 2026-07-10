@@ -30,6 +30,7 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
+use crate::config::BootstrapChallengeKey;
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
@@ -371,7 +372,163 @@ async fn healthz_returns_ok() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body, json!({ "status": "ok" }));
+    assert_eq!(body["status"], json!("ok"));
+    assert_eq!(body["service"], json!("nemo-relay"));
+    assert_eq!(body["version"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(body["bootstrap_protocol"], json!(1));
+}
+
+#[tokio::test]
+async fn healthz_rejects_a_different_persistent_gateway_fingerprint() {
+    let app = router_with_state(AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        None,
+    ));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/healthz")
+                .header(
+                    "x-nemo-relay-bootstrap-fingerprint",
+                    "different-fingerprint",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["status"], json!("incompatible"));
+    assert!(body.get("bootstrap_fingerprint").is_none());
+}
+
+#[tokio::test]
+async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
+    let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(challenge_key.clone()),
+        None,
+    );
+    let activity = state.last_activity.clone();
+    let baseline = std::time::Instant::now() - Duration::from_secs(30);
+    *activity.lock().unwrap() = baseline;
+    let app = router_with_state(state);
+
+    for fingerprint in [
+        None,
+        Some("wrong-fingerprint"),
+        Some("expected-fingerprint"),
+    ] {
+        let mut request = Request::builder().method("GET").uri("/healthz");
+        if let Some(fingerprint) = fingerprint {
+            request = request.header("x-nemo-relay-bootstrap-fingerprint", fingerprint);
+        }
+        let _ = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(*activity.lock().unwrap(), baseline);
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/healthz")
+                .header("x-nemo-relay-bootstrap-fingerprint", "expected-fingerprint")
+                .header(
+                    "x-nemo-relay-bootstrap-nonce",
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-nemo-relay-bootstrap-proof")
+            .unwrap(),
+        challenge_key
+            .proof(
+                "expected-fingerprint",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            )
+            .as_str()
+    );
+    assert!(*activity.lock().unwrap() > baseline);
+}
+
+#[tokio::test]
+async fn bootstrap_shutdown_requires_the_private_owner_token() {
+    let (sender, receiver) = oneshot::channel();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        test_config(),
+        None,
+        None,
+        Some(BootstrapShutdown {
+            token: "private-token".into(),
+            sender: Arc::new(std::sync::Mutex::new(Some(sender))),
+        }),
+    ));
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/bootstrap/shutdown")
+                .header("x-nemo-relay-bootstrap-token", "wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+
+    let accepted = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/bootstrap/shutdown")
+                .header("x-nemo-relay-bootstrap-token", "private-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
+    tokio::time::timeout(std::time::Duration::from_secs(1), receiver)
+        .await
+        .expect("shutdown signal was not delivered")
+        .unwrap();
+}
+
+#[test]
+fn readiness_file_is_published_atomically_with_gateway_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("gateway.ready.json");
+    let address = "127.0.0.1:43123".parse().unwrap();
+
+    write_ready_file(&path, address).unwrap();
+
+    let ready: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(ready["address"], json!(address));
+    assert_eq!(ready["service"], json!("nemo-relay"));
+    assert_eq!(ready["version"], json!(env!("CARGO_PKG_VERSION")));
+    assert_eq!(ready["bootstrap_protocol"], json!(1));
+    assert!(!path.with_extension("json.tmp").exists());
 }
 
 #[tokio::test]
@@ -462,20 +619,20 @@ async fn plugin_idle_timeout_parses_absent_invalid_zero_and_positive_values() {
 
     let key = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
     let removed = EnvVarGuard::remove(key);
-    assert_eq!(plugin_idle_timeout(), None);
+    assert_eq!(plugin_idle_timeout().unwrap(), None);
     drop(removed);
 
     let invalid = EnvVarGuard::set(key, "not-a-number");
-    assert_eq!(plugin_idle_timeout(), None);
+    assert!(plugin_idle_timeout().is_err());
     drop(invalid);
 
     let zero = EnvVarGuard::set(key, "0");
-    assert_eq!(plugin_idle_timeout(), None);
+    assert!(plugin_idle_timeout().is_err());
     drop(zero);
 
     let positive = EnvVarGuard::set(key, "2");
     assert_eq!(
-        plugin_idle_timeout(),
+        plugin_idle_timeout().unwrap(),
         Some(std::time::Duration::from_secs(2))
     );
     drop(positive);
@@ -535,6 +692,36 @@ async fn serve_listener_waits_for_active_turn_before_plugin_idle_shutdown() {
         .expect("plugin idle timeout should stop after Stop closes the turn")
         .unwrap();
     result.unwrap();
+}
+
+#[tokio::test]
+async fn idle_shutdown_rechecks_activity_after_session_lookup() {
+    let timeout = std::time::Duration::from_secs(1);
+    let last_activity = Arc::new(std::sync::Mutex::new(
+        std::time::Instant::now() - timeout - std::time::Duration::from_millis(1),
+    ));
+    let activity_during_lookup = Arc::clone(&last_activity);
+
+    let ready = idle_shutdown_ready(&last_activity, timeout, async move {
+        *activity_during_lookup.lock().unwrap() = std::time::Instant::now();
+        false
+    })
+    .await;
+
+    assert!(!ready, "new activity must cancel a stale shutdown decision");
+}
+
+#[tokio::test]
+async fn idle_shutdown_requires_expiry_and_no_open_session_without_new_activity() {
+    let timeout = std::time::Duration::from_secs(1);
+    let recent = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
+    assert!(!idle_shutdown_ready(&recent, timeout, async { false }).await);
+
+    let expired = Arc::new(std::sync::Mutex::new(
+        std::time::Instant::now() - timeout - std::time::Duration::from_millis(1),
+    ));
+    assert!(!idle_shutdown_ready(&expired, timeout, async { true }).await);
+    assert!(idle_shutdown_ready(&expired, timeout, async { false }).await);
 }
 
 #[tokio::test]
@@ -1632,6 +1819,8 @@ async fn serve_listener_records_codex_stop_atof_contract() {
     assert_eq!(turn_start["metadata"]["turn_source"], "user_prompt");
     assert_eq!(turn_end["data"]["hook_event_name"], "Stop");
     assert_eq!(turn_end["data"]["response"], "Done.");
+    assert_eq!(turn_end["metadata"]["hook_event_name"], "Stop");
+    assert_eq!(turn_end["metadata"]["session_id"], "codex-atof-session");
 
     let tool_start = find_scope_event(&events, "Read", "tool", "start");
     let tool_end = find_scope_event(&events, "Read", "tool", "end");
@@ -1831,9 +2020,11 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
         vec![ActiveDynamicPluginComponent {
             plugin_id: "cli.missing-native".into(),
             kind: DynamicPluginKind::RustDynamic,
+            lifecycle_generation: 0,
             manifest_ref: Some(manifest_ref.to_string_lossy().into_owned()),
             environment_ref: None,
             config: Map::new(),
+            activation_snapshot: None,
         }],
         Some(shutdown_rx),
     )

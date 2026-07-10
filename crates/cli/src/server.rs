@@ -3,13 +3,15 @@
 
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use nemo_relay::plugin::dynamic::{
@@ -23,14 +25,15 @@ use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use reqwest::Client;
 use serde_json::Value;
+use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::adapters::{claude_code, codex, hermes};
-use crate::config::GatewayConfig;
+use crate::config::{BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity};
 use crate::error::CliError;
 use crate::gateway;
-use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
+use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
 use crate::session::SessionManager;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,17 +43,47 @@ const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(300);
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) config: GatewayConfig,
+    pub(crate) bootstrap_fingerprint: Option<String>,
+    pub(crate) bootstrap_challenge_key: Option<BootstrapChallengeKey>,
     pub(crate) http: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
+    pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BootstrapShutdown {
+    token: String,
+    sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 /// Binds the configured address and activates enabled dynamic plugins before serving.
 pub(crate) async fn serve_with_dynamic(
     config: GatewayConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    managed_bootstrap: Option<ManagedBootstrapIdentity>,
+    ready_file: Option<&Path>,
 ) -> Result<(), CliError> {
-    let listener = TcpListener::bind(config.bind).await.map_err(|err| {
+    let listener = bind_listener(config.bind).await?;
+    print_startup_status(listener.local_addr()?, &config);
+    let bootstrap_fingerprint = managed_bootstrap
+        .as_ref()
+        .map(|identity| identity.fingerprint().to_owned());
+    serve_listener_with_dynamic_inner(
+        listener,
+        config,
+        dynamic_plugins,
+        bootstrap_fingerprint,
+        managed_bootstrap,
+        Some(ShutdownMode::ProcessSignal),
+        ready_file,
+    )
+    .await
+}
+
+/// Binds a gateway listener and translates address conflicts into actionable diagnostics.
+pub(crate) async fn bind_listener(bind: SocketAddr) -> Result<TcpListener, CliError> {
+    TcpListener::bind(bind).await.map_err(|err| {
         // Translate the common bind-failure (port already in use) into an actionable message.
         // Plain `io error: Address already in use (os error 48)` is unhelpful; the friendly
         // version names the likely cause and points at the real fixes.
@@ -62,23 +95,15 @@ pub(crate) async fn serve_with_dynamic(
                  `taskkill /IM nemo-relay.exe`)\n  \
                  • use an ephemeral port: `nemo-relay --bind 127.0.0.1:0`\n  \
                  • pick a free port: `nemo-relay --bind 127.0.0.1:4041`",
-                config.bind
+                bind
             ))
         } else {
             CliError::Io(err)
         }
-    })?;
-    print_startup_status(listener.local_addr()?, &config);
-    serve_listener_with_dynamic_inner(
-        listener,
-        config,
-        dynamic_plugins,
-        Some(ShutdownMode::ProcessSignal),
-    )
-    .await
+    })
 }
 
-fn print_startup_status(bind: SocketAddr, config: &GatewayConfig) {
+pub(crate) fn print_startup_status(bind: SocketAddr, config: &GatewayConfig) {
     let use_color = std::io::IsTerminal::is_terminal(&std::io::stderr())
         && std::env::var_os("NO_COLOR").is_none();
     eprint!("{}", render_startup_status(bind, config, use_color));
@@ -122,6 +147,25 @@ pub(crate) async fn serve_listener(
     serve_listener_with_dynamic(listener, config, Vec::new(), shutdown).await
 }
 
+#[cfg(test)]
+pub(crate) async fn serve_listener_with_bootstrap(
+    listener: TcpListener,
+    config: GatewayConfig,
+    bootstrap_fingerprint: String,
+    shutdown: Option<oneshot::Receiver<()>>,
+) -> Result<(), CliError> {
+    serve_listener_with_dynamic_inner(
+        listener,
+        config,
+        Vec::new(),
+        Some(bootstrap_fingerprint),
+        None,
+        shutdown.map(ShutdownMode::Receiver),
+        None,
+    )
+    .await
+}
+
 /// Serves the gateway router and activates enabled dynamic plugin components.
 pub(crate) async fn serve_listener_with_dynamic(
     listener: TcpListener,
@@ -133,7 +177,10 @@ pub(crate) async fn serve_listener_with_dynamic(
         listener,
         config,
         dynamic_plugins,
+        None,
+        None,
         shutdown.map(ShutdownMode::Receiver),
+        None,
     )
     .await
 }
@@ -149,18 +196,41 @@ async fn serve_listener_with_dynamic_inner(
     listener: TcpListener,
     config: GatewayConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    bootstrap_fingerprint: Option<String>,
+    managed_bootstrap: Option<ManagedBootstrapIdentity>,
     shutdown_mode: Option<ShutdownMode>,
+    ready_file: Option<&Path>,
 ) -> Result<(), CliError> {
+    let bootstrap_challenge_key = bootstrap_fingerprint
+        .as_ref()
+        .map(|_| BootstrapChallengeKey::load())
+        .transpose()?;
     let plugin_activation =
         PluginActivation::initialize(config.plugin_config.clone(), dynamic_plugins).await?;
-    let state = AppState::new(config);
+    let (bootstrap_shutdown, bootstrap_shutdown_rx) = bootstrap_shutdown_channel();
+    let state = AppState::new_with_bootstrap(
+        config,
+        bootstrap_fingerprint,
+        bootstrap_challenge_key,
+        bootstrap_shutdown,
+    );
     let sessions = state.sessions.clone();
     let last_activity = state.last_activity.clone();
     let app = router_with_state(state);
-    let idle_shutdown = matches!(&shutdown_mode, None | Some(ShutdownMode::ProcessSignal))
-        .then(plugin_idle_timeout)
-        .flatten()
-        .map(|timeout| idle_shutdown_future(last_activity, sessions.clone(), timeout));
+    let local_address = listener.local_addr()?;
+    if let Some(identity) = managed_bootstrap.as_ref() {
+        identity.verify_current()?;
+    }
+    crate::sidecar::publish_sidecar_owner_from_env(local_address).map_err(CliError::Launch)?;
+    if let Some(path) = ready_file {
+        write_ready_file(path, local_address)?;
+    }
+    let idle_shutdown = if matches!(&shutdown_mode, None | Some(ShutdownMode::ProcessSignal)) {
+        plugin_idle_timeout()?
+            .map(|timeout| idle_shutdown_future(last_activity, sessions.clone(), timeout))
+    } else {
+        None
+    };
     let shutdown: Option<ShutdownFuture> = match shutdown_mode {
         Some(ShutdownMode::Receiver(receiver)) => Some(Box::pin(async move {
             let _ = receiver.await;
@@ -176,6 +246,18 @@ async fn serve_listener_with_dynamic_inner(
             }
         })),
         None => idle_shutdown.map(|idle| Box::pin(idle) as ShutdownFuture),
+    };
+    let shutdown = match (shutdown, bootstrap_shutdown_rx) {
+        (Some(shutdown), Some(receiver)) => Some(Box::pin(async move {
+            tokio::select! {
+                _ = shutdown => {}
+                _ = receiver => {}
+            }
+        }) as ShutdownFuture),
+        (None, Some(receiver)) => Some(Box::pin(async move {
+            let _ = receiver.await;
+        }) as ShutdownFuture),
+        (shutdown, None) => shutdown,
     };
     let serve_result = match shutdown {
         Some(shutdown) => {
@@ -243,7 +325,17 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 }
 
 impl AppState {
+    #[cfg(test)]
     fn new(config: GatewayConfig) -> Self {
+        Self::new_with_bootstrap(config, None, None, None)
+    }
+
+    fn new_with_bootstrap(
+        config: GatewayConfig,
+        bootstrap_fingerprint: Option<String>,
+        bootstrap_challenge_key: Option<BootstrapChallengeKey>,
+        bootstrap_shutdown: Option<BootstrapShutdown>,
+    ) -> Self {
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
         let http = Client::builder()
@@ -254,9 +346,12 @@ impl AppState {
             .expect("gateway HTTP client configuration is valid");
         Self {
             config,
+            bootstrap_fingerprint,
+            bootstrap_challenge_key,
             http,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
+            bootstrap_shutdown,
         }
     }
 
@@ -271,6 +366,7 @@ fn router_with_state(state: AppState) -> Router {
     let max_hook_payload_bytes = state.config.max_hook_payload_bytes;
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
         .route("/hooks/hermes", post(hermes_hook))
@@ -286,15 +382,145 @@ fn router_with_state(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn healthz(State(state): State<AppState>) -> Json<Value> {
-    state.touch();
-    Json(serde_json::json!({ "status": "ok" }))
+fn bootstrap_shutdown_channel() -> (Option<BootstrapShutdown>, Option<oneshot::Receiver<()>>) {
+    let Some(token) = std::env::var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty())
+    else {
+        return (None, None);
+    };
+    let (sender, receiver) = oneshot::channel();
+    (
+        Some(BootstrapShutdown {
+            token,
+            sender: Arc::new(Mutex::new(Some(sender))),
+        }),
+        Some(receiver),
+    )
 }
 
-fn plugin_idle_timeout() -> Option<Duration> {
-    let raw = std::env::var("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS").ok()?;
-    let seconds = raw.parse::<u64>().ok()?;
-    (seconds > 0).then(|| Duration::from_secs(seconds))
+async fn shutdown_bootstrap_sidecar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> StatusCode {
+    let Some(shutdown) = state.bootstrap_shutdown.as_ref() else {
+        return StatusCode::NOT_FOUND;
+    };
+    if headers
+        .get("x-nemo-relay-bootstrap-token")
+        .and_then(|value| value.to_str().ok())
+        != Some(shutdown.token.as_str())
+    {
+        return StatusCode::FORBIDDEN;
+    }
+    let Ok(mut sender) = shutdown.sender.lock() else {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    };
+    let Some(sender) = sender.take() else {
+        return StatusCode::GONE;
+    };
+    let _ = sender.send(());
+    StatusCode::NO_CONTENT
+}
+
+async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let presented_fingerprint = headers
+        .get("x-nemo-relay-bootstrap-fingerprint")
+        .and_then(|value| value.to_str().ok());
+    let mut response_headers = HeaderMap::new();
+    let compatible = match presented_fingerprint {
+        None => true,
+        Some(expected) => {
+            let fingerprint_matches = state
+                .bootstrap_fingerprint
+                .as_deref()
+                .is_some_and(|actual| bool::from(actual.as_bytes().ct_eq(expected.as_bytes())));
+            let nonce = headers
+                .get("x-nemo-relay-bootstrap-nonce")
+                .and_then(|value| value.to_str().ok())
+                .filter(|nonce| {
+                    nonce.len() == 64 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit())
+                });
+            match (
+                fingerprint_matches,
+                nonce,
+                state.bootstrap_challenge_key.as_ref(),
+            ) {
+                (true, Some(nonce), Some(key)) => {
+                    let proof = key.proof(expected, nonce);
+                    response_headers.insert(
+                        "x-nemo-relay-bootstrap-proof",
+                        HeaderValue::from_str(&proof).expect("bootstrap proof is an ASCII value"),
+                    );
+                    state.touch();
+                    true
+                }
+                _ => false,
+            }
+        }
+    };
+    (
+        if compatible {
+            StatusCode::OK
+        } else {
+            StatusCode::CONFLICT
+        },
+        response_headers,
+        Json(serde_json::json!({
+            "status": if compatible { "ok" } else { "incompatible" },
+            "service": "nemo-relay",
+            "version": env!("CARGO_PKG_VERSION"),
+            "bootstrap_protocol": 1
+        })),
+    )
+        .into_response()
+}
+
+fn write_ready_file(path: &Path, bind: SocketAddr) -> Result<(), CliError> {
+    let bytes = serde_json::to_vec(&serde_json::json!({
+        "address": bind,
+        "service": "nemo-relay",
+        "version": env!("CARGO_PKG_VERSION"),
+        "bootstrap_protocol": 1
+    }))
+    .map_err(|error| CliError::Launch(format!("failed to encode readiness file: {error}")))?;
+    let temporary = path.with_extension(format!(
+        "{}tmp",
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| format!("{extension}."))
+            .unwrap_or_default()
+    ));
+    std::fs::write(&temporary, bytes).map_err(|error| {
+        CliError::Launch(format!(
+            "failed to write readiness file {}: {error}",
+            temporary.display()
+        ))
+    })?;
+    std::fs::rename(&temporary, path).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        CliError::Launch(format!(
+            "failed to publish readiness file {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+fn plugin_idle_timeout() -> Result<Option<Duration>, CliError> {
+    let Some(raw) = std::env::var("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS").ok() else {
+        return Ok(None);
+    };
+    let seconds = raw.parse::<u64>().map_err(|error| {
+        CliError::Config(format!(
+            "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS must be a positive integer: {error}"
+        ))
+    })?;
+    if seconds == 0 {
+        return Err(CliError::Config(
+            "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS must be greater than 0".into(),
+        ));
+    }
+    Ok(Some(Duration::from_secs(seconds)))
 }
 
 async fn idle_shutdown_future(
@@ -307,20 +533,38 @@ async fn idle_shutdown_future(
         .max(Duration::from_secs(1));
     loop {
         tokio::time::sleep(tick).await;
-        let elapsed = last_activity
-            .lock()
-            .map(|last_activity| last_activity.elapsed())
-            .unwrap_or(timeout);
-        if elapsed >= timeout && !sessions.has_open_sessions().await {
+        if idle_shutdown_ready(&last_activity, timeout, sessions.has_open_sessions()).await {
             break;
         }
     }
+}
+
+async fn idle_shutdown_ready<F>(
+    last_activity: &Arc<Mutex<Instant>>,
+    timeout: Duration,
+    has_open_sessions: F,
+) -> bool
+where
+    F: std::future::Future<Output = bool>,
+{
+    let observed = match last_activity.lock() {
+        Ok(last_activity) if last_activity.elapsed() >= timeout => *last_activity,
+        Ok(_) => return false,
+        Err(_) => return true,
+    };
+    if has_open_sessions.await {
+        return false;
+    }
+    last_activity.lock().map_or(true, |last_activity| {
+        *last_activity == observed && last_activity.elapsed() >= timeout
+    })
 }
 
 struct PluginActivation {
     active: bool,
     native: Option<NativePluginActivation>,
     worker: Option<WorkerPluginActivation>,
+    _snapshots: Vec<Arc<DynamicPluginActivationSnapshot>>,
 }
 
 impl PluginActivation {
@@ -333,6 +577,7 @@ impl PluginActivation {
                 active: false,
                 native: None,
                 worker: None,
+                _snapshots: Vec::new(),
             });
         };
         register_adaptive_component().map_err(|error| {
@@ -341,16 +586,26 @@ impl PluginActivation {
         register_pii_redaction_component().map_err(|error| {
             CliError::Config(format!("PII redaction plugin registration failed: {error}"))
         })?;
+        for plugin in &dynamic_plugins {
+            if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
+                snapshot.verify_current()?;
+            }
+        }
         let native_specs = dynamic_plugins
             .iter()
             .filter(|plugin| plugin.kind == DynamicPluginKind::RustDynamic)
             .map(|plugin| {
-                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
-                    CliError::Config(format!(
-                        "native dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                        plugin.plugin_id
-                    ))
-                })?;
+                let manifest_ref = plugin
+                    .activation_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.activation_manifest_ref())
+                    .or_else(|| plugin.manifest_ref.clone())
+                    .ok_or_else(|| {
+                        CliError::Config(format!(
+                            "native dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                            plugin.plugin_id
+                        ))
+                    })?;
                 Ok(NativePluginLoadSpec {
                     plugin_id: plugin.plugin_id.clone(),
                     manifest_ref,
@@ -361,20 +616,34 @@ impl PluginActivation {
             .iter()
             .filter(|plugin| plugin.kind == DynamicPluginKind::Worker)
             .map(|plugin| {
-                let manifest_ref = plugin.manifest_ref.clone().ok_or_else(|| {
-                    CliError::Config(format!(
-                        "worker dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                        plugin.plugin_id
-                    ))
-                })?;
+                let manifest_ref = plugin
+                    .activation_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.activation_manifest_ref())
+                    .or_else(|| plugin.manifest_ref.clone())
+                    .ok_or_else(|| {
+                        CliError::Config(format!(
+                            "worker dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                            plugin.plugin_id
+                        ))
+                    })?;
                 Ok(WorkerPluginLoadSpec {
                     plugin_id: plugin.plugin_id.clone(),
                     manifest_ref,
-                    environment_ref: plugin.environment_ref.clone(),
+                    environment_ref: plugin
+                        .activation_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.activation_environment_ref())
+                        .map(ToOwned::to_owned)
+                        .or_else(|| plugin.environment_ref.clone()),
                     config: plugin.config.clone(),
                 })
             })
             .collect::<Result<Vec<_>, CliError>>()?;
+        let snapshots = dynamic_plugins
+            .iter()
+            .filter_map(|plugin| plugin.activation_snapshot.clone())
+            .collect();
         let native =
             if native_specs.is_empty() {
                 None
@@ -383,6 +652,11 @@ impl PluginActivation {
                     CliError::Config(format!("native plugin load failed: {error}"))
                 })?)
             };
+        for plugin in &dynamic_plugins {
+            if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
+                snapshot.verify_current()?;
+            }
+        }
         let worker =
             if worker_specs.is_empty() {
                 None
@@ -415,6 +689,7 @@ impl PluginActivation {
             active: true,
             native,
             worker,
+            _snapshots: snapshots,
         })
     }
 

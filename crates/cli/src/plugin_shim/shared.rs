@@ -1,77 +1,25 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared plugin-shim filesystem, sidecar, HTTP, and formatting helpers.
+//! Filesystem, hook transport, and process helpers shared by plugin shims.
 
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode, Stdio};
-use std::thread;
+use std::process::{Command, ExitCode};
 use std::time::Duration;
 
-use reqwest::Url;
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::CodingAgent;
+pub(super) use crate::file_io::atomic_write;
+use crate::sidecar::{DEFAULT_URL, loopback_authority, parse_loopback_url};
+pub(super) use crate::sidecar::{current_exe, healthz, plugin_idle_timeout, relay_binary};
 
-use super::{DEFAULT_URL, HEALTHZ_TIMEOUT, STALE_LOCK_AFTER};
-
-pub(super) fn ensure_sidecar(agent: CodingAgent, url: &str) {
-    if healthz(url) {
-        return;
-    }
-    let runtime = runtime_dir();
-    let _ = fs::create_dir_all(&runtime);
-    let lock = runtime.join(format!("{}-sidecar.lock", sidecar_lock_name(url)));
-    let mut acquired = false;
-    for _ in 0..40 {
-        match fs::create_dir(&lock) {
-            Ok(()) => {
-                acquired = true;
-                break;
-            }
-            Err(_) if healthz(url) => return,
-            Err(_) if repair_stale_lock(&lock) => continue,
-            Err(_) => thread::sleep(Duration::from_millis(50)),
-        }
-    }
-    if !acquired {
-        eprintln!("nemo-relay sidecar lock timed out");
-        return;
-    }
-    let result = start_sidecar(agent, url, &runtime);
-    let _ = fs::remove_dir(&lock);
-    if let Err(error) = result {
-        eprintln!("{error}");
-    }
-}
-
-pub(super) fn repair_stale_lock(lock: &Path) -> bool {
-    repair_stale_lock_after(lock, STALE_LOCK_AFTER)
-}
-
-pub(super) fn repair_stale_lock_after(lock: &Path, stale_after: Duration) -> bool {
-    if !lock.exists() || !lock_is_old(lock, stale_after) {
-        return false;
-    }
-    match fs::remove_dir_all(lock) {
-        Ok(()) => return true,
-        Err(error) => eprintln!("failed to repair stale nemo-relay sidecar lock: {error}"),
-    }
-    false
-}
-
-pub(super) fn lock_is_old(lock: &Path, stale_after: Duration) -> bool {
-    lock.metadata()
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|elapsed| elapsed >= stale_after)
-}
+pub(super) const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub(super) fn ensure_table<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut Table {
     if !doc.as_table().contains_key(name) || !doc[name].is_table() {
@@ -99,86 +47,6 @@ pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     atomic_write(path, &bytes)
-}
-
-pub(super) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
-    }
-    let tmp = path.with_extension(format!(
-        "{}tmp",
-        path.extension()
-            .and_then(|value| value.to_str())
-            .map(|value| format!("{value}."))
-            .unwrap_or_default()
-    ));
-    fs::write(&tmp, bytes)
-        .map_err(|error| format!("failed to write {}: {error}", tmp.display()))?;
-    replace_file(&tmp, path)
-}
-
-#[cfg(not(windows))]
-pub(super) fn replace_file(tmp: &Path, path: &Path) -> Result<(), String> {
-    fs::rename(tmp, path).map_err(|error| format!("failed to replace {}: {error}", path.display()))
-}
-
-#[cfg(windows)]
-pub(super) fn replace_file(tmp: &Path, path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return fs::rename(tmp, path)
-            .map_err(|error| format!("failed to replace {}: {error}", path.display()));
-    }
-
-    let backup = replace_backup_path(path);
-    match fs::remove_file(&backup) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "failed to remove stale replacement backup {}: {error}",
-                backup.display()
-            ));
-        }
-    }
-
-    match fs::rename(path, &backup) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return fs::rename(tmp, path)
-                .map_err(|error| format!("failed to replace {}: {error}", path.display()));
-        }
-        Err(error) => {
-            return Err(format!(
-                "failed to prepare replacement for {}: {error}",
-                path.display()
-            ));
-        }
-    }
-
-    match fs::rename(tmp, path) {
-        Ok(()) => {
-            let _ = fs::remove_file(&backup);
-            Ok(())
-        }
-        Err(error) => match fs::rename(&backup, path) {
-            Ok(()) => Err(format!("failed to replace {}: {error}", path.display())),
-            Err(restore_error) => Err(format!(
-                "failed to replace {}: {error}; additionally failed to restore {}: {restore_error}",
-                path.display(),
-                backup.display()
-            )),
-        },
-    }
-}
-
-#[cfg(windows)]
-pub(super) fn replace_backup_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("config");
-    path.with_file_name(format!(".{file_name}.nemo-relay-replace.tmp"))
 }
 
 pub(super) fn backup(path: &Path) -> Result<(), String> {
@@ -270,137 +138,110 @@ pub(super) fn restore_file_snapshot(snapshot: &FileSnapshot) -> Result<(), Strin
     }
 }
 
-pub(super) fn start_sidecar(agent: CodingAgent, url: &str, runtime: &Path) -> Result<(), String> {
-    if healthz(url) {
-        return Ok(());
-    }
-    let (_, port) = parse_loopback_url(url)?;
-    let bind = format!("127.0.0.1:{port}");
-    let relay = relay_binary()?;
-    let log_path = runtime.join(format!("{}-sidecar.log", agent.as_arg()));
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|error| format!("failed to open {}: {error}", log_path.display()))?;
-    let err_log = log
-        .try_clone()
-        .map_err(|error| format!("failed to clone sidecar log handle: {error}"))?;
-    let mut child = Command::new(relay)
-        .arg("--bind")
-        .arg(bind)
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", plugin_idle_timeout())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log))
-        .spawn()
-        .map_err(|error| format!("failed to spawn nemo-relay sidecar: {error}"))?;
-    let pid_path = runtime.join(format!("{}-sidecar.pid", agent.as_arg()));
-    let _ = fs::write(&pid_path, child.id().to_string());
-    for _ in 0..50 {
-        if healthz(url) {
-            return Ok(());
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let _ = fs::remove_file(&pid_path);
-                return Err(format!(
-                    "nemo-relay sidecar exited before becoming ready at {url}: {status}"
-                ));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                let _ = fs::remove_file(&pid_path);
-                return Err(format!(
-                    "failed to inspect nemo-relay sidecar process: {error}"
-                ));
-            }
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    terminate_unready_sidecar(child, &pid_path, url)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct HookForwardError {
+    message: String,
+    retryable: bool,
 }
 
-pub(super) fn terminate_unready_sidecar(
-    mut child: std::process::Child,
-    pid_path: &Path,
+impl HookForwardError {
+    pub(super) fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+
+    pub(super) fn not_retryable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    pub(super) fn is_retryable(&self) -> bool {
+        self.retryable
+    }
+}
+
+impl std::fmt::Display for HookForwardError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+pub(super) fn post_hook(
+    agent: CodingAgent,
     url: &str,
-) -> Result<(), String> {
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            let _ = fs::remove_file(pid_path);
-            return Err(format!(
-                "nemo-relay sidecar exited before becoming ready at {url}: {status}"
-            ));
-        }
-        Ok(None) => {}
-        Err(error) => {
-            let _ = fs::remove_file(pid_path);
-            return Err(format!(
-                "failed to inspect nemo-relay sidecar process: {error}"
-            ));
-        }
-    }
-    if let Err(error) = child.kill() {
-        let _ = fs::remove_file(pid_path);
-        return Err(format!(
-            "nemo-relay sidecar did not become ready at {url}; failed to terminate startup process: {error}"
-        ));
-    }
-    let _ = child.wait();
-    let _ = fs::remove_file(pid_path);
-    Err(format!(
-        "nemo-relay sidecar did not become ready at {url}; terminated startup process"
-    ))
-}
-
-pub(super) fn post_hook(agent: CodingAgent, url: &str, payload: &[u8]) -> Result<Vec<u8>, String> {
+    payload: &[u8],
+) -> Result<Vec<u8>, HookForwardError> {
     let hook_path = match agent {
         CodingAgent::ClaudeCode => "/hooks/claude-code",
         CodingAgent::Codex => "/hooks/codex",
         _ => {
-            return Err(format!(
+            return Err(HookForwardError::not_retryable(format!(
                 "plugin shim hook forwarding supports claude and codex, got {}",
                 agent.as_arg()
-            ));
+            )));
         }
     };
-    let (host, port) = parse_loopback_url(url)?;
+    let (host, port) = parse_loopback_url(url).map_err(HookForwardError::not_retryable)?;
     let addrs = (host.as_str(), port)
         .to_socket_addrs()
-        .map_err(|error| format!("hook forward failed: {error}"))?;
+        .map_err(|error| HookForwardError::retryable(format!("hook forward failed: {error}")))?;
     let mut stream = None;
+    let mut connect_error = None;
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
             Ok(candidate) => {
                 stream = Some(candidate);
                 break;
             }
-            Err(_) => continue,
+            Err(error) => connect_error = Some(error),
         }
     }
     let Some(mut stream) = stream else {
-        return Err("hook forward failed: connection timed out".into());
+        let detail = connect_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no loopback address resolved".into());
+        return Err(HookForwardError::retryable(format!(
+            "hook forward failed before sending request bytes: {detail}"
+        )));
     };
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(|error| format!("failed to set read timeout: {error}"))?;
+        .map_err(|error| {
+            HookForwardError::not_retryable(format!("failed to set read timeout: {error}"))
+        })?;
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(|error| format!("failed to set write timeout: {error}"))?;
+        .map_err(|error| {
+            HookForwardError::not_retryable(format!("failed to set write timeout: {error}"))
+        })?;
     let request = format!(
-        "POST {hook_path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {hook_path} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        loopback_authority(&host, port),
         payload.len()
     );
     stream
         .write_all(request.as_bytes())
         .and_then(|_| stream.write_all(payload))
-        .map_err(|error| format!("hook forward failed: {error}"))?;
+        .map_err(|error| {
+            HookForwardError::not_retryable(format!("hook forward failed: {error}"))
+        })?;
     let mut response = Vec::new();
     stream
+        .take(MAX_HOOK_RESPONSE_BYTES.saturating_add(1) as u64)
         .read_to_end(&mut response)
-        .map_err(|error| format!("hook forward failed: {error}"))?;
-    parse_http_response(&response)
+        .map_err(|error| {
+            HookForwardError::not_retryable(format!("hook forward failed: {error}"))
+        })?;
+    if response.len() > MAX_HOOK_RESPONSE_BYTES {
+        return Err(HookForwardError::not_retryable(format!(
+            "hook forward response exceeds the {MAX_HOOK_RESPONSE_BYTES}-byte limit"
+        )));
+    }
+    parse_http_response(&response).map_err(HookForwardError::not_retryable)
 }
 
 pub(super) fn parse_http_response(response: &[u8]) -> Result<Vec<u8>, String> {
@@ -428,62 +269,6 @@ pub(super) fn parse_http_response(response: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 
-pub(super) fn healthz(url: &str) -> bool {
-    let Ok((host, port)) = parse_loopback_url(url) else {
-        return false;
-    };
-    let Ok(addrs) = (host.as_str(), port).to_socket_addrs() else {
-        return false;
-    };
-    let mut stream = None;
-    for addr in addrs {
-        match TcpStream::connect_timeout(&addr, HEALTHZ_TIMEOUT) {
-            Ok(candidate) => {
-                stream = Some(candidate);
-                break;
-            }
-            Err(_) => continue,
-        }
-    }
-    let Some(mut stream) = stream else {
-        return false;
-    };
-    if stream.set_read_timeout(Some(HEALTHZ_TIMEOUT)).is_err()
-        || stream.set_write_timeout(Some(HEALTHZ_TIMEOUT)).is_err()
-    {
-        return false;
-    }
-    let request =
-        format!("GET /healthz HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-    let mut response = [0_u8; 32];
-    stream
-        .read(&mut response)
-        .ok()
-        .is_some_and(|count| response[..count].starts_with(b"HTTP/1.1 200"))
-}
-
-pub(super) fn parse_loopback_url(url: &str) -> Result<(String, u16), String> {
-    let without_scheme = url
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("plugin shim only supports http loopback URLs: {url}"))?;
-    let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
-    let (host, port) = authority
-        .rsplit_once(':')
-        .ok_or_else(|| format!("missing port in gateway URL: {url}"))?;
-    if host != "127.0.0.1" && host != "localhost" {
-        return Err(format!(
-            "plugin shim only supports loopback gateway URLs: {url}"
-        ));
-    }
-    let port = port
-        .parse::<u16>()
-        .map_err(|error| format!("invalid gateway port in {url}: {error}"))?;
-    Ok((host.to_string(), port))
-}
-
 pub(super) fn gateway_url(agent: CodingAgent, explicit: Option<&str>) -> String {
     if let Some(url) = explicit {
         return url.to_string();
@@ -496,94 +281,44 @@ pub(super) fn gateway_url(agent: CodingAgent, explicit: Option<&str>) -> String 
     env::var("NEMO_RELAY_PLUGIN_GATEWAY_URL").unwrap_or_else(|_| DEFAULT_URL.into())
 }
 
-pub(super) fn relay_binary() -> Result<PathBuf, String> {
-    if let Ok(path) = env::var("NEMO_RELAY_PLUGIN_BINARY") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Ok(path);
-        }
-        return Err(format!(
-            "NEMO_RELAY_PLUGIN_BINARY does not exist: {}",
-            path.display()
-        ));
-    }
-    current_exe()
+#[cfg(windows)]
+pub(crate) fn portable_executable_path(path: PathBuf) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    strip_windows_verbatim_prefix(&encoded)
+        .map(|value| OsString::from_wide(&value))
+        .map(PathBuf::from)
+        .unwrap_or(path)
 }
 
-pub(super) fn current_exe() -> Result<PathBuf, String> {
-    env::current_exe().map_err(|error| format!("failed to resolve current executable: {error}"))
+#[cfg(not(windows))]
+pub(crate) fn portable_executable_path(path: PathBuf) -> PathBuf {
+    path
 }
 
-pub(super) fn runtime_dir() -> PathBuf {
-    runtime_dir_for(
-        env::var_os("XDG_RUNTIME_DIR"),
-        env::var_os("TMPDIR"),
-        env::var_os("TEMP"),
-        env::temp_dir(),
-        env::var_os("USER"),
-        env::var_os("USERNAME"),
-    )
-}
+#[cfg(any(test, windows))]
+pub(crate) fn strip_windows_verbatim_prefix(encoded: &[u16]) -> Option<Vec<u16>> {
+    const VERBATIM_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const VERBATIM_UNC_PREFIX: &[u16] = &[
+        b'\\' as u16,
+        b'\\' as u16,
+        b'?' as u16,
+        b'\\' as u16,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        b'\\' as u16,
+    ];
 
-pub(super) fn runtime_dir_for(
-    xdg_runtime_dir: Option<std::ffi::OsString>,
-    tmpdir: Option<std::ffi::OsString>,
-    temp: Option<std::ffi::OsString>,
-    temp_dir: PathBuf,
-    user: Option<std::ffi::OsString>,
-    username: Option<std::ffi::OsString>,
-) -> PathBuf {
-    if let Some(base) = xdg_runtime_dir.or(tmpdir).or(temp) {
-        return PathBuf::from(base).join("nemo-relay-plugin");
-    }
-    temp_dir
-        .join(runtime_user_segment(user, username))
-        .join("nemo-relay-plugin")
-}
-
-pub(super) fn sidecar_lock_name(url: &str) -> String {
-    let raw = Url::parse(url)
-        .ok()
-        .and_then(|parsed| {
-            let host = parsed.host_str()?;
-            let port = parsed.port_or_known_default()?;
-            Some(format!("{host}-{port}"))
-        })
-        .unwrap_or_else(|| url.to_string());
-    sanitize_filesystem_segment(&raw)
-}
-
-fn runtime_user_segment(
-    user: Option<std::ffi::OsString>,
-    username: Option<std::ffi::OsString>,
-) -> String {
-    let raw = user
-        .or(username)
-        .and_then(|value| value.into_string().ok())
-        .unwrap_or_else(|| "unknown-user".into());
-    sanitize_filesystem_segment(&raw)
-}
-
-fn sanitize_filesystem_segment(raw: &str) -> String {
-    let sanitized: String = raw
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if sanitized.is_empty() {
-        "unknown".into()
+    if let Some(rest) = encoded.strip_prefix(VERBATIM_UNC_PREFIX) {
+        let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+        normalized.extend_from_slice(rest);
+        Some(normalized)
     } else {
-        sanitized
+        encoded.strip_prefix(VERBATIM_PREFIX).map(ToOwned::to_owned)
     }
-}
-
-pub(super) fn plugin_idle_timeout() -> String {
-    env::var("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS").unwrap_or_else(|_| "300".into())
 }
 
 pub(super) fn fail_closed() -> bool {

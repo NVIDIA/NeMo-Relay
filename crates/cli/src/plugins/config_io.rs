@@ -6,7 +6,6 @@
 use std::path::{Path, PathBuf};
 
 use console::style;
-use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -424,7 +423,7 @@ pub(crate) fn remove_dynamic_plugin_reference(
             target_manifest_ref
                 .as_ref()
                 .is_some_and(|target_manifest_ref| manifest_ref == target_manifest_ref)
-                || DynamicPluginManifest::load_from_path(manifest_ref)
+                || crate::config::load_bounded_dynamic_plugin_manifest(manifest_ref)
                     .map(|(manifest, _)| manifest.plugin.id.trim() == plugin_id)
                     .unwrap_or(false)
         });

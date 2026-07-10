@@ -282,13 +282,15 @@ fn load_dynamic_plugin_state(
     entry: DynamicPluginConfigEntry,
     plugin_ids: &mut HashSet<String>,
 ) -> Result<DynamicPluginEditorState, CliError> {
-    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&entry.manifest_path)
-        .map_err(|error| {
-            CliError::Config(format!(
-                "could not load dynamic plugin manifest '{}' for editing: {error}",
-                entry.manifest
-            ))
-        })?;
+    let (manifest, manifest_ref) = crate::config::load_bounded_dynamic_plugin_manifest(
+        &entry.manifest_path,
+    )
+    .map_err(|error| {
+        CliError::Config(format!(
+            "could not load dynamic plugin manifest '{}' for editing: {error}",
+            entry.manifest
+        ))
+    })?;
     let plugin_id = manifest.plugin.id.trim().to_owned();
     if !plugin_ids.insert(plugin_id.clone()) {
         return Err(CliError::Config(format!(

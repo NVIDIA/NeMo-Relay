@@ -1235,15 +1235,22 @@ impl Session {
                 .await?;
             return Ok(());
         }
-        self.close_turn(event.payload, "closed_by_turn_end").await?;
+        self.close_turn(event.payload, Some(event.metadata), "closed_by_turn_end")
+            .await?;
         Ok(())
     }
 
     async fn close_turn_for_reason(&mut self, reason: &str) -> Result<Vec<String>, CliError> {
-        self.close_turn(json!({ "status": reason }), reason).await
+        self.close_turn(json!({ "status": reason }), None, reason)
+            .await
     }
 
-    async fn close_turn(&mut self, output: Value, reason: &str) -> Result<Vec<String>, CliError> {
+    async fn close_turn(
+        &mut self,
+        output: Value,
+        boundary_metadata: Option<Value>,
+        reason: &str,
+    ) -> Result<Vec<String>, CliError> {
         if self.turn_scope.is_none() {
             return Ok(Vec::new());
         }
@@ -1252,7 +1259,7 @@ impl Session {
         let closed_subagents = self.close_active_subagents(reason).await?;
         let output = self.last_turn_llm_output.take().unwrap_or(output);
         self.clear_correlation_state();
-        self.close_turn_scope(output)?;
+        self.close_turn_scope(output, boundary_metadata)?;
         Ok(closed_subagents)
     }
 
@@ -1359,7 +1366,11 @@ impl Session {
         Ok(())
     }
 
-    fn close_turn_scope(&mut self, output: Value) -> Result<(), CliError> {
+    fn close_turn_scope(
+        &mut self,
+        output: Value,
+        boundary_metadata: Option<Value>,
+    ) -> Result<(), CliError> {
         let Some(scope) = self.turn_scope.take() else {
             return Ok(());
         };
@@ -1368,6 +1379,7 @@ impl Session {
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
                 .output(output)
+                .metadata_opt(boundary_metadata)
                 .build(),
         )?;
         Ok(())
