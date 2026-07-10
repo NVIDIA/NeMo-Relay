@@ -1056,6 +1056,10 @@ clean:
         examples/rust-native-plugin/target \
         target
 
+# Opt-in: requires codex-cli 0.143+ and is intentionally outside test-rust/CI.
+test-codex-plugin-e2e:
+    ./scripts/test-codex-plugin-e2e.sh
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash
@@ -1238,8 +1242,10 @@ test-python-plugin-e2e:
         'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
     "$cli" --config "$config" --bind "127.0.0.1:$port" >"$tmp/gateway.log" 2>&1 &
     gateway_pid=$!
+    gateway_ready_timeout_seconds=30
+    gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))
     ready=false
-    for _ in $(seq 1 100); do
+    while ((SECONDS < gateway_ready_deadline)); do
         if "$python_executable" -c \
             'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=0.2).read()' \
             "http://127.0.0.1:$port/healthz" 2>/dev/null; then
@@ -1252,6 +1258,11 @@ test-python-plugin-e2e:
         sleep 0.1
     done
     if [[ "$ready" != true ]]; then
+        if kill -0 "$gateway_pid" 2>/dev/null; then
+            echo "gateway remained alive but did not become ready within ${gateway_ready_timeout_seconds}s" >&2
+        else
+            echo "gateway exited before becoming ready" >&2
+        fi
         cat "$tmp/gateway.log"
         exit 1
     fi
