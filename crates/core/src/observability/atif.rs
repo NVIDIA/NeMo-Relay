@@ -770,7 +770,7 @@ fn extract_metrics(
         .and_then(Json::as_array)
         .map(|a| a.iter().filter_map(Json::as_f64).collect());
     let known: std::collections::HashSet<&str> = TOKEN_USAGE_KNOWN_KEYS.iter().copied().collect();
-    let extra_map: serde_json::Map<String, Json> = output
+    let mut extra_map: serde_json::Map<String, Json> = output
         .as_object()
         .into_iter()
         .flat_map(|output| {
@@ -782,12 +782,31 @@ fn extract_metrics(
         .filter(|(k, _)| !known.contains(k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    if let Some(summary) =
+        normalized_response.and_then(|response| response.optimization_summary.as_ref())
+        && let Ok(summary) = serde_json::to_value(summary)
+    {
+        let relay = extra_map
+            .entry("nemo_relay".to_string())
+            .or_insert_with(|| Json::Object(serde_json::Map::new()));
+        if !relay.is_object() {
+            *relay = Json::Object(serde_json::Map::new());
+        }
+        if let Some(relay) = relay.as_object_mut() {
+            relay.insert("optimization".to_string(), summary);
+        }
+    }
     let extra = if extra_map.is_empty() {
         None
     } else {
         Some(Json::Object(extra_map))
     };
-    if prompt.is_none() && completion.is_none() && cached.is_none() && cost.is_none() {
+    if prompt.is_none()
+        && completion.is_none()
+        && cached.is_none()
+        && cost.is_none()
+        && extra.is_none()
+    {
         return None;
     }
     Some(AtifMetrics {
@@ -1213,6 +1232,10 @@ struct FinalMetricsTotals {
     completion_tokens: Option<u64>,
     cached_tokens: Option<u64>,
     cost_usd: Option<f64>,
+    optimization_prompt_tokens_saved: Option<u64>,
+    optimization_total_tokens_saved: Option<u64>,
+    optimization_estimated_cost_saved_usd: Option<f64>,
+    optimization_calls: u64,
 }
 
 impl FinalMetricsTotals {
@@ -1221,16 +1244,54 @@ impl FinalMetricsTotals {
         add_u64_total(&mut self.completion_tokens, metrics.completion_tokens);
         add_u64_total(&mut self.cached_tokens, metrics.cached_tokens);
         add_f64_total(&mut self.cost_usd, metrics.cost_usd);
+        let optimization = metrics
+            .extra
+            .as_ref()
+            .and_then(|extra| extra.pointer("/nemo_relay/optimization"));
+        if let Some(optimization) = optimization {
+            self.optimization_calls = self.optimization_calls.saturating_add(1);
+            add_u64_total(
+                &mut self.optimization_prompt_tokens_saved,
+                optimization
+                    .pointer("/tokens_saved/prompt_tokens")
+                    .and_then(Json::as_u64),
+            );
+            add_u64_total(
+                &mut self.optimization_total_tokens_saved,
+                optimization
+                    .pointer("/tokens_saved/total_tokens")
+                    .and_then(Json::as_u64),
+            );
+            let saved_usd = optimization
+                .get("currency")
+                .and_then(Json::as_str)
+                .filter(|currency| currency.eq_ignore_ascii_case("USD"))
+                .and_then(|_| optimization.get("estimated_cost_saved"))
+                .and_then(Json::as_f64);
+            add_f64_total(&mut self.optimization_estimated_cost_saved_usd, saved_usd);
+        }
     }
 
     fn into_final_metrics(self, step_count: usize) -> AtifFinalMetrics {
+        let optimization_extra = (self.optimization_calls > 0).then(|| {
+            serde_json::json!({
+                "nemo_relay": {
+                    "optimization": {
+                        "llm_call_count": self.optimization_calls,
+                        "prompt_tokens_saved": self.optimization_prompt_tokens_saved,
+                        "total_tokens_saved": self.optimization_total_tokens_saved,
+                        "estimated_cost_saved_usd": self.optimization_estimated_cost_saved_usd,
+                    }
+                }
+            })
+        });
         AtifFinalMetrics {
             total_prompt_tokens: self.prompt_tokens,
             total_completion_tokens: self.completion_tokens,
             total_cached_tokens: self.cached_tokens,
             total_cost_usd: self.cost_usd,
             total_steps: Some(step_count as u64),
-            extra: None,
+            extra: optimization_extra,
         }
     }
 }

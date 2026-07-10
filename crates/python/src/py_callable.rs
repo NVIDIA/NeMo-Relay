@@ -25,16 +25,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
@@ -850,6 +850,67 @@ pub fn wrap_py_event_subscriber(py_fn: Py<PyAny>) -> EventSubscriberFn {
             if let Err(e) = result {
                 eprintln!("Event subscriber error: {e}");
             }
+        })
+    })
+}
+
+/// Wrap a Python callable ``(Event, EventSanitizeFields) -> EventSanitizeFields``.
+pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
+    Arc::new(move |event: &Event, fields: EventSanitizeFields| {
+        Python::attach(|py| {
+            let py_event = match event {
+                Event::Scope(inner) => Py::new(
+                    py,
+                    crate::py_types::PyScopeEvent {
+                        inner: inner.clone(),
+                    },
+                )
+                .map(|value| value.into_any()),
+                Event::Mark(inner) => Py::new(
+                    py,
+                    crate::py_types::PyMarkEvent {
+                        inner: inner.clone(),
+                    },
+                )
+                .map(|value| value.into_any()),
+            };
+            let py_event = match py_event {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("nemo_relay: failed to convert event sanitizer context: {error}");
+                    return fields.clone();
+                }
+            };
+            let fields_json = match serde_json::to_value(&fields) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("nemo_relay: failed to serialize event sanitizer fields: {error}");
+                    return fields.clone();
+                }
+            };
+            let py_fields = match json_to_py(py, &fields_json) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("nemo_relay: failed to convert event sanitizer fields: {error}");
+                    return fields.clone();
+                }
+            };
+            let result = match py_fn.call1(py, (py_event, py_fields)) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("nemo_relay: Python event sanitizer callable failed: {error}");
+                    return fields.clone();
+                }
+            };
+            py_to_json(result.bind(py))
+                .ok()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_else(|| {
+                    eprintln!(
+                        "nemo_relay: event sanitizer must return data, category_profile, and metadata fields"
+                    );
+                    fields.clone()
+                })
         })
     })
 }

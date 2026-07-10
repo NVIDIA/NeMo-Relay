@@ -18,6 +18,7 @@ describe('pii_redaction plugin helpers', () => {
       output: true,
       tool_input: true,
       tool_output: true,
+      mark: true,
       priority: 100,
     });
     assert.deepEqual(piiRedaction.builtinConfig(), { action: 'remove' });
@@ -44,6 +45,9 @@ describe('pii_redaction plugin helpers', () => {
         }),
       ],
     });
-    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field), ['builtin.detector']);
+    assert.deepEqual(
+      report.diagnostics.map((diagnostic) => diagnostic.field),
+      ['builtin.detector'],
+    );
   });
 });

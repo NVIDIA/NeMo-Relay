@@ -873,6 +873,7 @@ fn test_accumulator_extracts_annotated_response() {
             cost: None,
         }),
         api_specific: None,
+        optimization_summary: None,
         extra: serde_json::Map::new(),
     };
 
@@ -990,6 +991,7 @@ fn test_accumulator_annotated_response_partial_data() {
         finish_reason: None,
         usage: None,
         api_specific: None,
+        optimization_summary: None,
         extra: serde_json::Map::new(),
     };
 

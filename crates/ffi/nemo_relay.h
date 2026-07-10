@@ -206,16 +206,24 @@ typedef struct Option_NemoRelayFinalizerCb Option_NemoRelayFinalizerCb;
 typedef struct Option_NemoRelayPluginValidateCb Option_NemoRelayPluginValidateCb;
 
 /**
- * Callback for LLM execution (default callable). Receives a native JSON C string,
- * returns the response as a JSON C string.
+ * Callback for mark and scope event sanitizers.
+ * The returned JSON string transfers to Relay and is freed exactly once.
  */
-typedef char *(*NemoRelayLlmExecCb)(void *user_data, const char *native_json);
+typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
+                                          const struct FfiEvent *event,
+                                          const char *fields_json);
 
 /**
  * Optional destructor for user data passed to callbacks.
  * Called when the runtime no longer needs the associated callback.
  */
 typedef void (*NemoRelayFreeFn)(void *user_data);
+
+/**
+ * Callback for LLM execution (default callable). Receives a native JSON C string,
+ * returns the response as a JSON C string.
+ */
+typedef char *(*NemoRelayLlmExecCb)(void *user_data, const char *native_json);
 
 /**
  * Nullable version of [`NemoRelayCodecDecodeCb`] for use as an optional
@@ -438,6 +446,32 @@ NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new(const struct F
                                                                   char **out_outcome_json);
 
 /**
+ * Allocate canonical JSON for a C LLM request-intercept callback result,
+ * including optional plugin-neutral optimization contributions.
+ *
+ * `annotated_json`, `pending_marks_json`, and
+ * `optimization_contributions_json` may be null. Null list pointers serialize
+ * as empty lists. Contributions use the canonical
+ * `LlmOptimizationContribution` JSON shape; custom `kind` strings and unknown
+ * top-level fields are preserved. The existing unversioned helper remains
+ * ABI-compatible and behaves as though this function received a null
+ * `optimization_contributions_json` pointer.
+ *
+ * # Safety
+ *
+ * `request` must point to a live `FfiLLMRequest`, optional JSON inputs must
+ * be valid null-terminated strings when non-null, and `out_outcome_json` must
+ * be writable. A successful output must either be transferred through a
+ * callback's `out_outcome_json` or freed by its caller with
+ * `nemo_relay_string_free`.
+ */
+NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new_v2(const struct FfiLLMRequest *request,
+                                                                     const char *annotated_json,
+                                                                     const char *pending_marks_json,
+                                                                     const char *optimization_contributions_json,
+                                                                     char **out_outcome_json);
+
+/**
  * Run the registered LLM conditional execution guardrail chain.
  *
  * Returns `NemoRelayStatus::Ok` if all guardrails pass, or
@@ -546,6 +580,120 @@ NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *opti
  * Set manual latency sensitivity on the current scope.
  */
 NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
+
+/**
+ * Register a global mark event sanitizer.
+ * # Safety
+ * Pointers must be valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_register_mark_sanitize_guardrail(const char *name,
+                                                            int32_t priority,
+                                                            NemoRelayEventSanitizeCb cb,
+                                                            void *user_data,
+                                                            NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a global mark event sanitizer.
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoRelayStatus nemo_relay_deregister_mark_sanitize_guardrail(const char *name);
+
+/**
+ * Register a global scope-start event sanitizer.
+ * # Safety
+ * Pointers must be valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_register_scope_sanitize_start_guardrail(const char *name,
+                                                                   int32_t priority,
+                                                                   NemoRelayEventSanitizeCb cb,
+                                                                   void *user_data,
+                                                                   NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a global scope-start event sanitizer.
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoRelayStatus nemo_relay_deregister_scope_sanitize_start_guardrail(const char *name);
+
+/**
+ * Register a global scope-end event sanitizer.
+ * # Safety
+ * Pointers must be valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_register_scope_sanitize_end_guardrail(const char *name,
+                                                                 int32_t priority,
+                                                                 NemoRelayEventSanitizeCb cb,
+                                                                 void *user_data,
+                                                                 NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a global scope-end event sanitizer.
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoRelayStatus nemo_relay_deregister_scope_sanitize_end_guardrail(const char *name);
+
+/**
+ * Register a scope-local mark event sanitizer.
+ * # Safety
+ * Pointers must be valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_scope_register_mark_sanitize_guardrail(const char *scope_uuid,
+                                                                  const char *name,
+                                                                  int32_t priority,
+                                                                  NemoRelayEventSanitizeCb cb,
+                                                                  void *user_data,
+                                                                  NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a scope-local mark event sanitizer.
+ * # Safety
+ * String pointers must be valid C strings.
+ */
+NemoRelayStatus nemo_relay_scope_deregister_mark_sanitize_guardrail(const char *scope_uuid,
+                                                                    const char *name);
+
+/**
+ * Register a scope-local scope-start event sanitizer.
+ * # Safety
+ * Pointers must be valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_scope_register_scope_sanitize_start_guardrail(const char *scope_uuid,
+                                                                         const char *name,
+                                                                         int32_t priority,
+                                                                         NemoRelayEventSanitizeCb cb,
+                                                                         void *user_data,
+                                                                         NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a scope-local scope-start event sanitizer.
+ * # Safety
+ * String pointers must be valid C strings.
+ */
+NemoRelayStatus nemo_relay_scope_deregister_scope_sanitize_start_guardrail(const char *scope_uuid,
+                                                                           const char *name);
+
+/**
+ * Register a scope-local scope-end event sanitizer.
+ * # Safety
+ * Pointers must be valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_scope_register_scope_sanitize_end_guardrail(const char *scope_uuid,
+                                                                       const char *name,
+                                                                       int32_t priority,
+                                                                       NemoRelayEventSanitizeCb cb,
+                                                                       void *user_data,
+                                                                       NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a scope-local scope-end event sanitizer.
+ * # Safety
+ * String pointers must be valid C strings.
+ */
+NemoRelayStatus nemo_relay_scope_deregister_scope_sanitize_end_guardrail(const char *scope_uuid,
+                                                                         const char *name);
 
 /**
  * Begin a manual LLM call lifecycle span.
@@ -1329,6 +1477,42 @@ NemoRelayStatus nemo_relay_plugin_context_register_subscriber(struct FfiPluginCo
                                                               NemoRelayEventSubscriberCb cb,
                                                               void *user_data,
                                                               NemoRelayFreeFn free_fn);
+
+/**
+ * Register a mark event sanitizer into a plugin context.
+ * # Safety
+ * Pointers must remain valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_mark_sanitize_guardrail(struct FfiPluginContext *ctx,
+                                                                           const char *name,
+                                                                           int32_t priority,
+                                                                           NemoRelayEventSanitizeCb cb,
+                                                                           void *user_data,
+                                                                           NemoRelayFreeFn free_fn);
+
+/**
+ * Register a scope-start event sanitizer into a plugin context.
+ * # Safety
+ * Pointers must remain valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(struct FfiPluginContext *ctx,
+                                                                                  const char *name,
+                                                                                  int32_t priority,
+                                                                                  NemoRelayEventSanitizeCb cb,
+                                                                                  void *user_data,
+                                                                                  NemoRelayFreeFn free_fn);
+
+/**
+ * Register a scope-end event sanitizer into a plugin context.
+ * # Safety
+ * Pointers must remain valid for the documented call lifetime.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(struct FfiPluginContext *ctx,
+                                                                                const char *name,
+                                                                                int32_t priority,
+                                                                                NemoRelayEventSanitizeCb cb,
+                                                                                void *user_data,
+                                                                                NemoRelayFreeFn free_fn);
 
 /**
  * Register a tool sanitize-request guardrail into the plugin registration context.

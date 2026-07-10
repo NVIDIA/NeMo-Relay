@@ -595,3 +595,57 @@ async def collect_stream(awaitable):
         });
     });
 }
+
+#[test]
+fn event_sanitize_wrapper_covers_conversion_success_and_fail_open_paths() {
+    use nemo_relay::api::event::{BaseEvent, MarkEvent};
+
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let module = load_module(
+            py,
+            r#"
+def sanitize(event, fields):
+    assert event.kind == "mark"
+    fields["data"] = {"safe": event.name}
+    fields["metadata"] = None
+    return fields
+
+def raises(event, fields):
+    raise RuntimeError("sanitize boom")
+
+def invalid(event, fields):
+    return "not fields"
+"#,
+        );
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder().name("checkpoint").build(),
+            None,
+            None,
+        ));
+        let fields = EventSanitizeFields {
+            data: Some(json!({"secret": true})),
+            category_profile: None,
+            metadata: Some(json!({"secret": true})),
+        };
+
+        let sanitized = wrap_py_event_sanitize_fn(module.getattr("sanitize").unwrap().unbind())(
+            &event,
+            fields.clone(),
+        );
+        assert_eq!(sanitized.data, Some(json!({"safe": "checkpoint"})));
+        assert_eq!(sanitized.metadata, None);
+
+        let raised = wrap_py_event_sanitize_fn(module.getattr("raises").unwrap().unbind())(
+            &event,
+            fields.clone(),
+        );
+        assert_eq!(raised, fields);
+
+        let invalid = wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind())(
+            &event,
+            fields.clone(),
+        );
+        assert_eq!(invalid, fields);
+    });
+}

@@ -14,17 +14,17 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
     NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayJsonCb,
     NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
     NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
     NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
     NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn,
-    wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn, wrap_llm_exec_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
+    wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
+    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_fn,
+    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::convert::{
     c_str_to_json, c_str_to_opt_json, c_str_to_string, json_to_c_string, nemo_relay_string_free,
@@ -55,6 +55,7 @@ use nemo_relay::api::scope::ScopeAttributes;
 use nemo_relay::api::subscriber as core_subscriber_api;
 use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
@@ -65,6 +66,7 @@ use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;
 
 mod adaptive;
+mod event_registry;
 mod llm;
 mod llm_registry;
 mod observability;
@@ -76,6 +78,7 @@ mod tool_lifecycle;
 mod tool_registry;
 
 pub use adaptive::*;
+pub use event_registry::*;
 pub use llm::*;
 pub use llm_registry::*;
 pub use observability::*;
@@ -264,6 +267,43 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
     pending_marks_json: *const c_char,
     out_outcome_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_llm_request_intercept_outcome_json_new_v2(
+            request,
+            annotated_json,
+            pending_marks_json,
+            std::ptr::null(),
+            out_outcome_json,
+        )
+    }
+}
+
+/// Allocate canonical JSON for a C LLM request-intercept callback result,
+/// including optional plugin-neutral optimization contributions.
+///
+/// `annotated_json`, `pending_marks_json`, and
+/// `optimization_contributions_json` may be null. Null list pointers serialize
+/// as empty lists. Contributions use the canonical
+/// `LlmOptimizationContribution` JSON shape; custom `kind` strings and unknown
+/// top-level fields are preserved. The existing unversioned helper remains
+/// ABI-compatible and behaves as though this function received a null
+/// `optimization_contributions_json` pointer.
+///
+/// # Safety
+///
+/// `request` must point to a live `FfiLLMRequest`, optional JSON inputs must
+/// be valid null-terminated strings when non-null, and `out_outcome_json` must
+/// be writable. A successful output must either be transferred through a
+/// callback's `out_outcome_json` or freed by its caller with
+/// `nemo_relay_string_free`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new_v2(
+    request: *const FfiLLMRequest,
+    annotated_json: *const c_char,
+    pending_marks_json: *const c_char,
+    optimization_contributions_json: *const c_char,
+    out_outcome_json: *mut *mut c_char,
+) -> NemoRelayStatus {
     clear_last_error();
     if out_outcome_json.is_null() {
         set_last_error("out_outcome_json must be non-null");
@@ -304,10 +344,26 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new(
             }
         }
     };
+    let optimization_contributions = if optimization_contributions_json.is_null() {
+        Vec::new()
+    } else {
+        let value = match c_str_to_json(optimization_contributions_json) {
+            Some(value) => value,
+            None => return NemoRelayStatus::InvalidJson,
+        };
+        match serde_json::from_value::<Vec<LlmOptimizationContribution>>(value) {
+            Ok(value) => value,
+            Err(error) => {
+                set_last_error(&format!("invalid optimization contributions JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        }
+    };
     let outcome = LlmRequestInterceptOutcome {
         request: unsafe { &*request }.0.clone(),
         annotated_request,
         pending_marks,
+        optimization_contributions,
     };
     match serde_json::to_value(outcome) {
         Ok(value) => {

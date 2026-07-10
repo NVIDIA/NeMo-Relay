@@ -7,6 +7,8 @@
 pub mod event;
 /// LLM lifecycle helpers and managed execution entry points.
 pub mod llm;
+/// Plugin-neutral evidence recording for managed LLM calls.
+pub mod optimization;
 /// Global and scope-local middleware registration helpers.
 pub mod registry;
 /// Advanced runtime state, callbacks, and scope-stack helpers.

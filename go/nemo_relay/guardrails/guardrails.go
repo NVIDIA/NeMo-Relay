@@ -34,6 +34,66 @@ import (
 	"github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 )
 
+// RegisterMarkSanitize registers a global mark event sanitizer.
+func RegisterMarkSanitize(name string, priority int32, fn nemo_relay.EventSanitizeFunc) error {
+	return nemo_relay.RegisterMarkSanitizeGuardrail(name, priority, fn)
+}
+
+// DeregisterMarkSanitize removes a global mark event sanitizer.
+func DeregisterMarkSanitize(name string) error {
+	return nemo_relay.DeregisterMarkSanitizeGuardrail(name)
+}
+
+// RegisterScopeSanitizeStart registers a global scope-start event sanitizer.
+func RegisterScopeSanitizeStart(name string, priority int32, fn nemo_relay.EventSanitizeFunc) error {
+	return nemo_relay.RegisterScopeSanitizeStartGuardrail(name, priority, fn)
+}
+
+// DeregisterScopeSanitizeStart removes a global scope-start event sanitizer.
+func DeregisterScopeSanitizeStart(name string) error {
+	return nemo_relay.DeregisterScopeSanitizeStartGuardrail(name)
+}
+
+// RegisterScopeSanitizeEnd registers a global scope-end event sanitizer.
+func RegisterScopeSanitizeEnd(name string, priority int32, fn nemo_relay.EventSanitizeFunc) error {
+	return nemo_relay.RegisterScopeSanitizeEndGuardrail(name, priority, fn)
+}
+
+// DeregisterScopeSanitizeEnd removes a global scope-end event sanitizer.
+func DeregisterScopeSanitizeEnd(name string) error {
+	return nemo_relay.DeregisterScopeSanitizeEndGuardrail(name)
+}
+
+// ScopeRegisterMarkSanitize registers a scope-local mark event sanitizer.
+func ScopeRegisterMarkSanitize(scopeUUID, name string, priority int32, fn nemo_relay.EventSanitizeFunc) error {
+	return nemo_relay.ScopeRegisterMarkSanitizeGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterMarkSanitize removes a scope-local mark event sanitizer.
+func ScopeDeregisterMarkSanitize(scopeUUID, name string) error {
+	return nemo_relay.ScopeDeregisterMarkSanitizeGuardrail(scopeUUID, name)
+}
+
+// ScopeRegisterScopeSanitizeStart registers a scope-local scope-start sanitizer.
+func ScopeRegisterScopeSanitizeStart(scopeUUID, name string, priority int32, fn nemo_relay.EventSanitizeFunc) error {
+	return nemo_relay.ScopeRegisterScopeSanitizeStartGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterScopeSanitizeStart removes a scope-local scope-start sanitizer.
+func ScopeDeregisterScopeSanitizeStart(scopeUUID, name string) error {
+	return nemo_relay.ScopeDeregisterScopeSanitizeStartGuardrail(scopeUUID, name)
+}
+
+// ScopeRegisterScopeSanitizeEnd registers a scope-local scope-end sanitizer.
+func ScopeRegisterScopeSanitizeEnd(scopeUUID, name string, priority int32, fn nemo_relay.EventSanitizeFunc) error {
+	return nemo_relay.ScopeRegisterScopeSanitizeEndGuardrail(scopeUUID, name, priority, fn)
+}
+
+// ScopeDeregisterScopeSanitizeEnd removes a scope-local scope-end sanitizer.
+func ScopeDeregisterScopeSanitizeEnd(scopeUUID, name string) error {
+	return nemo_relay.ScopeDeregisterScopeSanitizeEndGuardrail(scopeUUID, name)
+}
+
 // --- Tool Sanitize Request ---
 
 // RegisterToolSanitizeRequest registers a guardrail that sanitizes tool request

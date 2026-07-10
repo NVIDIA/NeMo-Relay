@@ -6,7 +6,7 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -242,6 +242,42 @@ unsafe extern "C" fn subscriber_cb(user_data: *mut libc::c_void, event: *const F
     if unsafe { (&*event).0.name() } == "ffi-event" {
         counter.fetch_add(1, Ordering::SeqCst);
     }
+}
+
+unsafe extern "C" fn event_sanitize_cb(
+    user_data: *mut libc::c_void,
+    event: *const FfiEvent,
+    fields_json: *const c_char,
+) -> *mut c_char {
+    let counter = unsafe { &*(user_data as *const Arc<AtomicUsize>) };
+    counter.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(unsafe { (&*event).0.name() }, "ffi-event");
+    let mut fields: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(fields_json) }
+            .to_str()
+            .unwrap_or("null"),
+    )
+    .unwrap();
+    fields["data"] = json!({"safe": true});
+    fields["category_profile"] = json!({"subtype": "ffi"});
+    fields["metadata"] = Json::Null;
+    CString::new(fields.to_string()).unwrap().into_raw()
+}
+
+unsafe extern "C" fn invalid_event_sanitize_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+    _fields_json: *const c_char,
+) -> *mut c_char {
+    CString::new("invalid-json").unwrap().into_raw()
+}
+
+unsafe extern "C" fn null_event_sanitize_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+    _fields_json: *const c_char,
+) -> *mut c_char {
+    std::ptr::null_mut()
 }
 
 fn make_request() -> LlmRequest {
@@ -495,6 +531,31 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
     assert_eq!(seen.load(Ordering::SeqCst), 1);
     drop(subscriber);
     assert_eq!(seen.load(Ordering::SeqCst), 2);
+
+    let original_fields = EventSanitizeFields::builder()
+        .data(json!({"secret": true}))
+        .metadata(json!({"trace": true}))
+        .build();
+    let (user_data, sanitize_calls) = user_data_counter();
+    let sanitizer = wrap_event_sanitize_fn(event_sanitize_cb, user_data, Some(free_arc_counter));
+    let sanitized = sanitizer(&event, original_fields.clone());
+    assert_eq!(sanitized.data, Some(json!({"safe": true})));
+    assert_eq!(
+        sanitized
+            .category_profile
+            .as_ref()
+            .and_then(|profile| profile.subtype.as_deref()),
+        Some("ffi")
+    );
+    assert_eq!(sanitized.metadata, None);
+    assert_eq!(sanitize_calls.load(Ordering::SeqCst), 1);
+    drop(sanitizer);
+    assert_eq!(sanitize_calls.load(Ordering::SeqCst), 2);
+
+    let invalid = wrap_event_sanitize_fn(invalid_event_sanitize_cb, std::ptr::null_mut(), None);
+    assert_eq!(invalid(&event, original_fields.clone()), original_fields);
+    let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
+    assert_eq!(null(&event, original_fields.clone()), original_fields);
 
     let handle = LlmHandle::builder()
         .name("llm")
