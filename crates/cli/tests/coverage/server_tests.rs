@@ -15,7 +15,8 @@ use futures_util::stream;
 use http_body_util::BodyExt;
 use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::registry::{
-    deregister_tool_conditional_execution_guardrail, register_tool_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_tool_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
@@ -93,6 +94,14 @@ struct ToolGuardrailCleanup(&'static str);
 impl Drop for ToolGuardrailCleanup {
     fn drop(&mut self) {
         let _ = deregister_tool_conditional_execution_guardrail(self.0);
+    }
+}
+
+struct LlmExecutionInterceptCleanup(&'static str);
+
+impl Drop for LlmExecutionInterceptCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_llm_execution_intercept(self.0);
     }
 }
 
@@ -2679,4 +2688,321 @@ async fn spawn_anthropic_upstream() -> TestServer {
         url: format!("http://{address}"),
         handle,
     }
+}
+
+/// Spawns a minimal mock upstream that counts calls and returns a fixed
+/// (status, content-type, body) for every POST. Returns its base URL and the
+/// call counter.
+async fn spawn_mock_upstream(
+    status: StatusCode,
+    content_type: &'static str,
+    body: &'static str,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use axum::routing::any;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let app = axum::Router::new().route(
+        "/{*path}",
+        any(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                axum::response::Response::builder()
+                    .status(status)
+                    .header(http::header::CONTENT_TYPE, content_type)
+                    .header("x-upstream-marker", "mock")
+                    .body(axum::body::Body::from(body))
+                    .unwrap()
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{address}"), calls)
+}
+
+/// Gateway config wired to `upstream` with the response cache enabled.
+fn cache_gateway_config(upstream: &str) -> GatewayConfig {
+    let mut config = test_config();
+    config.openai_base_url = upstream.into();
+    config.anthropic_base_url = upstream.into();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [{
+            "kind": "adaptive",
+            "enabled": true,
+            "config": {"response_cache": {
+                "ttl_seconds": 3600,
+                "bypass_rate": 0.0,
+                "namespace": "gateway-test",
+                "backend": {"kind": "in_memory"}
+            }}
+        }]
+    }));
+    config
+}
+
+const MOCK_CHAT_BODY: &str = r#"{"id":"chatcmpl-1","object":"chat.completion","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"message":{"role":"assistant","content":"The answer is 42."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}"#;
+
+#[tokio::test]
+async fn gateway_serves_cached_hit_with_full_body_and_json_content_type() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "application/json", MOCK_CHAT_BODY).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "What is the answer?"}],
+        "temperature": 0.0
+    });
+    let first = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body: Value = first.json().await.unwrap();
+
+    let second = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        second
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("application/json"),
+        "a cached hit must still declare its JSON content type"
+    );
+    let second_body: Value = second.json().await.unwrap();
+
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the repeat must be served from cache, not the upstream"
+    );
+    assert_eq!(
+        second_body, first_body,
+        "the cached body must be byte-equivalent to the live one"
+    );
+    assert_eq!(
+        second_body["choices"][0]["message"]["content"],
+        json!("The answer is 42.")
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+#[tokio::test]
+async fn gateway_relays_non_2xx_upstream_verbatim_and_never_caches_it() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    // A 503 whose body has NO top-level `error` key — the shape the
+    // response-body error check alone would not catch; only the status gate
+    // keeps it out of the cache.
+    let (upstream, upstream_calls) = spawn_mock_upstream(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "application/json",
+        r#"{"message":"service temporarily unavailable"}"#,
+    )
+    .await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}]
+    });
+    for _ in 0..2 {
+        let response = client
+            .post(format!("{url}/v1/chat/completions"))
+            .json(&request_body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the upstream failure must be relayed with its real status"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-upstream-marker")
+                .and_then(|value| value.to_str().ok()),
+            Some("mock"),
+            "upstream headers must be relayed on failures"
+        );
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body, json!({"message": "service temporarily unavailable"}));
+    }
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "an upstream failure must never be cached"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+#[tokio::test]
+async fn gateway_surfaces_post_upstream_intercept_rejection_instead_of_relaying_body() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    const INTERCEPT_NAME: &str = "cli-test-post-upstream-reject";
+    const MARKER: &str = "cli-test reject the response after upstream success";
+    let _ = deregister_llm_execution_intercept(INTERCEPT_NAME);
+    register_llm_execution_intercept(
+        INTERCEPT_NAME,
+        1,
+        Arc::new(|_name, request, next| {
+            Box::pin(async move {
+                let marked = request.content["messages"][0]["content"].as_str() == Some(MARKER);
+                let response = next(request).await?;
+                if marked {
+                    return Err(nemo_relay::error::FlowError::Internal(
+                        "response rejected by policy".to_string(),
+                    ));
+                }
+                Ok(response)
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = LlmExecutionInterceptCleanup(INTERCEPT_NAME);
+
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "application/json", MOCK_CHAT_BODY).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let response = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": MARKER}]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the intercept must reject only after a completed upstream exchange"
+    );
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a rejection after upstream success must surface as the translated \
+         runtime error, not a relay of the upstream body"
+    );
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["type"], json!("nemo_relay_gateway_error"));
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+const MOCK_CHAT_SSE: &str = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
+#[tokio::test]
+async fn gateway_streaming_hit_carries_event_stream_content_type() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let (upstream, upstream_calls) =
+        spawn_mock_upstream(StatusCode::OK, "text/event-stream", MOCK_CHAT_SSE).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let config = cache_gateway_config(&upstream);
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+
+    let client = test_http_client();
+    let request_body = json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "stream it"}],
+        "stream": true
+    });
+    let first = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let _ = first.text().await.unwrap(); // drain so the tee stores the aggregate
+
+    let second = client
+        .post(format!("{url}/v1/chat/completions"))
+        .json(&request_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        second
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream"),
+        "a replayed stream must declare the SSE content type"
+    );
+    let replayed = second.text().await.unwrap();
+    assert!(
+        replayed.contains("The answer is 42."),
+        "the replay must carry the stored answer: {replayed}"
+    );
+    assert!(
+        replayed.trim_end().ends_with("data: [DONE]"),
+        "a chat replay must terminate the SSE stream: {replayed}"
+    );
+    assert_eq!(
+        upstream_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the streaming repeat must be served from cache"
+    );
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
 }

@@ -52,6 +52,12 @@ type AcgStabilityThresholds = nemo_relay.AcgStabilityThresholds
 // AcgConfig configures the adaptive cache governor.
 type AcgConfig = nemo_relay.AcgConfig
 
+// ResponseCacheConfig configures the opt-in LLM response cache.
+type ResponseCacheConfig = nemo_relay.ResponseCacheConfig
+
+// ResponseCacheBackendConfig selects the response-cache backend kind and options.
+type ResponseCacheBackendConfig = nemo_relay.ResponseCacheBackendConfig
+
 // CacheUsage is normalized LLM token usage for cache telemetry.
 type CacheUsage = nemo_relay.CacheUsage
 
@@ -111,6 +117,21 @@ func NewAcgStabilityThresholds() AcgStabilityThresholds {
 // NewAcgConfig returns default adaptive cache governor settings.
 func NewAcgConfig() AcgConfig {
 	return nemo_relay.NewAcgConfig()
+}
+
+// NewResponseCacheConfig returns default response cache settings.
+func NewResponseCacheConfig() ResponseCacheConfig {
+	return nemo_relay.NewResponseCacheConfig()
+}
+
+// NewInMemoryResponseCacheBackend returns an in-memory response-cache backend spec.
+func NewInMemoryResponseCacheBackend() ResponseCacheBackendConfig {
+	return nemo_relay.NewInMemoryResponseCacheBackend()
+}
+
+// NewRedisResponseCacheBackend returns a Redis response-cache backend spec.
+func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendConfig {
+	return nemo_relay.NewRedisResponseCacheBackend(url, keyPrefix)
 }
 
 // NewComponentSpec wraps adaptive config as an enabled top-level adaptive component.

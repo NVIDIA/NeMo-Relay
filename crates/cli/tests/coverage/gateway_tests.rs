@@ -452,12 +452,14 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
     };
     let upstream_info = Arc::new(Mutex::new(None));
     let upstream_error = Arc::new(Mutex::new(None));
+    let upstream_failed = Arc::new(Mutex::new(false));
     let response_bytes = Arc::new(Mutex::new(None));
     let func = build_buffered_func(
         state,
         &prepared,
         upstream_info,
         upstream_error.clone(),
+        upstream_failed,
         response_bytes,
     );
     let error = func(LlmRequest {

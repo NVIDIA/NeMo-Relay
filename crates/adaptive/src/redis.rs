@@ -31,6 +31,23 @@ use crate::trie::serialization::TrieEnvelope;
 use crate::types::plan::ExecutionPlan;
 use crate::types::records::RunRecord;
 
+/// Connect to Redis, returning the client and an auto-reconnecting
+/// [`ConnectionManager`].
+///
+/// # Errors
+///
+/// Returns [`AdaptiveError::Storage`] if the client cannot be created or the
+/// connection cannot be established.
+pub(crate) async fn connect(url: &str) -> Result<(Client, ConnectionManager)> {
+    let client = redis::Client::open(url)
+        .map_err(|e| AdaptiveError::Storage(format!("redis client: {e}")))?;
+    let conn = client
+        .get_connection_manager()
+        .await
+        .map_err(|e| AdaptiveError::Storage(format!("redis connection: {e}")))?;
+    Ok((client, conn))
+}
+
 /// A Redis-backed storage backend for cross-process shared state.
 ///
 /// Uses [`ConnectionManager`] which is `Clone` (internally `Arc`-based) and
@@ -55,12 +72,7 @@ impl RedisBackend {
     /// Returns [`AdaptiveError::Storage`] if the client cannot be created or the
     /// connection cannot be established.
     pub async fn new(url: &str, key_prefix: impl Into<String>) -> Result<Self> {
-        let client = redis::Client::open(url)
-            .map_err(|e| AdaptiveError::Storage(format!("redis client: {e}")))?;
-        let conn = client
-            .get_connection_manager()
-            .await
-            .map_err(|e| AdaptiveError::Storage(format!("redis connection: {e}")))?;
+        let (client, conn) = connect(url).await?;
         Ok(Self {
             client,
             conn,

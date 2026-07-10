@@ -148,6 +148,35 @@ function acgConfig(config = {}) {
 }
 
 /**
+ * Create response-cache settings with defaults applied.
+ *
+ * Merges caller-supplied overrides onto the opt-in LLM response-cache config
+ * shape (exact-match) used by the adaptive plugin. This is a section of
+ * the adaptive component, not a standalone plugin kind.
+ *
+ * @param {object} [config={}] - Partial response-cache settings to override.
+ * @returns {object} A normalized response-cache config object.
+ * @remarks The default backend is in-memory; pass a `backend` (e.g.
+ * `redisBackend(url)`) for a shared cache. `bypass_rate` defaults to `0.0`
+ * (always reuse / exact replay).
+ */
+function responseCacheConfig(config = {}) {
+  const { backend, ...rest } = config;
+  return {
+    ttl_seconds: 3600,
+    namespace: '',
+    priority: 50,
+    bypass_rate: 0.0,
+    cache_nondeterministic: true,
+    key_strategy: 'exact_request',
+    header_allowlist: [],
+    skip_keys: [],
+    backend: backend ?? inMemoryBackend(),
+    ...rest,
+  };
+}
+
+/**
  * Wrap adaptive config as a top-level plugin component.
  *
  * Produces the plugin component entry that can be inserted directly
@@ -205,6 +234,7 @@ module.exports = {
   adaptiveHintsConfig,
   toolParallelismConfig,
   acgConfig,
+  responseCacheConfig,
   ComponentSpec,
   validateConfig,
   buildCacheTelemetryEvent,

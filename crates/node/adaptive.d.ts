@@ -52,6 +52,19 @@ export interface AcgConfig {
   stability_thresholds?: AcgStabilityThresholds;
 }
 
+/** Opt-in LLM response cache (exact-match) settings. */
+export interface ResponseCacheConfig {
+  ttl_seconds?: number;
+  namespace?: string;
+  priority?: number;
+  bypass_rate?: number;
+  cache_nondeterministic?: boolean;
+  key_strategy?: string;
+  header_allowlist?: string[];
+  skip_keys?: string[];
+  backend?: BackendSpec;
+}
+
 /** Canonical config object for the top-level adaptive component. */
 export interface Config {
   version?: number;
@@ -61,6 +74,7 @@ export interface Config {
   adaptive_hints?: AdaptiveHintsConfig;
   tool_parallelism?: ToolParallelismConfig;
   acg?: AcgConfig;
+  response_cache?: ResponseCacheConfig;
   policy?: ConfigPolicy;
 }
 
@@ -244,6 +258,20 @@ export declare function toolParallelismConfig(config?: ToolParallelismConfig): T
  * callers can override only the thresholds they need.
  */
 export declare function acgConfig(config?: AcgConfig): AcgConfig;
+/**
+ * Create response-cache settings with defaults applied.
+ *
+ * Merges caller-supplied overrides onto the opt-in LLM response-cache config
+ * shape (exact-match) used by the adaptive plugin. This is a section of
+ * the adaptive component, not a standalone plugin kind.
+ *
+ * @param config - Partial response-cache settings to override.
+ * @returns A normalized response-cache config object.
+ * @remarks The default backend is in-memory; pass a `backend` (e.g.
+ * `redisBackend(url)`) for a shared cache. `bypass_rate` defaults to `0.0`
+ * (always reuse / exact replay).
+ */
+export declare function responseCacheConfig(config?: ResponseCacheConfig): ResponseCacheConfig;
 /**
  * Wrap adaptive config as a top-level component.
  *
