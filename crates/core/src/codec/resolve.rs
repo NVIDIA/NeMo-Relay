@@ -4,8 +4,6 @@
 //! Provider-surface detection, best-effort normalization, and construction of
 //! the matching built-in codecs from a raw payload, surface, or codec name.
 
-use std::sync::Arc;
-
 use crate::api::llm::LlmRequest;
 use crate::error::Result;
 use crate::json::Json;
@@ -52,8 +50,8 @@ pub(crate) struct ProviderSurfaceDescriptor {
     pub(crate) decode_request: fn(&LlmRequest) -> Result<AnnotatedLlmRequest>,
     pub(crate) decode_response: fn(&Json) -> Result<AnnotatedLlmResponse>,
     pub(crate) codec_name: &'static str,
-    pub(crate) request_codec: fn() -> Arc<dyn LlmCodec>,
-    pub(crate) response_codec: fn() -> Arc<dyn LlmResponseCodec>,
+    pub(crate) request_codec: fn() -> Box<dyn LlmCodec>,
+    pub(crate) response_codec: fn() -> Box<dyn LlmResponseCodec>,
     pub(crate) streaming_codec: fn() -> Box<dyn StreamingCodec>,
 }
 
@@ -186,13 +184,13 @@ pub fn supported_codec_names() -> Vec<&'static str> {
 
 /// Constructs the built-in bidirectional request codec ([`LlmCodec`]) for a surface.
 #[must_use]
-pub fn request_codec(surface: ProviderSurface) -> Arc<dyn LlmCodec> {
+pub fn request_codec(surface: ProviderSurface) -> Box<dyn LlmCodec> {
     (descriptor_for(surface).request_codec)()
 }
 
 /// Constructs the built-in decode-only response codec ([`LlmResponseCodec`]) for a surface.
 #[must_use]
-pub fn response_codec(surface: ProviderSurface) -> Arc<dyn LlmResponseCodec> {
+pub fn response_codec(surface: ProviderSurface) -> Box<dyn LlmResponseCodec> {
     (descriptor_for(surface).response_codec)()
 }
 

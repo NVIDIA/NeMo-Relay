@@ -91,11 +91,7 @@ fn decode_request_for_surface(
     request_codec(request_surface.provider_surface())
         .decode(request)
         .map_err(|error| {
-            let surface_label = match request_surface {
-                RequestSurface::AnthropicMessages => "anthropic",
-                RequestSurface::OpenAIChat => "openai chat",
-                RequestSurface::OpenAIResponses => "openai responses",
-            };
+            let surface_label: &str = request_surface.as_ref();
             AdaptiveError::Internal(format!("failed to decode {surface_label} request: {error}"))
         })
 }

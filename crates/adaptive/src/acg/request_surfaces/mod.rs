@@ -18,12 +18,14 @@ use std::collections::HashSet;
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::codec::resolve::{ProviderSurface, detect_request_surface};
 use serde_json::Value;
+use strum::AsRefStr;
 
 use crate::acg::prompt_ir::PromptIR;
 use crate::acg::translation::{HintPlan, HintTarget};
 
 #[cfg_attr(not(test), allow(dead_code))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr)]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum RequestSurface {
     AnthropicMessages,
     OpenAIChat,

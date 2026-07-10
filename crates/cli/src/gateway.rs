@@ -252,7 +252,7 @@ fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
             streaming: Some(build_streaming_codec(surface)),
-            response: Some(build_response_codec(surface)),
+            response: Some(Arc::from(build_response_codec(surface))),
         },
         None => RouteCodecs {
             streaming: None,

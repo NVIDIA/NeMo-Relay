@@ -34,8 +34,8 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
     decode_request: |request| OpenAIChatCodec.decode(request),
     decode_response: |raw| OpenAIChatCodec.decode_response(raw),
     codec_name: "openai_chat",
-    request_codec: || std::sync::Arc::new(OpenAIChatCodec),
-    response_codec: || std::sync::Arc::new(OpenAIChatCodec),
+    request_codec: || Box::new(OpenAIChatCodec),
+    response_codec: || Box::new(OpenAIChatCodec),
     streaming_codec: || Box::new(OpenAIChatStreamingCodec::new()),
 };
 
