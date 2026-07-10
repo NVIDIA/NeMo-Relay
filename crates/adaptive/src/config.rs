@@ -212,7 +212,7 @@ pub struct ResponseCacheConfig {
     /// requests explicitly pinned deterministic (`temperature` = 0) — absent
     /// or unreadable temperatures count as nondeterministic.
     pub cache_nondeterministic: bool,
-    /// Key strategy. Only [`KEY_STRATEGY_EXACT_REQUEST`] is supported.
+    /// Key strategy: `exact_request` or `logical`.
     pub key_strategy: String,
     /// Request headers (case-insensitive) folded into the key; never auth headers.
     pub header_allowlist: Vec<String>,

@@ -9,7 +9,9 @@ use nemo_relay::plugin::{
 use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
-use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
+use crate::response_cache::config::{
+    KEY_STRATEGY_EXACT_REQUEST, KEY_STRATEGY_LOGICAL, ToolCacheConfig,
+};
 use crate::response_cache::tool::{is_supported_tool_pattern, wildcard_patterns_overlap};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
@@ -123,11 +125,15 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
             "bypass_rate must be in [0.0, 1.0]".to_string(),
         ));
     }
-    if config.key_strategy != KEY_STRATEGY_EXACT_REQUEST {
+    if ![KEY_STRATEGY_EXACT_REQUEST, KEY_STRATEGY_LOGICAL].contains(&config.key_strategy.as_str()) {
         report.diagnostics.push(response_cache_error(
             "response_cache.unsupported_key_strategy",
             Some("key_strategy"),
-            format!("unsupported key_strategy; only \"{KEY_STRATEGY_EXACT_REQUEST}\" is supported"),
+            format!(
+                "unsupported key_strategy '{}'; supported: \"{KEY_STRATEGY_EXACT_REQUEST}\", \
+                 \"{KEY_STRATEGY_LOGICAL}\"",
+                config.key_strategy
+            ),
         ));
     }
     // Auth material must never enter the key or the stored entries.

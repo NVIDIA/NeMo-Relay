@@ -17,6 +17,11 @@ use serde_json::{Map, Value as Json};
 /// Exact-request key strategy identifier.
 pub const KEY_STRATEGY_EXACT_REQUEST: &str = "exact_request";
 
+/// The "logical" key strategy: exact-match keying, but the tool set is keyed
+/// on a structural, description- and order-insensitive fingerprint — so rewording
+/// or reordering tools does not bust the cache; only a changed tool interface does.
+pub const KEY_STRATEGY_LOGICAL: &str = "logical";
+
 /// Default in-memory byte budget: 256 MiB.
 pub const DEFAULT_MAX_BYTES: usize = 256 * 1024 * 1024;
 

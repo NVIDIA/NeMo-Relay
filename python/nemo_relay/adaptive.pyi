@@ -227,7 +227,7 @@ class ToolCacheConfig:
 
 @dataclass(slots=True)
 class ResponseCacheConfig:
-    """Opt-in exact-match LLM response and tool-result cache settings.
+    """Opt-in LLM response and tool-result cache settings.
 
     A section of the adaptive component, not a standalone plugin kind.
 
@@ -240,7 +240,7 @@ class ResponseCacheConfig:
         bypass_rate: Probability in ``[0.0, 1.0]`` of skipping the cache and running live.
         cache_nondeterministic: Cache nondeterministic requests too; ``False``
             caches only requests explicitly pinned deterministic (``temperature`` = 0).
-        key_strategy: Key strategy. Only ``"exact_request"`` is supported.
+        key_strategy: Key strategy: ``"exact_request"`` or ``"logical"``.
         header_allowlist: Request headers folded into the key.
         backend: Cache storage backend (``in_memory`` or ``redis``).
         tools: Opt-in tool-result cache; ``None`` leaves the tool surface off.

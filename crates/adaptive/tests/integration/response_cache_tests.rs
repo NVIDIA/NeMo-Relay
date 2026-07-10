@@ -793,6 +793,49 @@ async fn hit_preserves_usage_on_the_end_event_and_reports_savings_on_the_mark() 
 }
 
 #[tokio::test]
+async fn logical_strategy_reuses_across_reworded_tool_descriptions() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    // `logical` must be accepted by validation (activate_cache asserts no
+    // diagnostics) and must reuse across a reworded tool description end-to-end.
+    activate_cache(ResponseCacheConfig {
+        key_strategy: "logical".to_string(),
+        ..ResponseCacheConfig::default()
+    })
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider = counting_provider(Arc::clone(&calls), sample_body());
+
+    let request_with_tool = |description: &str| LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "what is the weather?"}],
+            "temperature": 0.0,
+            "tools": [{"type": "function", "function": {
+                "name": "get_weather",
+                "description": description,
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+            }}]
+        }),
+    };
+
+    call(&provider, request_with_tool("Get the weather for a city.")).await;
+    call(
+        &provider,
+        request_with_tool("Look up the current weather (reworded)."),
+    )
+    .await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "logical keying must serve the reworded-tool repeat from cache"
+    );
+}
+
+#[tokio::test]
 async fn errors_are_not_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
