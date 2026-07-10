@@ -930,6 +930,8 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         ("UserPromptSubmit", "prompt"),
         ("afterAgentResponse", "response"),
         ("PreCompact", "compact"),
+        ("PostCompact", "compact"),
+        (COMPACTION_EVENT_NAME, "compact"),
         ("Notification", "notification"),
         ("Unrecognized.Event", "hook"),
     ] {

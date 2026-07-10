@@ -6,6 +6,7 @@ pub(crate) mod codex;
 pub(crate) mod hermes;
 
 use axum::http::HeaderMap;
+use nemo_relay::api::scope::COMPACTION_EVENT_NAME;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -895,7 +896,7 @@ fn classify_primary(
                     fallback_session_id,
                 ))
             }
-            "precompact" | "compaction" => {
+            "precompact" | "postcompact" | COMPACTION_EVENT_NAME => {
                 NormalizedEvent::Compaction(common_session_event_with_fallback(
                     payload,
                     headers,
