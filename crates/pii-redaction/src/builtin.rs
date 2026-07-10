@@ -124,8 +124,8 @@ impl CompiledBuiltinBackend {
         Ok(Self {
             action,
             target_paths: Arc::new(config.target_paths),
-            request_codec: surface.map(build_request_codec).map(Arc::from),
-            response_codec: surface.map(build_response_codec).map(Arc::from),
+            request_codec: surface.map(build_request_codec),
+            response_codec: surface.map(build_response_codec),
             codec_name: surface.map(BuiltinCodecName::from_provider_surface),
         })
     }

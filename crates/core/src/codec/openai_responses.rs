@@ -49,8 +49,8 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
     decode_request: |request| OpenAIResponsesCodec.decode(request),
     decode_response: |raw| OpenAIResponsesCodec.decode_response(raw),
     codec_name: "openai_responses",
-    request_codec: || Box::new(OpenAIResponsesCodec),
-    response_codec: || Box::new(OpenAIResponsesCodec),
+    request_codec: || std::sync::Arc::new(OpenAIResponsesCodec),
+    response_codec: || std::sync::Arc::new(OpenAIResponsesCodec),
     streaming_codec: || Box::new(OpenAIResponsesStreamingCodec::new()),
 };
 
