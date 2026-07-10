@@ -27,6 +27,9 @@ The selected host CLI must also be available:
 - `claude` for Claude Code plugin installation.
 - `codex` for Codex plugin installation.
 
+Codex plugin installation requires `codex-cli >= 0.143.0`. The installer checks
+the version before modifying plugin or Codex configuration.
+
 ## Install Host Plugin
 
 Run the command for the host plugin that you want to install:
@@ -64,6 +67,11 @@ default directory is platform-specific:
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/nemo-relay/plugins` |
 | Windows | `%LOCALAPPDATA%\nemo-relay\plugins` |
 
+Install, force-install, rollback, and uninstall operations are serialized per
+user and host, including operations that name different install directories.
+If another operation is active, Relay waits briefly and then returns an
+actionable timeout instead of changing host-global plugin state concurrently.
+
 ## What Install Changes
 
 `nemo-relay install` writes a local marketplace named `nemo-relay-local`, then
@@ -76,22 +84,56 @@ existing Claude authentication and model settings and backs them up only when
 it adds the Relay provider route.
 
 For Codex, install registers the local Codex marketplace, installs
-`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, merges generated hook
-entries, and configures the `nemo-relay-openai` provider alias at
-`http://127.0.0.1:47632`.
+`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
+`nemo-relay-openai` provider alias at `http://127.0.0.1:47632`. The plugin's
+`hooks/hooks.json` is the sole persistent Relay hook source. The installer uses
+the Codex app-server API to select hooks by plugin ID, exact canonical command,
+and event definition. It never trusts unrelated user, project, or plugin hooks.
+If Codex does not discover exactly one enabled and trusted handler for every
+generated event—`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
+`PostCompact`—installation restores the previous Codex config, legacy hooks,
+Relay backup files, and every original targeted trust entry. These 10 events are
+the complete supported Codex 0.143 plugin hook schema; Relay does not generate
+undiscoverable `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
+Upgrade removes legacy Relay groups from
+`~/.codex/hooks.json` while preserving unrelated hooks.
 
-Codex plugin mode is hook-supervised on-demand startup only. It does not install a
-Codex wrapper, user-level daemon, launch agent, system user service,
-scheduled task, login item, or persistent supervisor. The sidecar starts when an
-installed Codex hook runs, reuses an already healthy sidecar when one exists,
-and exits after its idle timeout.
+Start a new Codex CLI process after installation. Restart the Codex desktop app
+if it was already running so it reloads the provider and hook configuration.
 
-<Warning>
-The plugin captures the first provider request only when Codex fires an
-installed hook before that request. If a Codex version calls the provider
-before any hook, the plugin cannot guarantee first-request capture under
-hook-only lazy startup.
-</Warning>
+Codex plugin mode uses a required `nemo-relay mcp` lifecycle client. The client
+starts or reuses a detached native sidecar on `127.0.0.1:47632`, verifies Relay
+identity, version, protocol readiness, and effective user-level configuration,
+and heartbeats it every 30 seconds. Concurrent
+Codex processes share the gateway. After the final MCP client closes, the
+sidecar exits after 300 idle seconds by default. If the gateway exits while MCP
+stdio is open, the client performs one coordinated restart and fails if
+recovery does not succeed. A foreign process on the configured port is rejected
+with an actionable conflict instead of being accepted because it returned HTTP
+200.
+
+On Windows, Relay requests Job Object breakaway only when the host job permits
+it. If the host applies a restrictive job but permits nested jobs, Relay keeps
+the sidecar scoped to that host job and retains a nested cleanup job for its
+process tree; the sidecar cannot outlive the host job. If Relay cannot create or
+configure the cleanup job, or the host rejects nested assignment, persistent
+bootstrap fails actionably instead of starting without process-tree cleanup
+guarantees.
+
+The compatibility fingerprint covers resolved provider, exporter, dynamic
+plugin, and relevant environment settings without exposing their values in the
+health response. `nemo-relay install codex --force` uses a private ownership
+token to stop an existing installer-owned sidecar before refreshing the plugin;
+it does not terminate an unrelated listener.
+
+Persistent mode resolves only system and user Relay configuration and starts in
+the user configuration directory. Project `.nemo-relay` layers remain available
+through transparent `nemo-relay run` invocations. The generated MCP manifest
+forwards environment variable names for provider credentials, Relay runtime,
+OpenTelemetry, AWS, proxies, certificates, approved prefixes, and credential
+variables referenced by user observability configuration. It never stores
+their values.
 
 ## Diagnose
 
@@ -112,8 +154,14 @@ nemo-relay doctor --plugin all
 `nemo-relay doctor` includes every persistent host-plugin installation found in
 the default platform install directory. It checks the generated marketplace and
 plugin files, Relay binary and hook support, host registration, provider
-routing, hooks, and lazy-sidecar assumptions. A stopped Codex lazy sidecar is
-informational; hooks start it on first use.
+routing, hooks, and sidecar readiness assumptions. For Codex, doctor also asks the
+Codex app-server whether each exact Relay-generated hook is trusted and
+enabled. JSON output includes `checks.codex_hooks_trusted` and a
+`codex_hook_trust` object that groups trusted, untrusted, modified, disabled,
+missing, or duplicated required hooks. A stopped Codex sidecar is informational;
+the required plugin MCP starts it before the captured turn. Doctor also reports
+newly required forwarded environment names and recommends
+`nemo-relay install codex --force`.
 
 Use the focused plugin doctor when diagnosing one host or an installation that
 uses a custom directory:
@@ -143,10 +191,11 @@ nemo-relay uninstall codex
 nemo-relay uninstall all
 ```
 
-Uninstall removes the generated host plugin registration and marketplace entry,
-restores Claude Code provider routing from the Relay backup, and removes
-generated Codex hook/provider configuration, while preserving unrelated user
-configuration.
+Uninstall removes Codex provider configuration and trust for the exact plugin
+hooks before unregistering the plugin, while Codex can still report its hook
+metadata. It then removes the host registration and marketplace. Claude Code
+provider routing is restored from the Relay backup. Unrelated user hooks and
+configuration remain unchanged.
 
 ## Source Marketplace Discovery
 
@@ -159,6 +208,5 @@ validation:
 Those manifests are useful when validating host plugin metadata from a source
 checkout. For end-user setup, use `nemo-relay install <host>`. It generates the
 local marketplace, registers the host plugin, and performs the required
-provider and hook setup. Avoid keeping both a source-installed
-plugin and a generated install active for the same host because both can forward
-the same hook payload.
+provider and hook setup. Source manifests do not provide Codex's complete
+provider, environment-forwarding, and verified-trust workflow.

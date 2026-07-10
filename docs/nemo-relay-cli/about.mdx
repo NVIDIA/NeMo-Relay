@@ -49,7 +49,7 @@ controls.
 | Agent | Observability | Security | Optimization | Notes |
 | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
-| Codex | Yes | Yes | Partial | Hook forwarding and gateway-routed LLM optimization are supported after hooks are reviewed and activated. The missing session-end hook limits full coverage. |
+| Codex | Yes | Yes | Partial | Persistent install verifies all 10 hooks in the supported schema. Each `Stop` finalizes a turn snapshot because the plugin schema does not expose `SessionEnd`. |
 | Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool guardrails, and Hermes API-request telemetry are supported. Optimization depends on Hermes shell and API-request hook coverage. |
 
 ## Guides

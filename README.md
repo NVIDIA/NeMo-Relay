@@ -120,10 +120,15 @@ and provider settings for that launched process, then shuts the gateway down
 when the agent exits.
 
 > [!WARNING]
-> If generated hooks are inactive, Codex users must review and activate them
-> before events appear. The Codex Desktop App has additional limitations.
+> `nemo-relay install codex` automatically trusts only the exact hooks owned by
+> `nemo-relay-plugin@nemo-relay-local`. It does not trust unrelated user,
+> project, or plugin hooks. Manual or source-marketplace installs can still
+> require review. Restart an already running Codex app after persistent
+> installation. On Windows, a restrictive host Job Object can keep the shared
+> Relay gateway scoped to the host process lifetime.
+> The Codex Desktop App has additional limitations.
 > Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
-> current hook activation caveat and troubleshooting steps.
+> current lifecycle, startup, and troubleshooting details.
 
 #### 4. Verify the Run
 
@@ -287,7 +292,7 @@ coverage.
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
-| Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
+| Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; `SessionEnd` availability remains Codex-version-dependent. |
 | Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
 
 ### Public API Integrations

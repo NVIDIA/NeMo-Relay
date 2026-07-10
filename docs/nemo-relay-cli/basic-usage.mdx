@@ -113,7 +113,7 @@ nemo-relay uninstall codex
 ```
 
 Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
-directories, host-specific behavior, and Codex lazy sidecar constraints.
+directories, host-specific behavior, and Codex shared-sidecar lifecycle.
 
 ## Shared Configuration
 
@@ -306,8 +306,8 @@ Generated hook bundles subscribe to the events needed for that mapping:
 
 | Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
 | --- | --- | --- |
-| Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
-| Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
+| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
+| Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 
 Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks

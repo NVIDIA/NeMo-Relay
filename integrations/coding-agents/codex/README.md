@@ -13,40 +13,109 @@ supported only when they run locally and honor the same hook/plugin config and
 provider routing. Cloud or remote Codex tasks are partial or unsupported for
 local gateway LLM capture.
 
-Requires `codex-cli >= 0.129.0` (introduced the `features.hooks` flag and the
-provider alias surface the gateway relies on).
+Requires `codex-cli >= 0.143.0`, including the complete required lifecycle-hook
+set, plugin app-server metadata, `features.hooks`, and provider alias surfaces
+used by the installer.
 
 ## Files
 
 - `.codex-plugin/plugin.json` describes the Codex plugin package.
+- `.mcp.json` starts the native `nemo-relay mcp` lifecycle client and requires
+  successful gateway initialization.
 - `hooks/hooks.json` contains Codex hook entries that run
   `nemo-relay plugin-shim hook codex`.
 - `nemo-relay install codex` creates the local marketplace, installs the plugin,
-  and persists Codex hook and provider configuration using `nemo-relay` from
-  `PATH`.
+  and persists Codex provider and exact plugin-hook trust using `nemo-relay`
+  from `PATH`.
 
 ## Captured Events
 
-With `codex-cli >= 0.129.0`, the minimum supported installed hooks are
-`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
-`PermissionRequest`, `Stop`, `PreCompact`, and `PostCompact`.
+With `codex-cli >= 0.143.0`, persistent installation requires `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PermissionRequest`,
+`SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and `PostCompact`. Relay
+requires exactly one enabled and trusted app-server handler for every generated
+event and forwards delivered hooks as scope, tool, mark, or private LLM
+correlation events. `PostToolUseFailure`, `Notification`, and `SessionEnd` are not
+in the Codex 0.143 plugin hook schema and are not generated.
 
-The hook template also documents events used by newer or broader host hook
-surfaces, including `SessionEnd`, `PostToolUseFailure`, `SubagentStart`,
-`SubagentStop`, and `Notification`. Relay forwards any delivered supported hook
-as scope, tool, mark, or private LLM correlation events, but the v1 plugin
-manifest does not depend on Codex exposing those broader events.
+Each delivered `Stop` closes the active turn and writes a cumulative ATIF
+snapshot. Because the plugin schema does not expose `SessionEnd`, the final
+`Stop` is the final session snapshot.
 
-Transparent setup injects these hooks with CLI config overrides. Plugin setup
-does not install hooks from the package template directly. It writes
-`features.hooks = true` in `.codex/config.toml`, configures the
-`nemo-relay-openai` provider alias, and merges hook shim entries into
+Transparent setup injects hooks with CLI config overrides. Persistent setup
+writes `features.hooks = true` in `.codex/config.toml`, configures the
+`nemo-relay-openai` provider alias, and uses this plugin's `hooks/hooks.json` as
+the sole persistent Relay hook source. It does not add Relay groups to
 `.codex/hooks.json`.
 
-Codex plugin mode uses hook-supervised on-demand startup only. It does not install a
-user-level daemon, launchd agent, systemd user service, scheduled task, login
-item, wrapper, or persistent supervisor. The sidecar starts only when a Codex
-hook invokes `nemo-relay plugin-shim hook codex`.
+Persistent installation opens the stable Codex app-server interface and
+selects only hooks whose source is `plugin`, plugin ID is
+`nemo-relay-plugin@nemo-relay-local`, and command exactly matches the generated
+canonical Relay shim command. It requires exactly one handler for each event
+in the complete 10-event supported set listed above.
+
+Unrelated user, project, and plugin hooks are never trusted. If installation
+fails after a trust write, it restores every targeted hook's prior trusted,
+modified, disabled, or absent state together with Codex config and backups.
+Upgrade removes legacy Relay user-hook groups while preserving unrelated hooks.
+
+Codex plugin mode starts the native `nemo-relay mcp` subcommand through the
+plugin MCP configuration. That Rust process is a lightweight lifecycle client:
+it starts or reuses a detached native `nemo-relay --bind 127.0.0.1:47632`
+sidecar, rejects foreign listeners, and completes the MCP handshake only after
+Relay identity, version, bootstrap protocol, and effective persistent
+configuration are verified. Compatibility uses a one-way fingerprint of the
+resolved settings and relevant environment values without exposing secrets.
+The complete dynamic plugin activation snapshot, including adjacent runtime
+files and a copied managed Python environment, is limited to 100,000 filesystem
+entries and 512 MiB in total, with a maximum directory traversal depth of 128.
+If startup reports an activation snapshot budget error, remove unrelated files
+from the manifest or load-target directory, flatten deeply nested directories,
+or reduce the managed Python environment before retrying. Concurrent Codex
+processes share the gateway and heartbeat it every 30 seconds. The sidecar
+remains available for 300 idle seconds after the final client closes. If it dies
+while MCP remains open, one coordinated restart is attempted. The MCP server
+advertises no tools.
+
+On Windows, Relay requests Job Object breakaway only when the host job permits
+it. Under a restrictive Job Object that permits nested jobs, Relay keeps the
+sidecar scoped to the host job and retains a nested cleanup job for the sidecar
+process tree. The sidecar cannot outlive the host job, so the 300-second idle
+reuse window can end early. If Relay cannot create or configure the cleanup job,
+or the host rejects nested assignment, persistent bootstrap fails actionably
+instead of running without process-tree cleanup guarantees.
+
+Persistent mode loads only system and user Relay configuration and starts from
+the user configuration directory. Project `.nemo-relay` layers remain specific
+to transparent `nemo-relay run` invocations. The MCP manifest forwards approved
+provider, Relay, OpenTelemetry, AWS, proxy, certificate, and config-referenced
+credential variable names without storing values.
+
+Plugin-owned hook commands pin `http://127.0.0.1:47632` explicitly, so an
+ambient `NEMO_RELAY_PLUGIN_GATEWAY_URL` cannot split hook traffic from the
+required MCP-managed gateway.
+
+If the Relay version, user configuration, or forwarded credentials change, an
+MCP client refuses to reuse the incompatible sidecar. `nemo-relay install codex
+--force` retires an installer-owned sidecar through its private shutdown token
+before refreshing the plugin.
+
+An existing install without MCP generation fencing cannot be retired safely,
+even when Codex reports that the plugin is no longer registered, because an
+already-running MCP process can outlive registration. If upgrade or uninstall
+reports a missing MCP generation marker, close every Codex client and
+standalone `nemo-relay mcp` process, then run:
+
+```bash
+codex plugin remove nemo-relay-plugin@nemo-relay-local
+codex plugin marketplace remove nemo-relay-local
+```
+
+Remove `codex-marketplace` and `codex.json` from the install directory named in
+the error, then retry `nemo-relay install codex --force` to install a fenced
+generation. If removal was the original goal, run `nemo-relay uninstall codex`
+immediately afterward; the fenced reinstall lets Relay remove provider and hook
+trust state transactionally.
 
 ## Transparent Setup
 
@@ -73,10 +142,9 @@ nemo-relay run \
   -- codex
 ```
 
-## Shared Config
+## Configure Transparent Runs
 
-Use `.nemo-relay/config.toml` for project defaults or
-`~/.config/nemo-relay/config.toml` for user defaults:
+Use `.nemo-relay/config.toml` for project defaults:
 
 ```toml
 [agents.codex]
@@ -103,6 +171,32 @@ Then run:
 ```bash
 nemo-relay run --agent codex
 ```
+
+This example writes ATIF files under the project at `.nemo-relay/atif`.
+
+## Configure the Persistent Plugin
+
+Use `~/.config/nemo-relay/config.toml`, or
+`$XDG_CONFIG_HOME/nemo-relay/config.toml` when `XDG_CONFIG_HOME` is set, for
+persistent provider defaults. Run `nemo-relay plugins edit` without
+`--project` to write user-scoped observability configuration. For example:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atif]
+enabled = true
+output_directory = "atif"
+```
+
+Persistent mode ignores project layers and starts the sidecar in the user Relay
+configuration directory. The relative path above resolves to
+`$XDG_CONFIG_HOME/nemo-relay/atif`, or `~/.config/nemo-relay/atif` when
+`XDG_CONFIG_HOME` is not set.
 
 ## Standalone Gateway
 
@@ -141,11 +235,17 @@ for context.
 
 ## Verify
 
-Run a Codex session that starts, uses one simple tool, and ends. Confirm that
-ATIF was written:
+Run a Codex session that starts, uses one simple tool, and ends. For a
+transparent project run, confirm that ATIF was written:
 
 ```bash
 ls .nemo-relay/atif
+```
+
+For the persistent user-scoped configuration above, enter:
+
+```bash
+ls "${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/atif"
 ```
 
 For a direct endpoint smoke test against a manually started gateway:
@@ -174,9 +274,10 @@ nemo-relay install codex
 
 `nemo-relay install codex` writes a local Codex marketplace, registers
 `nemo-relay-plugin`, enables Codex hooks, and configures the
-`nemo-relay-openai` provider alias. Codex sidecar lifecycle remains
-hook-supervised on-demand startup only; the installer does not create a wrapper or
-daemon.
+`nemo-relay-openai` provider alias. It writes a required MCP server entry that
+invokes the resolved native `nemo-relay` binary. Installation automatically
+trusts the exact plugin-owned hook definitions through `codex app-server` and
+rolls back files and original trust state if activation cannot be verified.
 
 The install command requires `nemo-relay` to be available on `PATH`. It does not
 require launching Codex through the `nemo-relay` wrapper and does not install a
@@ -193,16 +294,16 @@ That path reads `.agents/plugins/marketplace.json` from the repository and
 installs this Codex plugin from `integrations/coding-agents/codex`. Source hooks
 invoke `nemo-relay plugin-shim hook codex` directly.
 
-Treat the source marketplace path as discovery or manifest validation. For the
-complete provider and generated-hook setup, remove the source-installed plugin
-first and then run `nemo-relay install codex`. Keeping both the source plugin
-and the generated install active can forward the same Codex hook twice.
+Treat the source marketplace path as discovery or manifest validation. Use
+`nemo-relay install codex` for the complete provider, environment-forwarding,
+and verified-trust setup.
 
 Package or unpack the plugin so the plugin root contains:
 
 ```text
 nemo-relay-plugin/
   .codex-plugin/plugin.json
+  .mcp.json
   hooks/hooks.json
 ```
 
@@ -249,11 +350,8 @@ codex plugin marketplace add "$MARKETPLACE_ROOT"
 codex plugin add nemo-relay-plugin@nemo-relay-local
 ```
 
-For end-to-end installation, we recommend using`nemo-relay install codex`; it performs the
-marketplace registration and the persistent Codex provider/hook setup together.
-If you used the manual source marketplace commands above, remove that plugin
-before running the full installer so source hook templates and generated
-persistent hooks do not both forward the same event.
+For end-to-end installation, use `nemo-relay install codex`; it performs the
+marketplace registration and persistent provider/plugin-hook setup together.
 
 The installer writes a provider alias like:
 
@@ -274,16 +372,23 @@ Run read-only plugin checks:
 nemo-relay doctor --plugin codex
 ```
 
+Doctor reports the generated MCP server, native `nemo-relay mcp` support,
+plugin hook installation, environment forwarding, and live Codex trust state.
+In JSON mode, inspect `checks.codex_hooks_trusted` and `codex_hook_trust` for
+untrusted, modified, disabled, or missing required hook entries.
+
 Start a normal Codex session:
 
 ```bash
 codex
 ```
 
-The installed hooks start the Relay sidecar lazily on
-`http://127.0.0.1:47632`, and the Codex provider alias routes model traffic
-through that sidecar. No launchd agent, systemd user service, scheduled task,
-login item, wrapper, or persistent supervisor is installed.
+Start a new CLI process after install, or restart the Codex desktop app if it
+was already open, so the provider selection and hooks are reloaded.
+
+The required plugin MCP server starts or reuses the shared native Relay gateway
+on `http://127.0.0.1:47632` before Codex begins the captured turn, and the
+provider alias routes model traffic through it.
 
 To upgrade, replace the plugin directory contents with the new package for the
 same host, keep the same `MARKETPLACE_ROOT`, refresh the local marketplace
@@ -297,14 +402,16 @@ codex plugin add nemo-relay-plugin@nemo-relay-local
 nemo-relay install codex
 ```
 
-To uninstall, remove NeMo Relay's Codex config and hook entries, remove the
-marketplace registration, and remove the generated marketplace directory:
+To uninstall, remove NeMo Relay's Codex config and exact plugin-hook trust,
+remove the marketplace registration, and remove the generated marketplace
+directory:
 
 ```bash
 nemo-relay uninstall codex
 ```
 
-Full first-request LLM capture depends on Codex firing one of the installed
-hooks, especially `SessionStart` or `UserPromptSubmit`, before its first model
-provider request. If a Codex version sends the provider request first, the first
-request may fail or may not be captured until the next hook starts Relay.
+Codex can perform provider discovery before it launches plugin MCP servers. A
+cold start can therefore produce transient `/models` connection failures that
+Codex retries. Because the MCP server is required, Codex does not begin the
+captured turn or send its `/responses` request until the native Relay gateway is
+ready; if startup fails, the turn fails instead of silently bypassing Relay.

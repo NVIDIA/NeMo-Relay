@@ -211,6 +211,14 @@ print(f"sha256:{sha256(artifact.read_bytes()).hexdigest()}")
 PY
 ```
 
+Relay requires the module portion of `load.entrypoint` to resolve directly
+under `source.manifest_root` to exactly one Python source file: either
+`module/path.py` or `module/path/__init__.py`. That canonical file must be the
+integrity-checked `source.artifact`. Relay rejects ambiguous modules and custom
+build-backend mappings, including `src/` layouts that cannot be derived from the
+manifest. This prevents an unsigned sibling module from becoming the executed
+entrypoint.
+
 ## Register the Plugin
 
 Run the following commands from the project directory:
@@ -226,6 +234,13 @@ nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
 the `source.manifest_root` project into it. Relay uses that recorded environment
 when it starts the worker. Do not start the worker directly: Relay supplies its
 worker socket, host socket, activation ID, and activation token.
+
+Relay records a digest of the installed environment in a locally authenticated
+marker bound to the integrity-checked entrypoint artifact. The marker detects
+changes between provisioning and activation, but it is not a security boundary
+against a process running as the same operating-system user, which can access
+the same user-owned keys and files. Worker process isolation is not a security
+sandbox.
 
 ## Configure the Plugin
 

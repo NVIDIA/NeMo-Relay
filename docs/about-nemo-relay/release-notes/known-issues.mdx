@@ -9,6 +9,22 @@ SPDX-License-Identifier: Apache-2.0 */}
 This page lists current limitations and support notes for the release
 documentation set.
 
+## NVIDIA NeMo Relay 0.6
+
+- Codex can perform provider discovery and request `/models` before launching
+  required plugin MCP servers. That cold-start request can fail and be retried;
+  the captured turn and `/responses` traffic wait for verified Relay gateway
+  readiness.
+- On Windows, a restrictive host Job Object can prevent the Codex plugin's
+  Relay sidecar from breaking away. When nested job assignment is supported,
+  the sidecar remains scoped to the host job and the shared gateway might not
+  remain available for the full 300-second idle reuse window. If Relay cannot
+  create or configure its cleanup job, bootstrap fails instead of starting
+  without descendant-cleanup guarantees.
+- The Codex 0.143 plugin hook schema does not expose `SessionEnd`. Relay writes a
+  cumulative trajectory snapshot for every delivered `Stop`, so the final turn
+  snapshot is also the final session snapshot.
+
 ## NVIDIA NeMo Relay 0.5
 
 These notes apply to the NVIDIA NeMo Relay 0.5 release.
@@ -19,8 +35,6 @@ These notes apply to the NVIDIA NeMo Relay 0.5 release.
 - The NeMo Relay CLI is experimental. Coding-agent observability support varies
   with host plugin, hook, and provider-routing capabilities. Hooks alone cannot
   produce complete LLM request and response spans.
-- Complete first-request capture in Codex plugin mode depends on Codex firing
-  an installed hook before the first provider request.
 - Node.js 24 or newer is required for Node.js binding and package workflows.
 - OpenClaw support uses public hook-backed telemetry with partial security and
   optimization support. Security is limited to pre-tool conditional guardrails,

@@ -28,9 +28,10 @@ environment variables, or shared TOML config.
 - `codex/` is a Codex plugin package. `nemo-relay install codex` creates the
   marketplace, installs the plugin, enables `features.hooks = true`, and
   configures a local `nemo-relay-openai` provider alias. Codex plugin delivery
-  uses hook-supervised lazy sidecar startup only, with no wrapper, user-level daemon,
-  login item, launchd agent, systemd user service, scheduled task, or persistent
-  supervisor.
+  uses required native `nemo-relay mcp` lifecycle clients that share one
+  Rust gateway, subject to the Windows Job Object lifetime caveat below, with no
+  wrapper, login item, launchd agent, systemd user service, scheduled task, or
+  persistent supervisor.
 - Hermes does not require a static bundle in this directory. The setup wizard
   (`nemo-relay config`) merges hook commands into `.hermes/config.yaml` when
   hermes is selected.
@@ -76,11 +77,23 @@ required.
 Claude Code can start the sidecar from plugin hooks or helper commands and route
 model traffic by setting `ANTHROPIC_BASE_URL` to the sidecar URL.
 
-Codex does not use a daemon in plugin mode. The installed Codex hooks call the
-`nemo-relay plugin-shim hook codex` command. The shim then checks `/healthz`, starts
-the local `nemo-relay` sidecar, if needed, waits briefly for readiness, and then
-forwards the hook payload. Codex model traffic is routed through the stable
-provider alias at `http://127.0.0.1:47632`.
+Codex's required plugin MCP entry starts `nemo-relay mcp`, a lightweight client
+that starts or reuses a native `nemo-relay --bind 127.0.0.1:47632` sidecar. Relay
+detaches the sidecar when host policy permits. A restrictive Windows Job Object
+keeps the sidecar scoped to that host job instead of failing bootstrap.
+MCP initialization waits for Relay identity, version, and bootstrap-protocol
+readiness. Concurrent Codex processes share the gateway and heartbeat it while
+their MCP stdio connections remain open; the gateway exits after the final
+client's idle timeout. Plugin-owned hooks call the canonically resolved
+`nemo-relay plugin-shim hook codex` command, and model traffic uses the same
+stable provider alias.
+
+Persistent Codex mode loads system and user Relay configuration only and starts
+the sidecar from the user configuration directory. Relative exporter paths are
+therefore stable across projects. The generated MCP manifest forwards approved
+provider, Relay, OpenTelemetry, AWS, proxy, certificate, and config-referenced
+credential environment names without storing their values. Use transparent
+`nemo-relay run` for project-specific configuration.
 
 Install the local host marketplaces with:
 
@@ -106,9 +119,9 @@ codex plugin add nemo-relay-plugin@nemo-relay
 That path relies on `nemo-relay` being available on `PATH`; source plugin hooks
 invoke `nemo-relay plugin-shim hook codex` directly.
 
-Use the source marketplace path for discovery or manifest validation. Remove
-the source-installed Codex plugin before running `nemo-relay install codex`;
-keeping both active can forward the same Codex hook twice.
+Use the source marketplace path for discovery or manifest validation. Use
+`nemo-relay install codex` for complete provider routing, environment
+forwarding, and verified plugin-hook trust.
 
 Claude Code users can add this repository as a marketplace the same way:
 
@@ -131,6 +144,9 @@ Shared TOML config is loaded from `/etc/nemo-relay/config.toml`, then nearest
 project `.nemo-relay/config.toml`, then
 `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
 `~/.config/nemo-relay/config.toml`.
+
+That layering applies to transparent runs. Persistent Codex plugin mode skips
+the project layer and merges only system and user configuration.
 
 ```toml
 [agents.codex]
@@ -176,8 +192,9 @@ the same hook command reaches the ephemeral per-run gateway; hermes hooks fall
 back to an embedded `--gateway-url` when running outside the wrapper.
 
 Claude Code and Codex plugin hooks call `nemo-relay plugin-shim hook <agent>`.
-The plugin shim ensures the local sidecar is reachable, then forwards the hook
-payload to the plugin sidecar endpoint.
+For Codex, the installed plugin file is the sole persistent Relay hook source;
+installation does not add Relay groups to `~/.codex/hooks.json`. The shim
+forwards each canonical payload to the verified shared sidecar.
 
 Since hook forwarding fails open by default, gateway or sidecar outages do not
 block the coding agent. The hook command exits successfully after logging the
