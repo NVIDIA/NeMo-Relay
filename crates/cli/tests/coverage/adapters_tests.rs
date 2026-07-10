@@ -120,7 +120,10 @@ fn maps_slash_command_expansion_to_minimal_inferred_skill_mark() {
     match &outcome.events[0] {
         NormalizedEvent::HookMark(event) => {
             assert_eq!(event.payload, json!({"skill_name": "review"}));
-            assert_eq!(event.metadata["skill_load_source"], "prompt_expansion");
+            assert_eq!(
+                event.metadata[SKILL_LOAD_SOURCE_KEY],
+                SKILL_LOAD_SOURCE_PROMPT_EXPANSION
+            );
             assert_eq!(event.metadata["inferred"], true);
             assert_eq!(event.metadata["command_source"], "plugin");
             assert!(event.metadata.get("prompt").is_none());
@@ -148,7 +151,14 @@ fn does_not_infer_non_slash_or_empty_prompt_expansions() {
         let outcome = claude_code::adapt(payload, &HeaderMap::new());
         match &outcome.events[0] {
             NormalizedEvent::HookMark(event) => {
-                assert_ne!(event.metadata["skill_load_source"], "prompt_expansion");
+                assert_ne!(
+                    event
+                        .metadata
+                        .get(SKILL_LOAD_SOURCE_KEY)
+                        .and_then(Value::as_str),
+                    Some(SKILL_LOAD_SOURCE_PROMPT_EXPANSION)
+                );
+                assert_eq!(event.payload["hook_event_name"], "UserPromptExpansion");
             }
             event => panic!("unexpected event: {event:?}"),
         }

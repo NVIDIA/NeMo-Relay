@@ -6,34 +6,17 @@
 use std::collections::HashSet;
 
 use serde_json::Value;
+use strum::{EnumString, IntoStaticStr};
 
 pub(crate) const HANDLED_METADATA_KEY: &str = "nemo_relay.skill_load_handled";
 pub(crate) const PRECOMPUTED_METADATA_KEY: &str = "nemo_relay.skill_loads";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum SkillLoadSource {
     SkillTool,
     StructuredRead,
     ShellRead,
-}
-
-impl SkillLoadSource {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::SkillTool => "skill_tool",
-            Self::StructuredRead => "structured_read",
-            Self::ShellRead => "shell_read",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "skill_tool" => Some(Self::SkillTool),
-            "structured_read" => Some(Self::StructuredRead),
-            "shell_read" => Some(Self::ShellRead),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,7 +29,7 @@ pub(crate) fn detect(tool_name: &str, args: &Value) -> Vec<SkillLoad> {
     let normalized_tool = normalize_identifier(tool_name);
     let source_and_names = if matches!(normalized_tool.as_str(), "skill" | "skillview") {
         (SkillLoadSource::SkillTool, skill_tool_names(args))
-    } else if is_structured_reader(&normalized_tool) && !has_partial_read_controls(args) {
+    } else if is_structured_reader(tool_name) && !has_partial_read_controls(args) {
         (
             SkillLoadSource::StructuredRead,
             structured_skill_names(args),
@@ -78,7 +61,7 @@ pub(crate) fn precomputed(metadata: Option<&Value>) -> Option<Vec<SkillLoad>> {
             .filter_map(|entry| {
                 let entry = entry.as_object()?;
                 let name = entry.get("skill_name")?.as_str()?.trim();
-                let source = SkillLoadSource::from_str(entry.get("source")?.as_str()?)?;
+                let source = entry.get("source")?.as_str()?.parse().ok()?;
                 (!name.is_empty() && seen.insert(name.to_string())).then(|| SkillLoad {
                     name: name.to_string(),
                     source,
@@ -90,7 +73,10 @@ pub(crate) fn precomputed(metadata: Option<&Value>) -> Option<Vec<SkillLoad>> {
 
 fn skill_tool_names(args: &Value) -> Vec<String> {
     let mut names = Vec::new();
-    collect_named_strings(args, &mut |key, value| {
+    visit_named_values(args, |key, value| {
+        let Some(value) = value.as_str() else {
+            return;
+        };
         if matches!(key.as_str(), "skill" | "skillname" | "name") {
             let value = value.trim();
             if !value.is_empty() {
@@ -103,7 +89,7 @@ fn skill_tool_names(args: &Value) -> Vec<String> {
 
 fn structured_skill_names(args: &Value) -> Vec<String> {
     let mut names = Vec::new();
-    collect_named_values(args, &mut |key, value| {
+    visit_named_values(args, |key, value| {
         if matches!(
             key.as_str(),
             "path" | "filepath" | "filename" | "file" | "paths"
@@ -116,8 +102,10 @@ fn structured_skill_names(args: &Value) -> Vec<String> {
 
 fn shell_skill_names(args: &Value) -> Vec<String> {
     let mut commands = Vec::new();
-    collect_named_strings(args, &mut |key, value| {
-        if matches!(key.as_str(), "command" | "cmd") {
+    visit_named_values(args, |key, value| {
+        if matches!(key.as_str(), "command" | "cmd")
+            && let Some(value) = value.as_str()
+        {
             commands.push(value.to_string());
         }
     });
@@ -129,15 +117,20 @@ fn shell_skill_names(args: &Value) -> Vec<String> {
 }
 
 fn is_structured_reader(tool_name: &str) -> bool {
-    [
+    const READERS: [&str; 5] = [
         "read",
         "readfile",
         "readtextfile",
         "readmultiplefiles",
         "fileread",
-    ]
-    .iter()
-    .any(|reader| tool_name == *reader || tool_name.ends_with(reader))
+    ];
+    let segments = tool_name
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|segment| !segment.is_empty())
+        .map(normalize_identifier)
+        .collect::<Vec<_>>();
+    (1..=segments.len())
+        .any(|length| READERS.contains(&segments[segments.len() - length..].concat().as_str()))
 }
 
 fn is_shell_tool(tool_name: &str) -> bool {
@@ -158,20 +151,19 @@ fn is_shell_tool(tool_name: &str) -> bool {
 }
 
 fn has_partial_read_controls(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => object.iter().any(|(key, value)| {
-            let key = normalize_identifier(key);
-            let partial = match key.as_str() {
+    let mut partial = false;
+    visit_named_values(value, |key, value| {
+        if !partial {
+            let key = normalize_identifier(&key);
+            partial = match key.as_str() {
                 "offset" => value.as_i64().is_some_and(|offset| offset != 0),
                 "limit" | "range" | "head" | "tail" | "startline" | "endline" | "linestart"
                 | "lineend" => !value.is_null(),
                 _ => false,
             };
-            partial || has_partial_read_controls(value)
-        }),
-        Value::Array(values) => values.iter().any(has_partial_read_controls),
-        _ => false,
-    }
+        }
+    });
+    partial
 }
 
 fn collect_path_skill_names(value: &Value, names: &mut Vec<String>) {
@@ -181,37 +173,26 @@ fn collect_path_skill_names(value: &Value, names: &mut Vec<String>) {
                 names.push(name);
             }
         }
-        Value::Array(values) => {
-            for value in values {
-                collect_path_skill_names(value, names);
-            }
-        }
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_path_skill_names(value, names)),
         _ => {}
     }
 }
 
-fn collect_named_strings(value: &Value, visit: &mut impl FnMut(String, &str)) {
-    collect_named_values(value, &mut |key, value| {
-        if let Some(value) = value.as_str() {
-            visit(key, value);
-        }
-    });
-}
-
-fn collect_named_values(value: &Value, visit: &mut impl FnMut(String, &Value)) {
-    match value {
-        Value::Object(object) => {
-            for (key, value) in object {
-                visit(normalize_identifier(key), value);
-                collect_named_values(value, visit);
+fn visit_named_values(value: &Value, mut visit: impl FnMut(String, &Value)) {
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Object(object) => {
+                for (key, value) in object {
+                    visit(normalize_identifier(key), value);
+                    stack.push(value);
+                }
             }
+            Value::Array(values) => stack.extend(values.iter()),
+            _ => {}
         }
-        Value::Array(values) => {
-            for value in values {
-                collect_named_values(value, visit);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -234,9 +215,25 @@ fn skill_name_from_path(path: &str) -> Option<String> {
 }
 
 fn complete_reader_paths(command: &str) -> Vec<String> {
-    let Some(words) = tokenize_simple_command(command) else {
+    if command.contains(['\n', '\r']) {
+        return Vec::new();
+    }
+    // Preserve Windows separators: shell-words treats a lone backslash as an escape.
+    let escaped_windows_paths = command.replace('\\', "\\\\");
+    let Ok(words) = shell_words::split(&escaped_windows_paths) else {
         return Vec::new();
     };
+    if words.is_empty()
+        || words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "|" | "||" | "&" | "&&" | ";" | "<" | ">" | "<<" | ">>"
+            ) || word.contains("$(")
+                || word.contains('`')
+        })
+    {
+        return Vec::new();
+    }
     let Some(executable) = words.first().and_then(|word| executable_name(word)) else {
         return Vec::new();
     };
@@ -289,59 +286,6 @@ fn powershell_content_paths(words: &[String]) -> Vec<String> {
         index += 1;
     }
     paths
-}
-
-fn tokenize_simple_command(command: &str) -> Option<Vec<String>> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut characters = command.chars().peekable();
-
-    while let Some(character) = characters.next() {
-        match quote {
-            Some(active_quote) if character == active_quote => quote = None,
-            Some('\'') => current.push(character),
-            Some('"') if character == '\\' => {
-                if characters
-                    .peek()
-                    .is_some_and(|next| matches!(next, '\\' | '"' | '$' | '`' | '\n'))
-                {
-                    current.push(characters.next()?);
-                } else {
-                    current.push(character);
-                }
-            }
-            Some(_) => current.push(character),
-            None if matches!(character, '\'' | '"') => quote = Some(character),
-            None if matches!(character, '|' | '&' | ';' | '<' | '>' | '`' | '\n' | '\r') => {
-                return None;
-            }
-            None if character.is_whitespace() => {
-                if !current.is_empty() {
-                    words.push(std::mem::take(&mut current));
-                }
-            }
-            None if character == '$' && characters.peek() == Some(&'(') => return None,
-            None if character == '\\' => {
-                if characters
-                    .peek()
-                    .is_some_and(|next| next.is_whitespace() || matches!(next, '\\' | '\'' | '"'))
-                {
-                    current.push(characters.next()?);
-                } else {
-                    current.push(character);
-                }
-            }
-            None => current.push(character),
-        }
-    }
-    if quote.is_some() {
-        return None;
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    (!words.is_empty()).then_some(words)
 }
 
 fn executable_name(executable: &str) -> Option<String> {

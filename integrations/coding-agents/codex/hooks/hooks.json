@@ -23,17 +23,6 @@
         ]
       }
     ],
-    "UserPromptExpansion": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "*",

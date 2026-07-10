@@ -5,6 +5,9 @@ pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod hermes;
 
+pub(crate) const SKILL_LOAD_SOURCE_KEY: &str = "skill_load_source";
+pub(crate) const SKILL_LOAD_SOURCE_PROMPT_EXPANSION: &str = "prompt_expansion";
+
 use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -829,7 +832,10 @@ fn inferred_skill_load_event(
         common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
     event.payload = json!({"skill_name": skill_name});
     if let Some(metadata) = event.metadata.as_object_mut() {
-        metadata.insert("skill_load_source".into(), json!("prompt_expansion"));
+        metadata.insert(
+            SKILL_LOAD_SOURCE_KEY.into(),
+            json!(SKILL_LOAD_SOURCE_PROMPT_EXPANSION),
+        );
         metadata.insert("inferred".into(), json!(true));
         if let Some(command_source) = string_at(payload, &["command_source"]) {
             metadata.insert("command_source".into(), json!(command_source));

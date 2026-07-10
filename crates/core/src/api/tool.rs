@@ -237,18 +237,18 @@ fn tool_call_with_subscriber_snapshot(
         .and_then(|metadata| metadata.get(skill_load::HANDLED_METADATA_KEY))
         .and_then(Json::as_bool)
         .is_some_and(|handled| handled);
-    let skill_loads = if handled_skill_loads {
-        Vec::new()
-    } else if let Some(skill_loads) = skill_load::precomputed(params.metadata.as_ref()) {
-        skill_loads
-    } else {
-        skill_load::detect(params.name, &params.args)
-    };
     let sanitized_args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
         params.name,
         params.args,
         &entries,
     );
+    let skill_loads = if handled_skill_loads {
+        Vec::new()
+    } else if let Some(skill_loads) = skill_load::precomputed(params.metadata.as_ref()) {
+        skill_loads
+    } else {
+        skill_load::detect(params.name, &sanitized_args)
+    };
     let (handle, event, marks) = {
         let context = global_context();
         let state = context
@@ -275,7 +275,7 @@ fn tool_call_with_subscriber_snapshot(
                         .timestamp(handle.started_at)
                         .data(json!({"skill_name": skill_load.name}))
                         .metadata(json!({
-                            "skill_load_source": skill_load.source.as_str(),
+                            "skill_load_source": <&str>::from(skill_load.source),
                             "tool_name": handle.name,
                         }))
                         .build(),

@@ -145,6 +145,9 @@ fn structured_readers_reject_non_skill_paths_missing_parents_and_non_read_tools(
         ),
         ("edit_file", json!({"file_path": "/skills/review/SKILL.md"})),
         ("list_directory", json!({"path": "/skills/review/SKILL.md"})),
+        ("thread", json!({"path": "/skills/review/SKILL.md"})),
+        ("spread", json!({"path": "/skills/review/SKILL.md"})),
+        ("unread", json!({"path": "/skills/review/SKILL.md"})),
     ] {
         assert_rejected(tool, args);
     }
