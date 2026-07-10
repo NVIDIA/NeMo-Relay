@@ -1,0 +1,16 @@
+---
+title: "Function streaming_codec"
+sidebar-title: "streaming_codec"
+description: "Constructs a fresh, single-use streaming codec (`StreamingCodec`) for a surface."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn streaming_codec(surface: <a href=\"enum-providersurface\">ProviderSurface</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"../streaming/trait-streamingcodec\">StreamingCodec</a>&gt;"}} /></pre>
+
+Constructs a fresh, single-use streaming codec ([`StreamingCodec`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec)) for a surface.
+
+A [`StreamingCodec`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec) finalizer consumes its accumulator, so callers must construct one instance per managed streaming call.

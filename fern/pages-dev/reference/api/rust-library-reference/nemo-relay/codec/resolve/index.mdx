@@ -1,7 +1,7 @@
 ---
 title: "Module resolve"
 sidebar-title: "resolve"
-description: "Provider-surface detection and best-effort normalization: the preferred path for turning raw provider JSON into normalized types when no codec annotation is present."
+description: "Provider-surface detection, best-effort normalization, and construction of the matching built-in codecs from a raw payload, surface, or codec name."
 position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-Provider-surface detection and best-effort normalization: the preferred path for turning raw provider JSON into normalized types when no codec annotation is present.
+Provider-surface detection, best-effort normalization, and construction of the matching built-in codecs from a raw payload, surface, or codec name.
 
 ## Enums
 
@@ -23,3 +23,7 @@ Provider-surface detection and best-effort normalization: the preferred path for
 - [normalize_request](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-normalize-request): Best-effort decode of a raw request into [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest) (fail-open).
 - [normalize_request_with_hint](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-normalize-request-with-hint): Like [`normalize_request`](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-normalize-request), but a recognized `provider_hint` can disambiguate provider request shapes that are otherwise identical.
 - [normalize_response](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-normalize-response): Best-effort decode of a raw response into [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse) (fail-open).
+- [request_codec](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-request-codec): Constructs the built-in bidirectional request codec ([`LlmCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmcodec)) for a surface.
+- [response_codec](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-response-codec): Constructs the built-in decode-only response codec ([`LlmResponseCodec`](/reference/api/rust-library-reference/nemo-relay/codec/traits/trait-llmresponsecodec)) for a surface.
+- [streaming_codec](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-streaming-codec): Constructs a fresh, single-use streaming codec ([`StreamingCodec`](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec)) for a surface.
+- [supported_codec_names](/reference/api/rust-library-reference/nemo-relay/codec/resolve/fn-supported-codec-names): The canonical codec names of every built-in provider surface, for config validation and "supported codec" messages.

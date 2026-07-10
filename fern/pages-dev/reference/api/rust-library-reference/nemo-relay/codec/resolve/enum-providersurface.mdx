@@ -39,6 +39,24 @@ OpenAI Responses.
 
 Anthropic Messages.
 
+## Implementations
+
+### `impl ProviderSurface`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-providersurface\">ProviderSurface</a>"}} /></pre>
+
+#### `codec_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn codec_name(self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+
+The canonical codec name for this surface (e.g. `"openai_chat"`), the inverse of [`Self::from_codec_name`](/reference/api/rust-library-reference/nemo-relay/codec/resolve/enum-providersurface).
+
+#### `from_codec_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_codec_name(name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+
+Resolves a canonical codec name to its surface, or `None` when `name` is not a built-in provider codec.
+
 ## Trait Implementations
 
 ### `impl Clone for ProviderSurface`
