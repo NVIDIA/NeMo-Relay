@@ -8,6 +8,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "First-party Switchyard Decision API routing plugin for NeMo Relay."
+publish = false
+readme = "README.md"
 
 [lints]
 workspace = true
