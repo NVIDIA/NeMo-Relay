@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Plugin-shim setup, restore, and doctor delegation.
+//! Host setup, restore, and doctor delegation.
 
-use crate::config::{CodingAgent, PluginHost};
-use crate::plugin_shim;
+use crate::config::{CodingAgent, IntegrationHost};
+use crate::plugin_host;
 use serde_json::Value;
 use std::path::Path;
 
@@ -13,7 +13,7 @@ use super::state::PluginInstallOptions;
 use super::state::PluginLayout;
 
 pub(super) fn run_plugin_setup(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -26,7 +26,7 @@ pub(super) fn run_plugin_setup(
 }
 
 pub(super) fn run_plugin_uninstall(
-    host: PluginHost,
+    host: IntegrationHost,
     plugin_root: &Path,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -39,7 +39,7 @@ pub(super) fn run_plugin_uninstall(
 }
 
 pub(super) fn run_plugin_doctor(
-    host: PluginHost,
+    host: IntegrationHost,
     plugin_root: &Path,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -52,34 +52,34 @@ pub(super) fn run_plugin_doctor(
 }
 
 pub(super) fn run_plugin_doctor_json(
-    host: PluginHost,
+    host: IntegrationHost,
     plugin_root: &Path,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<Value, String> {
     setup_runner.doctor_json(host, DEFAULT_GATEWAY_URL, plugin_root)
 }
 
-pub(super) fn setup_action_description(host: PluginHost, action: &str) -> String {
+pub(super) fn setup_action_description(host: IntegrationHost, action: &str) -> String {
     match (host, action) {
-        (PluginHost::Codex, "configure") => {
+        (IntegrationHost::Codex, "configure") => {
             "configure Codex provider and trust plugin-owned hooks".into()
         }
-        (PluginHost::Codex, "restore") => "remove Codex provider and plugin hook trust".into(),
-        (PluginHost::Codex, "doctor") => "check Codex provider and plugin-owned hooks".into(),
-        (PluginHost::ClaudeCode, "configure") => {
+        (IntegrationHost::Codex, "restore") => "remove Codex provider and plugin hook trust".into(),
+        (IntegrationHost::Codex, "doctor") => "check Codex provider and plugin-owned hooks".into(),
+        (IntegrationHost::ClaudeCode, "configure") => {
             "enable Claude Code provider routing through NeMo Relay".into()
         }
-        (PluginHost::ClaudeCode, "restore") => {
+        (IntegrationHost::ClaudeCode, "restore") => {
             "restore Claude Code provider routing from NeMo Relay backup".into()
         }
-        (PluginHost::ClaudeCode, "doctor") => "check Claude Code provider routing".into(),
-        (PluginHost::All, _) => unreachable!("all is expanded before plugin setup"),
+        (IntegrationHost::ClaudeCode, "doctor") => "check Claude Code provider routing".into(),
+        (IntegrationHost::All, _) => unreachable!("all is expanded before plugin setup"),
         (_, _) => unreachable!("unsupported setup action"),
     }
 }
 
 pub(super) trait PluginSetupRunner {
-    fn snapshot(&self, _host: PluginHost) -> Result<Option<PluginSetupSnapshot>, String> {
+    fn snapshot(&self, _host: IntegrationHost) -> Result<Option<PluginSetupSnapshot>, String> {
         Ok(None)
     }
 
@@ -87,22 +87,31 @@ pub(super) trait PluginSetupRunner {
         Ok(())
     }
 
-    fn refresh_gateway(&self, _host: PluginHost) -> Result<(), String> {
+    fn refresh_gateway(&self, _host: IntegrationHost) -> Result<(), String> {
         Ok(())
     }
 
-    fn setup(&self, host: PluginHost, gateway_url: &str, plugin_root: &Path) -> Result<(), String>;
-    fn uninstall(
+    fn setup(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String>;
-    fn doctor(&self, host: PluginHost, gateway_url: &str, plugin_root: &Path)
-    -> Result<(), String>;
+    fn uninstall(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+    ) -> Result<(), String>;
+    fn doctor(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+    ) -> Result<(), String>;
     fn doctor_json(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<Value, String>;
@@ -111,94 +120,113 @@ pub(super) trait PluginSetupRunner {
 pub(super) struct RealPluginSetupRunner;
 
 pub(super) enum PluginSetupSnapshot {
-    Codex(plugin_shim::CodexSetupSnapshot),
-    Claude(plugin_shim::ClaudeSetupSnapshot),
+    Codex(plugin_host::CodexSetupSnapshot),
+    Claude(plugin_host::ClaudeSetupSnapshot),
     #[cfg(test)]
     Mock,
 }
 
 impl PluginSetupRunner for RealPluginSetupRunner {
-    fn snapshot(&self, host: PluginHost) -> Result<Option<PluginSetupSnapshot>, String> {
+    fn snapshot(&self, host: IntegrationHost) -> Result<Option<PluginSetupSnapshot>, String> {
         match host {
-            PluginHost::Codex => plugin_shim::snapshot_codex_setup()
+            IntegrationHost::Codex => plugin_host::snapshot_codex_setup()
                 .map(PluginSetupSnapshot::Codex)
                 .map(Some),
-            PluginHost::ClaudeCode => plugin_shim::snapshot_claude_setup()
+            IntegrationHost::ClaudeCode => plugin_host::snapshot_claude_setup()
                 .map(PluginSetupSnapshot::Claude)
                 .map(Some),
-            PluginHost::All => unreachable!("all is expanded before plugin setup"),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before plugin setup")
+            }
         }
     }
 
     fn restore_snapshot(&self, snapshot: &PluginSetupSnapshot) -> Result<(), String> {
         match snapshot {
-            PluginSetupSnapshot::Codex(snapshot) => plugin_shim::restore_codex_setup(snapshot),
-            PluginSetupSnapshot::Claude(snapshot) => plugin_shim::restore_claude_setup(snapshot),
+            PluginSetupSnapshot::Codex(snapshot) => plugin_host::restore_codex_setup(snapshot),
+            PluginSetupSnapshot::Claude(snapshot) => plugin_host::restore_claude_setup(snapshot),
             #[cfg(test)]
             PluginSetupSnapshot::Mock => Ok(()),
         }
     }
 
-    fn refresh_gateway(&self, host: PluginHost) -> Result<(), String> {
+    fn refresh_gateway(&self, host: IntegrationHost) -> Result<(), String> {
         match host {
-            PluginHost::Codex => plugin_shim::stop_plugin_gateway(CodingAgent::Codex),
-            PluginHost::ClaudeCode => plugin_shim::stop_plugin_gateway(CodingAgent::ClaudeCode),
-            PluginHost::All => unreachable!("all is expanded before plugin setup"),
+            IntegrationHost::Codex => plugin_host::stop_plugin_gateway(CodingAgent::Codex),
+            IntegrationHost::ClaudeCode => {
+                plugin_host::stop_plugin_gateway(CodingAgent::ClaudeCode)
+            }
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before plugin setup")
+            }
         }
     }
 
-    fn setup(&self, host: PluginHost, gateway_url: &str, plugin_root: &Path) -> Result<(), String> {
+    fn setup(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+    ) -> Result<(), String> {
         match host {
-            PluginHost::Codex => plugin_shim::install_codex_plugin(gateway_url, plugin_root),
-            PluginHost::ClaudeCode => plugin_shim::enable_claude_provider(gateway_url),
-            PluginHost::All => unreachable!("all is expanded before plugin setup"),
+            IntegrationHost::Codex => plugin_host::install_codex_plugin(gateway_url, plugin_root),
+            IntegrationHost::ClaudeCode => plugin_host::enable_claude_provider(gateway_url),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before plugin setup")
+            }
         }
     }
 
     fn uninstall(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
         match host {
-            PluginHost::Codex => plugin_shim::uninstall_codex_plugin(gateway_url, plugin_root),
-            PluginHost::ClaudeCode => plugin_shim::restore_claude_provider(gateway_url),
-            PluginHost::All => unreachable!("all is expanded before plugin uninstall"),
+            IntegrationHost::Codex => plugin_host::uninstall_codex_plugin(gateway_url, plugin_root),
+            IntegrationHost::ClaudeCode => plugin_host::restore_claude_provider(gateway_url),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before plugin uninstall")
+            }
         }
     }
 
     fn doctor(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
         match host {
-            PluginHost::Codex => {
-                plugin_shim::doctor_plugin(CodingAgent::Codex, gateway_url, plugin_root)
+            IntegrationHost::Codex => {
+                plugin_host::doctor_plugin(CodingAgent::Codex, gateway_url, plugin_root)
             }
-            PluginHost::ClaudeCode => {
-                plugin_shim::doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root)
+            IntegrationHost::ClaudeCode => {
+                plugin_host::doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root)
             }
-            PluginHost::All => unreachable!("all is expanded before plugin doctor"),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before plugin doctor")
+            }
         }
     }
 
     fn doctor_json(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<Value, String> {
         match host {
-            PluginHost::Codex => {
-                plugin_shim::doctor_plugin_json(CodingAgent::Codex, gateway_url, plugin_root)
+            IntegrationHost::Codex => {
+                plugin_host::doctor_plugin_json(CodingAgent::Codex, gateway_url, plugin_root)
             }
-            PluginHost::ClaudeCode => {
-                plugin_shim::doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
+            IntegrationHost::ClaudeCode => {
+                plugin_host::doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
             }
-            PluginHost::All => unreachable!("all is expanded before plugin doctor"),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before plugin doctor")
+            }
         }
     }
 }

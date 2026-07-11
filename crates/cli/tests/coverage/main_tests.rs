@@ -6,7 +6,7 @@ use std::ffi::OsString;
 
 use super::*;
 use crate::config::{
-    CompletionsCommand, McpAgent, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
+    CompletionsCommand, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
     PluginsListCommand, PluginsSubcommand, PluginsValidateCommand, PricingSubcommand,
     PricingValidateCommand, ServerArgs,
 };
@@ -88,7 +88,7 @@ fn cli_parses_native_mcp_subcommand_and_bind_override() {
     let cli = Cli::try_parse_from(["nemo-relay", "mcp"]).unwrap();
     assert!(matches!(
         cli.command,
-        Some(Command::Mcp(command)) if command.agent == McpAgent::Codex
+        Some(Command::Mcp(command)) if command.agent == CodingAgent::Codex
     ));
     assert!(cli.server.bind.is_none());
 
@@ -99,13 +99,13 @@ fn cli_parses_native_mcp_subcommand_and_bind_override() {
     let cli = Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "claude"]).unwrap();
     assert!(matches!(
         cli.command,
-        Some(Command::Mcp(command)) if command.agent == McpAgent::ClaudeCode
+        Some(Command::Mcp(command)) if command.agent == CodingAgent::ClaudeCode
     ));
 
     let cli = Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "hermes"]).unwrap();
     assert!(matches!(
         cli.command,
-        Some(Command::Mcp(command)) if command.agent == McpAgent::Hermes
+        Some(Command::Mcp(command)) if command.agent == CodingAgent::Hermes
     ));
 }
 
@@ -235,20 +235,6 @@ fn safe_dispatch_plugin_json_errors_return_exit_codes() {
 
 #[tokio::test]
 async fn run_command_dispatches_safe_plugin_and_install_paths() {
-    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "install", "claude"]).unwrap();
-    let error = run_command(cli.command.unwrap(), &cli.server)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("plugin install supports codex and hermes"));
-
-    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "claude"]).unwrap();
-    let error = run_command(cli.command.unwrap(), &cli.server)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("plugin uninstall supports codex and hermes"));
-
     let dir = tempfile::tempdir().unwrap();
     let install_dir = dir.path().join("plugin-install");
     let install_dir_arg = install_dir.to_string_lossy().to_string();

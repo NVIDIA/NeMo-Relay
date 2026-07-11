@@ -623,7 +623,7 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert_eq!(command_executable("codex --full-auto"), "codex");
     assert_eq!(command_executable(""), "");
     assert_eq!(
-        agent_command(CodingAgent::ClaudeCode, &AgentConfigs::default(), "claude"),
+        agent_command(CodingAgent::ClaudeCode, &AgentConfigs::default()),
         "claude"
     );
     assert_eq!(
@@ -724,7 +724,7 @@ fn collect_environment_and_completions_cover_missing_home_and_unknown_shell() {
 async fn collect_agents_filters_target_and_records_version() {
     let temp = tempfile::tempdir().unwrap();
     let codex = temp.path().join("codex");
-    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex 1.2.3\\n'\n").unwrap();
+    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.143.0\\n'\n").unwrap();
     make_executable(&codex);
 
     let mut resolved = ResolvedConfig::default();
@@ -735,7 +735,7 @@ async fn collect_agents_filters_target_and_records_version() {
     assert_eq!(agents[0].name, "codex");
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(codex.as_path()));
-    assert_eq!(agents[0].version.as_deref(), Some("codex 1.2.3"));
+    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.143.0"));
 }
 
 #[cfg(unix)]
@@ -1624,27 +1624,4 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
-}
-
-#[test]
-fn claude_hook_floor_warning_pins_version_boundary() {
-    // 2.1.116 is the first Claude Code whose plugin hook whitelist accepts UserPromptExpansion;
-    // 2.1.114 is the newest published version that rejects it (2.1.115 was never published).
-    let cases = [
-        ("2.1.114 (Claude Code)", true),
-        ("2.1.116 (Claude Code)", false),
-        ("2.1.206 (Claude Code)", false),
-        ("2.0.999 (Claude Code)", true),
-        ("3.0.0 (Claude Code)", false),
-        ("2.1.116-beta (Claude Code)", false),
-        ("not a version", false),
-        ("", false),
-    ];
-    for (version, expect_warning) in cases {
-        assert_eq!(
-            claude_hook_floor_warning(version).is_some(),
-            expect_warning,
-            "unexpected floor verdict for {version:?}"
-        );
-    }
 }

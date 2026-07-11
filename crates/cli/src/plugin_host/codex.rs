@@ -21,7 +21,7 @@ use super::codex_app_server::{CodexAppServerClient, CodexHookMetadata, CodexHook
 use super::shared::{
     FileSnapshot, atomic_write, backup, backup_path, current_exe, ensure_table, home_dir,
     portable_executable_path, read_json_object, remove_backup, restore_file_snapshot, shell_quote,
-    shell_quote_arg_for_platform, shell_quote_for_platform, snapshot_optional_file, write_json,
+    shell_quote_arg_for_platform, snapshot_optional_file, write_json,
 };
 
 pub(super) const CODEX_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
@@ -878,7 +878,10 @@ fn managed_codex_hook_for_relay(
 }
 
 fn legacy_relay_hook_command(command: &str) -> bool {
-    let Some((program, arguments)) = command.split_once(" plugin-shim hook codex") else {
+    let Some((program, arguments)) = [" hook-forward codex", " plugin-shim hook codex"]
+        .into_iter()
+        .find_map(|separator| command.split_once(separator))
+    else {
         return false;
     };
     if !arguments.is_empty() && !arguments.starts_with(" --gateway-url ") {
@@ -1116,7 +1119,7 @@ pub(super) fn codex_home_dir() -> Result<PathBuf, String> {
 
 pub(super) fn codex_hook_command(gateway_url: &str) -> String {
     format!(
-        "nemo-relay plugin-shim hook codex --gateway-url {}",
+        "nemo-relay hook-forward codex --gateway-url {}",
         shell_quote_arg_for_platform(gateway_url, cfg!(windows))
     )
 }
@@ -1126,10 +1129,10 @@ pub(super) fn codex_plugin_hook_command(relay: &Path) -> String {
 }
 
 pub(super) fn codex_plugin_hook_command_for_platform(relay: &Path, windows: bool) -> String {
-    format!(
-        "{} plugin-shim hook codex --gateway-url {}",
-        shell_quote_for_platform(relay, windows),
-        shell_quote_arg_for_platform(super::DEFAULT_URL, windows)
+    crate::installer::persistent_hook_forward_command_for_platform(
+        relay,
+        CodingAgent::Codex,
+        windows,
     )
 }
 
@@ -1140,8 +1143,8 @@ pub(super) fn codex_hook_command_for_platform(
     windows: bool,
 ) -> String {
     format!(
-        "{} plugin-shim hook codex --gateway-url {}",
-        shell_quote_for_platform(relay, windows),
+        "{} hook-forward codex --gateway-url {}",
+        crate::plugin_host::shell_quote_for_platform(relay, windows),
         shell_quote_arg_for_platform(gateway_url, windows)
     )
 }

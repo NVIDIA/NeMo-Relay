@@ -21,13 +21,16 @@ session, subagent, tool, and model lifecycle payloads. You do not need a
 separate service manager, wrapper process, Node.js runtime, or Python bootstrap
 component.
 
-## Configure Persistent Capture
+## Install Persistent Capture
 
-Run the scoped setup flow:
+Install the user-level integration:
 
 ```bash
-nemo-relay config hermes
+nemo-relay install hermes
 ```
+
+Installation requires Hermes Agent 0.18.2 or newer. Relay validates the Hermes
+CLI before modifying configuration.
 
 Relay preserves unrelated Hermes settings and updates the Relay-owned portions
 of the user configuration. Hermes reads this configuration from
@@ -35,7 +38,7 @@ of the user configuration. Hermes reads this configuration from
 unset. This location is user-owned even when you choose project-scoped Relay
 configuration.
 
-Setup performs the following changes as one verified transaction:
+Installation performs the following changes as one verified transaction:
 
 - Adds `mcp_servers.nemo-relay` with the canonical absolute `nemo-relay`
   executable and `mcp --agent hermes` arguments.
@@ -52,30 +55,33 @@ If any write or post-write verification fails, Relay restores the original
 Hermes config, allowlist, and generation file. Concurrent setup operations are
 serialized so they cannot overwrite one another.
 
-Run doctor to verify the MCP entry, all hook definitions, every trust record,
-the generation fence, the Relay executable, and forwarded environment names:
+Run integration doctor to verify the Hermes version, MCP entry, all hook
+definitions, every trust record, the generation fence, the Relay executable,
+and forwarded environment names:
 
 ```bash
-nemo-relay doctor hermes
+nemo-relay doctor --plugin hermes
 ```
 
 If you add a Relay, OpenTelemetry, AWS, proxy, certificate, or
-config-referenced credential variable later, rerun `nemo-relay config hermes`
-to add its name to the Hermes MCP environment. Generated config stores
-`${VARIABLE_NAME}` references, never secret values.
+config-referenced credential variable later, run
+`nemo-relay install hermes --force` to add its name to the Hermes MCP
+environment. Generated config stores `${VARIABLE_NAME}` references, never
+secret values.
 
 ## Gateway Lifecycle
 
 Hermes launches `nemo-relay mcp --agent hermes` as a long-lived stdio MCP
-server. The MCP process does not expose tools. It waits for a valid MCP
-`initialize` request before starting or acquiring the gateway, then completes
-initialization only after Relay identity, version, bootstrap protocol, and
-effective persistent configuration are verified.
+server. The MCP process does not expose tools. It starts or acquires the gateway
+immediately when the process launches and completes initialization only after
+Relay identity, version, bootstrap protocol, and effective persistent
+configuration are verified.
 
 Hermes starts MCP discovery in the background, so an early lifecycle hook can
-arrive before MCP initialization completes. The installed hook command handles
-that race: it attempts delivery, starts or reuses the same gateway under the
-same startup lock after a connection failure, and retries the original payload
+arrive before the MCP process finishes acquiring the gateway. The installed
+hook command handles that race: it starts or reuses the same gateway under the
+same startup lock before delivery. If delivery then fails before connecting,
+the command performs one coordinated recovery and retries the original payload
 once. The payload is not reconstructed or replaced.
 
 Concurrent Hermes, Claude Code, and Codex MCP clients can share one compatible
@@ -153,14 +159,15 @@ nemo-relay run --agent hermes --dry-run --print -- hermes
 
 ## Remove the Integration
 
-Remove the Relay agent block and the Relay-owned Hermes MCP, hooks, trust, and
-generation state with:
+Remove the Relay-owned Hermes MCP, hooks, trust, and generation state with:
 
 ```bash
-nemo-relay config --reset hermes
+nemo-relay uninstall hermes
 ```
 
-Unrelated Hermes configuration remains unchanged.
+Unrelated Hermes configuration remains unchanged. The interactive
+`nemo-relay config hermes` and `nemo-relay config --reset hermes` paths remain
+available when configuring Relay through the setup wizard.
 
 ## Validate End-to-End Capture
 
@@ -179,8 +186,9 @@ It is intentionally outside mandatory Rust CI.
 ## Troubleshoot
 
 If Hermes reports that the MCP server failed to start, run
-`nemo-relay doctor hermes` and inspect the sidecar log path named in the error.
-A foreign listener on `127.0.0.1:47632` is rejected rather than adopted.
+`nemo-relay doctor --plugin hermes` and inspect the sidecar log path named in
+the error. A foreign listener on `127.0.0.1:47632` is rejected rather than
+adopted.
 
 If lifecycle events appear but direct model spans do not, check whether the
 Hermes provider base URL points at Relay. If model spans attach to the parent

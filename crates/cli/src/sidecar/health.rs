@@ -197,10 +197,10 @@ fn split_http_response(response: &[u8]) -> Option<(&[u8], &[u8])> {
 
 pub(crate) fn parse_loopback_url(url: &str) -> Result<(String, u16), String> {
     let parsed = Url::parse(url)
-        .map_err(|error| format!("invalid plugin shim loopback URL {url}: {error}"))?;
+        .map_err(|error| format!("invalid shared gateway loopback URL {url}: {error}"))?;
     if parsed.scheme() != "http" {
         return Err(format!(
-            "plugin shim only supports http loopback URLs: {url}"
+            "shared gateway recovery only supports http loopback URLs: {url}"
         ));
     }
     let host = parsed
@@ -214,7 +214,7 @@ pub(crate) fn parse_loopback_url(url: &str) -> Result<(String, u16), String> {
             .is_ok_and(|address| address.is_loopback());
     if !loopback {
         return Err(format!(
-            "plugin shim only supports loopback gateway URLs: {url}"
+            "shared gateway recovery only supports loopback gateway URLs: {url}"
         ));
     }
     let port = parsed

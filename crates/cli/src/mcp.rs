@@ -18,11 +18,15 @@ pub(crate) async fn run(
     agent: CodingAgent,
     server_args: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
-    // Configuration is resolved before reading stdin, but the gateway process is not acquired
-    // until the session receives a valid MCP initialize request.
-    let gateway = gateway::GatewayPlan::resolve(agent, server_args).await?;
+    // Starting the MCP process is the lifecycle boundary. Acquire the shared gateway before
+    // reading protocol frames so hosts can rely on process startup rather than their individual
+    // initialize and hook ordering.
+    let lease = gateway::GatewayPlan::resolve(agent, server_args)
+        .await?
+        .acquire()
+        .await?;
     let frames = transport::spawn_stdin_reader()?;
-    session::run(gateway, frames, tokio::io::stdout()).await?;
+    session::run(lease, frames, tokio::io::stdout()).await?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -30,11 +34,6 @@ fn default_mcp_bind() -> SocketAddr {
     crate::sidecar::DEFAULT_BIND
         .parse()
         .expect("default MCP gateway bind is valid")
-}
-
-#[cfg(test)]
-fn request_requires_gateway(line: &str) -> bool {
-    protocol::evaluate_frame(line).requires_gateway
 }
 
 #[cfg(test)]

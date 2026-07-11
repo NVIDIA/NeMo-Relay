@@ -322,6 +322,9 @@ pub(crate) fn hermes_config_path_for_agents(
 
 /// Installs Hermes's lifecycle-bound MCP client and exact trusted Relay hooks transactionally.
 pub(crate) fn install_hermes_integration(home: &Path) -> Result<Vec<PathBuf>, CliError> {
+    CodingAgent::Hermes
+        .validate_executable(Path::new(CodingAgent::Hermes.executable()))
+        .map_err(CliError::Install)?;
     let relay = std::env::current_exe().map_err(|error| {
         CliError::Install(format!(
             "failed to resolve the nemo-relay executable: {error}"
@@ -401,11 +404,7 @@ pub(super) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
 }
 
 pub(super) fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'static str) {
-    match agent {
-        CodingAgent::ClaudeCode => ("claude", "claude"),
-        CodingAgent::Codex => ("codex", "codex"),
-        CodingAgent::Hermes => ("hermes", "hermes"),
-    }
+    (agent.as_arg(), agent.executable())
 }
 
 pub(super) fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {

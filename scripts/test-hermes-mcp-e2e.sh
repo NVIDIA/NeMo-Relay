@@ -12,11 +12,6 @@ if ! command -v hermes >/dev/null 2>&1; then
     echo "SKIP: hermes is not installed"
     exit 0
 fi
-if ! hermes mcp --help >/dev/null 2>&1 || ! hermes hooks --help >/dev/null 2>&1; then
-    echo "SKIP: installed Hermes does not provide stdio MCP and shell-hook configuration"
-    exit 0
-fi
-
 cargo build -p nemo-relay-cli --bin nemo-relay
 
 work="$(mktemp -d)"
@@ -135,8 +130,8 @@ filename = "events.jsonl"
 mode = "append"
 EOF
 
-nemo-relay plugin-shim install hermes
-nemo-relay doctor hermes --json >"$work/doctor.json"
+nemo-relay install hermes
+nemo-relay doctor --plugin hermes --json >"$work/doctor.json"
 
 python3 - "$HERMES_HOME" "$work/doctor.json" "$repo_root/target/debug/nemo-relay" <<'PY'
 import json
@@ -159,14 +154,14 @@ allowlist = json.loads((home / "shell-hooks-allowlist.json").read_text())
 commands = {
     entry["command"]
     for entry in allowlist["approvals"]
-    if "plugin-shim hook hermes" in entry.get("command", "")
+    if "hook-forward hermes" in entry.get("command", "")
 }
 assert len(commands) == 1, commands
 command = commands.pop()
 approvals = [entry for entry in allowlist["approvals"] if entry.get("command") == command]
 assert len(approvals) == 13, approvals
 assert len({entry["event"] for entry in approvals}) == 13, approvals
-assert config.count("plugin-shim hook hermes") == 13, config
+assert config.count("hook-forward hermes") == 13, config
 
 doctor = json.loads(doctor_path.read_text())
 hermes = next(agent for agent in doctor["agents"] if agent["name"] == "hermes")

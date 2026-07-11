@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::config::{CodingAgent, PluginHost};
+use crate::config::IntegrationHost;
 use crate::install_generation::{GENERATION_FILE_ENV, write_new_generation};
 use crate::installer::generated_hooks;
 
@@ -17,7 +17,7 @@ use super::state::{PluginInstallOptions, PluginLayout, remove_path, write_json};
 use super::{MARKETPLACE_NAME, PLUGIN_NAME};
 
 pub(super) fn write_plugin_marketplace(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     relay: &Path,
     options: &PluginInstallOptions,
@@ -26,7 +26,7 @@ pub(super) fn write_plugin_marketplace(
 }
 
 pub(super) fn write_plugin_marketplace_for_generation(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     relay: &Path,
     active_generation_fence: &Path,
@@ -72,9 +72,9 @@ pub(super) fn write_plugin_marketplace_for_generation(
     Ok(())
 }
 
-pub(super) fn marketplace_manifest(host: PluginHost) -> Value {
+pub(super) fn marketplace_manifest(host: IntegrationHost) -> Value {
     match host {
-        PluginHost::Codex => json!({
+        IntegrationHost::Codex => json!({
             "name": MARKETPLACE_NAME,
             "interface": {
                 "displayName": "NeMo Relay Local"
@@ -92,7 +92,7 @@ pub(super) fn marketplace_manifest(host: PluginHost) -> Value {
                 "category": "Coding"
             }]
         }),
-        PluginHost::ClaudeCode => json!({
+        IntegrationHost::ClaudeCode => json!({
             "name": MARKETPLACE_NAME,
             "metadata": {
                 "description": "Local NeMo Relay plugins for Claude Code."
@@ -108,24 +108,32 @@ pub(super) fn marketplace_manifest(host: PluginHost) -> Value {
                 "category": "development"
             }]
         }),
-        PluginHost::All => unreachable!("all is expanded before manifest generation"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before manifest generation")
+        }
     }
 }
 
-pub(super) fn plugin_manifest(host: PluginHost) -> Value {
+pub(super) fn plugin_manifest(host: IntegrationHost) -> Value {
     let description = match host {
-        PluginHost::Codex => {
+        IntegrationHost::Codex => {
             "Native Relay gateway lifecycle and Codex hooks for complete local observability."
         }
-        PluginHost::ClaudeCode => {
+        IntegrationHost::ClaudeCode => {
             "Native Relay gateway lifecycle and Claude Code hooks for complete local observability."
         }
-        PluginHost::All => unreachable!("all is expanded before manifest generation"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before manifest generation")
+        }
     };
     let keywords = match host {
-        PluginHost::Codex => json!(["nemo-relay", "codex", "hooks", "observability"]),
-        PluginHost::ClaudeCode => json!(["nemo-relay", "claude-code", "hooks", "observability"]),
-        PluginHost::All => unreachable!("all is expanded before manifest generation"),
+        IntegrationHost::Codex => json!(["nemo-relay", "codex", "hooks", "observability"]),
+        IntegrationHost::ClaudeCode => {
+            json!(["nemo-relay", "claude-code", "hooks", "observability"])
+        }
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before manifest generation")
+        }
     };
     let mut manifest = json!({
         "name": PLUGIN_NAME,
@@ -143,7 +151,7 @@ pub(super) fn plugin_manifest(host: PluginHost) -> Value {
     if plugin_uses_mcp(host) {
         manifest["mcpServers"] = json!("./.mcp.json");
     }
-    if matches!(host, PluginHost::Codex) {
+    if matches!(host, IntegrationHost::Codex) {
         manifest["interface"] = json!({
             "displayName": "NeMo Relay Plugin",
             "shortDescription": "Run the native Relay gateway and capture Codex lifecycle events.",
@@ -160,13 +168,13 @@ pub(super) fn plugin_manifest(host: PluginHost) -> Value {
 }
 
 pub(super) fn plugin_mcp_config(
-    host: PluginHost,
+    host: IntegrationHost,
     relay: &Path,
     generation_fence: &Path,
 ) -> Result<Value, String> {
     let generation_fence = absolute_or_self(generation_fence);
     let server = match host {
-        PluginHost::Codex => json!({
+        IntegrationHost::Codex => json!({
             "command": relay,
             "args": ["mcp", "--agent", "codex"],
             "env": {
@@ -177,20 +185,25 @@ pub(super) fn plugin_mcp_config(
             "required": true,
             "startup_timeout_sec": 20
         }),
-        PluginHost::ClaudeCode => json!({
+        IntegrationHost::ClaudeCode => json!({
             "command": relay,
             "args": ["mcp", "--agent", "claude"],
             "env": {
                 "NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632",
                 (GENERATION_FILE_ENV): generation_fence
-            }
+            },
+            "alwaysLoad": true
         }),
-        PluginHost::All => unreachable!("all is expanded before MCP generation"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before MCP generation")
+        }
     };
     Ok(match host {
-        PluginHost::Codex => json!({ "nemo-relay": server }),
-        PluginHost::ClaudeCode => json!({ "mcpServers": { "nemo-relay": server } }),
-        PluginHost::All => unreachable!("all is expanded before MCP generation"),
+        IntegrationHost::Codex => json!({ "nemo-relay": server }),
+        IntegrationHost::ClaudeCode => json!({ "mcpServers": { "nemo-relay": server } }),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before MCP generation")
+        }
     })
 }
 
@@ -203,18 +216,14 @@ fn absolute_or_self(path: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|_| path.to_owned())
 }
 
-pub(super) fn plugin_hooks(host: PluginHost, relay: &Path) -> Value {
-    match host {
-        PluginHost::Codex => generated_hooks(
-            CodingAgent::Codex,
-            &crate::plugin_shim::codex_plugin_hook_command(relay),
-        ),
-        PluginHost::ClaudeCode => generated_hooks(
-            CodingAgent::ClaudeCode,
-            "nemo-relay plugin-shim hook claude",
-        ),
-        PluginHost::All => unreachable!("all is expanded before hook generation"),
-    }
+pub(super) fn plugin_hooks(host: IntegrationHost, relay: &Path) -> Value {
+    let agent = host
+        .agent()
+        .expect("all is expanded before hook generation");
+    generated_hooks(
+        agent,
+        &crate::installer::persistent_hook_forward_command(relay, agent),
+    )
 }
 
 pub(super) fn plugin_mcp_env_vars() -> Result<Vec<String>, String> {
@@ -230,16 +239,20 @@ pub(super) fn plugin_mcp_env_vars_from(
     crate::mcp_environment::forwarded_names(environment, config)
 }
 
-pub(super) fn plugin_has_hooks_template(host: PluginHost) -> bool {
+pub(super) fn plugin_has_hooks_template(host: IntegrationHost) -> bool {
     match host {
-        PluginHost::Codex | PluginHost::ClaudeCode => true,
-        PluginHost::All => unreachable!("all is expanded before hook generation"),
+        IntegrationHost::Codex | IntegrationHost::ClaudeCode => true,
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before hook generation")
+        }
     }
 }
 
-pub(super) fn plugin_uses_mcp(host: PluginHost) -> bool {
+pub(super) fn plugin_uses_mcp(host: IntegrationHost) -> bool {
     match host {
-        PluginHost::Codex | PluginHost::ClaudeCode => true,
-        PluginHost::All => unreachable!("all is expanded before MCP generation"),
+        IntegrationHost::Codex | IntegrationHost::ClaudeCode => true,
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before MCP generation")
+        }
     }
 }

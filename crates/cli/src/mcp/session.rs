@@ -5,36 +5,29 @@
 
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-use super::gateway::{GatewayLease, GatewayPlan};
+use super::gateway::GatewayLease;
 use super::protocol::{FrameAction, evaluate_frame};
 use super::transport::FrameReceiver;
 use crate::error::CliError;
 
 pub(super) async fn run<W>(
-    gateway: GatewayPlan,
+    mut lease: GatewayLease,
     mut frames: FrameReceiver,
     mut writer: W,
 ) -> Result<(), CliError>
 where
     W: AsyncWrite + Unpin,
 {
-    let mut lease: Option<GatewayLease> = None;
     loop {
-        let received = match lease.as_mut() {
-            Some(active) => tokio::select! {
-                frame = frames.recv() => frame,
-                result = active.wait() => return result,
-            },
-            None => frames.recv().await,
+        let received = tokio::select! {
+            frame = frames.recv() => frame,
+            result = lease.wait() => return result,
         };
         let Some(frame) = received else {
             return Ok(());
         };
         let frame = frame?;
         let action = evaluate_frame(&frame);
-        if action.requires_gateway && lease.is_none() {
-            lease = Some(gateway.acquire().await?);
-        }
         write_response(action, &mut writer).await?;
     }
 }

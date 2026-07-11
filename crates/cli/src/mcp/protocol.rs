@@ -10,36 +10,18 @@ pub(super) const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 /// Result of decoding one newline-delimited MCP frame.
 pub(super) struct FrameAction {
     pub(super) response: Option<Value>,
-    pub(super) requires_gateway: bool,
 }
 
-/// Parse a frame once and derive both its protocol response and bootstrap requirement.
+/// Parse a frame once and derive its protocol response.
 pub(super) fn evaluate_frame(frame: &str) -> FrameAction {
     match serde_json::from_str::<Value>(frame) {
         Ok(message) => FrameAction {
-            requires_gateway: is_valid_initialize(&message),
             response: response_for(&message),
         },
         Err(_) => FrameAction {
             response: Some(jsonrpc_error(Value::Null, -32700, "Parse error")),
-            requires_gateway: false,
         },
     }
-}
-
-fn is_valid_initialize(message: &Value) -> bool {
-    valid_jsonrpc_request(message)
-        && message.get("method").and_then(Value::as_str) == Some("initialize")
-        && message
-            .pointer("/params/protocolVersion")
-            .and_then(Value::as_str)
-            .is_some()
-}
-
-fn valid_jsonrpc_request(message: &Value) -> bool {
-    message.is_object()
-        && message.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
-        && message.get("id").is_some()
 }
 
 pub(super) fn response_for(message: &Value) -> Option<Value> {

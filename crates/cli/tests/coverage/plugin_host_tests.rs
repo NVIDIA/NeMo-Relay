@@ -426,337 +426,6 @@ impl Drop for EnvVarGuard {
 }
 
 #[test]
-fn hook_with_io_defaults_blank_payload_and_writes_non_empty_response() {
-    let mut input = std::io::Cursor::new(b" \n\t".to_vec());
-    let mut output = Vec::new();
-    let ensured = std::cell::RefCell::new(Vec::new());
-    let seen_payload = std::cell::RefCell::new(Vec::new());
-
-    let status = hook_with_io(
-        HookInvocation {
-            agent: CodingAgent::Codex,
-            gateway_url: Some("http://127.0.0.1:59999"),
-            max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-            preflight_gateway: false,
-        },
-        &mut input,
-        &mut output,
-        |agent, url| {
-            ensured
-                .borrow_mut()
-                .push((agent.as_arg().to_string(), url.to_string()));
-            Ok(())
-        },
-        |agent, url, payload| {
-            assert_eq!(agent, CodingAgent::Codex);
-            assert_eq!(url, "http://127.0.0.1:59999");
-            seen_payload.borrow_mut().extend_from_slice(payload);
-            Ok(br#"{"decision":"allow"}"#.to_vec())
-        },
-        || false,
-    )
-    .unwrap();
-
-    assert_eq!(status, ExitCode::SUCCESS);
-    assert_eq!(&*seen_payload.borrow(), b"{}");
-    assert_eq!(output, br#"{"decision":"allow"}"#);
-    assert!(ensured.into_inner().is_empty());
-}
-
-#[test]
-fn hook_payload_reader_rejects_bytes_beyond_its_limit() {
-    let mut input = std::io::Cursor::new(b"12345".to_vec());
-    let mut payload = Vec::new();
-
-    let error = read_hook_payload(&mut input, &mut payload, 4).unwrap_err();
-
-    assert!(error.contains("exceeds the 4-byte limit"));
-    assert_eq!(payload, b"12345");
-}
-
-#[test]
-fn hook_with_io_applies_fail_open_and_fail_closed_to_oversized_stdin() {
-    for fail_closed in [false, true] {
-        let mut input = std::io::Cursor::new(b"12345".to_vec());
-        let mut output = Vec::new();
-        let result = hook_with_io(
-            HookInvocation {
-                agent: CodingAgent::Codex,
-                gateway_url: Some(DEFAULT_URL),
-                max_payload_bytes: 4,
-                preflight_gateway: true,
-            },
-            &mut input,
-            &mut output,
-            |_agent, _url| panic!("oversized input must not bootstrap the gateway"),
-            |_agent, _url, _payload| panic!("oversized input must not be forwarded"),
-            || fail_closed,
-        );
-
-        if fail_closed {
-            assert!(result.unwrap_err().contains("exceeds the 4-byte limit"));
-        } else {
-            assert_eq!(result.unwrap(), ExitCode::SUCCESS);
-        }
-        assert!(output.is_empty());
-    }
-}
-
-#[test]
-fn hook_with_io_applies_fail_open_and_fail_closed_to_stdin_read_errors() {
-    struct FailingReader;
-
-    impl Read for FailingReader {
-        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::other("synthetic stdin failure"))
-        }
-    }
-
-    for fail_closed in [false, true] {
-        let mut input = FailingReader;
-        let mut output = Vec::new();
-        let result = hook_with_io(
-            HookInvocation {
-                agent: CodingAgent::Codex,
-                gateway_url: Some(DEFAULT_URL),
-                max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-                preflight_gateway: true,
-            },
-            &mut input,
-            &mut output,
-            |_agent, _url| panic!("unreadable input must not bootstrap the gateway"),
-            |_agent, _url, _payload| panic!("unreadable input must not be forwarded"),
-            || fail_closed,
-        );
-
-        if fail_closed {
-            let error = result.unwrap_err();
-            assert!(error.contains("failed to read hook payload"));
-            assert!(error.contains("synthetic stdin failure"));
-        } else {
-            assert_eq!(result.unwrap(), ExitCode::SUCCESS);
-        }
-        assert!(output.is_empty());
-    }
-}
-
-#[test]
-fn hook_with_io_bootstraps_and_retries_once_only_for_pre_send_connection_failure() {
-    let mut input = std::io::Cursor::new(br#"{"event":"prompt"}"#.to_vec());
-    let mut output = Vec::new();
-    let ensures = std::cell::Cell::new(0);
-    let posts = std::cell::Cell::new(0);
-
-    let status = hook_with_io(
-        HookInvocation {
-            agent: CodingAgent::Codex,
-            gateway_url: Some("http://127.0.0.1:59997"),
-            max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-            preflight_gateway: false,
-        },
-        &mut input,
-        &mut output,
-        |_agent, _url| {
-            ensures.set(ensures.get() + 1);
-            Ok(())
-        },
-        |_agent, _url, _payload| {
-            posts.set(posts.get() + 1);
-            if posts.get() == 1 {
-                Err(HookForwardError::retryable(
-                    "connection refused before send",
-                ))
-            } else {
-                Ok(b"retried".to_vec())
-            }
-        },
-        || true,
-    )
-    .unwrap();
-
-    assert_eq!(status, ExitCode::SUCCESS);
-    assert_eq!(output, b"retried");
-    assert_eq!(ensures.get(), 1);
-    assert_eq!(posts.get(), 2);
-}
-
-#[test]
-fn hook_with_io_does_not_bootstrap_or_retry_ambiguous_forward_failure() {
-    let mut input = std::io::Cursor::new(b"{}".to_vec());
-    let mut output = Vec::new();
-    let ensures = std::cell::Cell::new(0);
-    let posts = std::cell::Cell::new(0);
-
-    let error = hook_with_io(
-        HookInvocation {
-            agent: CodingAgent::Codex,
-            gateway_url: Some(DEFAULT_URL),
-            max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-            preflight_gateway: false,
-        },
-        &mut input,
-        &mut output,
-        |_agent, _url| {
-            ensures.set(ensures.get() + 1);
-            Ok(())
-        },
-        |_agent, _url, _payload| {
-            posts.set(posts.get() + 1);
-            Err(HookForwardError::not_retryable("response read failed"))
-        },
-        || true,
-    )
-    .unwrap_err();
-
-    assert!(error.contains("response read failed"));
-    assert_eq!(ensures.get(), 0);
-    assert_eq!(posts.get(), 1);
-}
-
-#[test]
-fn hook_with_io_propagates_bootstrap_error_without_second_post() {
-    let mut input = std::io::Cursor::new(b"{}".to_vec());
-    let mut output = Vec::new();
-    let posts = std::cell::Cell::new(0);
-
-    let error = hook_with_io(
-        HookInvocation {
-            agent: CodingAgent::Codex,
-            gateway_url: Some(DEFAULT_URL),
-            max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-            preflight_gateway: false,
-        },
-        &mut input,
-        &mut output,
-        |_agent, _url| Err("startup log says bind failed".into()),
-        |_agent, _url, _payload| {
-            posts.set(posts.get() + 1);
-            Err(HookForwardError::retryable(
-                "connection refused before send",
-            ))
-        },
-        || true,
-    )
-    .unwrap_err();
-
-    assert!(error.contains("sidecar bootstrap failed"));
-    assert!(error.contains("startup log says bind failed"));
-    assert_eq!(posts.get(), 1);
-}
-
-#[test]
-fn hook_with_io_applies_fail_open_and_fail_closed_forwarding_policies() {
-    let mut input = std::io::Cursor::new(br#"{"event":"tool"}"#.to_vec());
-    let mut output = Vec::new();
-    let status = hook_with_io(
-        HookInvocation {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: Some("http://127.0.0.1:59998"),
-            max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-            preflight_gateway: false,
-        },
-        &mut input,
-        &mut output,
-        |_agent, _url| Ok(()),
-        |_agent, _url, _payload| Err(HookForwardError::not_retryable("forward failed open")),
-        || false,
-    )
-    .unwrap();
-
-    assert_eq!(status, ExitCode::SUCCESS);
-    assert!(output.is_empty());
-
-    let mut input = std::io::Cursor::new(br#"{"event":"tool"}"#.to_vec());
-    let mut output = Vec::new();
-    let error = hook_with_io(
-        HookInvocation {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: Some("http://127.0.0.1:59998"),
-            max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-            preflight_gateway: false,
-        },
-        &mut input,
-        &mut output,
-        |_agent, _url| Ok(()),
-        |_agent, _url, _payload| Err(HookForwardError::not_retryable("forward failed closed")),
-        || true,
-    )
-    .unwrap_err();
-
-    assert!(error.contains("forward failed closed"));
-    assert!(output.is_empty());
-}
-
-#[test]
-fn codex_hook_preflight_rejects_healthy_wrong_fingerprint_under_both_policies() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let _config = EnvVarGuard::set_path("XDG_CONFIG_HOME", &dir.path().join("config"));
-    let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &dir.path().join("runtime"));
-
-    for fail_closed in [false, true] {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = listener.accept().unwrap();
-                let request = read_http_request(&mut stream);
-                let request = String::from_utf8_lossy(&request);
-                assert!(request.starts_with("GET /healthz"));
-                assert!(
-                    request.contains("X-NeMo-Relay-Bootstrap-Fingerprint: expected-fingerprint")
-                );
-                let body = format!(
-                    r#"{{"status":"incompatible","service":"nemo-relay","version":"{}","bootstrap_protocol":1}}"#,
-                    env!("CARGO_PKG_VERSION")
-                );
-                stream
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 409 Conflict\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                        .as_bytes(),
-                    )
-                    .unwrap();
-            }
-        });
-        let url = format!("http://{address}");
-        let mut input = std::io::Cursor::new(b"{}".to_vec());
-        let mut output = Vec::new();
-        let result = hook_with_io(
-            HookInvocation {
-                agent: CodingAgent::Codex,
-                gateway_url: Some(&url),
-                max_payload_bytes: DEFAULT_HOOK_STDIN_BYTES,
-                preflight_gateway: true,
-            },
-            &mut input,
-            &mut output,
-            |_agent, _url| {
-                GatewaySpec::new(CodingAgent::Codex, address)
-                    .with_fingerprint("expected-fingerprint")
-                    .ensure()
-                    .map(|_| ())
-            },
-            |_agent, _url, _payload| panic!("wrong-fingerprint gateway must not receive the hook"),
-            || fail_closed,
-        );
-        if fail_closed {
-            assert!(
-                result
-                    .unwrap_err()
-                    .contains("gateway identity preflight failed")
-            );
-        } else {
-            assert_eq!(result.unwrap(), ExitCode::SUCCESS);
-        }
-        assert!(output.is_empty());
-        server.join().unwrap();
-    }
-}
-
-#[test]
 fn backup_preserves_first_snapshot() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -1579,13 +1248,7 @@ fn codex_doctor_requires_app_server_reported_trust_but_allows_stopped_sidecar() 
     let (_path, _hooks, _log) = fake_codex_app_server(dir.path(), &trusted);
     let _plugin_root = EnvVarGuard::set_path("PLUGIN_ROOT", &plugin_root);
 
-    let status = doctor(PluginShimDoctorCommand {
-        agent: CodingAgent::Codex,
-        gateway_url: DEFAULT_URL.into(),
-    })
-    .unwrap();
-
-    assert_eq!(status, std::process::ExitCode::SUCCESS);
+    doctor_plugin(CodingAgent::Codex, DEFAULT_URL, &plugin_root).unwrap();
     let report = doctor_plugin_json(CodingAgent::Codex, DEFAULT_URL, &plugin_root).unwrap();
     assert_eq!(report["checks"]["codex_hooks_trusted"], json!(true));
     assert_eq!(
@@ -1629,35 +1292,10 @@ supports_websockets = false
 }
 
 #[test]
-fn plugin_shim_helpers_reject_unsupported_agents_and_report_lazy_claude_status() {
+fn plugin_host_doctor_rejects_unsupported_agents_and_reports_lazy_claude_status() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
 
-    assert!(
-        install(PluginShimInstallCommand {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: DEFAULT_URL.into(),
-        })
-        .unwrap_err()
-        .contains("supports codex")
-    );
-    assert!(
-        uninstall(PluginShimUninstallCommand {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: DEFAULT_URL.into(),
-        })
-        .unwrap_err()
-        .contains("supports codex")
-    );
-    assert!(
-        provider(PluginShimProviderCommand {
-            agent: CodingAgent::Codex,
-            action: PluginShimProviderAction::Status,
-            gateway_url: DEFAULT_URL.into(),
-        })
-        .unwrap_err()
-        .contains("supports claude")
-    );
     assert!(
         doctor_plugin(CodingAgent::Hermes, DEFAULT_URL, dir.path())
             .unwrap_err()
@@ -1671,7 +1309,7 @@ fn plugin_shim_helpers_reject_unsupported_agents_and_report_lazy_claude_status()
 
     let report = doctor_plugin_json(CodingAgent::ClaudeCode, DEFAULT_URL, dir.path()).unwrap();
     assert_eq!(report["ok"], json!(false));
-    assert_eq!(report["sidecar_health"], json!("not_running_lazy_start"));
+    assert_eq!(report["sidecar_health"], json!("not_running_mcp_start"));
     assert_eq!(report["checks"]["claude_provider_routing"], json!(false));
 }
 
@@ -2265,7 +1903,7 @@ fn claude_restore_without_backup_preserves_matching_user_relay_url() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
 
     let updated: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(
@@ -2294,7 +1932,7 @@ fn claude_enable_rolls_back_backup_when_settings_write_fails() {
     .unwrap();
     fs::create_dir(settings.with_extension("json.tmp")).unwrap();
 
-    let error = claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap_err();
+    let error = enable_claude_provider(DEFAULT_URL).unwrap_err();
 
     assert!(error.contains("failed to write"));
     assert!(!backup_path(&settings).exists());
@@ -2315,7 +1953,7 @@ fn claude_enable_does_not_back_up_when_env_shape_is_invalid() {
     )
     .unwrap();
 
-    let error = claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap_err();
+    let error = enable_claude_provider(DEFAULT_URL).unwrap_err();
 
     assert!(error.contains("non-object env field"));
     assert!(!backup_path(&settings).exists());
@@ -2340,7 +1978,7 @@ fn claude_restore_with_backup_preserves_user_settings_added_after_install() {
         .unwrap(),
     )
     .unwrap();
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
     fs::write(
         &settings,
         serde_json::to_vec_pretty(&json!({
@@ -2355,7 +1993,7 @@ fn claude_restore_with_backup_preserves_user_settings_added_after_install() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
 
     let updated: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(
@@ -2384,7 +2022,7 @@ fn claude_restore_with_backup_preserves_user_changed_provider_url() {
         .unwrap(),
     )
     .unwrap();
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
     fs::write(
         &settings,
         serde_json::to_vec_pretty(&json!({
@@ -2396,7 +2034,7 @@ fn claude_restore_with_backup_preserves_user_changed_provider_url() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
 
     let updated: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(
@@ -2423,7 +2061,7 @@ fn claude_reinstall_refreshes_backup_after_user_owned_restore() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
     fs::write(
         &settings,
         serde_json::to_vec_pretty(&json!({
@@ -2434,10 +2072,10 @@ fn claude_reinstall_refreshes_backup_after_user_owned_restore() {
         .unwrap(),
     )
     .unwrap();
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
     assert!(backup_path(&settings).exists());
 
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
     let refreshed_backup: Value =
         serde_json::from_str(&fs::read_to_string(backup_path(&settings)).unwrap()).unwrap();
     assert_eq!(
@@ -2445,7 +2083,7 @@ fn claude_reinstall_refreshes_backup_after_user_owned_restore() {
         Some("https://custom.example")
     );
 
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
 
     let updated: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(
@@ -2472,8 +2110,8 @@ fn claude_reinstall_uses_fresh_backup_after_prior_restore() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
     assert!(!backup_path(&settings).exists());
 
     fs::write(
@@ -2487,8 +2125,8 @@ fn claude_reinstall_uses_fresh_backup_after_prior_restore() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
 
     let updated: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(
@@ -2873,11 +2511,11 @@ fn codex_hook_command_uses_cmd_quoting_for_windows_paths() {
 
     assert_eq!(
         command,
-        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" plugin-shim hook codex --gateway-url http://127.0.0.1:47632"#
+        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
     );
     assert_eq!(
         codex_plugin_hook_command_for_platform(&relay, true),
-        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" plugin-shim hook codex --gateway-url http://127.0.0.1:47632"#
+        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
     );
     assert_eq!(
         shell_quote_arg_for_platform("foo&bar", true),
@@ -2909,138 +2547,16 @@ fn codex_hook_command_uses_posix_single_quote_escaping() {
 
     assert_eq!(
         command,
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' plugin-shim hook codex --gateway-url http://127.0.0.1:47632"
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632"
     );
     assert_eq!(
         codex_plugin_hook_command_for_platform(&relay, false),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' plugin-shim hook codex --gateway-url http://127.0.0.1:47632"
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632"
     );
     assert_eq!(shell_quote_arg_for_platform("", false), "''");
     assert_eq!(
         shell_quote_arg_for_platform(r"/tmp/path\with-backslash", false),
         r#"'/tmp/path\with-backslash'"#
-    );
-}
-
-#[test]
-fn hook_forward_connect_attempt_is_bounded() {
-    let error = post_hook(CodingAgent::Codex, "http://127.0.0.1:9", b"{}").unwrap_err();
-
-    assert!(error.to_string().contains("hook forward failed"));
-}
-
-#[test]
-fn hook_forward_posts_to_local_sidecar_and_healthz_verifies_relay_identity() {
-    let hook_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let hook_port = hook_listener.local_addr().unwrap().port();
-    let hook_thread = thread::spawn(move || {
-        let (mut stream, _) = hook_listener.accept().unwrap();
-        let request = read_http_request(&mut stream);
-        let raw = String::from_utf8_lossy(&request);
-        assert!(raw.starts_with("POST /hooks/codex HTTP/1.1"));
-        assert!(raw.contains("Content-Length: 7"));
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-            .unwrap();
-    });
-
-    let body = post_hook(
-        CodingAgent::Codex,
-        &format!("http://127.0.0.1:{hook_port}"),
-        br#"{"x":1}"#,
-    )
-    .unwrap();
-    assert_eq!(body, b"ok");
-    hook_thread.join().unwrap();
-
-    let health_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let health_port = health_listener.local_addr().unwrap().port();
-    let health_thread = thread::spawn(move || {
-        let (mut stream, _) = health_listener.accept().unwrap();
-        let request = read_http_request(&mut stream);
-        assert!(String::from_utf8_lossy(&request).starts_with("GET /healthz"));
-        let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":1}}"#,
-            env!("CARGO_PKG_VERSION")
-        );
-        stream
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-        stream.write_all(body.as_bytes()).unwrap();
-    });
-    assert!(healthz(&format!("http://127.0.0.1:{health_port}")));
-    health_thread.join().unwrap();
-}
-
-#[test]
-fn hermes_hook_forward_posts_the_canonical_payload_to_the_hermes_endpoint() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let request = read_http_request(&mut stream);
-        let raw = String::from_utf8_lossy(&request);
-        assert!(raw.starts_with("POST /hooks/hermes HTTP/1.1"));
-        assert!(raw.ends_with(r#"{"hook_event_name":"on_session_start"}"#));
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
-            .unwrap();
-    });
-
-    let body = post_hook(
-        CodingAgent::Hermes,
-        &format!("http://127.0.0.1:{port}"),
-        br#"{"hook_event_name":"on_session_start"}"#,
-    )
-    .unwrap();
-
-    assert_eq!(body, b"{}");
-    server.join().unwrap();
-}
-
-#[test]
-fn hook_forward_rejects_an_oversized_http_response() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let _ = read_http_request(&mut stream);
-        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n");
-        let _ = stream.write_all(&vec![b'x'; MAX_HOOK_RESPONSE_BYTES + 1]);
-    });
-
-    let error = post_hook(
-        CodingAgent::Codex,
-        &format!("http://127.0.0.1:{port}"),
-        b"{}",
-    )
-    .unwrap_err();
-
-    assert!(error.to_string().contains("response exceeds"));
-    server.join().unwrap();
-}
-
-#[test]
-fn hook_http_response_requires_numeric_2xx_status() {
-    assert_eq!(
-        parse_http_response(b"HTTP/1.1 204 No Content\r\n\r\npayload").unwrap(),
-        b"payload"
-    );
-    assert!(
-        parse_http_response(b"HTTP/1.1 500 upstream 2 bad\r\n\r\npayload")
-            .unwrap_err()
-            .contains("HTTP/1.1 500 upstream 2 bad")
-    );
-    assert!(
-        parse_http_response(b"HTTP/1.1 OK 2\r\n\r\npayload")
-            .unwrap_err()
-            .contains("HTTP/1.1 OK 2")
     );
 }
 
@@ -3363,7 +2879,7 @@ fn codex_install_hooks_persist_custom_gateway_url() {
         .as_str()
         .unwrap();
 
-    assert!(command.contains("plugin-shim hook codex"));
+    assert!(command.contains("hook-forward codex"));
     assert!(command.contains("--gateway-url http://127.0.0.1:47633"));
 }
 
@@ -3775,115 +3291,6 @@ fn shared_filesystem_helpers_cover_tables_snapshots_and_lock_branches() {
 }
 
 #[test]
-fn shared_url_env_and_response_helpers_cover_error_branches() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let _plugin_url =
-        EnvVarGuard::set_value("NEMO_RELAY_PLUGIN_GATEWAY_URL", "http://127.0.0.1:47640");
-    let _claude_url = EnvVarGuard::set_value("NEMO_RELAY_GATEWAY_URL", "http://127.0.0.1:47641");
-    let _timeout = EnvVarGuard::set_value("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "7");
-    let _fail_closed = EnvVarGuard::set_value("NEMO_RELAY_FAIL_CLOSED", "1");
-
-    assert_eq!(
-        gateway_url(CodingAgent::Codex, None),
-        "http://127.0.0.1:47640"
-    );
-    assert_eq!(
-        gateway_url(CodingAgent::ClaudeCode, None),
-        "http://127.0.0.1:47641"
-    );
-    assert_eq!(
-        gateway_url(CodingAgent::Hermes, None),
-        "http://127.0.0.1:47641"
-    );
-    assert_eq!(
-        gateway_url(CodingAgent::Codex, Some("http://127.0.0.1:9")),
-        "http://127.0.0.1:9"
-    );
-    assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(7));
-    assert_eq!(
-        plugin_heartbeat_interval().unwrap(),
-        Duration::from_secs(7) / 3
-    );
-    assert!(fail_closed());
-
-    assert_eq!(
-        runtime_dir_for(
-            Some("/run/user/1000".into()),
-            Some("/tmp/ignored".into()),
-            None,
-            dir.path().join("tmp"),
-            Some("ignored".into()),
-            None,
-        ),
-        std::path::PathBuf::from("/run/user/1000").join("nemo-relay-plugin")
-    );
-    assert_eq!(
-        runtime_dir_for(
-            None,
-            None,
-            None,
-            dir.path().join("tmp"),
-            Some("user/name".into()),
-            None,
-        ),
-        dir.path()
-            .join("tmp")
-            .join("user_name")
-            .join("nemo-relay-plugin")
-    );
-    assert_eq!(
-        sidecar_lock_name("http://localhost:47632/hooks"),
-        "localhost-47632"
-    );
-    assert_eq!(sidecar_lock_name("not a url!*"), "not_a_url__");
-
-    assert_eq!(
-        parse_loopback_url("http://localhost:47632/path").unwrap(),
-        ("localhost".to_string(), 47632)
-    );
-    assert_eq!(
-        parse_loopback_url("http://[::1]:47632/path").unwrap(),
-        ("::1".to_string(), 47632)
-    );
-    assert!(
-        parse_loopback_url("https://127.0.0.1:47632")
-            .unwrap_err()
-            .contains("http loopback")
-    );
-    assert!(
-        parse_loopback_url("http://192.168.1.2:47632")
-            .unwrap_err()
-            .contains("loopback")
-    );
-    assert!(
-        parse_loopback_url("http://127.0.0.1")
-            .unwrap_err()
-            .contains("missing port")
-    );
-    assert!(
-        parse_loopback_url("http://127.0.0.1:nope")
-            .unwrap_err()
-            .contains("invalid plugin shim loopback URL")
-    );
-
-    assert_eq!(
-        parse_http_response(b"HTTP/1.1 204 No Content\r\nHeader: value\r\n\r\nbody").unwrap(),
-        b"body"
-    );
-    assert!(
-        parse_http_response(b"HTTP/1.1 500 Server Error\r\n\r\nbad")
-            .unwrap_err()
-            .contains("HTTP/1.1 500")
-    );
-    assert!(
-        parse_http_response(b"HTTP/1.1 200 OK\n\nbody")
-            .unwrap_err()
-            .contains("malformed")
-    );
-}
-
-#[test]
 fn shared_defaults_cover_runtime_username_and_empty_segments() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
@@ -3892,14 +3299,11 @@ fn shared_defaults_cover_runtime_username_and_empty_segments() {
     let _timeout = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS");
     let _fail_closed = EnvVarGuard::remove("NEMO_RELAY_FAIL_CLOSED");
 
-    assert_eq!(gateway_url(CodingAgent::Codex, None), DEFAULT_URL);
-    assert_eq!(gateway_url(CodingAgent::Hermes, None), DEFAULT_URL);
     assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(300));
     assert_eq!(
         plugin_heartbeat_interval().unwrap(),
         Duration::from_secs(30)
     );
-    assert!(!fail_closed());
     assert_eq!(
         runtime_dir_for(
             None,
@@ -3959,14 +3363,13 @@ fn claude_provider_enable_status_and_restore_cover_managed_backup_paths() {
         claude_settings_base_url().as_deref(),
         Some("https://api.anthropic.com")
     );
-    claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL).unwrap();
+    enable_claude_provider(DEFAULT_URL).unwrap();
     assert_eq!(claude_settings_base_url().as_deref(), Some(DEFAULT_URL));
     assert_eq!(
         json_env_string(&read_json_object(&settings_path).unwrap(), "OTHER"),
         Some("kept")
     );
-    claude_provider(PluginShimProviderAction::Status, DEFAULT_URL).unwrap();
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
     assert_eq!(
         claude_settings_base_url().as_deref(),
         Some("https://api.anthropic.com")
@@ -4019,14 +3422,14 @@ fn claude_provider_restore_noops_without_matching_backup_or_managed_value() {
     )
     .unwrap();
 
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
     assert_eq!(
         claude_settings_base_url().as_deref(),
         Some("https://custom.example")
     );
 
     backup_claude_settings(&settings_path, false).unwrap();
-    claude_provider(PluginShimProviderAction::Restore, DEFAULT_URL).unwrap();
+    restore_claude_provider(DEFAULT_URL).unwrap();
     assert_eq!(
         claude_settings_base_url().as_deref(),
         Some("https://custom.example")
@@ -4043,7 +3446,7 @@ fn claude_provider_errors_for_non_object_env_and_restore_env_type_mismatch() {
     fs::write(&settings_path, r#"{"env": "bad"}"#).unwrap();
 
     assert!(
-        claude_provider(PluginShimProviderAction::Enable, DEFAULT_URL)
+        enable_claude_provider(DEFAULT_URL)
             .unwrap_err()
             .contains("non-object env field")
     );
@@ -4091,7 +3494,7 @@ fn claude_backup_bootstraps_missing_settings_and_replaces_stale_backup() {
 }
 
 #[test]
-fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
+fn plugin_host_entrypoints_reject_unsupported_agents_and_report_json() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
     let settings_path = dir.path().join(".claude").join("settings.json");
@@ -4125,7 +3528,7 @@ fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
     .unwrap();
 
     let report = doctor_plugin_json(CodingAgent::ClaudeCode, DEFAULT_URL, &plugin_root).unwrap();
-    assert_eq!(report["sidecar_health"], json!("not_running_lazy_start"));
+    assert_eq!(report["sidecar_health"], json!("not_running_mcp_start"));
     assert_eq!(report["checks"]["claude_provider_routing"], json!(true));
     let codex_report = doctor_plugin_json(CodingAgent::Codex, DEFAULT_URL, &plugin_root).unwrap();
     assert_eq!(
@@ -4149,135 +3552,6 @@ fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
             .unwrap_err()
             .contains("codex plugin doctor checks failed")
     );
-    assert!(
-        install(PluginShimInstallCommand {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: DEFAULT_URL.into(),
-        })
-        .unwrap_err()
-        .contains("supports codex")
-    );
-    assert!(
-        uninstall(PluginShimUninstallCommand {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: DEFAULT_URL.into(),
-        })
-        .unwrap_err()
-        .contains("supports codex")
-    );
-    assert!(
-        provider(PluginShimProviderCommand {
-            agent: CodingAgent::Codex,
-            action: PluginShimProviderAction::Status,
-            gateway_url: DEFAULT_URL.into(),
-        })
-        .unwrap_err()
-        .contains("supports claude")
-    );
-}
-
-#[test]
-fn plugin_shim_dispatcher_covers_supported_errors_and_serve_failure() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let missing_relay = dir.path().join("missing-nemo-relay");
-    let _binary_override = EnvVarGuard::set_path("NEMO_RELAY_PLUGIN_BINARY", &missing_relay);
-
-    let error = run(PluginShimCommand {
-        command: PluginShimSubcommand::Serve(super::command::PluginShimServeCommand {
-            args: vec![],
-        }),
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("does not exist"));
-
-    let error = run(PluginShimCommand {
-        command: PluginShimSubcommand::Install(PluginShimInstallCommand {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: DEFAULT_URL.into(),
-        }),
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("supports codex"));
-
-    let error = run(PluginShimCommand {
-        command: PluginShimSubcommand::Uninstall(PluginShimUninstallCommand {
-            agent: CodingAgent::ClaudeCode,
-            gateway_url: DEFAULT_URL.into(),
-        }),
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("supports codex"));
-
-    let error = run(PluginShimCommand {
-        command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
-            agent: CodingAgent::Codex,
-            action: PluginShimProviderAction::Status,
-            gateway_url: DEFAULT_URL.into(),
-        }),
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("supports claude"));
-
-    let error = run(PluginShimCommand {
-        command: PluginShimSubcommand::Doctor(PluginShimDoctorCommand {
-            agent: CodingAgent::Hermes,
-            gateway_url: DEFAULT_URL.into(),
-        }),
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("supports claude and codex"));
-}
-
-#[test]
-fn plugin_shim_dispatcher_covers_claude_provider_status_and_doctor() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-
-    run(PluginShimCommand {
-        command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
-            agent: CodingAgent::ClaudeCode,
-            action: PluginShimProviderAction::Enable,
-            gateway_url: DEFAULT_URL.into(),
-        }),
-    })
-    .unwrap();
-
-    assert_eq!(
-        run(PluginShimCommand {
-            command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
-                agent: CodingAgent::ClaudeCode,
-                action: PluginShimProviderAction::Status,
-                gateway_url: DEFAULT_URL.into(),
-            }),
-        })
-        .unwrap(),
-        std::process::ExitCode::SUCCESS
-    );
-    assert_eq!(
-        run(PluginShimCommand {
-            command: PluginShimSubcommand::Doctor(PluginShimDoctorCommand {
-                agent: CodingAgent::ClaudeCode,
-                gateway_url: DEFAULT_URL.into(),
-            }),
-        })
-        .unwrap(),
-        std::process::ExitCode::SUCCESS
-    );
-
-    run(PluginShimCommand {
-        command: PluginShimSubcommand::Provider(PluginShimProviderCommand {
-            agent: CodingAgent::ClaudeCode,
-            action: PluginShimProviderAction::Restore,
-            gateway_url: DEFAULT_URL.into(),
-        }),
-    })
-    .unwrap();
 }
 
 fn event_contains_command(config: &Value, event: &str, command: &str) -> bool {

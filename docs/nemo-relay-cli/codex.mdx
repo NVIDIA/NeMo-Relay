@@ -88,11 +88,12 @@ The installer creates a local marketplace, installs
 existing `nemo-relay` binary on `PATH` but does not install a plugin-local Relay
 binary.
 
-The required plugin MCP process is a lightweight lifecycle client. It starts or
-reuses a detached Rust `nemo-relay --bind 127.0.0.1:47632` sidecar and completes
-MCP initialization only after `/healthz` confirms the Relay identity, version,
-bootstrap protocol, and effective persistent configuration. The compatibility
-check uses a one-way fingerprint that includes relevant environment values; it
+The required plugin MCP process is a lightweight lifecycle client. As soon as
+it launches, it starts or reuses a detached Rust
+`nemo-relay --bind 127.0.0.1:47632` sidecar. It completes MCP initialization
+only after `/healthz` confirms the Relay identity, version, bootstrap protocol,
+and effective persistent configuration. The compatibility check uses a one-way
+fingerprint that includes relevant environment values; it
 does not return credentials or configuration secrets. Dynamic plugin manifests,
 artifacts, and signatures included in this identity must be regular files. The
 complete activation snapshot, including adjacent runtime files and a copied
@@ -170,8 +171,8 @@ To remove the plugin, enter:
 nemo-relay uninstall codex
 ```
 
-Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
-directories, shared-sidecar behavior, rollback behavior, and source
+Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
+install directories, shared-sidecar behavior, rollback behavior, and source
 marketplace notes.
 
 ## Configure Transparent Runs

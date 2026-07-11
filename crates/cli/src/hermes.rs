@@ -43,7 +43,7 @@ pub(crate) fn user_config_path(default_home: &Path) -> PathBuf {
 
 pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<PathBuf>, CliError> {
     let relay = relay.canonicalize().unwrap_or_else(|_| relay.to_path_buf());
-    let relay = crate::plugin_shim::portable_executable_path(relay);
+    let relay = crate::plugin_host::portable_executable_path(relay);
     if !relay_is_executable(&relay) {
         return Err(CliError::Install(format!(
             "nemo-relay executable is missing or not executable at {}",
@@ -67,6 +67,11 @@ pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<Path
         SystemTime::now(),
         atomic_write,
     )
+}
+
+pub(crate) fn persistent_state_exists(config: &Path) -> bool {
+    PersistentPaths::for_config(config.to_path_buf())
+        .is_ok_and(|paths| paths.all().iter().any(|path| path.exists()))
 }
 
 pub(crate) fn uninstall_persistent(config: &Path) -> Result<Vec<PathBuf>, CliError> {
@@ -141,7 +146,7 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
         .collect::<Vec<_>>();
     if !missing.is_empty() {
         return Err(format!(
-            "Hermes Relay MCP is missing environment names {}; rerun `nemo-relay config hermes`",
+            "Hermes Relay MCP is missing environment names {}; run `nemo-relay install hermes --force`",
             missing.join(", ")
         ));
     }

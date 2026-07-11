@@ -16,7 +16,6 @@ use crate::sidecar::{GatewayBootstrap, GatewaySpec};
 
 const UNHEALTHY_CHECKS_BEFORE_RESTART: u8 = 3;
 
-#[derive(Clone)]
 pub(super) struct GatewayPlan {
     spec: GatewaySpec,
     heartbeat_interval: Duration,
@@ -45,10 +44,9 @@ impl GatewayPlan {
         })
     }
 
-    pub(super) async fn acquire(&self) -> Result<GatewayLease, CliError> {
+    pub(super) async fn acquire(self) -> Result<GatewayLease, CliError> {
         let bootstrap = ensure_gateway(self.spec.clone(), self.generation.clone()).await?;
-        let plan = self.clone();
-        let monitor = tokio::spawn(async move { plan.monitor(bootstrap.endpoint.url).await });
+        let monitor = tokio::spawn(async move { self.monitor(bootstrap.endpoint.url).await });
         Ok(GatewayLease { monitor })
     }
 

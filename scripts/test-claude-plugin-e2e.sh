@@ -7,20 +7,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v claude >/dev/null 2>&1; then
-    echo "SKIP: claude is not installed; Claude Code plugin E2E requires 2.1.116+"
-    exit 0
-fi
-
-claude_version="$(claude --version 2>/dev/null || true)"
-if ! python3 - "$claude_version" <<'PY'
-import re
-import sys
-
-match = re.search(r"(\d+)\.(\d+)\.(\d+)", sys.argv[1])
-raise SystemExit(0 if match and tuple(map(int, match.groups())) >= (2, 1, 116) else 1)
-PY
-then
-    echo "SKIP: Claude Code plugin E2E requires 2.1.116+; found: ${claude_version:-unknown}"
+    echo "SKIP: claude is not installed"
     exit 0
 fi
 
@@ -132,7 +119,7 @@ assert server["env"]["NEMO_RELAY_GATEWAY_BIND"] == "127.0.0.1:47632", server
 generation = Path(server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"])
 assert generation == plugin_root / ".nemo-relay-generation", generation
 assert generation.is_file(), generation
-assert "alwaysLoad" not in server, server
+assert server["alwaysLoad"] is True, server
 PY
 
 wait_for_relay_port_release() {

@@ -23,7 +23,7 @@ used by the installer.
 - `.mcp.json` starts the native `nemo-relay mcp` lifecycle client and requires
   successful gateway initialization.
 - `hooks/hooks.json` contains Codex hook entries that run
-  `nemo-relay plugin-shim hook codex`.
+  `nemo-relay hook-forward codex`.
 - `nemo-relay install codex` creates the local marketplace, installs the plugin,
   and persists Codex provider and exact plugin-hook trust using `nemo-relay`
   from `PATH`.
@@ -51,7 +51,7 @@ the sole persistent Relay hook source. It does not add Relay groups to
 Persistent installation opens the stable Codex app-server interface and
 selects only hooks whose source is `plugin`, plugin ID is
 `nemo-relay-plugin@nemo-relay-local`, and command exactly matches the generated
-canonical Relay shim command. It requires exactly one handler for each event
+canonical Relay forwarding command. It requires exactly one handler for each event
 in the complete 10-event supported set listed above.
 
 Unrelated user, project, and plugin hooks are never trusted. If installation
@@ -293,7 +293,7 @@ codex plugin add nemo-relay-plugin@nemo-relay
 
 That path reads `.agents/plugins/marketplace.json` from the repository and
 installs this Codex plugin from `integrations/coding-agents/codex`. Source hooks
-invoke `nemo-relay plugin-shim hook codex` directly.
+invoke `nemo-relay hook-forward codex` directly.
 
 Treat the source marketplace path as discovery or manifest validation. Use
 `nemo-relay install codex` for the complete provider, environment-forwarding,

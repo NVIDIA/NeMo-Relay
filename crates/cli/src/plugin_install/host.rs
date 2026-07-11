@@ -7,25 +7,24 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use semver::Version;
 use serde_json::Value;
 
 #[cfg(test)]
 use serde_json::json;
 
-use crate::config::PluginHost;
+use crate::config::IntegrationHost;
 
 use super::state::PluginInstallOptions;
-use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND, host_cli};
+use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
 
 pub(super) fn run_host_marketplace_registration(
-    host: PluginHost,
+    host: IntegrationHost,
     marketplace_root: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     run_command(
-        host_cli(host),
+        host.executable().expect("concrete plugin host"),
         &[
             "plugin".into(),
             "marketplace".into(),
@@ -38,13 +37,13 @@ pub(super) fn run_host_marketplace_registration(
 }
 
 pub(super) fn run_host_plugin_registration(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     match host {
-        PluginHost::Codex => run_command(
-            host_cli(host),
+        IntegrationHost::Codex => run_command(
+            host.executable().expect("concrete plugin host"),
             &[
                 "plugin".into(),
                 "add".into(),
@@ -53,8 +52,8 @@ pub(super) fn run_host_plugin_registration(
             options,
             runner,
         ),
-        PluginHost::ClaudeCode => run_command(
-            host_cli(host),
+        IntegrationHost::ClaudeCode => run_command(
+            host.executable().expect("concrete plugin host"),
             &[
                 "plugin".into(),
                 "install".into(),
@@ -65,18 +64,20 @@ pub(super) fn run_host_plugin_registration(
             options,
             runner,
         ),
-        PluginHost::All => unreachable!("all is expanded before host registration"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before host registration")
+        }
     }
 }
 
 pub(super) fn run_host_plugin_removal(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     match host {
-        PluginHost::Codex => run_command(
-            host_cli(host),
+        IntegrationHost::Codex => run_command(
+            host.executable().expect("concrete plugin host"),
             &[
                 "plugin".into(),
                 "remove".into(),
@@ -85,24 +86,26 @@ pub(super) fn run_host_plugin_removal(
             options,
             runner,
         )?,
-        PluginHost::ClaudeCode => run_command(
-            host_cli(host),
+        IntegrationHost::ClaudeCode => run_command(
+            host.executable().expect("concrete plugin host"),
             &["plugin".into(), "uninstall".into(), PLUGIN_NAME.into()],
             options,
             runner,
         )?,
-        PluginHost::All => unreachable!("all is expanded before host unregistration"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before host unregistration")
+        }
     }
     Ok(())
 }
 
 pub(super) fn run_host_marketplace_removal(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     run_command(
-        host_cli(host),
+        host.executable().expect("concrete plugin host"),
         &[
             "plugin".into(),
             "marketplace".into(),
@@ -137,7 +140,7 @@ impl HostRegistrationReport {
 
 #[cfg(test)]
 pub(super) fn validate_host_registration(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
@@ -154,14 +157,14 @@ pub(super) fn validate_host_registration(
         }
         Err(format!(
             "{} plugin host registration is incomplete: missing {}",
-            host_cli(host),
+            host.executable().expect("concrete plugin host"),
             missing.join(", ")
         ))
     }
 }
 
 pub(super) fn host_registration_report(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
@@ -173,15 +176,17 @@ pub(super) fn host_registration_report(
     }
     require_host_cli(host, options, runner)?;
     Ok(match host {
-        PluginHost::ClaudeCode => HostRegistrationReport {
+        IntegrationHost::ClaudeCode => HostRegistrationReport {
             host_plugin_registered: claude_plugin_registered(options, runner)?,
             host_marketplace_registered: claude_marketplace_registered(options, runner)?,
         },
-        PluginHost::Codex => HostRegistrationReport {
+        IntegrationHost::Codex => HostRegistrationReport {
             host_plugin_registered: codex_plugin_registered(options, runner)?,
             host_marketplace_registered: codex_marketplace_registered(options, runner)?,
         },
-        PluginHost::All => unreachable!("all is expanded before host registration checks"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before host registration checks")
+        }
     })
 }
 
@@ -294,10 +299,10 @@ pub(super) fn require_relay(
     runner
         .current_executable()
         .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::plugin_shim::portable_executable_path)
+        .map(crate::plugin_host::portable_executable_path)
 }
 
-pub(super) fn validate_relay_plugin_shim(
+pub(super) fn validate_relay_hook_forward(
     relay: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -305,13 +310,13 @@ pub(super) fn validate_relay_plugin_shim(
     if options.dry_run {
         return Ok(());
     }
-    let args = ["plugin-shim".into(), "hook".into(), "--help".into()];
+    let args = ["hook-forward".into(), "--help".into()];
     let status = runner.run_quiet(relay, &args)?;
     if status == 0 {
         Ok(())
     } else {
         Err(format!(
-            "{} failed with exit code {status}; installed hooks require `nemo-relay plugin-shim hook` support",
+            "{} failed with exit code {status}; installed hooks require `nemo-relay hook-forward` support",
             format_command(&relay.display().to_string(), &args)
         ))
     }
@@ -338,45 +343,35 @@ pub(super) fn validate_relay_mcp(
 }
 
 pub(super) fn require_host_cli(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     if options.dry_run {
         return Ok(());
     }
-    let cli = host_cli(host);
+    let cli = host
+        .executable()
+        .expect("all is expanded before CLI validation");
     runner
         .resolve_executable(cli)?
         .map(|_| ())
         .ok_or_else(|| format!("required `{cli}` CLI was not found on PATH"))
 }
 
-pub(super) fn validate_codex_version(
+pub(super) fn validate_host_version(
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     if options.dry_run {
         return Ok(());
     }
-    let output = run_capture_command("codex", &["--version".into()], options, runner)?;
-    let version = parse_codex_version(&output.stdout).ok_or_else(|| {
-        format!(
-            "could not parse `codex --version` output {:?}; the Relay plugin requires codex-cli 0.143.0 or newer",
-            output.stdout.trim()
-        )
-    })?;
-    if version >= Version::new(0, 143, 0) {
-        Ok(())
-    } else {
-        Err(format!(
-            "codex-cli {version} is unsupported; the Relay plugin requires codex-cli 0.143.0 or newer"
-        ))
-    }
-}
-
-fn parse_codex_version(raw: &str) -> Option<Version> {
-    Version::parse(raw.trim().strip_prefix("codex-cli ")?).ok()
+    let agent = host
+        .agent()
+        .expect("all is expanded before host version validation");
+    let output = run_capture_command(agent.executable(), &["--version".into()], options, runner)?;
+    agent.validate_version_output(&output.stdout).map(|_| ())
 }
 
 pub(super) fn run_command(

@@ -1056,15 +1056,15 @@ clean:
         examples/rust-native-plugin/target \
         target
 
-# Opt-in: requires codex-cli 0.143+ and is intentionally outside test-rust/CI.
+# Opt-in: requires a supported Codex installation and is intentionally outside test-rust/CI.
 test-codex-plugin-e2e:
     ./scripts/test-codex-plugin-e2e.sh
 
-# Opt-in: requires Claude Code 2.1.116+ and is intentionally outside test-rust/CI.
+# Opt-in: requires a supported Claude Code installation and is intentionally outside test-rust/CI.
 test-claude-plugin-e2e:
     ./scripts/test-claude-plugin-e2e.sh
 
-# Opt-in: requires Hermes Agent with shell hooks and stdio MCP support; outside test-rust/CI.
+# Opt-in: requires a supported Hermes Agent installation and is intentionally outside test-rust/CI.
 test-hermes-mcp-e2e:
     ./scripts/test-hermes-mcp-e2e.sh
 

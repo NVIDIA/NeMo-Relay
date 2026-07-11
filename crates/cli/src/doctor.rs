@@ -393,19 +393,14 @@ async fn collect_agents(
     target_agent: Option<CodingAgent>,
     resolved: &ResolvedConfig,
 ) -> Vec<AgentInfo> {
-    let supported = [
-        (CodingAgent::ClaudeCode, "claude", "claude"),
-        (CodingAgent::Codex, "codex", "codex"),
-        (CodingAgent::Hermes, "hermes", "hermes"),
-    ];
-    let mut out = Vec::with_capacity(supported.len());
-    for (agent, display_name, default_exec) in supported {
+    let mut out = Vec::with_capacity(CodingAgent::ALL.len());
+    for agent in CodingAgent::ALL {
         if target_agent.is_some_and(|target| target != agent) {
             continue;
         }
         let configured = agent_configured(agent, &resolved.agents);
         let target_requested = target_agent == Some(agent);
-        let command = agent_command(agent, &resolved.agents, default_exec);
+        let command = agent_command(agent, &resolved.agents);
         let exec = command_executable(&command);
         let path = which_command(exec);
         let version = match &path {
@@ -430,14 +425,41 @@ async fn collect_agents(
         if !hook_details.is_empty() {
             details.push(hook_details);
         }
-        if agent == CodingAgent::ClaudeCode
-            && let Some(warning) = version.as_deref().and_then(claude_hook_floor_warning)
-        {
-            status = combine_status(status, Status::Warn, true);
-            details.push(warning);
+        let version_required = configured || target_requested;
+        match version.as_deref() {
+            Some(version) => {
+                if let Err(error) = agent.validate_version_output(version) {
+                    status = combine_status(
+                        status,
+                        if version_required {
+                            Status::Fail
+                        } else {
+                            Status::Warn
+                        },
+                        true,
+                    );
+                    details.push(error);
+                }
+            }
+            None if path.is_some() => {
+                status = combine_status(
+                    status,
+                    if version_required {
+                        Status::Fail
+                    } else {
+                        Status::Warn
+                    },
+                    true,
+                );
+                details.push(format!(
+                    "could not determine version; NeMo Relay requires {}",
+                    agent.version_requirement()
+                ));
+            }
+            None => {}
         }
         out.push(AgentInfo {
-            name: display_name,
+            name: agent.as_arg(),
             status,
             configured,
             command,
@@ -468,10 +490,10 @@ fn command_executable(command: &str) -> &str {
     command.split_whitespace().next().unwrap_or(command)
 }
 
-fn agent_command(agent: CodingAgent, agents: &AgentConfigs, default_exec: &str) -> String {
+fn agent_command(agent: CodingAgent, agents: &AgentConfigs) -> String {
     configured_agent_command(agent, agents)
         .cloned()
-        .unwrap_or_else(|| default_exec.to_string())
+        .unwrap_or_else(|| agent.executable().to_string())
 }
 
 fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<&String> {
@@ -488,14 +510,10 @@ fn agent_configured(agent: CodingAgent, agents: &AgentConfigs) -> bool {
 }
 
 fn configured_agent_names(agents: &AgentConfigs) -> Vec<String> {
-    [
-        (CodingAgent::ClaudeCode, "claude"),
-        (CodingAgent::Codex, "codex"),
-        (CodingAgent::Hermes, "hermes"),
-    ]
-    .into_iter()
-    .filter_map(|(agent, name)| agent_configured(agent, agents).then_some(name.to_string()))
-    .collect()
+    CodingAgent::ALL
+        .into_iter()
+        .filter_map(|agent| agent_configured(agent, agents).then_some(agent.as_arg().to_string()))
+        .collect()
 }
 
 fn agent_command_status(path: Option<&Path>, configured: bool, target_requested: bool) -> Status {
@@ -531,12 +549,14 @@ fn hook_status(
                 Ok(details) => (Status::Pass, details),
                 Err(error) => (
                     Status::Fail,
-                    format!("persistent MCP/hooks: {error}; rerun `nemo-relay config hermes`"),
+                    format!(
+                        "persistent MCP/hooks: {error}; run `nemo-relay install hermes --force`"
+                    ),
                 ),
             },
             None if readiness_required => (
                 Status::Fail,
-                "hooks: not installed; run `nemo-relay config hermes`".into(),
+                "hooks: not installed; run `nemo-relay install hermes`".into(),
             ),
             None => (Status::Info, "hooks: not configured".into()),
         },
@@ -588,36 +608,6 @@ fn hook_file_status(
             format!("{label}: could not read {}: {error}", path.display()),
         ),
     }
-}
-
-// Claude Code validates plugin hooks.json against a strict event-name whitelist and rejects the
-// entire plugin's hooks on one unknown name. 2.1.116 is the oldest release that accepts every
-// event in the generated hook config (`UserPromptExpansion` was added to the whitelist there),
-// so older hosts silently load no relay hooks at all. Keep in sync with `HOOK_EVENTS` in
-// installer.rs.
-const CLAUDE_HOOK_EVENT_FLOOR: (u64, u64, u64) = (2, 1, 116);
-
-// Returns a doctor warning when a probed Claude Code version predates the hook-event floor.
-// Unparseable version strings return None: a missing warning is recoverable, a false one is not.
-fn claude_hook_floor_warning(version: &str) -> Option<String> {
-    let parsed = parse_leading_semver(version)?;
-    (parsed < CLAUDE_HOOK_EVENT_FLOOR).then(|| {
-        let (major, minor, patch) = CLAUDE_HOOK_EVENT_FLOOR;
-        format!(
-            "version predates {major}.{minor}.{patch}; this Claude Code rejects \
-             UserPromptExpansion and will silently load no relay hooks"
-        )
-    })
-}
-
-// Parses the leading `major.minor.patch` token from a probed version line such as
-// "2.1.206 (Claude Code)". Suffixes like prerelease tags fail the numeric parse and yield None.
-fn parse_leading_semver(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.split_whitespace().next()?.splitn(3, '.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
-    Some((major, minor, patch))
 }
 
 async fn probe_version(binary: &Path) -> Option<String> {

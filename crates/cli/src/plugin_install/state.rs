@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::config::PluginHost;
+use crate::config::IntegrationHost;
 use crate::install_generation::GENERATION_FILE_NAME;
 
-use super::{PLUGIN_NAME, host_arg};
+use super::PLUGIN_NAME;
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginInstallOptions {
@@ -44,7 +44,7 @@ impl HostRegistrationProgress {
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginLayout {
-    pub(super) host: PluginHost,
+    pub(super) host: IntegrationHost,
     pub(super) marketplace_root: PathBuf,
     pub(super) marketplace_manifest: PathBuf,
     pub(super) plugin_root: PathBuf,
@@ -56,23 +56,27 @@ pub(super) struct PluginLayout {
 }
 
 impl PluginLayout {
-    pub(super) fn new(host: PluginHost, install_dir: &Path) -> Self {
-        let marketplace_root = install_dir.join(format!("{}-marketplace", host_arg(host)));
+    pub(super) fn new(host: IntegrationHost, install_dir: &Path) -> Self {
+        let marketplace_root = install_dir.join(format!("{}-marketplace", host.as_arg()));
         let marketplace_manifest = match host {
-            PluginHost::Codex => marketplace_root
+            IntegrationHost::Codex => marketplace_root
                 .join(".agents")
                 .join("plugins")
                 .join("marketplace.json"),
-            PluginHost::ClaudeCode => marketplace_root
+            IntegrationHost::ClaudeCode => marketplace_root
                 .join(".claude-plugin")
                 .join("marketplace.json"),
-            PluginHost::All => unreachable!("all is expanded before layout resolution"),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before layout resolution")
+            }
         };
         let plugin_root = marketplace_root.join("plugins").join(PLUGIN_NAME);
         let plugin_manifest = match host {
-            PluginHost::Codex => plugin_root.join(".codex-plugin").join("plugin.json"),
-            PluginHost::ClaudeCode => plugin_root.join(".claude-plugin").join("plugin.json"),
-            PluginHost::All => unreachable!("all is expanded before layout resolution"),
+            IntegrationHost::Codex => plugin_root.join(".codex-plugin").join("plugin.json"),
+            IntegrationHost::ClaudeCode => plugin_root.join(".claude-plugin").join("plugin.json"),
+            IntegrationHost::Hermes | IntegrationHost::All => {
+                unreachable!("all is expanded before layout resolution")
+            }
         };
         let mcp_config = plugin_root.join(".mcp.json");
         let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
@@ -173,7 +177,7 @@ pub(super) fn write_state(
 }
 
 pub(super) fn mark_plugin_setup_installed(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
@@ -189,7 +193,7 @@ pub(super) fn mark_plugin_setup_installed(
 }
 
 pub(super) fn write_state_for_host(
-    host: PluginHost,
+    host: IntegrationHost,
     state: &PluginState,
     install_dir: &Path,
     options: &PluginInstallOptions,
@@ -202,7 +206,7 @@ pub(super) fn write_state_for_host(
     write_json(
         &path,
         &json!({
-            "host": host_arg(host),
+            "host": host.as_arg(),
             "marketplaceRoot": state.marketplace_root,
             "pluginRoot": state.plugin_root,
             "hostUnregistered": state.host_plugin_removed && state.host_marketplace_removed,
@@ -213,7 +217,7 @@ pub(super) fn write_state_for_host(
     )
 }
 
-pub(super) fn read_state(host: PluginHost, install_dir: &Path) -> Option<PluginState> {
+pub(super) fn read_state(host: IntegrationHost, install_dir: &Path) -> Option<PluginState> {
     let raw = fs::read_to_string(state_path(host, install_dir)).ok()?;
     let value = serde_json::from_str::<Value>(&raw).ok()?;
     let legacy_host_unregistered = value
@@ -238,8 +242,8 @@ pub(super) fn read_state(host: PluginHost, install_dir: &Path) -> Option<PluginS
     })
 }
 
-pub(super) fn state_path(host: PluginHost, install_dir: &Path) -> PathBuf {
-    install_dir.join(format!("{}.json", host_arg(host)))
+pub(super) fn state_path(host: IntegrationHost, install_dir: &Path) -> PathBuf {
+    install_dir.join(format!("{}.json", host.as_arg()))
 }
 
 pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {

@@ -22,9 +22,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
+pub(crate) use crate::coding_agent::CodingAgent;
 use crate::error::CliError;
 use crate::file_io::{LockAttempt, try_lock_exclusive};
-use crate::plugin_shim::PluginShimCommand;
 #[cfg(test)]
 use crate::plugins::lifecycle::active_dynamic_plugin_components;
 use crate::plugins::lifecycle::{
@@ -70,8 +70,8 @@ pub(crate) enum Command {
                       injects a `nemo-relay-openai` provider override so codex points at the \
                       gateway; the gateway then forwards to `--openai-base-url` (defaults to \
                       api.openai.com) with `OPENAI_API_KEY` injected on the codex route (see \
-                      NMF-86 — codex's own auth.json JWT is stripped). Requires codex-cli >= \
-                      0.143.0.",
+                      NMF-86 — codex's own auth.json JWT is stripped). The supported host version \
+                      is validated before launch.",
         after_help = "Examples:\n  \
                       nemo-relay codex\n  \
                       nemo-relay codex -- exec \"fix the bug in foo.rs\"\n  \
@@ -84,8 +84,8 @@ pub(crate) enum Command {
                       configures Hermes's user-level `mcp_servers` and shell hooks so bare Hermes \
                       processes can share the native Relay gateway on 127.0.0.1:47632. This \
                       wrapper temporarily suppresses that fixed MCP entry and uses a dynamic \
-                      gateway for project-specific Relay configuration. Re-run \
-                      `nemo-relay config hermes` to refresh the persistent integration.",
+                      gateway for project-specific Relay configuration. Run \
+                      `nemo-relay install hermes --force` to refresh the persistent integration.",
         after_help = "Examples:\n  \
                       nemo-relay hermes\n  \
                       nemo-relay hermes -- chat --provider custom"
@@ -94,7 +94,8 @@ pub(crate) enum Command {
     /// Keep a shared Relay gateway ready for an MCP client.
     #[command(
         long_about = "Start or reuse a shared native NeMo Relay gateway for an MCP stdio \
-                      connection. The gateway binds 127.0.0.1:47632 by default and MCP \
+                      connection. The command acquires the gateway immediately, before reading \
+                      MCP protocol frames. The gateway binds 127.0.0.1:47632 by default and MCP \
                       initialization completes only after Relay identity and readiness are \
                       verified. Multiple MCP clients share the gateway; it remains available \
                       until its idle timeout after the final client closes. This command \
@@ -126,9 +127,6 @@ pub(crate) enum Command {
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
     #[command(hide = true)]
     HookForward(HookForwardCommand),
-    /// Internal: plugin-local hook and sidecar supervisor. Not typed by humans.
-    #[command(hide = true)]
-    PluginShim(PluginShimCommand),
 }
 
 /// Host identity for the lifecycle-bound MCP client.
@@ -136,27 +134,7 @@ pub(crate) enum Command {
 pub(crate) struct McpCommand {
     /// Coding-agent host that launched this MCP client.
     #[arg(long, value_enum, default_value = "codex")]
-    pub(crate) agent: McpAgent,
-}
-
-/// Hosts that can own the lifecycle-bound MCP client through plugin or user configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub(crate) enum McpAgent {
-    #[value(name = "claude", alias = "claude-code")]
-    ClaudeCode,
-    Codex,
-    Hermes,
-}
-
-impl From<McpAgent> for CodingAgent {
-    fn from(agent: McpAgent) -> Self {
-        match agent {
-            McpAgent::ClaudeCode => Self::ClaudeCode,
-            McpAgent::Codex => Self::Codex,
-            McpAgent::Hermes => Self::Hermes,
-        }
-    }
+    pub(crate) agent: CodingAgent,
 }
 
 /// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
@@ -166,9 +144,9 @@ pub(crate) struct DoctorCommand {
     /// Limit readiness checks to one supported agent.
     #[arg(value_enum)]
     pub(crate) agent: Option<CodingAgent>,
-    /// Diagnose an installed coding-agent plugin instead of the normal relay config.
+    /// Diagnose an installed coding-agent integration instead of the normal Relay config.
     #[arg(long, value_enum)]
-    pub(crate) plugin: Option<PluginHost>,
+    pub(crate) plugin: Option<IntegrationHost>,
     /// Plugin install state directory. Defaults to the platform data directory.
     #[arg(long)]
     pub(crate) install_dir: Option<PathBuf>,
@@ -181,7 +159,7 @@ pub(crate) struct DoctorCommand {
 #[derive(Debug, Clone, Args)]
 pub(crate) struct InstallCommand {
     #[arg(value_enum)]
-    pub(crate) host: PluginHost,
+    pub(crate) host: IntegrationHost,
     #[arg(long)]
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
@@ -195,7 +173,7 @@ pub(crate) struct InstallCommand {
 #[derive(Debug, Clone, Args)]
 pub(crate) struct UninstallCommand {
     #[arg(value_enum)]
-    pub(crate) host: PluginHost,
+    pub(crate) host: IntegrationHost,
     #[arg(long)]
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
@@ -584,25 +562,48 @@ pub(crate) struct RunCommand {
     pub(crate) command: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub(crate) enum CodingAgent {
-    /// Canonical CLI spelling is `claude` (matches Anthropic's own binary name and the TOML
-    /// `[agents.claude]` key). `claude-code` is kept as an input alias for backward compat
-    /// with hooks installed before this rename.
-    #[value(name = "claude", alias = "claude-code")]
-    ClaudeCode,
-    Codex,
-    Hermes,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 #[value(rename_all = "kebab-case")]
-pub(crate) enum PluginHost {
+pub(crate) enum IntegrationHost {
     Codex,
     #[value(name = "claude-code", alias = "claude")]
     ClaudeCode,
+    Hermes,
     All,
+}
+
+impl IntegrationHost {
+    pub(crate) const fn agent(self) -> Option<CodingAgent> {
+        match self {
+            Self::Codex => Some(CodingAgent::Codex),
+            Self::ClaudeCode => Some(CodingAgent::ClaudeCode),
+            Self::Hermes => Some(CodingAgent::Hermes),
+            Self::All => None,
+        }
+    }
+
+    pub(crate) const fn as_arg(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+            Self::Hermes => "hermes",
+            Self::All => "all",
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self.agent() {
+            Some(agent) => agent.label(),
+            None => "all",
+        }
+    }
+
+    pub(crate) const fn executable(self) -> Option<&'static str> {
+        match self.agent() {
+            Some(agent) => Some(agent.executable()),
+            None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -2124,44 +2125,6 @@ pub(crate) fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn header_json(headers: &HeaderMap, name: &str) -> Option<Value> {
     header_string(headers, name).and_then(|raw| serde_json::from_str(&raw).ok())
-}
-
-impl CodingAgent {
-    // Returns the gateway hook endpoint for the agent. These paths are stable integration surface
-    // because installed hook commands persist them in user or project configuration.
-    pub(crate) const fn hook_path(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "/hooks/claude-code",
-            Self::Codex => "/hooks/codex",
-            Self::Hermes => "/hooks/hermes",
-        }
-    }
-
-    // Returns the canonical CLI spelling used in generated commands and diagnostics. Matches the
-    // clap `#[value(name = ...)]` overrides on the enum so install/run output can be copied back
-    // into commands. `claude` matches Anthropic's binary name and the TOML `[agents.claude]` key.
-    pub(crate) const fn as_arg(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "claude",
-            Self::Codex => "codex",
-            Self::Hermes => "hermes",
-        }
-    }
-
-    // Infers an agent from the executable basename, accepting both canonical project names and
-    // common command aliases. Path components are stripped so configured absolute commands work.
-    pub(crate) fn infer(command: &str) -> Option<Self> {
-        let name = std::path::Path::new(command)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(command);
-        match name {
-            "claude" | "claude-code" => Some(Self::ClaudeCode),
-            "codex" => Some(Self::Codex),
-            "hermes" | "hermes-agent" => Some(Self::Hermes),
-            _ => None,
-        }
-    }
 }
 
 impl GatewayMode {

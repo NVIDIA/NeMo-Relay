@@ -112,6 +112,9 @@ impl TransparentRun {
             crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
         };
         let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
+        if !dry_run {
+            validate_agent_version(agent, &argv[0]).await?;
+        }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let gateway_url = format!("http://{address}");
@@ -228,11 +231,43 @@ fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<Stri
 // Default agent binary names used when no `[agents.<name>] command = "..."` override is in the
 // resolved config. Matches the executable on $PATH that the wizard's detection probes for.
 const fn default_command_for(agent: CodingAgent) -> &'static str {
-    match agent {
-        CodingAgent::ClaudeCode => "claude",
-        CodingAgent::Codex => "codex",
-        CodingAgent::Hermes => "hermes",
+    agent.executable()
+}
+
+async fn validate_agent_version(agent: CodingAgent, executable: &str) -> Result<(), CliError> {
+    let mut command = Command::new(executable);
+    command
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(5), command.output())
+        .await
+        .map_err(|_| {
+            CliError::Launch(format!(
+                "timed out while checking {}; NeMo Relay requires {}",
+                agent.label(),
+                agent.version_requirement()
+            ))
+        })??;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::Launch(format!(
+            "`{executable} --version` failed with {}{}",
+            output.status,
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr.trim())
+            }
+        )));
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    agent
+        .validate_version_output(&stdout)
+        .map(|_| ())
+        .map_err(CliError::Launch)
 }
 
 // Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
@@ -406,7 +441,7 @@ impl PreparedRun {
     // Injects Codex hook and provider configuration through repeated `--config` flags. Codex
     // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
-    // current supported Codex releases. Requires codex-cli >= 0.143.0.
+    // current supported Codex releases. The centralized host policy validates the version first.
     fn prepare_codex(&mut self, gateway_url: &str) {
         // Codex resolves auth via `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/
         // manager.rs`): `auth_mode=ApiKey` uses `OPENAI_API_KEY`, `auth_mode=Chatgpt` uses the
@@ -895,7 +930,7 @@ fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
     };
     let relay = std::env::current_exe()
         .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::plugin_shim::portable_executable_path)
+        .map(crate::plugin_host::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"));
     let contents = crate::hermes::transparent_config(&existing, &relay)?;
     std::fs::write(path, contents)?;

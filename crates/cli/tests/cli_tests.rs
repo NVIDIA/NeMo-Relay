@@ -179,7 +179,7 @@ fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
 }
 
 #[test]
-fn cli_mcp_initializes_and_exits_cleanly_when_stdio_closes() {
+fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = Command::new(gateway_bin())
         .args(["--bind", "127.0.0.1:0", "mcp"])
@@ -187,20 +187,21 @@ fn cli_mcp_initializes_and_exits_cleanly_when_stdio_closes() {
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
         .env("TMPDIR", temp.path())
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1")
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "30")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
+    let owner = wait_for_owned_sidecar(temp.path(), "codex", None);
+    let address = sidecar_address(temp.path(), "codex");
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
         .write_all(
             b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
         )
         .unwrap();
+    drop(stdin);
 
     let output = wait_child_with_output(child);
 
@@ -221,17 +222,20 @@ fn cli_mcp_initializes_and_exits_cleanly_when_stdio_closes() {
     )
     .unwrap();
     assert!(log.contains("Gateway        http://127.0.0.1:"));
+    stop_owned_sidecar(&owner);
+    wait_for_port_closed(address);
 }
 
 #[test]
-fn cli_mcp_does_not_launch_gateway_when_stdio_closes_before_request() {
+fn cli_mcp_starts_gateway_even_when_stdio_closes_before_request() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = Command::new(gateway_bin())
-        .args(["mcp"])
+        .args(["--bind", "127.0.0.1:0", "mcp"])
         .env("HOME", temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
         .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "30")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -246,7 +250,11 @@ fn cli_mcp_does_not_launch_gateway_when_stdio_closes_before_request() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    assert!(find_runtime_file(temp.path(), "codex-sidecar.log").is_none());
+    assert!(find_runtime_file(temp.path(), "codex-sidecar.log").is_some());
+    let owner = wait_for_owned_sidecar(temp.path(), "codex", None);
+    let address = sidecar_address(temp.path(), "codex");
+    stop_owned_sidecar(&owner);
+    wait_for_port_closed(address);
 }
 
 #[cfg(unix)]
@@ -264,7 +272,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
         std::fs::create_dir_all(directory).unwrap();
     }
     let hermes = bin.join("hermes");
-    std::fs::write(&hermes, "#!/bin/sh\necho 'Hermes 1.0.0'\n").unwrap();
+    std::fs::write(&hermes, "#!/bin/sh\necho 'Hermes Agent v0.18.2 (test)'\n").unwrap();
     std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
@@ -272,7 +280,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
     .unwrap();
 
     let install = Command::new(gateway_bin())
-        .args(["plugin-shim", "install", "hermes"])
+        .args(["install", "hermes", "--skip-doctor"])
         .env("HOME", &home)
         .env("HERMES_HOME", &hermes_home)
         .env("XDG_CONFIG_HOME", &xdg)
@@ -306,7 +314,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
     let command = config["hooks"]["on_session_start"][0]["command"]
         .as_str()
         .unwrap();
-    assert!(command.contains("plugin-shim hook hermes"));
+    assert!(command.contains("hook-forward hermes"));
     let approvals: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(hermes_home.join("shell-hooks-allowlist.json")).unwrap(),
     )
@@ -352,7 +360,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
     );
 
     let uninstall = Command::new(gateway_bin())
-        .args(["plugin-shim", "uninstall", "hermes"])
+        .args(["uninstall", "hermes"])
         .env("HOME", &home)
         .env("HERMES_HOME", &hermes_home)
         .env("XDG_CONFIG_HOME", &xdg)
@@ -435,7 +443,7 @@ fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
         drop(probe);
         let gateway_url = format!("http://{address}");
         let mut hook = Command::new(gateway_bin())
-            .args(["plugin-shim", "hook", agent, "--gateway-url", &gateway_url])
+            .args(["hook-forward", agent, "--gateway-url", &gateway_url])
             .env("HOME", temp.path())
             .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
             .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
@@ -582,8 +590,7 @@ fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String
 
     let mut child = Command::new(gateway_bin())
         .args([
-            "plugin-shim",
-            "hook",
+            "hook-forward",
             "codex",
             "--gateway-url",
             &format!("http://{address}"),
@@ -644,12 +651,12 @@ fn run_codex_hook_with_launch_resolution_error(
     temp: &std::path::Path,
     fail_closed: bool,
     payload: &[u8],
+    invalid_idle_timeout: bool,
 ) -> Output {
     let mut command = Command::new(gateway_bin());
     command
         .args([
-            "plugin-shim",
-            "hook",
+            "hook-forward",
             "codex",
             "--gateway-url",
             "http://127.0.0.1:1",
@@ -658,11 +665,13 @@ fn run_codex_hook_with_launch_resolution_error(
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
         .env("TMPDIR", temp)
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "not-a-number")
         .env_remove("NEMO_RELAY_FAIL_CLOSED")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if invalid_idle_timeout {
+        command.env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "not-a-number");
+    }
     if fail_closed {
         command.env("NEMO_RELAY_FAIL_CLOSED", "1");
     }
@@ -676,10 +685,10 @@ fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
     let temp = tempfile::tempdir().unwrap();
 
     for fail_closed in [false, true] {
-        let output = run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, b"{}");
+        let output =
+            run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, b"{}", true);
         assert_eq!(output.status.success(), !fail_closed);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("gateway identity preflight failed"));
         assert!(stderr.contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS"));
         assert!(output.stdout.is_empty());
     }
@@ -693,12 +702,12 @@ fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
 
     for fail_closed in [false, true] {
         let output =
-            run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, &payload);
+            run_codex_hook_with_launch_resolution_error(temp.path(), fail_closed, &payload, false);
 
         assert_eq!(output.status.success(), !fail_closed);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("hook payload exceeds the 20971520-byte limit"));
-        assert!(!stderr.contains("gateway identity preflight failed"));
+        assert!(!stderr.contains("sidecar recovery"));
         assert!(output.stdout.is_empty());
     }
 }
@@ -2401,48 +2410,12 @@ fn cli_run_rejects_zero_body_limit_env() {
 }
 
 #[test]
-fn cli_hook_forward_fails_open_without_gateway_url() {
-    let mut child = Command::new(gateway_bin())
-        .env_remove("NEMO_RELAY_GATEWAY_URL")
-        .args(["hook-forward", "codex"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(b"").unwrap();
-    let output = child.wait_with_output().unwrap();
-
-    assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing gateway URL"));
-}
-
-#[test]
-fn cli_hook_forward_fails_closed_without_gateway_url() {
-    let mut child = Command::new(gateway_bin())
-        .env_remove("NEMO_RELAY_GATEWAY_URL")
-        .args(["hook-forward", "codex", "--fail-closed"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(b"{}").unwrap();
-    let output = child.wait_with_output().unwrap();
-
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("missing gateway URL"));
-}
-
-#[test]
 fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
     let mut child = Command::new(gateway_bin())
         .args([
             "hook-forward",
             "codex",
-            "--gateway-url",
-            &server_url,
             "--profile",
             "coverage",
             "--session-metadata",
@@ -2451,6 +2424,7 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
             "passthrough",
             "--fail-closed",
         ])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2480,13 +2454,8 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
 fn cli_hook_forward_hermes_shell_hook_returns_empty_object() {
     let (server_url, received) = spawn_single_request_server(200, r#"{}"#);
     let mut child = Command::new(gateway_bin())
-        .args([
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            &server_url,
-            "--fail-closed",
-        ])
+        .args(["hook-forward", "hermes", "--fail-closed"])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2513,13 +2482,8 @@ fn cli_hook_forward_hermes_shell_hook_returns_empty_object() {
 fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let (server_url, received) = spawn_single_request_server(503, "unavailable");
     let mut child = Command::new(gateway_bin())
-        .args([
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            &server_url,
-            "--fail-closed",
-        ])
+        .args(["hook-forward", "hermes", "--fail-closed"])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2541,7 +2505,8 @@ fn cli_hook_forward_exits_two_for_guardrail_rejection() {
         r#"{"error":{"message":"guardrail rejected: blocked by policy","type":"nemo_relay_guardrail_rejected","reason":"blocked by policy"}}"#,
     );
     let mut child = Command::new(gateway_bin())
-        .args(["hook-forward", "codex", "--gateway-url", &server_url])
+        .args(["hook-forward", "codex"])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2559,13 +2524,8 @@ fn cli_hook_forward_exits_two_for_guardrail_rejection() {
 #[test]
 fn cli_hook_forward_reports_transport_failure_when_fail_closed() {
     let mut child = Command::new(gateway_bin())
-        .args([
-            "hook-forward",
-            "codex",
-            "--gateway-url",
-            "http://127.0.0.1:1",
-            "--fail-closed",
-        ])
+        .args(["hook-forward", "codex", "--fail-closed"])
+        .env("NEMO_RELAY_GATEWAY_URL", "http://127.0.0.1:1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2578,10 +2538,41 @@ fn cli_hook_forward_reports_transport_failure_when_fail_closed() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("hook forward failed"));
 }
 
+#[test]
+fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
+    const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
+    for fail_closed in [false, true] {
+        let (server_url, received) =
+            spawn_single_request_server(200, "x".repeat(MAX_HOOK_RESPONSE_BYTES + 1));
+        let mut command = Command::new(gateway_bin());
+        command
+            .args(["hook-forward", "hermes"])
+            .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if fail_closed {
+            command.arg("--fail-closed");
+        }
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(b"{}").unwrap();
+        let output = child.wait_with_output().unwrap();
+
+        assert_eq!(output.status.success(), !fail_closed);
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("hook forward response exceeds the 1048576-byte limit")
+        );
+        assert!(received.recv_timeout(Duration::from_secs(2)).is_ok());
+    }
+}
+
 fn spawn_single_request_server(
     status: u16,
-    body: &'static str,
+    body: impl Into<String>,
 ) -> (String, mpsc::Receiver<String>) {
+    let body = body.into();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let (sender, receiver) = mpsc::channel();

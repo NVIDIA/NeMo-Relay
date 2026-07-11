@@ -7,20 +7,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v codex >/dev/null 2>&1; then
-    echo "SKIP: codex is not installed; Codex plugin E2E requires codex-cli 0.143+"
-    exit 0
-fi
-
-codex_version="$(codex --version 2>/dev/null || true)"
-if ! python3 - "$codex_version" <<'PY'
-import re
-import sys
-
-match = re.search(r"(\d+)\.(\d+)\.(\d+)", sys.argv[1])
-raise SystemExit(0 if match and tuple(map(int, match.groups())) >= (0, 143, 0) else 1)
-PY
-then
-    echo "SKIP: Codex plugin E2E requires codex-cli 0.143+; found: ${codex_version:-unknown}"
+    echo "SKIP: codex is not installed"
     exit 0
 fi
 

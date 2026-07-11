@@ -43,9 +43,10 @@ pub(crate) fn persistent_hook_command(relay: &Path) -> String {
 }
 
 pub(super) fn persistent_hook_command_for_platform(relay: &Path, windows: bool) -> String {
-    format!(
-        "{} plugin-shim hook hermes",
-        crate::plugin_shim::shell_quote_for_platform(relay, windows)
+    crate::installer::persistent_hook_forward_command_for_platform(
+        relay,
+        crate::config::CodingAgent::Hermes,
+        windows,
     )
 }
 

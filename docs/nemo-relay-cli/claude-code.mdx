@@ -55,18 +55,17 @@ provider routing through the local NeMo Relay sidecar. It uses the existing
 `nemo-relay` binary on `PATH`; it does not install a plugin-local Relay binary.
 
 The plugin starts `nemo-relay mcp`, a lightweight Rust lifecycle client that
-starts or reuses the shared gateway on `127.0.0.1:47632`. The client verifies
-the gateway identity and effective persistent configuration, heartbeats it
-while MCP stdio remains open, and performs one coordinated restart if the
-gateway becomes unhealthy. Claude Code, Codex, and Hermes MCP clients share a
-compatible gateway, and the gateway exits after the final client's idle
-timeout. The MCP server advertises no tools.
+starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
+MCP process launches. The client verifies the gateway identity and effective
+persistent configuration, heartbeats it while MCP stdio remains open, and
+performs one coordinated restart if the gateway becomes unhealthy. Claude
+Code, Codex, and Hermes MCP clients share a compatible gateway, and the gateway
+exits after the final client's idle timeout. The MCP server advertises no tools.
 
-Claude Code starts plugin MCP servers asynchronously, so `SessionStart` can run
-before the MCP connection is ready. The installed command hook handles this
-race by starting or reusing the same gateway and retrying the original payload
-once. MCP owns the normal session-long lifecycle; hook recovery preserves the
-earliest event.
+The generated entry sets `alwaysLoad: true`, so Claude Code 2.1.121 or newer
+waits for the MCP connection before session startup. The installed command
+hook retains the same-gateway retry path for an unexpected outage after
+startup. MCP owns the normal session-long lifecycle.
 
 Persistent plugin mode loads system and user Relay configuration only and uses
 the user configuration directory as its working directory. Use the transparent
@@ -81,8 +80,8 @@ nemo-relay doctor --plugin claude-code
 nemo-relay uninstall claude-code
 ```
 
-Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
-directories, rollback behavior, and source marketplace notes.
+Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
+install directories, rollback behavior, and source marketplace notes.
 
 ## Shared Config
 

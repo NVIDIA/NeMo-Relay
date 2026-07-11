@@ -10,7 +10,7 @@ struct DefaultsOnlyRunner;
 impl PluginSetupRunner for DefaultsOnlyRunner {
     fn setup(
         &self,
-        _host: PluginHost,
+        _host: IntegrationHost,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -19,7 +19,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn uninstall(
         &self,
-        _host: PluginHost,
+        _host: IntegrationHost,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -28,7 +28,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn doctor(
         &self,
-        _host: PluginHost,
+        _host: IntegrationHost,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -37,7 +37,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn doctor_json(
         &self,
-        _host: PluginHost,
+        _host: IntegrationHost,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<Value, String> {
@@ -49,40 +49,48 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 fn setup_runner_defaults_are_explicit_no_ops() {
     let runner = DefaultsOnlyRunner;
 
-    assert!(runner.snapshot(PluginHost::Codex).unwrap().is_none());
+    assert!(runner.snapshot(IntegrationHost::Codex).unwrap().is_none());
     runner.restore_snapshot(&PluginSetupSnapshot::Mock).unwrap();
-    runner.refresh_gateway(PluginHost::Codex).unwrap();
+    runner.refresh_gateway(IntegrationHost::Codex).unwrap();
 }
 
 #[test]
 fn setup_descriptions_reject_unexpanded_hosts_and_unknown_actions() {
     assert!(
-        std::panic::catch_unwind(|| setup_action_description(PluginHost::All, "configure"))
+        std::panic::catch_unwind(|| setup_action_description(IntegrationHost::All, "configure"))
             .is_err()
     );
     assert!(
-        std::panic::catch_unwind(|| setup_action_description(PluginHost::Codex, "unknown"))
+        std::panic::catch_unwind(|| setup_action_description(IntegrationHost::Codex, "unknown"))
             .is_err()
     );
 
     let runner = RealPluginSetupRunner;
     let root = Path::new("unused");
-    assert!(std::panic::catch_unwind(|| runner.snapshot(PluginHost::All)).is_err());
-    assert!(std::panic::catch_unwind(|| runner.refresh_gateway(PluginHost::All)).is_err());
+    assert!(std::panic::catch_unwind(|| runner.snapshot(IntegrationHost::All)).is_err());
+    assert!(std::panic::catch_unwind(|| runner.refresh_gateway(IntegrationHost::All)).is_err());
     assert!(
-        std::panic::catch_unwind(|| runner.setup(PluginHost::All, DEFAULT_GATEWAY_URL, root))
+        std::panic::catch_unwind(|| runner.setup(IntegrationHost::All, DEFAULT_GATEWAY_URL, root))
             .is_err()
     );
     assert!(
-        std::panic::catch_unwind(|| runner.uninstall(PluginHost::All, DEFAULT_GATEWAY_URL, root))
+        std::panic::catch_unwind(|| runner.uninstall(
+            IntegrationHost::All,
+            DEFAULT_GATEWAY_URL,
+            root
+        ))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| runner.doctor(IntegrationHost::All, DEFAULT_GATEWAY_URL, root))
             .is_err()
     );
     assert!(
-        std::panic::catch_unwind(|| runner.doctor(PluginHost::All, DEFAULT_GATEWAY_URL, root))
-            .is_err()
-    );
-    assert!(
-        std::panic::catch_unwind(|| runner.doctor_json(PluginHost::All, DEFAULT_GATEWAY_URL, root))
-            .is_err()
+        std::panic::catch_unwind(|| runner.doctor_json(
+            IntegrationHost::All,
+            DEFAULT_GATEWAY_URL,
+            root
+        ))
+        .is_err()
     );
 }

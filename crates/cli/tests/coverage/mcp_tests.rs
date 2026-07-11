@@ -140,36 +140,11 @@ fn invalid_and_unknown_requests_return_jsonrpc_errors() {
 }
 
 #[test]
-fn gateway_bootstrap_is_deferred_until_initialize() {
-    assert_eq!(default_mcp_bind(), "127.0.0.1:47632".parse().unwrap());
-    assert!(!request_requires_gateway("not-json\n"));
-    assert!(!request_requires_gateway(
-        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#
-    ));
-    assert!(!request_requires_gateway(
-        r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#
-    ));
-    assert!(!request_requires_gateway(
-        r#"{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#
-    ));
-    assert!(!request_requires_gateway(
-        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#
-    ));
-    assert!(!request_requires_gateway(
-        r#"{"jsonrpc":"1.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#
-    ));
-    assert!(request_requires_gateway(
-        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#
-    ));
-}
-
-#[test]
-fn invalid_jsonrpc_never_bootstraps_and_returns_invalid_request() {
+fn invalid_jsonrpc_returns_invalid_request() {
     let action = crate::mcp::protocol::evaluate_frame(
         r#"{"jsonrpc":"1.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
     );
 
-    assert!(!action.requires_gateway);
     assert_eq!(
         action.response,
         Some(jsonrpc_error(json!(1), -32600, "Invalid Request"))

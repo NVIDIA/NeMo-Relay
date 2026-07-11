@@ -18,14 +18,14 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::config::{InstallCommand, PluginHost, UninstallCommand};
+use crate::config::{CodingAgent, InstallCommand, IntegrationHost, UninstallCommand};
 use crate::error::CliError;
 use crate::install_generation::{GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration};
 
 use host::{
     CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,
     run_host_marketplace_registration, run_host_marketplace_removal, run_host_plugin_registration,
-    run_host_plugin_removal, validate_relay_mcp, validate_relay_plugin_shim,
+    run_host_plugin_removal, validate_relay_hook_forward, validate_relay_mcp,
 };
 use marketplace::{
     marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config, plugin_uses_mcp,
@@ -113,7 +113,7 @@ impl HostPluginReadiness {
 }
 
 struct PendingHostPluginReadiness {
-    host: PluginHost,
+    host: IntegrationHost,
     state_path: PathBuf,
     receiver: Receiver<HostPluginReadiness>,
 }
@@ -125,7 +125,7 @@ struct PendingHostPluginReadiness {
 /// into the persistent host-plugin workflow.
 pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness> {
     let install_dir = default_install_dir().canonicalize_or_self();
-    let pending = [PluginHost::Codex, PluginHost::ClaudeCode]
+    let pending = [IntegrationHost::Codex, IntegrationHost::ClaudeCode]
         .into_iter()
         .filter(|host| state_path(*host, &install_dir).exists())
         .map(|host| spawn_default_host_plugin_readiness(host, install_dir.clone()))
@@ -143,7 +143,7 @@ pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness
 }
 
 fn spawn_default_host_plugin_readiness(
-    host: PluginHost,
+    host: IntegrationHost,
     install_dir: PathBuf,
 ) -> PendingHostPluginReadiness {
     let state_path = state_path(host, &install_dir);
@@ -188,14 +188,14 @@ fn receive_host_plugin_readiness(
 }
 
 fn failed_host_plugin_readiness(
-    host: PluginHost,
+    host: IntegrationHost,
     state_path: PathBuf,
     details: impl Into<String>,
 ) -> HostPluginReadiness {
     let layout = PluginLayout::new(host, state_path.parent().unwrap_or_else(|| Path::new(".")));
     let mut readiness = HostPluginReadiness {
-        host: host_arg(host).to_string(),
-        remediation: format!("nemo-relay install {} --force", host_arg(host)),
+        host: host.as_arg().to_string(),
+        remediation: format!("nemo-relay install {} --force", host.as_arg()),
         state_path,
         marketplace: Some(layout.marketplace_root),
         plugin: Some(layout.plugin_root),
@@ -229,7 +229,10 @@ pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
         command.host,
         HostSelectionMode::Install,
         &options,
-        |host, options, runner, setup_runner| install_host(host, options, runner, setup_runner),
+        |host, options, runner, setup_runner| match host {
+            IntegrationHost::Hermes => install_hermes_host(options, runner),
+            _ => install_host(host, options, runner, setup_runner),
+        },
     )
 }
 
@@ -253,12 +256,15 @@ pub(crate) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
         command.host,
         HostSelectionMode::InstalledState,
         &options,
-        |host, options, runner, setup_runner| uninstall_host(host, options, runner, setup_runner),
+        |host, options, runner, setup_runner| match host {
+            IntegrationHost::Hermes => uninstall_hermes_host(options),
+            _ => uninstall_host(host, options, runner, setup_runner),
+        },
     )
 }
 
 pub(crate) fn doctor(
-    host: PluginHost,
+    host: IntegrationHost,
     install_dir: Option<PathBuf>,
     json: bool,
 ) -> Result<ExitCode, CliError> {
@@ -278,19 +284,22 @@ pub(crate) fn doctor(
         host,
         HostSelectionMode::InstalledState,
         &options,
-        |host, options, runner, setup_runner| doctor_host(host, options, runner, setup_runner),
+        |host, options, runner, setup_runner| match host {
+            IntegrationHost::Hermes => doctor_hermes_host(options, runner),
+            _ => doctor_host(host, options, runner, setup_runner),
+        },
     )
 }
 
 fn run_for_hosts<F>(
-    host: PluginHost,
+    host: IntegrationHost,
     mode: HostSelectionMode,
     options: &PluginInstallOptions,
     mut action: F,
 ) -> Result<ExitCode, CliError>
 where
     F: FnMut(
-        PluginHost,
+        IntegrationHost,
         &PluginInstallOptions,
         &dyn CommandRunner,
         &dyn PluginSetupRunner,
@@ -301,15 +310,15 @@ where
     let hosts = select_hosts(host, mode, options, &runner)?;
     if hosts.is_empty() {
         return Err(CliError::Install(match host {
-            PluginHost::All => match mode {
+            IntegrationHost::All => match mode {
                 HostSelectionMode::Install => {
-                    "no supported Claude Code or Codex host CLI was detected".into()
+                    "no supported Claude Code, Codex, or Hermes host CLI was detected".into()
                 }
                 HostSelectionMode::InstalledState => {
-                    "no installed Claude Code or Codex plugin state was found".into()
+                    "no installed Claude Code, Codex, or Hermes integration state was found".into()
                 }
             },
-            _ => "no supported plugin host selected".into(),
+            _ => "no supported integration host selected".into(),
         }));
     }
     for host in hosts {
@@ -318,25 +327,33 @@ where
     Ok(ExitCode::SUCCESS)
 }
 
-fn doctor_json(host: PluginHost, options: &PluginInstallOptions) -> Result<ExitCode, CliError> {
+fn doctor_json(
+    host: IntegrationHost,
+    options: &PluginInstallOptions,
+) -> Result<ExitCode, CliError> {
     let runner = RealCommandRunner;
     let setup_runner = RealPluginSetupRunner;
     let hosts = select_hosts(host, HostSelectionMode::InstalledState, options, &runner)?;
     if hosts.is_empty() {
         return Err(CliError::Install(match host {
-            PluginHost::All => "no installed Claude Code or Codex plugin state was found".into(),
-            _ => "no supported plugin host selected".into(),
+            IntegrationHost::All => {
+                "no installed Claude Code, Codex, or Hermes integration state was found".into()
+            }
+            _ => "no supported integration host selected".into(),
         }));
     }
     let reports = hosts
         .into_iter()
-        .map(|host| doctor_host_json_value(host, options, &runner, &setup_runner))
+        .map(|host| match host {
+            IntegrationHost::Hermes => doctor_hermes_json_value(options, &runner),
+            _ => doctor_host_json_value(host, options, &runner, &setup_runner),
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(CliError::Install)?;
     let ready = reports
         .iter()
         .all(|report| report.get("ok").and_then(Value::as_bool) == Some(true));
-    if matches!(host, PluginHost::All) {
+    if matches!(host, IntegrationHost::All) {
         print_json(&json!({
             "schema_version": 1,
             "plugins": reports
@@ -355,24 +372,30 @@ fn doctor_json(host: PluginHost, options: &PluginInstallOptions) -> Result<ExitC
 }
 
 fn select_hosts(
-    host: PluginHost,
+    host: IntegrationHost,
     mode: HostSelectionMode,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
-) -> Result<Vec<PluginHost>, CliError> {
-    if host != PluginHost::All {
+) -> Result<Vec<IntegrationHost>, CliError> {
+    if host != IntegrationHost::All {
         return Ok(vec![host]);
     }
     let mut hosts = Vec::new();
-    for candidate in [PluginHost::Codex, PluginHost::ClaudeCode] {
+    for candidate in [
+        IntegrationHost::Codex,
+        IntegrationHost::ClaudeCode,
+        IntegrationHost::Hermes,
+    ] {
         let selected = match mode {
             HostSelectionMode::Install => runner
-                .resolve_executable(host_cli(candidate))
+                .resolve_executable(candidate.executable().expect("concrete plugin host"))
                 .map_err(CliError::Install)?
                 .is_some(),
-            HostSelectionMode::InstalledState => {
-                state_path(candidate, &options.install_dir).exists()
-            }
+            HostSelectionMode::InstalledState => match candidate {
+                IntegrationHost::Hermes => hermes_config_path()
+                    .is_ok_and(|path| crate::hermes::persistent_state_exists(&path)),
+                _ => state_path(candidate, &options.install_dir).exists(),
+            },
         };
         if selected {
             hosts.push(candidate);
@@ -381,8 +404,110 @@ fn select_hosts(
     Ok(hosts)
 }
 
+fn hermes_config_path() -> Result<PathBuf, String> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .map(|home| crate::hermes::user_config_path(&home))
+        .ok_or_else(|| "cannot determine home directory (set HOME or USERPROFILE)".into())
+}
+
+fn install_hermes_host(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<(), String> {
+    require_host_cli(IntegrationHost::Hermes, options, runner)?;
+    host::validate_host_version(IntegrationHost::Hermes, options, runner)?;
+    let relay = require_relay(options, runner)?;
+    validate_relay_hook_forward(&relay, options, runner)?;
+    validate_relay_mcp(&relay, options, runner)?;
+    let config = hermes_config_path()?;
+    if options.dry_run {
+        println!("configure Hermes MCP and hooks at {}", config.display());
+        return Ok(());
+    }
+    crate::hermes::install_persistent(&config, &relay).map_err(|error| error.to_string())?;
+    if !options.skip_doctor {
+        crate::hermes::diagnose_persistent(&config)?;
+    }
+    println!("installed Hermes integration");
+    Ok(())
+}
+
+fn uninstall_hermes_host(options: &PluginInstallOptions) -> Result<(), String> {
+    let config = hermes_config_path()?;
+    if options.dry_run {
+        println!(
+            "remove Relay-owned Hermes MCP and hooks from {}",
+            config.display()
+        );
+        return Ok(());
+    }
+    crate::hermes::uninstall_persistent(&config).map_err(|error| error.to_string())?;
+    println!("uninstalled Hermes integration");
+    Ok(())
+}
+
+fn doctor_hermes_host(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<(), String> {
+    let report = doctor_hermes_json_value(options, runner)?;
+    for check in report["readiness_checks"]
+        .as_array()
+        .expect("Hermes readiness checks are an array")
+    {
+        println!(
+            "{}: {} ({})",
+            check["name"].as_str().unwrap_or_default(),
+            if check["ok"] == json!(true) {
+                "ok"
+            } else {
+                "failed"
+            },
+            check["details"].as_str().unwrap_or_default()
+        );
+    }
+    (report["ok"] == json!(true)).then_some(()).ok_or_else(|| {
+        format!(
+            "Hermes integration doctor checks failed; remediation: {}",
+            report["remediation"].as_str().unwrap_or_default()
+        )
+    })
+}
+
+fn doctor_hermes_json_value(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<Value, String> {
+    let config = hermes_config_path()?;
+    let version = host::validate_host_version(IntegrationHost::Hermes, options, runner);
+    let integration = crate::hermes::diagnose_persistent(&config);
+    let ok = version.is_ok() && integration.is_ok();
+    Ok(json!({
+        "ok": ok,
+        "host": IntegrationHost::Hermes.as_arg(),
+        "remediation": format!("nemo-relay install {} --force", IntegrationHost::Hermes.as_arg()),
+        "config": config,
+        "readiness_checks": [
+            {
+                "name": "Hermes Agent version",
+                "ok": version.is_ok(),
+                "details": version
+                    .map(|_| format!("{} is installed", CodingAgent::Hermes.version_requirement()))
+                    .unwrap_or_else(|error| error),
+            },
+            {
+                "name": "Hermes MCP and hooks",
+                "ok": integration.is_ok(),
+                "details": integration.unwrap_or_else(|error| error),
+            }
+        ]
+    }))
+}
+
 fn install_host(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -397,7 +522,7 @@ fn install_host(
 }
 
 fn install_host_with_operation_timeout(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -417,20 +542,18 @@ fn install_host_with_operation_timeout(
 }
 
 fn install_host_locked(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
     let relay = require_relay(options, runner)?;
-    validate_relay_plugin_shim(&relay, options, runner)?;
+    validate_relay_hook_forward(&relay, options, runner)?;
     if plugin_uses_mcp(host) {
         validate_relay_mcp(&relay, options, runner)?;
     }
     require_host_cli(host, options, runner)?;
-    if matches!(host, PluginHost::Codex) {
-        host::validate_codex_version(options, runner)?;
-    }
+    host::validate_host_version(host, options, runner)?;
     let layout = PluginLayout::new(host, &options.install_dir);
     let plugin_preflight = if !options.dry_run && plugin_uses_mcp(host) {
         Some(prepare_plugin_install(host, &layout, options, runner)?)
@@ -532,7 +655,7 @@ fn install_host_locked(
         registration.host_marketplace_added = true;
         run_host_plugin_registration(host, options, runner)?;
         registration.host_plugin_added = true;
-        if !matches!(host, PluginHost::Codex) {
+        if !matches!(host, IntegrationHost::Codex) {
             setup_installed = true;
         }
         run_plugin_setup(host, &layout, options, setup_runner)?;
@@ -590,14 +713,14 @@ fn install_host_locked(
     }
     println!(
         "installed {} plugin marketplace at {}",
-        host_label(host),
+        host.label(),
         layout.marketplace_root.display()
     );
     Ok(())
 }
 
 fn uninstall_host(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -612,7 +735,7 @@ fn uninstall_host(
 }
 
 fn uninstall_host_with_operation_timeout(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -632,7 +755,7 @@ fn uninstall_host_with_operation_timeout(
 }
 
 fn uninstall_host_locked(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -664,7 +787,7 @@ fn uninstall_host_locked(
 }
 
 fn retire_installed_generation(
-    host: PluginHost,
+    host: IntegrationHost,
     plugin_root: &Path,
     local_install_exists: bool,
     options: &PluginInstallOptions,
@@ -699,7 +822,7 @@ fn retire_installed_generation(
 }
 
 fn retire_replacement_before_rollback(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -720,15 +843,15 @@ fn retire_replacement_before_rollback(
     Ok(Some(retirement))
 }
 
-fn existing_plugin_install_requires_force_error(host: PluginHost) -> String {
+fn existing_plugin_install_requires_force_error(host: IntegrationHost) -> String {
     format!(
         "an existing fenced {} plugin install was found; rerun `nemo-relay install {} --force` to replace it safely",
-        host_label(host),
-        host_arg(host)
+        host.label(),
+        host.as_arg()
     )
 }
 
-fn missing_generation_fence_error(host: PluginHost, generation_fence: &Path) -> String {
+fn missing_generation_fence_error(host: IntegrationHost, generation_fence: &Path) -> String {
     unsafe_generation_fence_error(
         host,
         &format!("is missing at {}", generation_fence.display()),
@@ -736,7 +859,7 @@ fn missing_generation_fence_error(host: PluginHost, generation_fence: &Path) -> 
 }
 
 fn invalid_generation_fence_error(
-    host: PluginHost,
+    host: IntegrationHost,
     generation_fence: &Path,
     cause: &str,
 ) -> String {
@@ -749,20 +872,22 @@ fn invalid_generation_fence_error(
     )
 }
 
-fn unsafe_generation_fence_error(host: PluginHost, problem: &str) -> String {
+fn unsafe_generation_fence_error(host: IntegrationHost, problem: &str) -> String {
     match host {
-        PluginHost::Codex => format!(
+        IntegrationHost::Codex => format!(
             "cannot safely replace or uninstall an existing Codex plugin because its MCP generation marker {problem}; close all Codex clients and standalone `nemo-relay mcp` processes, run `codex plugin remove nemo-relay-plugin@nemo-relay-local` and `codex plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install codex --force` to create a fenced install (and `nemo-relay uninstall codex` afterward if removal was intended)"
         ),
-        PluginHost::ClaudeCode => format!(
+        IntegrationHost::ClaudeCode => format!(
             "cannot safely replace or uninstall an existing Claude Code plugin because its MCP generation marker {problem}; close all Claude Code clients and standalone `nemo-relay mcp` processes, run `claude plugin uninstall nemo-relay-plugin` and `claude plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install claude-code --force` to create a fenced install (and `nemo-relay uninstall claude-code` afterward if removal was intended)"
         ),
-        PluginHost::All => unreachable!("all is expanded before generation validation"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before generation validation")
+        }
     }
 }
 
-fn legacy_plugin_without_mcp(host: PluginHost, plugin_root: &Path) -> Result<bool, String> {
-    if !matches!(host, PluginHost::ClaudeCode) || plugin_root.join(".mcp.json").exists() {
+fn legacy_plugin_without_mcp(host: IntegrationHost, plugin_root: &Path) -> Result<bool, String> {
+    if !matches!(host, IntegrationHost::ClaudeCode) || plugin_root.join(".mcp.json").exists() {
         return Ok(false);
     }
     let manifest_path = plugin_manifest_path(host, plugin_root);
@@ -786,7 +911,7 @@ fn legacy_plugin_without_mcp(host: PluginHost, plugin_root: &Path) -> Result<boo
 }
 
 fn uninstall_host_with_setup_override(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -803,7 +928,7 @@ fn uninstall_host_with_setup_override(
         }
     });
     if let Err(error) = require_relay(options, runner)
-        .and_then(|relay| validate_relay_plugin_shim(&relay, options, runner))
+        .and_then(|relay| validate_relay_hook_forward(&relay, options, runner))
     {
         eprintln!("warning: skipping nemo-relay validation during uninstall: {error}");
     }
@@ -820,12 +945,12 @@ fn uninstall_host_with_setup_override(
     run_host_unregistration(host, &mut state, &options.install_dir, options, runner)?;
     remove_path(&state.marketplace_root, options)?;
     remove_path(&state_path(host, &options.install_dir), options)?;
-    println!("uninstalled {} plugin", host_label(host));
+    println!("uninstalled {} plugin", host.label());
     Ok(())
 }
 
 fn doctor_host(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -846,14 +971,14 @@ fn doctor_host(
     readiness.ok().then_some(()).ok_or_else(|| {
         format!(
             "{} plugin doctor checks failed; remediation: {}",
-            host_label(host),
+            host.label(),
             readiness.remediation
         )
     })
 }
 
 fn doctor_host_json_value(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -880,7 +1005,7 @@ fn doctor_host_json_value(
 }
 
 fn collect_host_plugin_readiness(
-    host: PluginHost,
+    host: IntegrationHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -901,8 +1026,8 @@ fn collect_host_plugin_readiness(
         .map(|state| state.plugin_root.clone())
         .or_else(|| state_path.exists().then(|| layout.plugin_root.clone()));
     let mut readiness = HostPluginReadiness {
-        host: host_arg(host).to_string(),
-        remediation: format!("nemo-relay install {} --force", host_arg(host)),
+        host: host.as_arg().to_string(),
+        remediation: format!("nemo-relay install {} --force", host.as_arg()),
         state_path: state_path.clone(),
         marketplace,
         plugin,
@@ -947,8 +1072,8 @@ fn collect_host_plugin_readiness(
         readiness.relay = Some(relay.clone());
         readiness.push(
             "Relay hook support",
-            validate_relay_plugin_shim(&relay, options, runner)
-                .map(|_| "plugin-shim hook is supported".into()),
+            validate_relay_hook_forward(&relay, options, runner)
+                .map(|_| "hook-forward is supported".into()),
         );
         if let Some(plugin) = readiness.plugin.as_ref() {
             readiness.push(
@@ -986,22 +1111,30 @@ fn collect_host_plugin_readiness(
         "Host CLI",
         host_cli_check
             .as_ref()
-            .map(|_| format!("{} is available", host_cli(host)))
+            .map(|_| {
+                format!(
+                    "{} is available",
+                    host.executable().expect("concrete plugin host")
+                )
+            })
             .map_err(Clone::clone),
     );
     if host_cli_check.is_ok() {
-        if matches!(host, PluginHost::Codex) {
-            let version = host::validate_codex_version(options, runner);
-            if version.is_err() {
-                readiness.remediation =
-                    "upgrade Codex to codex-cli 0.143.0 or newer, then run `nemo-relay install codex --force`"
-                        .into();
-            }
-            readiness.push(
-                "Codex version",
-                version.map(|_| "codex-cli 0.143.0 or newer is installed".into()),
+        let agent = host
+            .agent()
+            .expect("all is expanded before readiness checks");
+        let version = host::validate_host_version(host, options, runner);
+        if version.is_err() {
+            readiness.remediation = format!(
+                "upgrade to {}, then run `nemo-relay install {} --force`",
+                agent.version_requirement(),
+                host.as_arg()
             );
         }
+        readiness.push(
+            format!("{} version", agent.label()),
+            version.map(|_| format!("{} is installed", agent.version_requirement())),
+        );
         match host_registration_report(host, options, runner) {
             Ok(report) => {
                 readiness.host_plugin_registered = Some(report.host_plugin_registered);
@@ -1091,7 +1224,7 @@ fn generated_manifest_check(path: &Path, expected: &Value, label: &str) -> Resul
 }
 
 fn generated_mcp_config_check(
-    host: PluginHost,
+    host: IntegrationHost,
     path: &Path,
     expected: &Value,
 ) -> Result<String, String> {
@@ -1107,14 +1240,18 @@ fn generated_mcp_config_check(
         return Ok(format!("valid at {}", path.display()));
     }
     let expected_server = match host {
-        PluginHost::Codex => &expected["nemo-relay"],
-        PluginHost::ClaudeCode => &expected["mcpServers"]["nemo-relay"],
-        PluginHost::All => unreachable!("all is expanded before MCP validation"),
+        IntegrationHost::Codex => &expected["nemo-relay"],
+        IntegrationHost::ClaudeCode => &expected["mcpServers"]["nemo-relay"],
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before MCP validation")
+        }
     };
     let actual_server = match host {
-        PluginHost::Codex => &actual["nemo-relay"],
-        PluginHost::ClaudeCode => &actual["mcpServers"]["nemo-relay"],
-        PluginHost::All => unreachable!("all is expanded before MCP validation"),
+        IntegrationHost::Codex => &actual["nemo-relay"],
+        IntegrationHost::ClaudeCode => &actual["mcpServers"]["nemo-relay"],
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before MCP validation")
+        }
     };
     let expected_vars = expected_server["env_vars"]
         .as_array()
@@ -1137,7 +1274,7 @@ fn generated_mcp_config_check(
             "MCP server at {} is missing forwarded environment variables: {}; run `nemo-relay install {} --force`",
             path.display(),
             missing.join(", "),
-            host_arg(host)
+            host.as_arg()
         ));
     }
     Err(format!(
@@ -1146,22 +1283,26 @@ fn generated_mcp_config_check(
     ))
 }
 
-fn marketplace_manifest_path(host: PluginHost, root: &Path) -> PathBuf {
+fn marketplace_manifest_path(host: IntegrationHost, root: &Path) -> PathBuf {
     match host {
-        PluginHost::Codex => root
+        IntegrationHost::Codex => root
             .join(".agents")
             .join("plugins")
             .join("marketplace.json"),
-        PluginHost::ClaudeCode => root.join(".claude-plugin").join("marketplace.json"),
-        PluginHost::All => unreachable!("all is expanded before layout resolution"),
+        IntegrationHost::ClaudeCode => root.join(".claude-plugin").join("marketplace.json"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before layout resolution")
+        }
     }
 }
 
-fn plugin_manifest_path(host: PluginHost, root: &Path) -> PathBuf {
+fn plugin_manifest_path(host: IntegrationHost, root: &Path) -> PathBuf {
     match host {
-        PluginHost::Codex => root.join(".codex-plugin").join("plugin.json"),
-        PluginHost::ClaudeCode => root.join(".claude-plugin").join("plugin.json"),
-        PluginHost::All => unreachable!("all is expanded before layout resolution"),
+        IntegrationHost::Codex => root.join(".codex-plugin").join("plugin.json"),
+        IntegrationHost::ClaudeCode => root.join(".claude-plugin").join("plugin.json"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before layout resolution")
+        }
     }
 }
 
@@ -1204,7 +1345,7 @@ struct PluginInstallPreflight {
 }
 
 fn prepare_plugin_install(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -1237,13 +1378,15 @@ fn prepare_plugin_install(
         .unwrap_or_else(|| layout.plugin_root.clone());
     let previous_generation_fence = previous_plugin_root.join(GENERATION_FILE_NAME);
     let local_install_exists = match host {
-        PluginHost::Codex => layout.marketplace_root.exists(),
-        PluginHost::ClaudeCode => {
+        IntegrationHost::Codex => layout.marketplace_root.exists(),
+        IntegrationHost::ClaudeCode => {
             plugin_manifest_path(host, &previous_plugin_root).exists()
                 || previous_plugin_root.join(".mcp.json").exists()
                 || previous_generation_fence.exists()
         }
-        PluginHost::All => unreachable!("all is expanded before install preflight"),
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before install preflight")
+        }
     };
     let previous_install_exists = state_bytes.is_some()
         || local_install_exists
@@ -1336,14 +1479,14 @@ impl ForceInstallSnapshot {
 }
 
 fn stage_plugin_marketplace(
-    host: PluginHost,
+    host: IntegrationHost,
     relay: &Path,
     target: &PluginLayout,
     options: &PluginInstallOptions,
 ) -> Result<StagedPluginMarketplace, String> {
     let parent = options.install_dir.join(format!(
         ".{}-install-stage-{}",
-        host_arg(host),
+        host.as_arg(),
         uuid::Uuid::now_v7()
     ));
     let layout = PluginLayout::new(host, &parent);
@@ -1361,7 +1504,7 @@ fn stage_plugin_marketplace(
 }
 
 fn begin_force_replacement(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     preflight: PluginInstallPreflight,
     options: &PluginInstallOptions,
@@ -1386,7 +1529,7 @@ fn begin_force_replacement(
         .unwrap_or(&options.install_dir);
     let backup_marketplace_root = backup_parent.join(format!(
         ".{}-marketplace-backup-{}",
-        host_arg(host),
+        host.as_arg(),
         uuid::Uuid::now_v7()
     ));
     let backup_plugin_root =
@@ -1396,7 +1539,7 @@ fn begin_force_replacement(
                 .unwrap_or(&options.install_dir)
                 .join(format!(
                     ".{}-plugin-backup-{}",
-                    host_arg(host),
+                    host.as_arg(),
                     uuid::Uuid::now_v7()
                 ))
         });
@@ -1484,7 +1627,7 @@ fn begin_force_replacement(
 }
 
 fn restore_force_replacement_after_error<T>(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     snapshot: &mut ForceInstallSnapshot,
     options: &PluginInstallOptions,
@@ -1501,7 +1644,7 @@ fn restore_force_replacement_after_error<T>(
 }
 
 fn restore_force_replacement(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     snapshot: &mut ForceInstallSnapshot,
     options: &PluginInstallOptions,
@@ -1628,7 +1771,7 @@ fn restore_force_replacement(
 }
 
 fn force_cleanup_existing_install(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -1652,7 +1795,7 @@ fn force_cleanup_existing_install(
 }
 
 fn rollback_install(
-    host: PluginHost,
+    host: IntegrationHost,
     layout: &PluginLayout,
     registration: HostRegistrationProgress,
     setup_installed: bool,
@@ -1681,7 +1824,7 @@ fn rollback_install(
 }
 
 fn run_host_unregistration(
-    host: PluginHost,
+    host: IntegrationHost,
     state: &mut PluginState,
     install_dir: &Path,
     options: &PluginInstallOptions,
@@ -1700,30 +1843,6 @@ fn run_host_unregistration(
         write_state_for_host(host, state, install_dir, options)?;
     }
     Ok(())
-}
-
-fn host_arg(host: PluginHost) -> &'static str {
-    match host {
-        PluginHost::Codex => "codex",
-        PluginHost::ClaudeCode => "claude-code",
-        PluginHost::All => "all",
-    }
-}
-
-fn host_label(host: PluginHost) -> &'static str {
-    match host {
-        PluginHost::Codex => "Codex",
-        PluginHost::ClaudeCode => "Claude Code",
-        PluginHost::All => "all",
-    }
-}
-
-fn host_cli(host: PluginHost) -> &'static str {
-    match host {
-        PluginHost::Codex => "codex",
-        PluginHost::ClaudeCode => "claude",
-        PluginHost::All => unreachable!("all is expanded before host CLI resolution"),
-    }
 }
 
 fn print_json(value: &Value) -> Result<(), String> {

@@ -76,14 +76,14 @@ fn hook_command_round_trips_paths_and_recognizes_owned_legacy_spellings() {
     let relay = Path::new("/tmp/NeMo $Relay`test'/bin/nemo-relay");
     assert_eq!(
         persistent_hook_command_for_platform(relay, false),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' plugin-shim hook hermes"
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:47632"
     );
     assert_eq!(
         persistent_hook_command_for_platform(
             Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
             true,
         ),
-        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" plugin-shim hook hermes"#
+        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward hermes --gateway-url http://127.0.0.1:47632"#
     );
     for command in [
         "nemo-relay hook-forward hermes",

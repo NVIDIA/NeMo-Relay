@@ -615,7 +615,7 @@ fn prepares_hermes_hook_environment() {
         Some(&hooks_path)
     );
     let hooks = std::fs::read_to_string(&hooks_path).unwrap();
-    assert!(hooks.contains("plugin-shim hook hermes"));
+    assert!(hooks.contains("hook-forward hermes"));
     assert!(prepared.notes[0].contains("temporarily merged"));
 
     prepared.restore().unwrap();
@@ -732,7 +732,7 @@ hooks:
     .unwrap();
 
     let patched = std::fs::read_to_string(&hooks_path).unwrap();
-    assert!(patched.contains("plugin-shim hook hermes"));
+    assert!(patched.contains("hook-forward hermes"));
     let patched_yaml: serde_json::Value = serde_yaml::from_str(&patched).unwrap();
     assert!(patched_yaml["mcp_servers"].get("nemo-relay").is_none());
     assert_eq!(
@@ -913,7 +913,7 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
     std::fs::write(
         &script,
         format!(
-            "#!/bin/sh\nprintf '%s' \"$NEMO_RELAY_GATEWAY_URL\" > \"{}\"\nexit 7\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'codex-cli 0.143.0'\n  exit 0\nfi\nprintf '%s' \"$NEMO_RELAY_GATEWAY_URL\" > \"{}\"\nexit 7\n",
             output.display()
         ),
     )
@@ -1086,7 +1086,7 @@ async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
     assert!(
         std::fs::read_to_string(&hooks_path)
             .unwrap()
-            .contains("plugin-shim hook hermes")
+            .contains("hook-forward hermes")
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

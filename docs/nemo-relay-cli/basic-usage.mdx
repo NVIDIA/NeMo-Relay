@@ -92,26 +92,24 @@ environment, gateway URL, and final command without launching the agent.
 
 ## Persistent Host Integrations
 
-Use persistent plugin installation when Claude Code or Codex should load NeMo
-Relay through the host's plugin system instead of through a wrapper command:
+Use persistent integration installation when Claude Code, Codex, or Hermes
+Agent should load Relay instead of using a wrapper command:
 
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
+nemo-relay install hermes
 nemo-relay install all
 ```
 
-Hermes exposes the same stdio MCP lifecycle but owns it through user config
-instead of a marketplace plugin:
-
-```bash
-nemo-relay config hermes
-```
+Claude Code and Codex use marketplace plugins. Hermes exposes the same stdio
+MCP lifecycle through user configuration.
 
 Hermes, Claude Code, and Codex MCP clients can share the native gateway on
-`127.0.0.1:47632`. Hermes and Claude Code start MCP asynchronously, so their
-canonical hook command also closes the cold-start race and retries the original
-payload once.
+`127.0.0.1:47632`. Every `nemo-relay mcp` process acquires that gateway as soon
+as it launches. Claude Code uses `alwaysLoad` to wait for the MCP connection;
+Hermes starts discovery asynchronously, so its canonical hook command also
+closes the remaining cold-start race and retries the original payload once.
 
 Plugin installation writes a local marketplace, installs the generated
 `nemo-relay-plugin`, and configures the host-specific hook and provider routing
@@ -125,8 +123,8 @@ nemo-relay doctor --plugin codex
 nemo-relay uninstall codex
 ```
 
-Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
-directories, host-specific behavior, and the shared-sidecar lifecycle.
+Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
+install directories, host-specific behavior, and the shared-sidecar lifecycle.
 
 ## Shared Configuration
 
@@ -333,11 +331,12 @@ Transparent Claude Code and Codex hooks invoke
 `nemo-relay hook-forward <agent>` with the canonical payload on standard input.
 The wrapper injects `NEMO_RELAY_GATEWAY_URL` for its ephemeral gateway.
 
-Persistent Claude Code, Codex, and Hermes hooks use
-`nemo-relay plugin-shim hook <agent>`. That path starts or reuses the shared
-native sidecar before forwarding the unchanged payload. Hermes setup stores the
-canonical absolute command and trusts its exact event pairs; it does not enable
-global hook auto-acceptance.
+Persistent Claude Code, Codex, and Hermes hooks also use
+`nemo-relay hook-forward <agent>`. A persistent generated command identifies
+the fixed gateway explicitly, preflights its Relay identity, and performs one
+coordinated start or recovery before forwarding the unchanged payload. Hermes
+setup stores the canonical absolute command and trusts its exact event pairs;
+it does not enable global hook auto-acceptance.
 
 `hook-forward` reads the canonical hook payload from standard input, sends it
 to the matching endpoint, and prints the endpoint response. It fails open by
@@ -357,7 +356,7 @@ application-mode caveats.
 
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
-- [Plugin Installation](/nemo-relay-cli/plugin-installation)
+- [Coding Agent Installation](/nemo-relay-cli/plugin-installation)
 - [Hermes Agent](/nemo-relay-cli/hermes)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,

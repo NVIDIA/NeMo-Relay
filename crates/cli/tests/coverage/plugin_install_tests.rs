@@ -16,11 +16,12 @@ use tempfile::tempdir;
 use super::host::{
     CommandOutput, HostRegistrationReport, format_command, host_registration_report,
     require_host_cli, require_relay, run_capture_command, run_command, run_path_command,
-    validate_codex_version, validate_host_registration, validate_relay_mcp,
-    validate_relay_plugin_shim,
+    validate_host_registration, validate_host_version, validate_relay_hook_forward,
+    validate_relay_mcp,
 };
 use super::*;
-use crate::plugin_shim::strip_windows_verbatim_prefix;
+use crate::config::CodingAgent;
+use crate::plugin_host::strip_windows_verbatim_prefix;
 
 const OPERATION_LOCK_HELPER_DIR_ENV: &str = "NEMO_RELAY_TEST_OPERATION_LOCK_DIR";
 const OPERATION_LOCK_HELPER_GLOBAL_DIR_ENV: &str = "NEMO_RELAY_TEST_OPERATION_LOCK_GLOBAL_DIR";
@@ -75,7 +76,8 @@ fn windows_verbatim_relay_paths_are_normalized_for_mcp_config() {
 #[test]
 fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
     let dir = tempdir().unwrap();
-    let pending = spawn_default_host_plugin_readiness(PluginHost::Codex, dir.path().to_path_buf());
+    let pending =
+        spawn_default_host_plugin_readiness(IntegrationHost::Codex, dir.path().to_path_buf());
     let readiness = receive_host_plugin_readiness(pending, Duration::from_secs(5));
     assert_eq!(readiness.host, "codex");
     assert!(!readiness.checks.is_empty());
@@ -84,7 +86,7 @@ fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
     drop(sender);
     let readiness = receive_host_plugin_readiness(
         PendingHostPluginReadiness {
-            host: PluginHost::ClaudeCode,
+            host: IntegrationHost::ClaudeCode,
             state_path: dir.path().join("claude-state.json"),
             receiver,
         },
@@ -129,12 +131,12 @@ fn dry_run_cleanup_and_rollback_cover_absent_install_state() {
     let dir = tempdir().unwrap();
     let mut dry_run = options(dir.path());
     dry_run.dry_run = true;
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     let runner = MockRunner::default();
     let setup_runner = MockSetupRunner::default();
 
     force_cleanup_existing_install(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &layout,
         &dry_run,
         &runner,
@@ -142,7 +144,7 @@ fn dry_run_cleanup_and_rollback_cover_absent_install_state() {
     )
     .unwrap();
     rollback_install(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &layout,
         HostRegistrationProgress::default(),
         false,
@@ -159,10 +161,10 @@ fn staged_marketplace_promotion_reports_the_source_and_target() {
     let staged_parent = dir.path().join("stage");
     let target_parent = dir.path().join("target");
     let staged = StagedPluginMarketplace {
-        layout: PluginLayout::new(PluginHost::Codex, &staged_parent),
+        layout: PluginLayout::new(IntegrationHost::Codex, &staged_parent),
         parent: staged_parent,
     };
-    let target = PluginLayout::new(PluginHost::Codex, &target_parent);
+    let target = PluginLayout::new(IntegrationHost::Codex, &target_parent);
 
     let error = staged.promote(&target).unwrap_err();
 
@@ -184,13 +186,13 @@ fn codex_plugin_requires_version_with_complete_hook_support() {
     let supported = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output("/bin/codex --version", "codex-cli 0.143.0\n");
-    validate_codex_version(&normal, &supported).unwrap();
+    validate_host_version(IntegrationHost::Codex, &normal, &supported).unwrap();
 
     let old = MockRunner::default()
         .with_executable("codex", "/bin/codex")
         .with_capture_output("/bin/codex --version", "codex-cli 0.142.9\n");
     assert!(
-        validate_codex_version(&normal, &old)
+        validate_host_version(IntegrationHost::Codex, &normal, &old)
             .unwrap_err()
             .contains("requires codex-cli 0.143.0")
     );
@@ -199,7 +201,7 @@ fn codex_plugin_requires_version_with_complete_hook_support() {
         .with_executable("codex", "/bin/codex")
         .with_capture_output("/bin/codex --version", "codex nightly\n");
     assert!(
-        validate_codex_version(&normal, &invalid)
+        validate_host_version(IntegrationHost::Codex, &normal, &invalid)
             .unwrap_err()
             .contains("could not parse")
     );
@@ -208,7 +210,7 @@ fn codex_plugin_requires_version_with_complete_hook_support() {
         .with_executable("codex", "/bin/codex")
         .with_capture_output("/bin/codex --version", "codex-cli 0.143.0-alpha.1\n");
     assert!(
-        validate_codex_version(&normal, &prerelease)
+        validate_host_version(IntegrationHost::Codex, &normal, &prerelease)
             .unwrap_err()
             .contains("codex-cli 0.143.0-alpha.1 is unsupported")
     );
@@ -222,7 +224,41 @@ fn codex_plugin_requires_version_with_complete_hook_support() {
             .with_executable("codex", "/bin/codex")
             .with_capture_output("/bin/codex --version", malformed);
         assert!(
-            validate_codex_version(&normal, &runner)
+            validate_host_version(IntegrationHost::Codex, &normal, &runner)
+                .unwrap_err()
+                .contains("could not parse"),
+            "unexpectedly parsed {malformed:?}"
+        );
+    }
+}
+
+#[test]
+fn claude_plugin_requires_version_with_always_load_support() {
+    let dir = tempdir().unwrap();
+    let normal = options(dir.path());
+    let supported = MockRunner::default()
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output("/bin/claude --version", "2.1.121 (Claude Code)\n");
+    validate_host_version(IntegrationHost::ClaudeCode, &normal, &supported).unwrap();
+
+    for unsupported in ["2.1.120 (Claude Code)\n", "2.1.121-beta (Claude Code)\n"] {
+        let runner = MockRunner::default()
+            .with_executable("claude", "/bin/claude")
+            .with_capture_output("/bin/claude --version", unsupported);
+        assert!(
+            validate_host_version(IntegrationHost::ClaudeCode, &normal, &runner)
+                .unwrap_err()
+                .contains("requires Claude Code 2.1.121"),
+            "unexpectedly accepted {unsupported:?}"
+        );
+    }
+
+    for malformed in ["Claude Code 2.1.121\n", "2.1\n", "warning\n2.1.121\n"] {
+        let runner = MockRunner::default()
+            .with_executable("claude", "/bin/claude")
+            .with_capture_output("/bin/claude --version", malformed);
+        assert!(
+            validate_host_version(IntegrationHost::ClaudeCode, &normal, &runner)
                 .unwrap_err()
                 .contains("could not parse"),
             "unexpectedly parsed {malformed:?}"
@@ -549,6 +585,8 @@ impl CommandRunner for MockRunner {
             .unwrap_or_else(|| {
                 if rendered.ends_with("codex --version") {
                     CommandOutput::success("codex-cli 0.143.0\n".into())
+                } else if rendered.ends_with("claude --version") {
+                    CommandOutput::success("2.1.121 (Claude Code)\n".into())
                 } else if rendered.ends_with("claude plugin list --json")
                     || rendered.ends_with("claude plugin marketplace list --json")
                 {
@@ -582,8 +620,8 @@ impl MockSetupRunner {
 }
 
 impl PluginSetupRunner for MockSetupRunner {
-    fn snapshot(&self, host: PluginHost) -> Result<Option<PluginSetupSnapshot>, String> {
-        self.record(format!("snapshot {}", host_arg(host)))?;
+    fn snapshot(&self, host: IntegrationHost) -> Result<Option<PluginSetupSnapshot>, String> {
+        self.record(format!("snapshot {}", host.as_arg()))?;
         Ok(Some(PluginSetupSnapshot::Mock))
     }
 
@@ -591,47 +629,47 @@ impl PluginSetupRunner for MockSetupRunner {
         self.record("restore snapshot".into())
     }
 
-    fn refresh_gateway(&self, host: PluginHost) -> Result<(), String> {
-        self.record(format!("refresh {}", host_arg(host)))
+    fn refresh_gateway(&self, host: IntegrationHost) -> Result<(), String> {
+        self.record(format!("refresh {}", host.as_arg()))
     }
 
     fn setup(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
-        self.record(format!("setup {} {gateway_url}", host_arg(host)))
+        self.record(format!("setup {} {gateway_url}", host.as_arg()))
     }
 
     fn uninstall(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
-        self.record(format!("uninstall {} {gateway_url}", host_arg(host)))
+        self.record(format!("uninstall {} {gateway_url}", host.as_arg()))
     }
 
     fn doctor(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
-        self.record(format!("doctor {} {gateway_url}", host_arg(host)))
+        self.record(format!("doctor {} {gateway_url}", host.as_arg()))
     }
 
     fn doctor_json(
         &self,
-        host: PluginHost,
+        host: IntegrationHost,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<serde_json::Value, String> {
         self.doctor_roots
             .borrow_mut()
             .push(plugin_root.to_path_buf());
-        self.record(format!("doctor-json {} {gateway_url}", host_arg(host)))?;
+        self.record(format!("doctor-json {} {gateway_url}", host.as_arg()))?;
         Ok(json!({
             "ok": true,
             "checks": {}
@@ -661,14 +699,14 @@ fn options(dir: &Path) -> PluginInstallOptions {
 }
 
 fn relay_validation_command() -> String {
-    "/bin/nemo-relay plugin-shim hook --help".into()
+    "/bin/nemo-relay hook-forward --help".into()
 }
 
 fn relay_mcp_validation_command() -> String {
     "/bin/nemo-relay mcp --help".into()
 }
 
-fn write_installed_state(host: PluginHost, dir: &Path) {
+fn write_installed_state(host: IntegrationHost, dir: &Path) {
     let layout = PluginLayout::new(host, dir);
     write_plugin_marketplace(host, &layout, Path::new("/bin/nemo-relay"), &options(dir)).unwrap();
     write_state(&layout, &options(dir)).unwrap();
@@ -676,16 +714,16 @@ fn write_installed_state(host: PluginHost, dir: &Path) {
 }
 
 fn write_relocated_codex_install(selected_dir: &Path, relocated_dir: &Path) -> PluginLayout {
-    let relocated = PluginLayout::new(PluginHost::Codex, relocated_dir);
+    let relocated = PluginLayout::new(IntegrationHost::Codex, relocated_dir);
     write_plugin_marketplace(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &relocated,
         Path::new("/bin/nemo-relay"),
         &options(selected_dir),
     )
     .unwrap();
     write_state_for_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &PluginState {
             marketplace_root: relocated.marketplace_root.clone(),
             plugin_root: relocated.plugin_root.clone(),
@@ -846,7 +884,7 @@ fn cross_process_lock_holder() {
             PathBuf::from(std::env::var_os(OPERATION_LOCK_HELPER_GLOBAL_DIR_ENV).unwrap());
         _operation_lock = Some(
             PluginOperationLock::acquire(
-                PluginHost::Codex,
+                IntegrationHost::Codex,
                 &global_lock_dir,
                 Path::new(&path),
                 Duration::from_secs(5),
@@ -884,7 +922,7 @@ fn concurrent_install_install_times_out_without_mutating() {
     let setup_runner = MockSetupRunner::default();
 
     let error = install_host_with_operation_timeout(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &install_options,
         &runner,
         &setup_runner,
@@ -913,7 +951,7 @@ fn concurrent_install_uninstall_times_out_without_mutating() {
     let setup_runner = MockSetupRunner::default();
 
     let error = uninstall_host_with_operation_timeout(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &install_options,
         &runner,
         &setup_runner,
@@ -946,7 +984,7 @@ fn concurrent_different_install_roots_share_the_global_host_lock() {
     second_options.operation_lock_dir = global_lock_dir;
 
     let install_error = install_host_with_operation_timeout(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &second_options,
         &runner,
         &setup_runner,
@@ -1018,26 +1056,26 @@ fn default_install_dir_follows_platform_conventions() {
 #[test]
 fn plugin_manifests_and_hooks_use_path_based_relay_command() {
     assert_eq!(
-        marketplace_manifest(PluginHost::Codex)["name"],
+        marketplace_manifest(IntegrationHost::Codex)["name"],
         json!(MARKETPLACE_NAME)
     );
     assert_eq!(
-        marketplace_manifest(PluginHost::ClaudeCode)["plugins"][0]["source"],
+        marketplace_manifest(IntegrationHost::ClaudeCode)["plugins"][0]["source"],
         json!("./plugins/nemo-relay-plugin")
     );
     assert_eq!(
-        plugin_manifest(PluginHost::Codex)["name"],
+        plugin_manifest(IntegrationHost::Codex)["name"],
         json!(PLUGIN_NAME)
     );
     assert_eq!(
-        plugin_manifest(PluginHost::Codex)["mcpServers"],
+        plugin_manifest(IntegrationHost::Codex)["mcpServers"],
         json!("./.mcp.json")
     );
     let generation_fence = std::env::current_dir()
         .unwrap()
         .join("plugins/nemo-relay-plugin/.nemo-relay-generation");
     let mcp = plugin_mcp_config(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         Path::new("/bin/nemo-relay"),
         &generation_fence,
     )
@@ -1061,28 +1099,33 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
             .contains(&json!("OPENAI_API_KEY"))
     );
     let claude_mcp = plugin_mcp_config(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         Path::new("/bin/nemo-relay"),
         &generation_fence,
     );
     let claude_server = &claude_mcp.unwrap()["mcpServers"]["nemo-relay"];
     assert_eq!(claude_server["command"], json!("/bin/nemo-relay"));
     assert_eq!(claude_server["args"], json!(["mcp", "--agent", "claude"]));
+    assert_eq!(claude_server["alwaysLoad"], json!(true));
     assert_eq!(
         claude_server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"],
         json!(generation_fence)
     );
     assert_eq!(
-        plugin_hooks(PluginHost::Codex, Path::new("/bin/nemo-relay"))["hooks"]["SessionStart"][0]["hooks"]
-            [0]["command"],
-        json!(crate::plugin_shim::codex_plugin_hook_command(Path::new(
-            "/bin/nemo-relay"
-        )))
+        plugin_hooks(IntegrationHost::Codex, Path::new("/bin/nemo-relay"))["hooks"]["SessionStart"]
+            [0]["hooks"][0]["command"],
+        json!(crate::installer::persistent_hook_forward_command(
+            Path::new("/bin/nemo-relay"),
+            CodingAgent::Codex,
+        ))
     );
     assert_eq!(
-        plugin_hooks(PluginHost::ClaudeCode, Path::new("/bin/nemo-relay"))["hooks"]["SessionStart"]
+        plugin_hooks(IntegrationHost::ClaudeCode, Path::new("/bin/nemo-relay"))["hooks"]["SessionStart"]
             [0]["hooks"][0]["command"],
-        json!("nemo-relay plugin-shim hook claude")
+        json!(crate::installer::persistent_hook_forward_command(
+            Path::new("/bin/nemo-relay"),
+            CodingAgent::ClaudeCode,
+        ))
     );
 }
 
@@ -1097,12 +1140,15 @@ fn relay_identity_uses_running_executable_when_path_points_elsewhere() {
 
     assert_eq!(relay, PathBuf::from("/opt/nemo-relay/current/nemo-relay"));
     assert_eq!(
-        plugin_hooks(PluginHost::Codex, &relay)["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        json!(crate::plugin_shim::codex_plugin_hook_command(&relay))
+        plugin_hooks(IntegrationHost::Codex, &relay)["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        json!(crate::installer::persistent_hook_forward_command(
+            &relay,
+            CodingAgent::Codex,
+        ))
     );
     assert_eq!(
         plugin_mcp_config(
-            PluginHost::Codex,
+            IntegrationHost::Codex,
             &relay,
             Path::new("/plugins/nemo-relay-plugin/.nemo-relay-generation"),
         )
@@ -1235,23 +1281,23 @@ fn codex_mcp_env_vars_match_and_deduplicate_names_using_platform_semantics() {
 #[test]
 fn plugin_setup_delegates_and_dry_run_skips_runner_calls() {
     let dir = tempdir().unwrap();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let setup_runner = MockSetupRunner::default();
     let dry_run = PluginInstallOptions {
         dry_run: true,
         ..options(dir.path())
     };
 
-    run_plugin_setup(PluginHost::Codex, &layout, &dry_run, &setup_runner).unwrap();
+    run_plugin_setup(IntegrationHost::Codex, &layout, &dry_run, &setup_runner).unwrap();
     run_plugin_uninstall(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &layout.plugin_root,
         &dry_run,
         &setup_runner,
     )
     .unwrap();
     run_plugin_doctor(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &layout.plugin_root,
         &dry_run,
         &setup_runner,
@@ -1260,23 +1306,27 @@ fn plugin_setup_delegates_and_dry_run_skips_runner_calls() {
     assert!(setup_runner.calls().is_empty());
 
     let normal = options(dir.path());
-    run_plugin_setup(PluginHost::Codex, &layout, &normal, &setup_runner).unwrap();
+    run_plugin_setup(IntegrationHost::Codex, &layout, &normal, &setup_runner).unwrap();
     run_plugin_uninstall(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &layout.plugin_root,
         &normal,
         &setup_runner,
     )
     .unwrap();
     run_plugin_doctor(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &layout.plugin_root,
         &normal,
         &setup_runner,
     )
     .unwrap();
-    let report =
-        run_plugin_doctor_json(PluginHost::ClaudeCode, &layout.plugin_root, &setup_runner).unwrap();
+    let report = run_plugin_doctor_json(
+        IntegrationHost::ClaudeCode,
+        &layout.plugin_root,
+        &setup_runner,
+    )
+    .unwrap();
 
     assert_eq!(
         setup_runner.calls(),
@@ -1298,49 +1348,65 @@ fn real_plugin_setup_runner_uses_temp_home_for_claude_paths() {
     let plugin_root = dir.path().join("plugin");
 
     runner
-        .setup(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+        .setup(
+            IntegrationHost::ClaudeCode,
+            DEFAULT_GATEWAY_URL,
+            &plugin_root,
+        )
         .unwrap();
     assert!(
         runner
-            .doctor(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+            .doctor(
+                IntegrationHost::ClaudeCode,
+                DEFAULT_GATEWAY_URL,
+                &plugin_root
+            )
             .is_ok()
     );
     let claude_report = runner
-        .doctor_json(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+        .doctor_json(
+            IntegrationHost::ClaudeCode,
+            DEFAULT_GATEWAY_URL,
+            &plugin_root,
+        )
         .unwrap();
     assert_eq!(
         claude_report["checks"]["claude_provider_routing"],
         json!(true)
     );
     runner
-        .uninstall(PluginHost::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+        .uninstall(
+            IntegrationHost::ClaudeCode,
+            DEFAULT_GATEWAY_URL,
+            &plugin_root,
+        )
         .unwrap();
 }
 
 #[test]
 fn setup_action_descriptions_cover_supported_hosts_and_actions() {
     assert_eq!(
-        setup_action_description(PluginHost::Codex, "configure"),
+        setup_action_description(IntegrationHost::Codex, "configure"),
         "configure Codex provider and trust plugin-owned hooks"
     );
     assert_eq!(
-        setup_action_description(PluginHost::Codex, "restore"),
+        setup_action_description(IntegrationHost::Codex, "restore"),
         "remove Codex provider and plugin hook trust"
     );
     assert_eq!(
-        setup_action_description(PluginHost::Codex, "doctor"),
+        setup_action_description(IntegrationHost::Codex, "doctor"),
         "check Codex provider and plugin-owned hooks"
     );
     assert_eq!(
-        setup_action_description(PluginHost::ClaudeCode, "configure"),
+        setup_action_description(IntegrationHost::ClaudeCode, "configure"),
         "enable Claude Code provider routing through NeMo Relay"
     );
     assert_eq!(
-        setup_action_description(PluginHost::ClaudeCode, "restore"),
+        setup_action_description(IntegrationHost::ClaudeCode, "restore"),
         "restore Claude Code provider routing from NeMo Relay backup"
     );
     assert_eq!(
-        setup_action_description(PluginHost::ClaudeCode, "doctor"),
+        setup_action_description(IntegrationHost::ClaudeCode, "doctor"),
         "check Claude Code provider routing"
     );
 }
@@ -1358,8 +1424,9 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
         require_relay(&dry_run, &runner).unwrap(),
         PathBuf::from(RELAY_COMMAND)
     );
-    require_host_cli(PluginHost::Codex, &dry_run, &runner).unwrap();
-    validate_relay_plugin_shim(Path::new("nemo-relay"), &dry_run, &runner).unwrap();
+    require_host_cli(IntegrationHost::Codex, &dry_run, &runner).unwrap();
+    validate_host_version(IntegrationHost::ClaudeCode, &dry_run, &runner).unwrap();
+    validate_relay_hook_forward(Path::new("nemo-relay"), &dry_run, &runner).unwrap();
     validate_relay_mcp(Path::new("nemo-relay"), &dry_run, &runner).unwrap();
     run_command(
         "codex",
@@ -1377,7 +1444,7 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
     .unwrap();
     let capture = run_capture_command("codex", &["plugin".into()], &dry_run, &runner).unwrap();
     assert_eq!(capture.stdout, "null\n");
-    let report = host_registration_report(PluginHost::Codex, &dry_run, &runner).unwrap();
+    let report = host_registration_report(IntegrationHost::Codex, &dry_run, &runner).unwrap();
     assert!(report.ok());
     assert_eq!(report.to_json()["ok"], json!(true));
     assert_eq!(
@@ -1396,7 +1463,7 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
             .contains("nemo-relay")
     );
     assert!(
-        require_host_cli(PluginHost::Codex, &normal, &runner)
+        require_host_cli(IntegrationHost::Codex, &normal, &runner)
             .unwrap_err()
             .contains("codex")
     );
@@ -1409,11 +1476,11 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
     let mut runner = MockRunner::default()
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
-    runner.failing_quiet_suffix = Some("plugin-shim hook --help".into());
+    runner.failing_quiet_suffix = Some("hook-forward --help".into());
     assert!(
-        validate_relay_plugin_shim(Path::new("/bin/nemo-relay"), &normal, &runner)
+        validate_relay_hook_forward(Path::new("/bin/nemo-relay"), &normal, &runner)
             .unwrap_err()
-            .contains("plugin-shim hook")
+            .contains("hook-forward")
     );
     runner.failing_quiet_suffix = Some("mcp --help".into());
     assert!(
@@ -1463,7 +1530,7 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
         .with_executable("codex", "/bin/codex")
         .with_capture_output("/bin/codex plugin list", "PLUGIN  STATUS  VERSION  PATH\n")
         .with_capture_output("/bin/codex plugin marketplace list", "MARKETPLACE ROOT\n");
-    let error = validate_host_registration(PluginHost::Codex, &normal, &runner).unwrap_err();
+    let error = validate_host_registration(IntegrationHost::Codex, &normal, &runner).unwrap_err();
     assert!(
         error.contains("host plugin") && error.contains("host marketplace"),
         "error was: {error}"
@@ -1500,7 +1567,8 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
                 "/bin/claude plugin marketplace list --json",
                 json!([marketplace_entry]).to_string(),
             );
-        let report = host_registration_report(PluginHost::ClaudeCode, &normal, &runner).unwrap();
+        let report =
+            host_registration_report(IntegrationHost::ClaudeCode, &normal, &runner).unwrap();
         assert!(report.ok());
         assert!(report.host_plugin_registered);
         assert!(report.host_marketplace_registered);
@@ -1516,7 +1584,7 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
             "/bin/codex plugin marketplace list",
             format!("{MARKETPLACE_NAME} /tmp/nemo-relay-local\n"),
         );
-    let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+    let report = host_registration_report(IntegrationHost::Codex, &normal, &runner).unwrap();
     assert!(report.ok());
 
     let runner = MockRunner::default()
@@ -1529,7 +1597,7 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
             "/bin/codex plugin marketplace list",
             format!("{MARKETPLACE_NAME} /tmp/nemo-relay-local\n"),
         );
-    let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+    let report = host_registration_report(IntegrationHost::Codex, &normal, &runner).unwrap();
     assert!(!report.host_plugin_registered);
     assert!(report.host_marketplace_registered);
 
@@ -1540,7 +1608,7 @@ fn host_registration_report_accepts_claude_and_codex_shape_variants() {
             format!("{PLUGIN_NAME}@other  installed, enabled  0.4.0  /tmp/other\n"),
         )
         .with_capture_output("/bin/codex plugin marketplace list", "other /tmp/other\n");
-    let report = host_registration_report(PluginHost::Codex, &normal, &runner).unwrap();
+    let report = host_registration_report(IntegrationHost::Codex, &normal, &runner).unwrap();
     assert!(!report.ok());
     assert!(!report.host_plugin_registered);
     assert!(!report.host_marketplace_registered);
@@ -1555,7 +1623,7 @@ fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
         .with_executable("claude", "/bin/claude")
         .with_capture_output("/bin/claude plugin list --json", "not json");
     assert!(
-        host_registration_report(PluginHost::ClaudeCode, &normal, &runner)
+        host_registration_report(IntegrationHost::ClaudeCode, &normal, &runner)
             .unwrap_err()
             .contains("failed to parse")
     );
@@ -1568,7 +1636,8 @@ fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
             "ignored stdout",
             "  noisy failure  \n",
         );
-    let error = host_registration_report(PluginHost::ClaudeCode, &normal, &runner).unwrap_err();
+    let error =
+        host_registration_report(IntegrationHost::ClaudeCode, &normal, &runner).unwrap_err();
     assert!(error.contains("exit code 4: noisy failure"));
 
     let runner = MockRunner::default()
@@ -1583,7 +1652,8 @@ fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
             "ignored stdout",
             "",
         );
-    let error = host_registration_report(PluginHost::ClaudeCode, &normal, &runner).unwrap_err();
+    let error =
+        host_registration_report(IntegrationHost::ClaudeCode, &normal, &runner).unwrap_err();
     assert!(error.contains("exit code 5"));
     assert!(!error.contains("exit code 5:"));
 }
@@ -1596,7 +1666,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     let _path = PathScope::set_isolated(&empty_path, &dir.path().join("home"));
 
     let install_error = install(crate::config::InstallCommand {
-        host: PluginHost::All,
+        host: IntegrationHost::All,
         install_dir: Some(dir.path().join("install")),
         force: false,
         dry_run: false,
@@ -1605,40 +1675,44 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     .unwrap_err()
     .to_string();
     assert!(
-        install_error.contains("no supported Claude Code or Codex host CLI"),
+        install_error.contains("no supported Claude Code, Codex, or Hermes host CLI"),
         "error was: {install_error}"
     );
 
     let uninstall_error = uninstall(crate::config::UninstallCommand {
-        host: PluginHost::All,
+        host: IntegrationHost::All,
         install_dir: Some(dir.path().join("install")),
         dry_run: false,
     })
     .unwrap_err()
     .to_string();
     assert!(
-        uninstall_error.contains("no installed Claude Code or Codex plugin state"),
+        uninstall_error.contains("no installed Claude Code, Codex, or Hermes integration state"),
         "error was: {uninstall_error}"
     );
 
-    let doctor_error = doctor(PluginHost::All, Some(dir.path().join("install")), true)
+    let doctor_error = doctor(IntegrationHost::All, Some(dir.path().join("install")), true)
         .unwrap_err()
         .to_string();
     assert!(
-        doctor_error.contains("no installed Claude Code or Codex plugin state"),
+        doctor_error.contains("no installed Claude Code, Codex, or Hermes integration state"),
         "error was: {doctor_error}"
     );
-    let doctor_human_error = doctor(PluginHost::All, Some(dir.path().join("install")), false)
-        .unwrap_err()
-        .to_string();
+    let doctor_human_error = doctor(
+        IntegrationHost::All,
+        Some(dir.path().join("install")),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(
-        doctor_human_error.contains("no installed Claude Code or Codex plugin state"),
+        doctor_human_error.contains("no installed Claude Code, Codex, or Hermes integration state"),
         "error was: {doctor_human_error}"
     );
 
     assert_eq!(
         install(crate::config::InstallCommand {
-            host: PluginHost::Codex,
+            host: IntegrationHost::Codex,
             install_dir: Some(dir.path().join("dry-run-install")),
             force: false,
             dry_run: true,
@@ -1648,23 +1722,27 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         std::process::ExitCode::SUCCESS
     );
 
-    let codex_doctor_error = doctor(PluginHost::Codex, Some(dir.path().join("install")), false)
-        .unwrap_err()
-        .to_string();
+    let codex_doctor_error = doctor(
+        IntegrationHost::Codex,
+        Some(dir.path().join("install")),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(
         codex_doctor_error.contains("nemo-relay install codex --force"),
         "error was: {codex_doctor_error}"
     );
 
-    assert_eq!(host_arg(PluginHost::All), "all");
-    assert_eq!(host_label(PluginHost::All), "all");
+    assert_eq!(IntegrationHost::All.as_arg(), "all");
+    assert_eq!(IntegrationHost::All.label(), "all");
     print_json(&json!({"ok": true})).unwrap();
     assert_eq!(
         with_schema(json!({"ok": true})),
         json!({"ok": true, "schema_version": 1})
     );
     assert_eq!(with_schema(json!("not-an-object")), json!("not-an-object"));
-    assert!(std::panic::catch_unwind(|| host_cli(PluginHost::All)).is_err());
+    assert_eq!(IntegrationHost::All.executable(), None);
 }
 
 #[test]
@@ -1672,36 +1750,36 @@ fn select_all_uses_operation_specific_inputs() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default().with_executable("codex", "/bin/codex");
     let selected = select_hosts(
-        PluginHost::All,
+        IntegrationHost::All,
         HostSelectionMode::Install,
         &options(dir.path()),
         &runner,
     )
     .unwrap();
-    assert_eq!(selected, vec![PluginHost::Codex]);
+    assert_eq!(selected, vec![IntegrationHost::Codex]);
 
     std::fs::write(
-        state_path(PluginHost::ClaudeCode, dir.path()),
+        state_path(IntegrationHost::ClaudeCode, dir.path()),
         r#"{"marketplaceRoot":"/tmp/m","pluginRoot":"/tmp/p"}"#,
     )
     .unwrap();
     let selected = select_hosts(
-        PluginHost::All,
+        IntegrationHost::All,
         HostSelectionMode::Install,
         &options(dir.path()),
         &runner,
     )
     .unwrap();
-    assert_eq!(selected, vec![PluginHost::Codex]);
+    assert_eq!(selected, vec![IntegrationHost::Codex]);
 
     let selected = select_hosts(
-        PluginHost::All,
+        IntegrationHost::All,
         HostSelectionMode::InstalledState,
         &options(dir.path()),
         &runner,
     )
     .unwrap();
-    assert_eq!(selected, vec![PluginHost::ClaudeCode]);
+    assert_eq!(selected, vec![IntegrationHost::ClaudeCode]);
 }
 
 #[test]
@@ -1713,19 +1791,19 @@ fn install_codex_generates_marketplace_and_runs_setup() {
     let setup_runner = MockSetupRunner::default();
 
     install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
     )
     .unwrap();
 
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
     assert_eq!(
         serde_json::from_str::<Value>(&std::fs::read_to_string(&layout.hooks_path).unwrap())
             .unwrap(),
-        plugin_hooks(PluginHost::Codex, Path::new("/bin/nemo-relay"))
+        plugin_hooks(IntegrationHost::Codex, Path::new("/bin/nemo-relay"))
     );
     assert_eq!(
         runner.commands(),
@@ -1745,7 +1823,7 @@ fn install_codex_generates_marketplace_and_runs_setup() {
         serde_json::from_str::<Value>(&std::fs::read_to_string(&layout.mcp_config).unwrap())
             .unwrap(),
         plugin_mcp_config(
-            PluginHost::Codex,
+            IntegrationHost::Codex,
             Path::new("/bin/nemo-relay"),
             &layout.generation_fence,
         )
@@ -1764,13 +1842,13 @@ fn install_prunes_stale_managed_plugin_root() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("claude", "/bin/claude");
     let setup_runner = MockSetupRunner::default();
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     let stale = layout.plugin_root.join("bin").join("nemo-relay");
     std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
     std::fs::write(&stale, "stale").unwrap();
 
     install_host(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -1789,15 +1867,15 @@ fn ordinary_codex_reinstall_refuses_a_fenced_install_without_mutating_it() {
         .with_executable("codex", "/bin/codex")
         .with_codex_registration(true, true);
     let setup_runner = MockSetupRunner::default();
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let sentinel = layout.plugin_root.join("existing-install");
     std::fs::write(&sentinel, b"preserve").unwrap();
     let state = std::fs::read(&layout.state_path).unwrap();
     let generation = std::fs::read(&layout.generation_fence).unwrap();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -1825,13 +1903,13 @@ fn ordinary_codex_reinstall_refuses_a_legacy_install_before_staging() {
         .with_executable("codex", "/bin/codex")
         .with_codex_registration(false, false);
     let setup_runner = MockSetupRunner::default();
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(&layout.generation_fence).unwrap();
     let state = std::fs::read(&layout.state_path).unwrap();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -1856,7 +1934,7 @@ fn ordinary_codex_reinstall_refuses_a_registration_without_local_state() {
     let setup_runner = MockSetupRunner::default();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -1877,13 +1955,13 @@ fn ordinary_codex_reinstall_refuses_a_corrupt_install_before_staging() {
         .with_executable("codex", "/bin/codex")
         .with_codex_registration(false, false);
     let setup_runner = MockSetupRunner::default();
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::write(&layout.generation_fence, b"").unwrap();
     let state = std::fs::read(&layout.state_path).unwrap();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -1911,9 +1989,9 @@ fn force_install_unregisters_existing_host_before_reinstall() {
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
 
-    install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+    install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap();
 
     let commands = runner.commands();
     let remove_index = commands
@@ -1969,11 +2047,11 @@ fn force_install_retires_previous_mcp_generation() {
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
 
-    install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+    install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap();
 
     let error = previous.verify_current().unwrap_err();
     assert!(error.contains("has been retired"));
@@ -1998,11 +2076,17 @@ fn claude_force_install_retires_and_replaces_its_mcp_generation() {
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
 
-    install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+    install_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
 
     assert!(previous.verify_current().unwrap_err().contains("retired"));
     InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
@@ -2036,14 +2120,20 @@ fn claude_force_install_rollback_restores_generation_files_and_setup_snapshot() 
         skip_doctor: false,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     let sentinel = layout.plugin_root.join("previous-install");
     std::fs::write(&sentinel, "restore-exactly").unwrap();
     let original_state = std::fs::read(&layout.state_path).unwrap();
     let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
 
-    let error = install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
 
     assert!(error.contains("doctor claude-code"), "{error}");
     assert_eq!(
@@ -2082,23 +2172,29 @@ fn claude_force_install_migrates_a_legacy_hook_only_plugin() {
         force: true,
         ..options(dir.path())
     };
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     std::fs::create_dir_all(layout.plugin_manifest.parent().unwrap()).unwrap();
     write_json(
         &layout.marketplace_manifest,
-        &marketplace_manifest(PluginHost::ClaudeCode),
+        &marketplace_manifest(IntegrationHost::ClaudeCode),
     )
     .unwrap();
-    let mut legacy_manifest = plugin_manifest(PluginHost::ClaudeCode);
+    let mut legacy_manifest = plugin_manifest(IntegrationHost::ClaudeCode);
     legacy_manifest
         .as_object_mut()
         .unwrap()
         .remove("mcpServers");
     write_json(&layout.plugin_manifest, &legacy_manifest).unwrap();
     write_state(&layout, &options).unwrap();
-    mark_plugin_setup_installed(PluginHost::ClaudeCode, &layout, &options).unwrap();
+    mark_plugin_setup_installed(IntegrationHost::ClaudeCode, &layout, &options).unwrap();
 
-    install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+    install_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
 
     InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
     assert!(layout.mcp_config.is_file());
@@ -2116,12 +2212,12 @@ fn ordinary_claude_reinstall_requires_force_for_a_fenced_plugin() {
         .with_executable("claude", "/bin/claude")
         .with_claude_registration(true, true);
     let setup_runner = MockSetupRunner::default();
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     let original_generation = std::fs::read(&layout.generation_fence).unwrap();
 
     let error = install_host(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2156,14 +2252,20 @@ fn force_install_replaces_a_relocated_fenced_install_without_old_residue() {
         ..options(&selected_dir)
     };
 
-    install_host(PluginHost::Codex, &install_options, &runner, &setup_runner).unwrap();
+    install_host(
+        IntegrationHost::Codex,
+        &install_options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
 
-    let current = PluginLayout::new(PluginHost::Codex, &selected_dir);
+    let current = PluginLayout::new(IntegrationHost::Codex, &selected_dir);
     assert!(current.marketplace_root.exists());
     assert!(!relocated.marketplace_root.exists());
     assert!(!sentinel.exists());
     assert!(previous.verify_current().unwrap_err().contains("retired"));
-    let state = read_state(PluginHost::Codex, &selected_dir).unwrap();
+    let state = read_state(IntegrationHost::Codex, &selected_dir).unwrap();
     assert_eq!(state.marketplace_root, current.marketplace_root);
     assert_eq!(state.plugin_root, current.plugin_root);
     assert_no_force_replacement_residue(&selected_dir);
@@ -2178,7 +2280,7 @@ fn force_install_rollback_restores_a_relocated_fenced_install_and_registration()
     let relocated = write_relocated_codex_install(&selected_dir, &relocated_dir);
     let sentinel = relocated.plugin_root.join("relocated-install");
     std::fs::write(&sentinel, "restore-exactly").unwrap();
-    let original_state = std::fs::read(state_path(PluginHost::Codex, &selected_dir)).unwrap();
+    let original_state = std::fs::read(state_path(IntegrationHost::Codex, &selected_dir)).unwrap();
     let previous = InstallGeneration::capture(relocated.generation_fence.clone()).unwrap();
     let runner = MockRunner::default()
         .with_executable("nemo-relay", "/bin/nemo-relay")
@@ -2194,11 +2296,16 @@ fn force_install_rollback_restores_a_relocated_fenced_install_and_registration()
         ..options(&selected_dir)
     };
 
-    let error =
-        install_host(PluginHost::Codex, &install_options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(
+        IntegrationHost::Codex,
+        &install_options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
 
     assert!(error.contains("doctor codex"), "{error}");
-    let current = PluginLayout::new(PluginHost::Codex, &selected_dir);
+    let current = PluginLayout::new(IntegrationHost::Codex, &selected_dir);
     assert!(!current.marketplace_root.exists());
     assert!(relocated.marketplace_root.exists());
     assert_eq!(
@@ -2207,7 +2314,7 @@ fn force_install_rollback_restores_a_relocated_fenced_install_and_registration()
     );
     previous.verify_current().unwrap();
     assert_eq!(
-        std::fs::read(state_path(PluginHost::Codex, &selected_dir)).unwrap(),
+        std::fs::read(state_path(IntegrationHost::Codex, &selected_dir)).unwrap(),
         original_state
     );
     let marketplace_adds = runner
@@ -2252,7 +2359,7 @@ fn force_install_rejects_registered_legacy_plugin_without_generation_fence() {
         ..options(dir.path())
     };
 
-    let error = install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
     assert!(
         error.contains("MCP generation marker is missing"),
@@ -2277,11 +2384,11 @@ fn force_install_rejects_unregistered_legacy_plugin_without_generation_fence() {
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(&layout.generation_fence).unwrap();
 
-    let error = install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
     assert!(
         error.contains("MCP generation marker is missing"),
@@ -2311,11 +2418,12 @@ fn force_install_rejects_corrupt_generation_marker_without_mutating() {
             force: true,
             ..options(dir.path())
         };
-        write_installed_state(PluginHost::Codex, dir.path());
-        let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+        write_installed_state(IntegrationHost::Codex, dir.path());
+        let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
         corrupt_generation_fence(&layout.generation_fence, corruption);
 
-        let error = install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+        let error =
+            install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
         assert_actionable_generation_error(&error, "is invalid or unreadable");
         assert!(error.contains(cause), "{corruption}: {error}");
@@ -2340,9 +2448,9 @@ fn force_install_allows_a_clean_first_install_without_generation_fence() {
         ..options(dir.path())
     };
 
-    install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+    install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap();
 
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     assert!(layout.generation_fence.exists());
     assert!(layout.state_path.exists());
 }
@@ -2359,9 +2467,9 @@ fn force_install_uses_live_absent_registration_instead_of_stale_installed_state(
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
 
-    install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+    install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap();
 
     let commands = runner.commands();
     assert!(
@@ -2390,10 +2498,10 @@ fn force_install_uses_live_present_registration_instead_of_stale_removed_state()
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     write_state_for_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &PluginState {
             marketplace_root: layout.marketplace_root.clone(),
             plugin_root: layout.plugin_root.clone(),
@@ -2406,7 +2514,7 @@ fn force_install_uses_live_present_registration_instead_of_stale_removed_state()
     )
     .unwrap();
 
-    install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+    install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap();
 
     let commands = runner.commands();
     assert!(commands.iter().any(|command| {
@@ -2464,11 +2572,11 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
 
-    let error = install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
     assert!(error.contains("refresh codex failed"));
     assert!(layout.state_path.exists());
@@ -2507,13 +2615,13 @@ fn force_install_restores_previous_install_after_doctor_failure() {
         skip_doctor: false,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let sentinel = layout.plugin_root.join("previous-install");
     std::fs::write(&sentinel, "preserve").unwrap();
     let original_state = std::fs::read(&layout.state_path).unwrap();
 
-    let error = install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
     assert!(error.contains("doctor codex"), "{error}");
     assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "preserve");
@@ -2563,13 +2671,13 @@ fn force_install_does_not_uninstall_restored_setup_after_setup_failure() {
         force: true,
         ..options(dir.path())
     };
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let sentinel = layout.plugin_root.join("previous-install");
     std::fs::write(&sentinel, "preserve").unwrap();
     let original_state = std::fs::read(&layout.state_path).unwrap();
 
-    let error = install_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
     assert!(error.contains("setup codex"), "{error}");
     assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "preserve");
@@ -2597,14 +2705,14 @@ fn install_claude_enables_provider_routing() {
     let setup_runner = MockSetupRunner::default();
 
     install_host(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &options(dir.path()),
         &runner,
         &setup_runner,
     )
     .unwrap();
 
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     assert_eq!(
         runner.commands(),
         vec![
@@ -2626,13 +2734,38 @@ fn install_claude_enables_provider_routing() {
 }
 
 #[test]
+fn install_claude_rejects_hosts_without_always_load_support_before_writing() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_capture_output("/bin/claude --version", "2.1.120 (Claude Code)\n");
+    let setup_runner = MockSetupRunner::default();
+
+    let error = install_host(
+        IntegrationHost::ClaudeCode,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("requires Claude Code 2.1.121"), "{error}");
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+    assert!(runner.commands().is_empty());
+    assert!(setup_runner.calls().is_empty());
+}
+
+#[test]
 fn missing_relay_path_fails_before_generating_plugin() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default().with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2641,7 +2774,7 @@ fn missing_relay_path_fails_before_generating_plugin() {
 
     assert!(error.contains("nemo-relay"));
     assert!(
-        !PluginLayout::new(PluginHost::Codex, dir.path())
+        !PluginLayout::new(IntegrationHost::Codex, dir.path())
             .marketplace_root
             .exists()
     );
@@ -2653,20 +2786,20 @@ fn unsupported_relay_path_fails_before_generating_plugin() {
     let mut runner = MockRunner::default()
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
-    runner.failing_quiet_suffix = Some("plugin-shim hook --help".into());
+    runner.failing_quiet_suffix = Some("hook-forward --help".into());
     let setup_runner = MockSetupRunner::default();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
     )
     .unwrap_err();
 
-    assert!(error.contains("plugin-shim hook"));
+    assert!(error.contains("hook-forward"));
     assert!(
-        !PluginLayout::new(PluginHost::Codex, dir.path())
+        !PluginLayout::new(IntegrationHost::Codex, dir.path())
             .marketplace_root
             .exists()
     );
@@ -2682,7 +2815,7 @@ fn relay_without_native_mcp_fails_codex_install_before_generating_plugin() {
     let setup_runner = MockSetupRunner::default();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2691,7 +2824,7 @@ fn relay_without_native_mcp_fails_codex_install_before_generating_plugin() {
 
     assert!(error.contains("native `nemo-relay mcp` support"));
     assert!(
-        !PluginLayout::new(PluginHost::Codex, dir.path())
+        !PluginLayout::new(IntegrationHost::Codex, dir.path())
             .marketplace_root
             .exists()
     );
@@ -2709,7 +2842,7 @@ fn setup_failure_rolls_back_generated_files_and_registration() {
     };
 
     let error = install_host(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2718,7 +2851,7 @@ fn setup_failure_rolls_back_generated_files_and_registration() {
 
     assert!(error.contains("setup claude-code"));
     assert!(
-        !PluginLayout::new(PluginHost::ClaudeCode, dir.path())
+        !PluginLayout::new(IntegrationHost::ClaudeCode, dir.path())
             .marketplace_root
             .exists()
     );
@@ -2751,11 +2884,17 @@ fn doctor_failure_fails_install_and_rolls_back() {
         ..options(dir.path())
     };
 
-    let error = install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+    let error = install_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
 
     assert!(error.contains("doctor claude-code"));
     assert!(
-        !PluginLayout::new(PluginHost::ClaudeCode, dir.path())
+        !PluginLayout::new(IntegrationHost::ClaudeCode, dir.path())
             .marketplace_root
             .exists()
     );
@@ -2772,7 +2911,7 @@ fn registration_failure_does_not_restore_plugin_setup_that_never_ran() {
     let install_dir = dir.path().join("failure");
 
     let error = install_host(
-        PluginHost::ClaudeCode,
+        IntegrationHost::ClaudeCode,
         &options(&install_dir),
         &runner,
         &setup_runner,
@@ -2785,7 +2924,7 @@ fn registration_failure_does_not_restore_plugin_setup_that_never_ran() {
         "setup rollback should not run before setup was attempted"
     );
     assert!(
-        !PluginLayout::new(PluginHost::ClaudeCode, &install_dir)
+        !PluginLayout::new(IntegrationHost::ClaudeCode, &install_dir)
             .marketplace_root
             .exists()
     );
@@ -2799,10 +2938,10 @@ fn plugin_registration_failure_rolls_back_marketplace_without_plugin_removal() {
         .with_executable("codex", "/bin/codex");
     runner.failing_suffix = Some("plugin add nemo-relay-plugin@nemo-relay-local".into());
     let setup_runner = MockSetupRunner::default();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2834,11 +2973,11 @@ fn invalid_existing_state_fails_before_generating_marketplace() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::create_dir_all(&layout.state_path).unwrap();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2865,7 +3004,7 @@ fn retry_after_partial_registration_rollback_does_not_restore_uninstalled_setup(
     let setup_runner = MockSetupRunner::default();
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2873,7 +3012,7 @@ fn retry_after_partial_registration_rollback_does_not_restore_uninstalled_setup(
     .unwrap_err();
 
     assert!(error.contains("additionally failed to roll back install"));
-    let state = read_state(PluginHost::Codex, dir.path()).unwrap();
+    let state = read_state(IntegrationHost::Codex, dir.path()).unwrap();
     assert!(state.host_plugin_removed);
     assert!(!state.host_marketplace_removed);
     assert!(!state.plugin_setup_installed);
@@ -2882,7 +3021,7 @@ fn retry_after_partial_registration_rollback_does_not_restore_uninstalled_setup(
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
     uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2909,7 +3048,7 @@ fn retry_after_failed_codex_setup_does_not_uninstall_restored_setup() {
     };
 
     let error = install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2917,7 +3056,7 @@ fn retry_after_failed_codex_setup_does_not_uninstall_restored_setup() {
     .unwrap_err();
 
     assert!(error.contains("additionally failed to roll back install"));
-    let state = read_state(PluginHost::Codex, dir.path()).unwrap();
+    let state = read_state(IntegrationHost::Codex, dir.path()).unwrap();
     assert!(state.host_plugin_removed);
     assert!(!state.host_marketplace_removed);
     assert!(!state.plugin_setup_installed);
@@ -2926,7 +3065,7 @@ fn retry_after_failed_codex_setup_does_not_uninstall_restored_setup() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
     uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2949,17 +3088,17 @@ fn uninstall_uses_installed_state_and_removes_marketplace() {
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
     install_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
     )
     .unwrap();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     assert!(layout.marketplace_root.exists());
 
     uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -2988,12 +3127,12 @@ fn uninstall_rejects_registered_legacy_plugin_without_generation_fence() {
         .with_executable("codex", "/bin/codex")
         .with_codex_registration(true, true);
     let setup_runner = MockSetupRunner::default();
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(&layout.generation_fence).unwrap();
 
     let error = uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3019,12 +3158,12 @@ fn uninstall_rejects_unregistered_legacy_plugin_without_generation_fence() {
         .with_executable("codex", "/bin/codex")
         .with_codex_registration(false, false);
     let setup_runner = MockSetupRunner::default();
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(&layout.generation_fence).unwrap();
 
     let error = uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3054,12 +3193,12 @@ fn uninstall_rejects_each_corrupt_generation_marker_actionably() {
             .with_executable("codex", "/bin/codex")
             .with_codex_registration(false, false);
         let setup_runner = MockSetupRunner::default();
-        write_installed_state(PluginHost::Codex, dir.path());
-        let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+        write_installed_state(IntegrationHost::Codex, dir.path());
+        let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
         corrupt_generation_fence(&layout.generation_fence, corruption);
 
         let error = uninstall_host(
-            PluginHost::Codex,
+            IntegrationHost::Codex,
             &options(dir.path()),
             &runner,
             &setup_runner,
@@ -3080,11 +3219,11 @@ fn uninstall_continues_when_relay_is_missing() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default().with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
 
     uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3118,10 +3257,10 @@ fn doctor_json_uses_quiet_plugin_report() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
 
     let report =
-        doctor_host_json_value(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+        doctor_host_json_value(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap();
 
     assert_eq!(
         setup_runner.calls(),
@@ -3149,12 +3288,12 @@ fn doctor_uses_plugin_root_persisted_in_install_state() {
         .with_codex_registration(true, true);
     let setup_runner = MockSetupRunner::default();
     let install_options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let relocated_root = dir.path().join("relocated-plugin-root");
     std::fs::rename(&layout.plugin_root, &relocated_root).unwrap();
     write_state_for_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &PluginState {
             marketplace_root: layout.marketplace_root.clone(),
             plugin_root: relocated_root.clone(),
@@ -3167,8 +3306,12 @@ fn doctor_uses_plugin_root_persisted_in_install_state() {
     )
     .unwrap();
 
-    let _readiness =
-        collect_host_plugin_readiness(PluginHost::Codex, &install_options, &runner, &setup_runner);
+    let _readiness = collect_host_plugin_readiness(
+        IntegrationHost::Codex,
+        &install_options,
+        &runner,
+        &setup_runner,
+    );
 
     assert_eq!(setup_runner.doctor_roots(), vec![relocated_root]);
 }
@@ -3187,10 +3330,11 @@ fn codex_doctor_reports_upgrade_remediation_for_old_and_malformed_versions() {
             .with_capture_output("/bin/codex --version", version_output);
         let setup_runner = MockSetupRunner::default();
         let options = options(dir.path());
-        write_installed_state(PluginHost::Codex, dir.path());
+        write_installed_state(IntegrationHost::Codex, dir.path());
 
         let report =
-            doctor_host_json_value(PluginHost::Codex, &options, &runner, &setup_runner).unwrap();
+            doctor_host_json_value(IntegrationHost::Codex, &options, &runner, &setup_runner)
+                .unwrap();
         let version_check = report["readiness_checks"]
             .as_array()
             .unwrap()
@@ -3208,14 +3352,70 @@ fn codex_doctor_reports_upgrade_remediation_for_old_and_malformed_versions() {
         assert_eq!(
             report["remediation"],
             json!(
-                "upgrade Codex to codex-cli 0.143.0 or newer, then run `nemo-relay install codex --force`"
+                "upgrade to codex-cli 0.143.0 or newer, then run `nemo-relay install codex --force`"
             )
         );
 
         let text_error =
-            doctor_host(PluginHost::Codex, &options, &runner, &setup_runner).unwrap_err();
-        assert!(text_error.contains("remediation: upgrade Codex"));
+            doctor_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+        assert!(text_error.contains("remediation: upgrade to codex-cli"));
         assert!(text_error.contains("codex-cli 0.143.0 or newer"));
+    }
+}
+
+#[test]
+fn claude_doctor_reports_upgrade_remediation_for_old_and_malformed_versions() {
+    for (version_output, expected_detail) in [
+        ("2.1.120 (Claude Code)\n", "requires Claude Code 2.1.121"),
+        ("Claude Code nightly\n", "could not parse"),
+    ] {
+        let dir = tempdir().unwrap();
+        let runner = MockRunner::default()
+            .with_executable("nemo-relay", "/bin/nemo-relay")
+            .with_executable("claude", "/bin/claude")
+            .with_claude_registration(true, true)
+            .with_capture_output("/bin/claude --version", version_output);
+        let setup_runner = MockSetupRunner::default();
+        let options = options(dir.path());
+        write_installed_state(IntegrationHost::ClaudeCode, dir.path());
+
+        let report = doctor_host_json_value(
+            IntegrationHost::ClaudeCode,
+            &options,
+            &runner,
+            &setup_runner,
+        )
+        .unwrap();
+        let version_check = report["readiness_checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|check| check["name"] == "Claude Code version")
+            .unwrap();
+        assert_eq!(report["ok"], json!(false));
+        assert_eq!(version_check["ok"], json!(false));
+        assert!(
+            version_check["details"]
+                .as_str()
+                .unwrap()
+                .contains(expected_detail)
+        );
+        assert_eq!(
+            report["remediation"],
+            json!(
+                "upgrade to Claude Code 2.1.121 or newer, then run `nemo-relay install claude-code --force`"
+            )
+        );
+
+        let text_error = doctor_host(
+            IntegrationHost::ClaudeCode,
+            &options,
+            &runner,
+            &setup_runner,
+        )
+        .unwrap_err();
+        assert!(text_error.contains("remediation: upgrade to Claude Code"));
+        assert!(text_error.contains("upgrade to Claude Code 2.1.121 or newer"));
     }
 }
 
@@ -3235,11 +3435,12 @@ fn readiness_report_marks_missing_generated_plugin_files_as_failed() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(layout.plugin_manifest).unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(!report.ok());
     assert!(report.checks.iter().any(|check| {
@@ -3259,11 +3460,12 @@ fn readiness_report_rejects_missing_generated_mcp_server() {
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(layout.mcp_config).unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(!report.ok());
     assert!(report.checks.iter().any(|check| {
@@ -3279,11 +3481,12 @@ fn readiness_report_rejects_missing_mcp_generation_fence() {
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::remove_file(layout.generation_fence).unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(!report.ok());
     assert!(report.checks.iter().any(|check| {
@@ -3302,13 +3505,17 @@ fn claude_readiness_requires_its_mcp_server_and_generation_fence() {
         .with_claude_registration(true, true);
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
-    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::ClaudeCode, dir.path());
     std::fs::remove_file(layout.mcp_config).unwrap();
     std::fs::remove_file(layout.generation_fence).unwrap();
 
-    let report =
-        collect_host_plugin_readiness(PluginHost::ClaudeCode, &options, &runner, &setup_runner);
+    let report = collect_host_plugin_readiness(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    );
 
     assert!(!report.ok());
     for name in ["Generated MCP server", "MCP generation fence"] {
@@ -3330,12 +3537,12 @@ fn readiness_report_rejects_mcp_server_for_different_binary() {
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     write_json(
         &layout.mcp_config,
         &plugin_mcp_config(
-            PluginHost::Codex,
+            IntegrationHost::Codex,
             Path::new("/tmp/other-relay"),
             &layout.generation_fence,
         )
@@ -3343,7 +3550,8 @@ fn readiness_report_rejects_mcp_server_for_different_binary() {
     )
     .unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(!report.ok());
     assert!(report.checks.iter().any(|check| {
@@ -3359,8 +3567,8 @@ fn readiness_report_names_newly_required_mcp_env_vars_and_force_remediation() {
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let mut mcp: Value =
         serde_json::from_str(&std::fs::read_to_string(&layout.mcp_config).unwrap()).unwrap();
     mcp["nemo-relay"]["env_vars"]
@@ -3369,7 +3577,8 @@ fn readiness_report_names_newly_required_mcp_env_vars_and_force_remediation() {
         .retain(|name| name != "OPENAI_API_KEY");
     write_json(&layout.mcp_config, &mcp).unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(!report.ok());
     let check = report
@@ -3398,15 +3607,16 @@ fn readiness_report_rejects_invalid_generated_manifest_contents() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     std::fs::write(
         &layout.marketplace_manifest,
         r#"{"name":"wrong-marketplace"}"#,
     )
     .unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(!report.ok());
     assert!(report.checks.iter().any(|check| {
@@ -3430,9 +3640,9 @@ fn readiness_report_accepts_generated_plugin_manifest_from_an_older_version() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
-    let mut manifest = plugin_manifest(PluginHost::Codex);
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    let mut manifest = plugin_manifest(IntegrationHost::Codex);
     manifest["version"] = json!("0.0.0");
     std::fs::write(
         &layout.plugin_manifest,
@@ -3440,7 +3650,8 @@ fn readiness_report_accepts_generated_plugin_manifest_from_an_older_version() {
     )
     .unwrap();
 
-    let report = collect_host_plugin_readiness(PluginHost::Codex, &options, &runner, &setup_runner);
+    let report =
+        collect_host_plugin_readiness(IntegrationHost::Codex, &options, &runner, &setup_runner);
 
     assert!(report.ok());
     assert!(
@@ -3456,10 +3667,10 @@ fn doctor_json_preserves_unknown_host_registration_state() {
     let dir = tempdir().unwrap();
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
 
     let report = doctor_host_json_value(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options,
         &MockRunner::default(),
         &setup_runner,
@@ -3479,7 +3690,7 @@ fn timed_out_host_plugin_readiness_is_actionable() {
 
     let report = receive_host_plugin_readiness(
         PendingHostPluginReadiness {
-            host: PluginHost::Codex,
+            host: IntegrationHost::Codex,
             state_path: state_path.clone(),
             receiver,
         },
@@ -3515,7 +3726,7 @@ fn stopped_lazy_sidecar_does_not_fail_host_readiness() {
     append_plugin_setup_checks(
         &mut readiness,
         &json!({
-            "sidecar_health": "not_running_lazy_start",
+            "sidecar_health": "not_running_mcp_start",
             "checks": {
                 "plugin_binary": true,
                 "sidecar_running": false,
@@ -3562,9 +3773,15 @@ fn doctor_validates_claude_host_registration_before_setup_doctor() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
 
-    doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+    doctor_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
 
     assert_eq!(
         setup_runner.calls(),
@@ -3573,6 +3790,7 @@ fn doctor_validates_claude_host_registration_before_setup_doctor() {
     assert_eq!(
         runner.capture_commands(),
         vec![
+            "/bin/claude --version",
             "/bin/claude plugin list --json",
             "/bin/claude plugin marketplace list --json"
         ]
@@ -3595,9 +3813,15 @@ fn doctor_fails_when_claude_host_plugin_is_missing() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
 
-    let error = doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+    let error = doctor_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
 
     assert!(error.contains("nemo-relay install claude-code --force"));
     assert_eq!(
@@ -3625,9 +3849,15 @@ fn doctor_fails_when_claude_host_marketplace_is_missing() {
         );
     let setup_runner = MockSetupRunner::default();
     let options = options(dir.path());
-    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    write_installed_state(IntegrationHost::ClaudeCode, dir.path());
 
-    let error = doctor_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+    let error = doctor_host(
+        IntegrationHost::ClaudeCode,
+        &options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
 
     assert!(error.contains("nemo-relay install claude-code --force"));
     assert_eq!(
@@ -3646,7 +3876,7 @@ fn uninstall_cleans_up_plugin_setup_before_host_removal_failure() {
     let setup_runner = MockSetupRunner::default();
 
     let error = uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3673,10 +3903,10 @@ fn uninstall_does_not_unregister_host_when_plugin_cleanup_fails() {
         failing_call: Some(format!("uninstall codex {DEFAULT_GATEWAY_URL}")),
         ..MockSetupRunner::default()
     };
-    write_installed_state(PluginHost::Codex, dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
 
     let error = uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3684,7 +3914,7 @@ fn uninstall_does_not_unregister_host_when_plugin_cleanup_fails() {
     .unwrap_err();
 
     assert!(error.contains("uninstall codex"));
-    let state = read_state(PluginHost::Codex, dir.path()).unwrap();
+    let state = read_state(IntegrationHost::Codex, dir.path()).unwrap();
     assert!(!state.host_plugin_removed);
     assert!(!state.host_marketplace_removed);
     assert!(state.plugin_setup_installed);
@@ -3696,9 +3926,9 @@ fn uninstall_retry_skips_host_removal_after_prior_success() {
     let mut runner = MockRunner::default().with_executable("nemo-relay", "/bin/nemo-relay");
     runner.failing_suffix = Some("plugin remove nemo-relay-plugin@nemo-relay-local".into());
     let setup_runner = MockSetupRunner::default();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     write_state_for_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &PluginState {
             marketplace_root: layout.marketplace_root.clone(),
             plugin_root: layout.plugin_root.clone(),
@@ -3713,7 +3943,7 @@ fn uninstall_retry_skips_host_removal_after_prior_success() {
     crate::install_generation::write_new_generation(&layout.generation_fence).unwrap();
 
     uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3743,12 +3973,12 @@ fn uninstall_retry_skips_plugin_removal_after_marketplace_failure() {
         .with_executable("codex", "/bin/codex");
     runner.failing_suffix = Some("plugin marketplace remove nemo-relay-local".into());
     let setup_runner = MockSetupRunner::default();
-    let layout = PluginLayout::new(PluginHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     write_state(&layout, &options(dir.path())).unwrap();
     crate::install_generation::write_new_generation(&layout.generation_fence).unwrap();
 
     let error = uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,
@@ -3756,7 +3986,7 @@ fn uninstall_retry_skips_plugin_removal_after_marketplace_failure() {
     .unwrap_err();
 
     assert!(error.contains("plugin marketplace remove"));
-    let state = read_state(PluginHost::Codex, dir.path()).unwrap();
+    let state = read_state(IntegrationHost::Codex, dir.path()).unwrap();
     assert!(state.host_plugin_removed);
     assert!(!state.host_marketplace_removed);
 
@@ -3764,7 +3994,7 @@ fn uninstall_retry_skips_plugin_removal_after_marketplace_failure() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
     uninstall_host(
-        PluginHost::Codex,
+        IntegrationHost::Codex,
         &options(dir.path()),
         &runner,
         &setup_runner,

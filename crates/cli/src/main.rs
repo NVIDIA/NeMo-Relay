@@ -6,6 +6,7 @@
 mod adapters;
 mod alignment;
 mod banner;
+mod coding_agent;
 mod completions_install;
 mod config;
 mod doctor;
@@ -21,8 +22,8 @@ mod mcp;
 mod mcp_environment;
 mod model;
 mod model_pricing;
+mod plugin_host;
 mod plugin_install;
-mod plugin_shim;
 mod plugins;
 mod server;
 mod session;
@@ -77,7 +78,6 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
             installer::hook_forward(command).await?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::PluginShim(command) => plugin_shim::run(command),
         Command::Install(command) => plugin_install::install(command),
         Command::Uninstall(command) => plugin_install::uninstall(command),
         Command::Run(command) => launcher::run(command, Some(server)).await,
@@ -90,7 +90,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Hermes(command) => {
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
-        Command::Mcp(command) => mcp::run(command.agent.into(), server).await,
+        Command::Mcp(command) => mcp::run(command.agent, server).await,
         Command::Config(command) => run_config(command).await,
         Command::Plugins(command) => run_plugins(command, server),
         Command::ModelPricing(command) => run_pricing(command),

@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::io::Read;
+use std::path::Path;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
@@ -13,10 +15,9 @@ use crate::error::CliError;
 // Claude Code validates plugin hooks.json against a strict event-name whitelist — one unknown
 // event rejects the entire plugin's hooks (no hooks register, silently). Both Claude vectors
 // (the transparent-run temp plugin and the marketplace plugin) are plugin hooks.json, so every
-// event here must exist in the oldest supported Claude Code. UserPromptExpansion sets that
-// floor: 2.1.116 (verified empirically; 2.1.114 rejects it — see `claude_hook_floor_warning`
-// in doctor.rs). Codex receives a separate event schema because ignored unknown events would make
-// generated hooks impossible to discover and trust exhaustively.
+// event here must exist in the minimum Claude Code release prescribed by `coding_agent`.
+// Codex receives a separate event schema because ignored unknown events would make generated
+// hooks impossible to discover and trust exhaustively.
 const CLAUDE_HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
@@ -48,6 +49,7 @@ const CODEX_HOOK_EVENTS: &[&str] = &[
 ];
 
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub(crate) const HERMES_HOOK_EVENTS: &[&str] = &[
     "on_session_start",
@@ -74,20 +76,88 @@ pub(crate) const HERMES_HOOK_EVENTS: &[&str] = &[
 /// `--fail-closed` converts missing URLs, HTTP failures, and upstream errors into process errors.
 pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliError> {
     validate_optional_json("session metadata", command.session_metadata.as_deref())?;
-
-    let input = read_hook_payload()?;
-    let Some(url) = hook_forward_url(&command)? else {
-        return Ok(());
+    let fail_closed =
+        command.fail_closed || std::env::var("NEMO_RELAY_FAIL_CLOSED").ok().as_deref() == Some("1");
+    let destination = hook_destination(&command);
+    let recovery = match destination
+        .recover
+        .then(|| recovery_plan(command.agent, &destination.gateway_url))
+        .transpose()
+    {
+        Ok(recovery) => recovery,
+        Err(error) => return handle_hook_error(error, fail_closed),
     };
-    let response = send_hook_forward_request(&command, url, input).await?;
-    handle_hook_forward_response(response, command.fail_closed).await
+    let input = match read_hook_payload(
+        recovery
+            .as_ref()
+            .map_or(crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES, |launch| {
+                launch.max_hook_payload_bytes
+            }),
+    ) {
+        Ok(input) => input,
+        Err(error) => return handle_hook_error(error, fail_closed),
+    };
+    let url = format!(
+        "{}{}",
+        destination.gateway_url.trim_end_matches('/'),
+        command.agent.hook_path()
+    );
+    if let Some(launch) = recovery.as_ref()
+        && let Err(error) = recover_gateway(launch.gateway.clone()).await
+    {
+        return handle_hook_error(error, fail_closed);
+    }
+    let mut response = send_hook_forward_request(&command, &url, input.clone()).await?;
+    if response
+        .as_ref()
+        .is_err_and(|error| error.is_connect() || error.is_timeout())
+        && destination.recover
+    {
+        let launch = recovery
+            .as_ref()
+            .expect("recoverable destinations have a recovery plan");
+        if let Err(start_error) = recover_gateway(launch.gateway.clone()).await {
+            let transport_error = response
+                .as_ref()
+                .expect_err("recovery only follows a transport error");
+            let error = format!(
+                "nemo-relay hook forward failed: {transport_error}; sidecar recovery failed: {start_error}"
+            );
+            eprintln!("{error}");
+            return if fail_closed {
+                Err(CliError::Install(error))
+            } else {
+                Ok(())
+            };
+        }
+        response = send_hook_forward_request(&command, &url, input).await?;
+    }
+    handle_hook_forward_response(response, fail_closed).await
+}
+
+fn handle_hook_error(error: CliError, fail_closed: bool) -> Result<(), CliError> {
+    eprintln!("nemo-relay hook forward failed: {error}");
+    if fail_closed { Err(error) } else { Ok(()) }
 }
 
 // Reads the native hook payload from stdin and normalizes empty payloads to JSON object syntax.
 // This keeps hook commands observable even for agents or events that invoke hooks without input.
-fn read_hook_payload() -> Result<String, CliError> {
-    let mut input = String::new();
-    std::io::stdin().read_to_string(&mut input)?;
+fn read_hook_payload(limit: usize) -> Result<String, CliError> {
+    read_hook_payload_from(std::io::stdin(), limit)
+}
+
+fn read_hook_payload_from(reader: impl Read, limit: usize) -> Result<String, CliError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(CliError::Install(format!(
+            "hook payload exceeds the {limit}-byte limit"
+        )));
+    }
+    let input = String::from_utf8(bytes)
+        .map_err(|error| CliError::Install(format!("hook payload is not valid UTF-8: {error}")))?;
     if input.trim().is_empty() {
         Ok("{}".to_string())
     } else {
@@ -95,36 +165,74 @@ fn read_hook_payload() -> Result<String, CliError> {
     }
 }
 
-// Builds the target gateway hook URL and applies fail-open/fail-closed behavior for missing
-// gateway discovery. Returning `Ok(None)` is the fail-open path used by default hook commands.
-fn hook_forward_url(command: &HookForwardCommand) -> Result<Option<String>, CliError> {
-    let Some(gateway_url) = resolve_hook_gateway_url(
+struct HookDestination {
+    gateway_url: String,
+    recover: bool,
+}
+
+// Installed hooks use the shared fixed gateway and may recover it. Transparent runs set the
+// dynamic environment URL and already own that gateway's lifecycle, so hook subprocesses never
+// replace it with a persistent sidecar.
+fn hook_destination(command: &HookForwardCommand) -> HookDestination {
+    resolve_hook_destination(
         command.agent,
         command.gateway_url.clone(),
         std::env::var("NEMO_RELAY_GATEWAY_URL").ok(),
-    ) else {
-        eprintln!(
-            "nemo-relay hook forward failed: missing gateway URL; pass --gateway-url or set NEMO_RELAY_GATEWAY_URL"
-        );
-        if command.fail_closed {
-            return Err(CliError::Install(
-                "missing gateway URL; pass --gateway-url or set NEMO_RELAY_GATEWAY_URL".into(),
-            ));
-        }
-        return Ok(None);
-    };
-    Ok(Some(format!(
-        "{}{}",
-        gateway_url.trim_end_matches('/'),
-        command.agent.hook_path()
-    )))
+    )
+}
+
+fn resolve_hook_destination(
+    agent: CodingAgent,
+    command_url: Option<String>,
+    environment_url: Option<String>,
+) -> HookDestination {
+    if agent == CodingAgent::Hermes
+        && let Some(gateway_url) = environment_url
+    {
+        return HookDestination {
+            gateway_url,
+            recover: false,
+        };
+    }
+    if let Some(gateway_url) = command_url {
+        return HookDestination {
+            gateway_url,
+            recover: true,
+        };
+    }
+    if let Some(gateway_url) = environment_url {
+        return HookDestination {
+            gateway_url,
+            recover: false,
+        };
+    }
+    HookDestination {
+        gateway_url: crate::sidecar::DEFAULT_URL.into(),
+        recover: true,
+    }
+}
+
+fn recovery_plan(
+    agent: CodingAgent,
+    gateway_url: &str,
+) -> Result<crate::sidecar::PluginGatewaySpec, CliError> {
+    let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
+    crate::sidecar::resolve_plugin_gateway(agent, &Default::default(), bind)
+}
+
+async fn recover_gateway(gateway: crate::sidecar::GatewaySpec) -> Result<(), CliError> {
+    tokio::task::spawn_blocking(move || gateway.ensure())
+        .await
+        .map_err(|error| CliError::Launch(format!("hook recovery task failed: {error}")))?
+        .map(|_| ())
+        .map_err(CliError::Launch)
 }
 
 // Sends the hook payload with gateway-specific headers translated from CLI flags. The reqwest
 // transport result is returned separately so response handling can preserve fail-open semantics.
 async fn send_hook_forward_request(
     command: &HookForwardCommand,
-    url: String,
+    url: &str,
     input: String,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
     Ok(reqwest::Client::builder()
@@ -151,7 +259,14 @@ async fn handle_hook_forward_response(
     match response {
         Ok(response) => {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = match read_hook_response(response).await {
+                Ok(body) => body,
+                Err(error) if fail_closed => return Err(error),
+                Err(error) => {
+                    eprintln!("nemo-relay hook forward failed: {error}");
+                    return Ok(());
+                }
+            };
             if !status.is_success() {
                 if let Some(reason) = guardrail_rejection_reason(&body) {
                     return Err(CliError::GuardrailRejected(reason));
@@ -180,6 +295,21 @@ async fn handle_hook_forward_response(
     }
 }
 
+async fn read_hook_response(response: reqwest::Response) -> Result<String, CliError> {
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if body.len().saturating_add(chunk.len()) > MAX_HOOK_RESPONSE_BYTES {
+            return Err(CliError::Install(format!(
+                "hook forward response exceeds the {MAX_HOOK_RESPONSE_BYTES}-byte limit"
+            )));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
 fn guardrail_rejection_reason(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
     let error = value.get("error")?;
@@ -192,20 +322,6 @@ fn guardrail_rejection_reason(body: &str) -> Option<String> {
                 .map(ToOwned::to_owned)
         })
         .flatten()
-}
-
-// Chooses the gateway URL for hook-forward. Hermes prefers the runtime environment URL because
-// its hooks are installed persistently by setup but reused under `nemo-relay hermes` with an
-// ephemeral gateway; other agents prefer the installed command URL for stable configuration.
-fn resolve_hook_gateway_url(
-    agent: CodingAgent,
-    command_url: Option<String>,
-    env_url: Option<String>,
-) -> Option<String> {
-    match agent {
-        CodingAgent::Hermes => env_url.or(command_url),
-        _ => command_url.or(env_url),
-    }
 }
 
 /// Generates native hook configuration for the selected agent.
@@ -228,6 +344,24 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
 // `"nemo-relay"` because the user is expected to have the binary on `PATH` after install.
 pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> String {
     format!("{executable} hook-forward {}", agent.as_arg())
+}
+
+/// Canonical persistent hook command used by every supported host.
+pub(crate) fn persistent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
+    persistent_hook_forward_command_for_platform(relay, agent, cfg!(windows))
+}
+
+pub(crate) fn persistent_hook_forward_command_for_platform(
+    relay: &Path,
+    agent: CodingAgent,
+    windows: bool,
+) -> String {
+    format!(
+        "{} hook-forward {} --gateway-url {}",
+        crate::plugin_host::shell_quote_for_platform(relay, windows),
+        agent.as_arg(),
+        crate::plugin_host::shell_quote_arg_for_platform(crate::sidecar::DEFAULT_URL, windows)
+    )
 }
 
 fn claude_hooks(command: &str) -> Value {

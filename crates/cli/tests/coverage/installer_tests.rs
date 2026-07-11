@@ -4,6 +4,41 @@
 use super::*;
 
 #[test]
+fn hook_payload_reader_normalizes_blank_input_and_accepts_the_exact_limit() {
+    assert_eq!(read_hook_payload_from(" \n\t".as_bytes(), 3).unwrap(), "{}");
+    assert_eq!(
+        read_hook_payload_from("1234".as_bytes(), 4).unwrap(),
+        "1234"
+    );
+}
+
+#[test]
+fn hook_payload_reader_rejects_oversized_invalid_and_unreadable_input() {
+    let oversized = read_hook_payload_from("12345".as_bytes(), 4)
+        .unwrap_err()
+        .to_string();
+    assert!(oversized.contains("exceeds the 4-byte limit"));
+
+    let invalid = read_hook_payload_from([0xff].as_slice(), 1)
+        .unwrap_err()
+        .to_string();
+    assert!(invalid.contains("not valid UTF-8"));
+
+    struct FailingReader;
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("synthetic hook input failure"))
+        }
+    }
+    assert!(
+        read_hook_payload_from(FailingReader, 4)
+            .unwrap_err()
+            .to_string()
+            .contains("synthetic hook input failure")
+    );
+}
+
+#[test]
 fn hermes_config_merge_preserves_existing_yaml() {
     let existing = r#"
 model:
@@ -41,29 +76,26 @@ fn hermes_config_merge_rejects_invalid_yaml() {
 
 #[test]
 fn hermes_hook_forward_prefers_dynamic_env_url() {
-    assert_eq!(
-        resolve_hook_gateway_url(
-            CodingAgent::Hermes,
-            Some("http://installed".into()),
-            Some("http://dynamic".into()),
-        )
-        .as_deref(),
-        Some("http://dynamic")
+    let destination = resolve_hook_destination(
+        CodingAgent::Hermes,
+        Some("http://installed".into()),
+        Some("http://dynamic".into()),
     );
-    assert_eq!(
-        resolve_hook_gateway_url(CodingAgent::Hermes, Some("http://installed".into()), None,)
-            .as_deref(),
-        Some("http://installed")
+    assert_eq!(destination.gateway_url, "http://dynamic");
+    assert!(!destination.recover);
+
+    let destination =
+        resolve_hook_destination(CodingAgent::Hermes, Some("http://installed".into()), None);
+    assert_eq!(destination.gateway_url, "http://installed");
+    assert!(destination.recover);
+
+    let destination = resolve_hook_destination(
+        CodingAgent::Codex,
+        Some("http://installed".into()),
+        Some("http://dynamic".into()),
     );
-    assert_eq!(
-        resolve_hook_gateway_url(
-            CodingAgent::Codex,
-            Some("http://installed".into()),
-            Some("http://dynamic".into()),
-        )
-        .as_deref(),
-        Some("http://installed")
-    );
+    assert_eq!(destination.gateway_url, "http://installed");
+    assert!(destination.recover);
 }
 
 #[test]
@@ -195,7 +227,7 @@ fn packaged_hook_configs_are_valid_json() {
 }
 
 #[test]
-fn packaged_plugin_hooks_use_expected_shim_commands() {
+fn packaged_plugin_hooks_use_expected_forwarding_commands() {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../integrations/coding-agents");
     let claude = serde_json::from_str::<Value>(
@@ -218,15 +250,27 @@ fn packaged_plugin_hooks_use_expected_shim_commands() {
 
     assert_eq!(
         claude["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        json!("nemo-relay plugin-shim hook claude")
+        json!(format!(
+            "nemo-relay hook-forward claude --gateway-url {}",
+            crate::sidecar::DEFAULT_URL
+        ))
     );
     assert_eq!(
         codex["hooks"]["SessionStart"][0]["hooks"][0]["command"],
-        json!("nemo-relay plugin-shim hook codex")
+        json!(format!(
+            "nemo-relay hook-forward codex --gateway-url {}",
+            crate::sidecar::DEFAULT_URL
+        ))
     );
     assert_eq!(
         codex["hooks"],
-        generated_hooks(CodingAgent::Codex, "nemo-relay plugin-shim hook codex")["hooks"]
+        generated_hooks(
+            CodingAgent::Codex,
+            &format!(
+                "nemo-relay hook-forward codex --gateway-url {}",
+                crate::sidecar::DEFAULT_URL
+            ),
+        )["hooks"]
     );
     assert!(
         claude["hooks"]

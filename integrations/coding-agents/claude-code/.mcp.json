@@ -9,7 +9,8 @@
       ],
       "env": {
         "NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"
-      }
+      },
+      "alwaysLoad": true
     }
   }
 }

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::PluginHost;
+use crate::config::IntegrationHost;
 use crate::file_io::{LockAttempt, try_lock_exclusive};
 
 pub(super) const DEFAULT_OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -21,7 +21,7 @@ pub(super) struct PluginOperationLock {
 
 impl PluginOperationLock {
     pub(super) fn acquire(
-        host: PluginHost,
+        host: IntegrationHost,
         global_lock_dir: &Path,
         install_dir: &Path,
         timeout: Duration,
@@ -37,7 +37,7 @@ impl PluginOperationLock {
 }
 
 fn acquire_lock_file(
-    host: PluginHost,
+    host: IntegrationHost,
     directory: &Path,
     deadline: Instant,
     scope: &str,
@@ -87,14 +87,16 @@ fn acquire_lock_file(
     }
 }
 
-pub(super) fn operation_lock_path(host: PluginHost, install_dir: &Path) -> PathBuf {
+pub(super) fn operation_lock_path(host: IntegrationHost, install_dir: &Path) -> PathBuf {
     install_dir.join(format!(".nemo-relay-{}-operation.lock", host_name(host)))
 }
 
-fn host_name(host: PluginHost) -> &'static str {
+fn host_name(host: IntegrationHost) -> &'static str {
     match host {
-        PluginHost::Codex => "codex",
-        PluginHost::ClaudeCode => "claude-code",
-        PluginHost::All => unreachable!("all is expanded before operation locking"),
+        IntegrationHost::Codex => "codex",
+        IntegrationHost::ClaudeCode => "claude-code",
+        IntegrationHost::Hermes | IntegrationHost::All => {
+            unreachable!("all is expanded before operation locking")
+        }
     }
 }
