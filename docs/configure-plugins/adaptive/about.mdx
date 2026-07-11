@@ -22,6 +22,7 @@ The plugin can coordinate:
 - Adaptive hints injected into outgoing model requests.
 - Tool-parallelism observation or scheduling behavior.
 - Adaptive Cache Governor (ACG) prompt-cache planning.
+- Opt-in response caching for repeated LLM calls.
 - Component-local validation policy.
 
 ## Use Adaptive When
@@ -51,6 +52,8 @@ If instrumentation is not in place yet, start with
   cache planning accomplishes.
 - [Adaptive Hints](/configure-plugins/adaptive/adaptive-hints) explains request hint injection and how
   downstream model paths can consume the hints.
+- [Response Cache](/configure-plugins/adaptive/response-cache) explains the opt-in LLM response cache:
+  turning it on, what gets cached, and how savings are reported.
 
 State, telemetry, tool parallelism, and policy are whole-plugin configuration
 areas. They are documented on [Adaptive Configuration](/configure-plugins/adaptive/configuration) rather
