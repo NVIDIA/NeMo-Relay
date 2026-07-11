@@ -17,22 +17,22 @@ use std::sync::{OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::{CodingAgent, ServerArgs, resolve_persistent_server_config};
+use crate::config::{ServerArgs, resolve_persistent_server_config};
 use crate::error::CliError;
-use crate::file_io::{LockAttempt, try_lock_exclusive};
-#[cfg(test)]
-pub(crate) use health::healthz_compatible;
+use crate::file_io::{LockAttempt, try_lock_exclusive, try_lock_shared};
 use health::{
     RelayHealth, probe_after_lock as probe_relay_health_after_lock,
     probe_with_instance as probe_relay_health_with_instance,
 };
-pub(crate) use health::{healthz, loopback_bind};
+pub(crate) use health::{
+    VerifiedHttpError, VerifiedHttpResponse, authenticated_instance_id, healthz,
+    healthz_compatible, loopback_bind,
+};
 use process::DetachedSidecarProcess;
 #[cfg(all(windows, not(test)))]
 use process::SidecarJob;
 #[cfg(all(test, windows))]
 pub(crate) use process::SidecarJob;
-pub(crate) use process::configure_detached_sidecar;
 pub(crate) use process::join_sidecar_job_from_env;
 #[cfg(all(test, unix))]
 pub(crate) use process::terminate_sidecar_process_tree;
@@ -43,12 +43,13 @@ pub(crate) use process::{
     WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, terminate_unready_sidecar,
     windows_sidecar_creation_flags,
 };
+pub(crate) use process::{configure_detached_sidecar, spawn_detached_sidecar};
 pub(crate) use state::BOOTSTRAP_STATE_DIR_ENV;
 pub(crate) use state::EndpointLease;
 use state::{
-    RecoveryEpoch, create_private_runtime_dir, open_lock as open_sidecar_lock, read_owner_record,
-    read_ready_file as read_sidecar_ready_file, read_recovery_epoch, runtime_dir,
-    write_recovery_epoch,
+    RecoveryEpoch, create_private_runtime_dir, lock_endpoint_shared,
+    open_lock as open_sidecar_lock, read_owner_record, read_ready_file as read_sidecar_ready_file,
+    read_recovery_epoch, runtime_dir, validate_recovery_cohort, write_recovery_epoch,
 };
 pub(crate) use state::{
     lock_endpoint as lock_sidecar_endpoint, lock_path as sidecar_lock_path,
@@ -63,7 +64,8 @@ pub(crate) use state::{
     write_owner as write_sidecar_owner,
 };
 pub(crate) use state::{
-    publish_owner_from_env as publish_sidecar_owner_from_env, stop_owned as stop_owned_sidecar,
+    publish_owner_from_env as publish_sidecar_owner_from_env,
+    stop_owned_and_reset as stop_owned_sidecar_and_reset,
 };
 
 pub(crate) const DEFAULT_BIND: &str = "127.0.0.1:47632";
@@ -82,8 +84,25 @@ pub(crate) struct GatewayEndpoint {
 
 pub(crate) struct GatewayAcquisition {
     pub(crate) endpoint: GatewayEndpoint,
-    pub(crate) lease: Option<EndpointLease>,
+    pub(crate) lease: EndpointLease,
     pub(crate) spec: GatewaySpec,
+}
+
+/// Endpoint transaction lock retained while a hook request is in flight.
+pub(crate) struct GatewayCohortGuard {
+    _lock: fs::File,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GatewayCohortStatus {
+    Current,
+    UpdateInProgress,
+}
+
+impl GatewayAcquisition {
+    pub(crate) fn guard_cohort(&self) -> Result<GatewayCohortGuard, String> {
+        guard_gateway_cohort(&self.endpoint.url, self.lease.cohort_id())
+    }
 }
 
 /// Complete launch and compatibility contract for one shared gateway.
@@ -93,7 +112,6 @@ pub(crate) struct GatewayAcquisition {
 /// identity and later adopted under another.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GatewaySpec {
-    agent: CodingAgent,
     bind: SocketAddr,
     sidecar_args: Vec<OsString>,
     bootstrap_fingerprint: Option<String>,
@@ -101,9 +119,8 @@ pub(crate) struct GatewaySpec {
 }
 
 impl GatewaySpec {
-    pub(crate) fn new(agent: CodingAgent, bind: SocketAddr) -> Self {
+    pub(crate) fn new(bind: SocketAddr) -> Self {
         Self {
-            agent,
             bind,
             sidecar_args: Vec::new(),
             bootstrap_fingerprint: None,
@@ -130,26 +147,83 @@ impl GatewaySpec {
         self.bind
     }
 
-    pub(crate) fn ensure(&self) -> Result<GatewayEndpoint, String> {
-        ensure_gateway(self)
-    }
-
     pub(crate) fn acquire(&self) -> Result<GatewayAcquisition, String> {
         acquire_gateway(self)
     }
 
-    pub(crate) fn recover(&self, expected_instance: &str) -> Result<GatewayEndpoint, String> {
-        recover_gateway(self, expected_instance)
+    #[cfg(test)]
+    pub(crate) fn acquire_with_lease(
+        &self,
+        lease: EndpointLease,
+    ) -> Result<GatewayAcquisition, String> {
+        let url = format!("http://{}", self.bind);
+        let state = sidecar_state_dir()?;
+        acquire_fixed_gateway(self, &state, &url, lease)
+    }
+
+    pub(crate) fn recover(
+        &self,
+        expected_instance: &str,
+        cohort_id: &str,
+    ) -> Result<GatewayEndpoint, String> {
+        recover_gateway(self, expected_instance, cohort_id)
     }
 
     pub(crate) fn healthy_instance(&self, url: &str) -> Option<String> {
         health::compatible_instance_id(url, self.bootstrap_fingerprint.as_deref())
     }
+
+    /// Checks an already-bound endpoint without starting or replacing it.
+    ///
+    /// `Ok(None)` means no listener is ready yet, which lets source-plugin hooks wait for their
+    /// concurrently starting MCP bootstrap. Identity or protocol failures are terminal so a
+    /// foreign listener never receives a lifecycle payload.
+    pub(crate) fn existing_healthy_instance(&self, url: &str) -> Result<Option<String>, String> {
+        match probe_relay_health_with_instance(url, self.bootstrap_fingerprint.as_deref()) {
+            (RelayHealth::Compatible, instance_id) => Ok(instance_id),
+            (RelayHealth::Unavailable, _) => Ok(None),
+            (RelayHealth::Incompatible, _) => Err(format!(
+                "an incompatible NeMo Relay gateway is already listening at {url}"
+            )),
+            (RelayHealth::Foreign, _) => Err(format!(
+                "a foreign process is already listening at the shared Relay gateway URL {url}"
+            )),
+        }
+    }
+
+    pub(crate) fn post_verified(
+        &self,
+        url: &str,
+        path: &str,
+        headers: &[(String, String)],
+        body: &[u8],
+        timeout: Duration,
+        max_response_bytes: usize,
+    ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
+        let Some(fingerprint) = self.bootstrap_fingerprint.as_deref() else {
+            return Err(VerifiedHttpError::missing_fingerprint());
+        };
+        health::post_verified(
+            url,
+            fingerprint,
+            path,
+            headers,
+            body,
+            timeout,
+            max_response_bytes,
+        )
+    }
 }
 
 fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayAcquisition, String> {
+    if !spec.bind.ip().is_loopback() {
+        return Err(format!(
+            "plugin sidecars require a loopback bind address, got {}",
+            spec.bind
+        ));
+    }
     if spec.bind.port() == 0 {
-        let endpoint = spec.ensure()?;
+        let endpoint = start_automatic_gateway(spec)?;
         let effective_spec = GatewaySpec {
             bind: endpoint.address,
             ..spec.clone()
@@ -160,67 +234,126 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayAcquisition, String> {
             &effective_spec,
             &state,
             &endpoint.url,
+            lease.cohort_id(),
             lease.fresh_epoch(),
             &endpoint,
         )?;
         return Ok(GatewayAcquisition {
             endpoint,
-            lease: Some(lease),
+            lease,
             spec: effective_spec,
         });
     }
     let url = format!("http://{}", spec.bind);
     let state = sidecar_state_dir()?;
     let lease = EndpointLease::acquire(&state, &url)?;
-    let endpoint = if lease.fresh_epoch() {
-        spec.ensure()?
-    } else if let Some(epoch) = read_recovery_epoch(&state, &url)? {
-        spec.recover(&epoch.instance_id)?
-    } else {
-        spec.ensure()?
+    acquire_fixed_gateway(spec, &state, &url, lease)
+}
+
+fn acquire_fixed_gateway(
+    spec: &GatewaySpec,
+    state: &Path,
+    url: &str,
+    lease: EndpointLease,
+) -> Result<GatewayAcquisition, String> {
+    debug_assert_ne!(
+        spec.bind.port(),
+        0,
+        "fixed acquisition requires a fixed port"
+    );
+    let runtime = runtime_dir();
+    prepare_sidecar_directories(&runtime, state)?;
+    let lock = lock_sidecar_endpoint(state, url)?;
+    validate_recovery_cohort(state, url, lease.cohort_id())?;
+    let (health, instance_id) =
+        probe_relay_health_after_lock(url, spec.bootstrap_fingerprint.as_deref());
+    let endpoint = match health {
+        RelayHealth::Compatible => compatible_endpoint(spec.bind, url.to_string(), instance_id)?,
+        RelayHealth::Incompatible => return Err(incompatible_relay_error(url)),
+        RelayHealth::Foreign => return Err(foreign_listener_error(url)),
+        RelayHealth::Unavailable => {
+            let epoch = (!lease.fresh_epoch())
+                .then(|| read_recovery_epoch(state, url, lease.cohort_id()))
+                .transpose()?
+                .flatten();
+            if let Some(epoch) = epoch {
+                restart_gateway_after_lock(
+                    spec,
+                    &runtime,
+                    state,
+                    url,
+                    lease.cohort_id(),
+                    &epoch.instance_id,
+                    &lock,
+                )?
+            } else {
+                start_sidecar_bind(spec, &runtime, state, Some(&lock))
+                    .map_err(|error| sidecar_start_error(&runtime, &error))?
+            }
+        }
     };
-    record_gateway_epoch(spec, &state, &url, lease.fresh_epoch(), &endpoint)?;
+    record_gateway_epoch_after_lock(
+        spec,
+        state,
+        url,
+        lease.cohort_id(),
+        lease.fresh_epoch(),
+        &endpoint,
+    )?;
     Ok(GatewayAcquisition {
         endpoint,
-        lease: Some(lease),
+        lease,
         spec: spec.clone(),
     })
 }
 
-fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<GatewayEndpoint, String> {
+fn recover_gateway(
+    spec: &GatewaySpec,
+    expected_instance: &str,
+    cohort_id: &str,
+) -> Result<GatewayEndpoint, String> {
     debug_assert_ne!(spec.bind.port(), 0, "acquisition resolves automatic ports");
-    let agent = spec.agent;
     let url = format!("http://{}", spec.bind);
     let runtime = runtime_dir();
     let state = sidecar_state_dir()?;
-    create_private_runtime_dir(&runtime).map_err(|error| {
-        sidecar_start_error(
-            agent,
-            &runtime,
-            &format!("failed to create {}: {error}", runtime.display()),
-        )
-    })?;
-    create_private_runtime_dir(&state).map_err(|error| {
-        sidecar_start_error(
-            agent,
-            &runtime,
-            &format!("failed to create {}: {error}", state.display()),
-        )
-    })?;
+    prepare_sidecar_directories(&runtime, &state)?;
     let lock = lock_sidecar_endpoint(&state, &url)?;
+    validate_recovery_cohort(&state, &url, cohort_id)?;
     let (health, instance_id) =
         probe_relay_health_after_lock(&url, spec.bootstrap_fingerprint.as_deref());
     match health {
         RelayHealth::Compatible => {
             let endpoint = compatible_endpoint(spec.bind, url.clone(), instance_id)?;
-            reconcile_gateway_epoch(&state, &url, false, &endpoint.instance_id)?;
+            reconcile_gateway_epoch(&state, &url, cohort_id, false, &endpoint.instance_id)?;
             return Ok(endpoint);
         }
-        RelayHealth::Incompatible => return Err(incompatible_relay_error(agent, &url)),
+        RelayHealth::Incompatible => return Err(incompatible_relay_error(&url)),
         RelayHealth::Foreign => return Err(foreign_listener_error(&url)),
         RelayHealth::Unavailable => {}
     }
-    let mut epoch = read_recovery_epoch(&state, &url)?
+    let endpoint = restart_gateway_after_lock(
+        spec,
+        &runtime,
+        &state,
+        &url,
+        cohort_id,
+        expected_instance,
+        &lock,
+    )?;
+    record_gateway_epoch_after_lock(spec, &state, &url, cohort_id, false, &endpoint)?;
+    Ok(endpoint)
+}
+
+fn restart_gateway_after_lock(
+    spec: &GatewaySpec,
+    runtime: &Path,
+    state: &Path,
+    url: &str,
+    cohort_id: &str,
+    expected_instance: &str,
+    lock: &fs::File,
+) -> Result<GatewayEndpoint, String> {
+    let mut epoch = read_recovery_epoch(state, url, cohort_id)?
         .ok_or_else(|| "shared gateway recovery epoch is missing".to_string())?;
     if epoch.instance_id != expected_instance {
         return Err(format!(
@@ -235,21 +368,32 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
     }
     epoch.restarts = 1;
     epoch.pending = true;
-    write_recovery_epoch(&state, &epoch)?;
-    let endpoint = start_sidecar_bind(spec, &runtime, &state, Some(lock))
-        .map_err(|error| sidecar_start_error(agent, &runtime, &error))?;
-    record_gateway_epoch(spec, &state, &url, false, &endpoint)?;
-    Ok(endpoint)
+    write_recovery_epoch(state, &epoch)?;
+    start_sidecar_bind(spec, runtime, state, Some(lock))
+        .map_err(|error| sidecar_start_error(runtime, &error))
 }
 
 fn record_gateway_epoch(
     spec: &GatewaySpec,
     state: &Path,
     url: &str,
+    cohort_id: &str,
     fresh: bool,
     endpoint: &GatewayEndpoint,
 ) -> Result<(), String> {
     let _lock = lock_sidecar_endpoint(state, url)?;
+    record_gateway_epoch_after_lock(spec, state, url, cohort_id, fresh, endpoint)
+}
+
+fn record_gateway_epoch_after_lock(
+    spec: &GatewaySpec,
+    state: &Path,
+    url: &str,
+    cohort_id: &str,
+    fresh: bool,
+    endpoint: &GatewayEndpoint,
+) -> Result<(), String> {
+    validate_recovery_cohort(state, url, cohort_id)?;
     let current = spec.healthy_instance(url).ok_or_else(|| {
         "shared Relay gateway disappeared before recovery was recorded".to_string()
     })?;
@@ -258,18 +402,19 @@ fn record_gateway_epoch(
     } else {
         &current
     };
-    reconcile_gateway_epoch(state, url, fresh, instance_id)
+    reconcile_gateway_epoch(state, url, cohort_id, fresh, instance_id)
 }
 
 fn reconcile_gateway_epoch(
     state: &Path,
     url: &str,
+    cohort_id: &str,
     fresh: bool,
     instance_id: &str,
 ) -> Result<(), String> {
-    let mut epoch = read_recovery_epoch(state, url)?;
+    let mut epoch = read_recovery_epoch(state, url, cohort_id)?;
     if fresh || epoch.is_none() {
-        return write_recovery_epoch(state, &RecoveryEpoch::new(url, instance_id));
+        return write_recovery_epoch(state, &RecoveryEpoch::new(url, cohort_id, instance_id));
     }
     let epoch = epoch.as_mut().expect("gateway epoch is present");
     if epoch.instance_id == instance_id {
@@ -292,7 +437,6 @@ pub(crate) struct PluginGatewaySpec {
 }
 
 pub(crate) fn resolve_plugin_gateway(
-    agent: CodingAgent,
     server_args: &ServerArgs,
     bind: SocketAddr,
 ) -> Result<PluginGatewaySpec, CliError> {
@@ -319,7 +463,7 @@ pub(crate) fn resolve_plugin_gateway(
     .flat_map(|(flag, value)| [OsString::from(flag), OsString::from(value)])
     .collect();
     Ok(PluginGatewaySpec {
-        gateway: GatewaySpec::new(agent, bind)
+        gateway: GatewaySpec::new(bind)
             .with_launch_args(sidecar_args)
             .with_fingerprint(bootstrap_fingerprint)
             .with_user_config_scope(),
@@ -328,102 +472,73 @@ pub(crate) fn resolve_plugin_gateway(
 }
 
 #[cfg(test)]
-pub(crate) fn ensure_sidecar_bind(
-    agent: CodingAgent,
-    bind: SocketAddr,
-) -> Result<GatewayEndpoint, String> {
-    GatewaySpec::new(agent, bind).ensure()
+pub(crate) fn validate_gateway_cohort(url: &str, cohort_id: &str) -> Result<(), String> {
+    loop {
+        match check_gateway_cohort(url, cohort_id)? {
+            GatewayCohortStatus::Current => return Ok(()),
+            GatewayCohortStatus::UpdateInProgress => thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
-fn ensure_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
-    let agent = spec.agent;
-    let bind = spec.bind;
-    let bootstrap_fingerprint = spec.bootstrap_fingerprint.as_deref();
-    if !bind.ip().is_loopback() {
-        return Err(format!(
-            "plugin sidecars require a loopback bind address, got {bind}"
-        ));
+/// Check one committed endpoint lifecycle snapshot without blocking on an in-progress update.
+pub(crate) fn check_gateway_cohort(
+    url: &str,
+    cohort_id: &str,
+) -> Result<GatewayCohortStatus, String> {
+    let state = sidecar_state_dir()?;
+    let lock = open_sidecar_lock(&sidecar_lock_path(&state, url))?;
+    match try_lock_shared(&lock)
+        .map_err(|error| format!("failed to inspect gateway lifecycle at {url}: {error}"))?
+    {
+        LockAttempt::Contended => Ok(GatewayCohortStatus::UpdateInProgress),
+        LockAttempt::Acquired => {
+            validate_recovery_cohort(&state, url, cohort_id)?;
+            Ok(GatewayCohortStatus::Current)
+        }
     }
-    let url = format!("http://{bind}");
+}
+
+/// Pin one committed gateway cohort across a short-lived operation such as hook delivery.
+///
+/// Unlike heartbeat validation this remains bounded: a hook must fail open/closed according to
+/// its own policy instead of waiting indefinitely for an installer that is still running.
+pub(crate) fn guard_gateway_cohort(
+    url: &str,
+    cohort_id: &str,
+) -> Result<GatewayCohortGuard, String> {
+    let state = sidecar_state_dir()?;
+    let lock = lock_endpoint_shared(&state, url)?;
+    validate_recovery_cohort(&state, url, cohort_id)?;
+    Ok(GatewayCohortGuard { _lock: lock })
+}
+
+fn start_automatic_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
+    debug_assert_eq!(
+        spec.bind.port(),
+        0,
+        "automatic gateway startup requires port zero"
+    );
     let runtime = runtime_dir();
-    create_private_runtime_dir(&runtime).map_err(|error| {
+    let state = sidecar_state_dir()?;
+    prepare_sidecar_directories(&runtime, &state)?;
+    start_sidecar_bind(spec, &runtime, &state, None)
+        .map_err(|error| sidecar_start_error(&runtime, &error))
+}
+
+fn prepare_sidecar_directories(runtime: &Path, state: &Path) -> Result<(), String> {
+    create_private_runtime_dir(runtime).map_err(|error| {
         sidecar_start_error(
-            agent,
-            &runtime,
+            runtime,
             &format!("failed to create {}: {error}", runtime.display()),
         )
     })?;
-    let state = sidecar_state_dir()?;
-    create_private_runtime_dir(&state).map_err(|error| {
+    create_private_runtime_dir(state).map_err(|error| {
         sidecar_start_error(
-            agent,
-            &runtime,
+            runtime,
             &format!("failed to create {}: {error}", state.display()),
         )
-    })?;
-    if bind.port() == 0 {
-        return start_sidecar_bind(spec, &runtime, &state, None)
-            .map_err(|error| sidecar_start_error(agent, &runtime, &error));
-    }
-    let lock_path = sidecar_lock_path(&state, &url);
-    let (initial_health, initial_instance) =
-        probe_relay_health_with_instance(&url, bootstrap_fingerprint);
-    match initial_health {
-        RelayHealth::Compatible => {
-            return compatible_endpoint(bind, url, initial_instance);
-        }
-        RelayHealth::Incompatible | RelayHealth::Foreign | RelayHealth::Unavailable => {}
-    }
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|error| {
-            sidecar_start_error(
-                agent,
-                &runtime,
-                &format!(
-                    "failed to open sidecar lock {}: {error}",
-                    lock_path.display()
-                ),
-            )
-        })?;
-    let lock_deadline = Instant::now() + SIDECAR_LOCK_TIMEOUT;
-    loop {
-        match try_lock_exclusive(&lock) {
-            Ok(LockAttempt::Acquired) => break,
-            Ok(LockAttempt::Contended) => {
-                if Instant::now() >= lock_deadline {
-                    return Err(sidecar_start_error(
-                        agent,
-                        &runtime,
-                        "sidecar lock timed out",
-                    ));
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(error) => {
-                return Err(sidecar_start_error(
-                    agent,
-                    &runtime,
-                    &format!("failed to acquire sidecar lock: {error}"),
-                ));
-            }
-        }
-    }
-    let (health, instance_id) = probe_relay_health_after_lock(&url, bootstrap_fingerprint);
-    match health {
-        RelayHealth::Compatible => {
-            return compatible_endpoint(bind, url, instance_id);
-        }
-        RelayHealth::Incompatible => return Err(incompatible_relay_error(agent, &url)),
-        RelayHealth::Foreign => return Err(foreign_listener_error(&url)),
-        RelayHealth::Unavailable => {}
-    }
-    let result = start_sidecar_bind(spec, &runtime, &state, Some(lock));
-    result.map_err(|error| sidecar_start_error(agent, &runtime, &error))
+    })
 }
 
 fn compatible_endpoint(
@@ -445,25 +560,20 @@ fn foreign_listener_error(url: &str) -> String {
     )
 }
 
-fn incompatible_relay_error(agent: CodingAgent, url: &str) -> String {
-    let remediation = match agent {
-        CodingAgent::Codex => "run `nemo-relay install codex --force`",
-        CodingAgent::ClaudeCode => "run `nemo-relay install claude-code --force`",
-        CodingAgent::Hermes => "run `nemo-relay install hermes --force`",
-    };
+fn incompatible_relay_error(url: &str) -> String {
     format!(
-        "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for its idle shutdown, or {remediation} before retrying"
+        "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for its idle shutdown, or reinstall the affected integration with `nemo-relay install <agent> --force` before retrying"
     )
 }
 
-fn sidecar_start_error(agent: CodingAgent, runtime: &Path, error: &str) -> String {
-    let log_path = runtime.join(format!("{}-sidecar.log", agent.as_arg()));
+fn sidecar_start_error(runtime: &Path, error: &str) -> String {
+    let log_path = runtime.join("gateway-sidecar.log");
     format!("{error}; inspect {}", log_path.display())
 }
 
 #[cfg(all(test, unix))]
-pub(super) fn start_sidecar(agent: CodingAgent, url: &str, runtime: &Path) -> Result<(), String> {
-    let spec = GatewaySpec::new(agent, loopback_bind(url)?);
+pub(super) fn start_sidecar(url: &str, runtime: &Path) -> Result<(), String> {
+    let spec = GatewaySpec::new(loopback_bind(url)?);
     start_sidecar_bind(&spec, runtime, runtime, None).map(|_| ())
 }
 
@@ -544,9 +654,8 @@ fn start_sidecar_bind(
     spec: &GatewaySpec,
     runtime: &Path,
     state: &Path,
-    mut startup_lock: Option<fs::File>,
+    startup_lock: Option<&fs::File>,
 ) -> Result<GatewayEndpoint, String> {
-    let agent = spec.agent;
     let bind = spec.bind;
     let sidecar_args = &spec.sidecar_args;
     let bootstrap_fingerprint = spec.bootstrap_fingerprint.as_deref();
@@ -559,17 +668,16 @@ fn start_sidecar_bind(
                 return compatible_endpoint(bind, requested_url, instance_id);
             }
             RelayHealth::Incompatible => {
-                return Err(incompatible_relay_error(agent, &requested_url));
+                return Err(incompatible_relay_error(&requested_url));
             }
             RelayHealth::Foreign => return Err(foreign_listener_error(&requested_url)),
             RelayHealth::Unavailable => {}
         }
     }
     let relay = relay_binary()?;
-    let log_path = runtime.join(format!("{}-sidecar.log", agent.as_arg()));
+    let log_path = runtime.join("gateway-sidecar.log");
     let ready_path = runtime.join(format!(
-        "{}-sidecar-{}-{}.ready.json",
-        agent.as_arg(),
+        "gateway-sidecar-{}-{}.ready.json",
         std::process::id(),
         uuid::Uuid::now_v7()
     ));
@@ -603,6 +711,8 @@ fn start_sidecar_bind(
         )
         .env(BOOTSTRAP_STATE_DIR_ENV, state)
         .env("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", &shutdown_token)
+        .env_remove(crate::install_generation::GENERATION_FILE_ENV)
+        .env_remove(crate::install_generation::GENERATION_TOKEN_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err_log));
@@ -621,8 +731,7 @@ fn start_sidecar_bind(
         }
     }
     configure_detached_sidecar(&mut command);
-    let child = command
-        .spawn()
+    let child = spawn_detached_sidecar(&mut command)
         .map_err(|error| format!("failed to spawn nemo-relay sidecar: {error}"))?;
     let startup_pid_path = ready_path.with_extension("pid");
     let _ = fs::write(&startup_pid_path, child.id().to_string());
@@ -642,10 +751,13 @@ fn start_sidecar_bind(
                         .as_deref()
                         == Some(endpoint.instance_id.as_str()) =>
             {
-                let ownership_lock = match startup_lock.take() {
-                    Some(lock) => lock,
-                    None => lock_sidecar_endpoint(state, &endpoint.url)?,
-                };
+                let owned_lock = startup_lock
+                    .is_none()
+                    .then(|| lock_sidecar_endpoint(state, &endpoint.url))
+                    .transpose()?;
+                let _ownership_lock = startup_lock
+                    .or(owned_lock.as_ref())
+                    .expect("sidecar readiness holds an endpoint lock");
                 let owner_path = sidecar_owner_path(state, &endpoint.url);
                 let pid_path = sidecar_pid_path(state, &endpoint.url);
                 let pid = child.id();
@@ -668,7 +780,6 @@ fn start_sidecar_bind(
                     let _ = fs::remove_file(&ready_path);
                     return Err(error);
                 }
-                drop(ownership_lock);
                 let _ = fs::remove_file(&ready_path);
                 return Ok(endpoint);
             }
@@ -799,9 +910,17 @@ fn run_sidecar_reaper(receiver: mpsc::Receiver<SidecarReapRequest>) {
         let mut index = 0;
         while index < children.len() {
             if !children[index].exited {
-                match children[index].process.try_wait() {
-                    Ok(Some(_)) => children[index].exited = true,
-                    Ok(None) => {
+                match children[index].process.has_exited_for_tree_cleanup() {
+                    Ok(true) => {
+                        children[index].exited = true;
+                        if let Err(error) = children[index].process.terminate_retained_descendants()
+                        {
+                            eprintln!(
+                                "failed to terminate nemo-relay sidecar descendants: {error}"
+                            );
+                        }
+                    }
+                    Ok(false) => {
                         index += 1;
                         continue;
                     }
@@ -812,7 +931,6 @@ fn run_sidecar_reaper(receiver: mpsc::Receiver<SidecarReapRequest>) {
                     }
                 }
             }
-            children[index].process.terminate_retained_descendants();
             if cleanup_reaped_sidecar(&children[index]) {
                 let request = children.swap_remove(index);
                 drop(request);

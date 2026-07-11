@@ -49,6 +49,12 @@ with the installed `nemo-relay` command rather than link against the crate.
   CLI overrides for deterministic non-interactive use.
 - **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
+- **Persistent agent integration**: `nemo-relay install` configures Codex,
+  Claude Code, or Hermes Agent with one generated MCP bootstrap and the host's
+  canonical lifecycle hooks.
+- **Shared gateway lifecycle**: Every persistent integration launches the same
+  host-neutral `nemo-relay mcp` client. Concurrent clients share one native
+  gateway on `127.0.0.1:47632`.
 
 ## Installation Options
 
@@ -99,6 +105,12 @@ Run a supported agent through the gateway:
 ```bash
 nemo-relay codex
 nemo-relay claude -- "summarize this repository"
+```
+
+Install persistent integrations for the supported agent CLIs on `PATH`:
+
+```bash
+nemo-relay install all
 ```
 
 Use `run --dry-run` to inspect resolved config without spawning the agent:

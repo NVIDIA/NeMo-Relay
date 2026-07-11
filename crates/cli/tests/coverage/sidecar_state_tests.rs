@@ -17,14 +17,19 @@ fn endpoint_leases_reset_recovery_only_after_the_last_client_closes() {
     let runtime = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:47632";
     let first = EndpointLease::acquire(runtime.path(), url).unwrap();
+    let cohort = first.cohort_id().to_string();
     assert!(first.fresh_epoch());
-    let mut epoch = RecoveryEpoch::new(url, "gateway-1");
+    let mut epoch = RecoveryEpoch::new(url, &cohort, "gateway-1");
     epoch.restarts = 1;
     write_recovery_epoch(runtime.path(), &epoch).unwrap();
 
     let second = EndpointLease::acquire(runtime.path(), url).unwrap();
     assert!(!second.fresh_epoch());
-    assert!(read_recovery_epoch(runtime.path(), url).unwrap().is_some());
+    assert!(
+        read_recovery_epoch(runtime.path(), url, &cohort)
+            .unwrap()
+            .is_some()
+    );
     drop(first);
 
     let third = EndpointLease::acquire(runtime.path(), url).unwrap();
@@ -34,7 +39,186 @@ fn endpoint_leases_reset_recovery_only_after_the_last_client_closes() {
 
     let next_epoch = EndpointLease::acquire(runtime.path(), url).unwrap();
     assert!(next_epoch.fresh_epoch());
-    assert!(read_recovery_epoch(runtime.path(), url).unwrap().is_none());
+    assert!(
+        read_recovery_epoch(runtime.path(), url, next_epoch.cohort_id())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn endpoint_lease_release_is_serialized_with_registry_handoffs() {
+    let runtime = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let lease = EndpointLease::acquire(runtime.path(), url).unwrap();
+    let lease_path = lease.path.clone();
+    let registry = lock_file_for(
+        &lease_registry_path(runtime.path(), url),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let (dropping, started) = std::sync::mpsc::channel();
+    let release = std::thread::spawn(move || {
+        dropping.send(()).unwrap();
+        drop(lease);
+    });
+    started.recv().unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+
+    let still_locked = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lease_path)
+        .unwrap();
+    assert_eq!(
+        try_lock_exclusive(&still_locked).unwrap(),
+        LockAttempt::Contended
+    );
+
+    drop(registry);
+    release.join().unwrap();
+    assert!(!lease_path.exists());
+}
+
+#[test]
+fn intentional_plugin_stop_starts_a_fresh_cohort_despite_old_live_leases() {
+    let dir = tempdir().unwrap();
+    let environment = Environment::isolated();
+    environment.set("XDG_CONFIG_HOME", dir.path());
+    environment.set("HOME", dir.path());
+    environment.remove("USERPROFILE");
+    let runtime = state_dir().unwrap();
+    let url = crate::sidecar::DEFAULT_URL;
+    let old = EndpointLease::acquire(&runtime, url).unwrap();
+    let old_cohort = old.cohort_id().to_string();
+    let mut exhausted = RecoveryEpoch::new(url, &old_cohort, "gateway-old");
+    exhausted.restarts = 1;
+    write_recovery_epoch(&runtime, &exhausted).unwrap();
+
+    stop_owned_and_reset(url).unwrap();
+
+    let new = EndpointLease::acquire(&runtime, url).unwrap();
+    assert!(new.fresh_epoch());
+    assert_ne!(new.cohort_id(), old_cohort);
+    assert!(
+        read_recovery_epoch(&runtime, url, new.cohort_id())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn failed_plugin_stop_restores_the_previous_cohort_and_recovery_budget() {
+    let dir = tempdir().unwrap();
+    let environment = Environment::isolated();
+    environment.set("XDG_CONFIG_HOME", dir.path());
+    environment.set("HOME", dir.path());
+    environment.remove("USERPROFILE");
+    let runtime = state_dir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let old = EndpointLease::acquire(&runtime, url).unwrap();
+    let old_cohort = old.cohort_id().to_string();
+    let mut exhausted = RecoveryEpoch::new(url, &old_cohort, "gateway-old");
+    exhausted.restarts = 1;
+    write_recovery_epoch(&runtime, &exhausted).unwrap();
+    write_owner(&owner_path(&runtime, url), 42, url, "", Some("fingerprint")).unwrap();
+
+    let error = stop_owned_and_reset(url).unwrap_err();
+    assert!(error.contains("has no shutdown token"), "{error}");
+
+    let overlapping = EndpointLease::acquire(&runtime, url).unwrap();
+    assert!(!overlapping.fresh_epoch());
+    assert_eq!(overlapping.cohort_id(), old_cohort);
+    assert_eq!(
+        read_recovery_epoch(&runtime, url, &old_cohort)
+            .unwrap()
+            .unwrap()
+            .restarts,
+        1
+    );
+}
+
+#[test]
+fn failed_plugin_stop_hides_transient_retirement_from_heartbeat_validation() {
+    let dir = tempdir().unwrap();
+    let environment = Environment::isolated();
+    environment.set("XDG_CONFIG_HOME", dir.path());
+    environment.set("HOME", dir.path());
+    environment.remove("USERPROFILE");
+    let runtime = state_dir().unwrap();
+    let url = "http://127.0.0.1:9";
+    let old = EndpointLease::acquire(&runtime, url).unwrap();
+    let old_cohort = old.cohort_id().to_string();
+    write_owner(&owner_path(&runtime, url), 42, url, "", Some("fingerprint")).unwrap();
+    let (rotated_tx, rotated_rx) = std::sync::mpsc::channel();
+    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+
+    let stop = std::thread::spawn(move || {
+        stop_owned_and_reset_after_rotation(url, || {
+            rotated_tx.send(()).unwrap();
+            continue_rx.recv().unwrap();
+        })
+    });
+    rotated_rx.recv().unwrap();
+    let (validated_tx, validated_rx) = std::sync::mpsc::channel();
+    let validate_cohort = old_cohort.clone();
+    let validation = std::thread::spawn(move || {
+        validated_tx
+            .send(crate::sidecar::validate_gateway_cohort(
+                url,
+                &validate_cohort,
+            ))
+            .unwrap();
+    });
+
+    assert!(
+        validated_rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err(),
+        "heartbeat validation observed the uncommitted cohort rotation"
+    );
+    continue_tx.send(()).unwrap();
+    let error = stop.join().unwrap().unwrap_err();
+    assert!(error.contains("has no shutdown token"), "{error}");
+    validated_rx.recv().unwrap().unwrap();
+    validation.join().unwrap();
+}
+
+#[test]
+fn endpoint_cohort_lock_pins_hook_delivery_across_cross_host_replacement() {
+    let runtime = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let lease = EndpointLease::acquire(runtime.path(), url).unwrap();
+    let cohort = lease.cohort_id().to_string();
+    let delivery_guard = lock_endpoint_shared(runtime.path(), url).unwrap();
+    let concurrent_delivery_guard = lock_endpoint_shared(runtime.path(), url).unwrap();
+    validate_recovery_cohort(runtime.path(), url, &cohort).unwrap();
+
+    let runtime_path = runtime.path().to_path_buf();
+    let (replaced_tx, replaced_rx) = std::sync::mpsc::channel();
+    let replacement = std::thread::spawn(move || {
+        let _lock = lock_endpoint(&runtime_path, url).unwrap();
+        write_recovery_cohort(&runtime_path, &RecoveryCohort::new(url)).unwrap();
+        replaced_tx.send(()).unwrap();
+    });
+    assert!(
+        replaced_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "a different host replaced the gateway while hook delivery was pinned"
+    );
+
+    drop(delivery_guard);
+    assert!(
+        replaced_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "replacement ignored a second concurrent hook delivery"
+    );
+    drop(concurrent_delivery_guard);
+    replaced_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    replacement.join().unwrap();
+    assert!(validate_recovery_cohort(runtime.path(), url, &cohort).is_err());
 }
 
 #[test]
@@ -48,6 +232,7 @@ fn recovery_epoch_rejects_identity_and_restart_count_drift() {
             "service": "foreign",
             "bootstrap_protocol": BOOTSTRAP_PROTOCOL_VERSION,
             "url": url,
+            "cohort_id": "cohort-1",
             "instance_id": "gateway-1",
             "restarts": 0,
             "pending": false,
@@ -56,16 +241,16 @@ fn recovery_epoch_rejects_identity_and_restart_count_drift() {
     )
     .unwrap();
     assert!(
-        read_recovery_epoch(runtime.path(), url)
+        read_recovery_epoch(runtime.path(), url, "cohort-1")
             .unwrap_err()
             .contains("incompatible")
     );
 
-    let mut epoch = RecoveryEpoch::new(url, "gateway-1");
+    let mut epoch = RecoveryEpoch::new(url, "cohort-1", "gateway-1");
     epoch.restarts = 2;
     write_recovery_epoch(runtime.path(), &epoch).unwrap();
     assert!(
-        read_recovery_epoch(runtime.path(), url)
+        read_recovery_epoch(runtime.path(), url, "cohort-1")
             .unwrap_err()
             .contains("incompatible")
     );

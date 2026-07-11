@@ -31,6 +31,10 @@ mod session;
 mod setup;
 mod sidecar;
 
+#[cfg(test)]
+#[path = "../tests/coverage/hook_assertions.rs"]
+mod hook_assertions;
+
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -40,11 +44,28 @@ use crate::config::{
     PluginsSubcommand, PricingCommand, PricingSubcommand, ServerArgs,
 };
 
-#[tokio::main]
+fn main() -> ExitCode {
+    // Managed MCP hosts can preserve an unresolved `${NAME}` placeholder. Remove those values
+    // before clap reads environment-backed numeric and socket options, and before Tokio creates
+    // worker threads that would make process-environment mutation unsafe.
+    mcp_environment::remove_unresolved_mcp_placeholders();
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("failed to initialize async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(async_main())
+}
+
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
 // exit. Errors are printed once here so subcommands can return structured errors without also
 // owning process-level reporting.
-async fn main() -> ExitCode {
+async fn async_main() -> ExitCode {
     if let Err(error) = sidecar::join_sidecar_job_from_env() {
         eprintln!("{error}");
         return ExitCode::FAILURE;
@@ -91,7 +112,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Hermes(command) => {
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
-        Command::Mcp(command) => mcp::run(command.agent, server).await,
+        Command::Mcp => mcp::run(server).await,
         Command::Config(command) => run_config(command).await,
         Command::Plugins(command) => run_plugins(command, server),
         Command::ModelPricing(command) => run_pricing(command),

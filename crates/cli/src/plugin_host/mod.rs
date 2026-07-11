@@ -12,7 +12,6 @@ pub(crate) use claude::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_clau
 pub(crate) use codex::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::portable_executable_path;
 pub(crate) use shared::shell_quote_arg_for_platform;
-pub(crate) use shared::shell_quote_for_platform;
 #[cfg(test)]
 pub(crate) use shared::strip_windows_verbatim_prefix;
 
@@ -21,8 +20,11 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use claude::claude_settings_base_url;
-use codex::{codex_hook_trust_report, empty_codex_hook_trust_report};
-use codex::{codex_hooks_installed, codex_provider_installed, install_codex, uninstall_codex};
+use codex::{
+    codex_hook_trust_report, codex_hook_trust_report_with_generation, codex_hooks_installed,
+    codex_hooks_installed_with_generation, codex_provider_installed, empty_codex_hook_trust_report,
+    install_codex_with_generation, uninstall_codex,
+};
 use shared::{current_exe, healthz, print_check, print_info};
 
 use crate::config::CodingAgent;
@@ -30,12 +32,21 @@ use crate::config::CodingAgent;
 #[cfg(test)]
 pub(super) use crate::sidecar::DEFAULT_URL;
 
-pub(crate) fn install_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Result<(), String> {
-    install_codex(gateway_url, &plugin_root.join("hooks").join("hooks.json")).map(|_| ())
+pub(crate) fn install_codex_plugin_with_generation(
+    gateway_url: &str,
+    plugin_root: &Path,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
+    install_codex_with_generation(
+        gateway_url,
+        &plugin_root.join("hooks").join("hooks.json"),
+        generation_token,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn stop_plugin_gateway() -> Result<(), String> {
-    crate::sidecar::stop_owned_sidecar(crate::sidecar::DEFAULT_URL)
+    crate::sidecar::stop_owned_sidecar_and_reset(crate::sidecar::DEFAULT_URL)
 }
 
 pub(crate) fn uninstall_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Result<(), String> {
@@ -55,10 +66,20 @@ pub(crate) fn doctor_plugin(
     gateway_url: &str,
     plugin_root: &Path,
 ) -> Result<(), String> {
+    doctor_plugin_with_generation(agent, gateway_url, plugin_root, None)
+}
+
+pub(crate) fn doctor_plugin_with_generation(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
     if doctor_ok(
         agent,
         gateway_url,
         Some(&plugin_root.join("hooks").join("hooks.json")),
+        generation_token,
     )? {
         Ok(())
     } else {
@@ -134,6 +155,7 @@ fn doctor_ok(
     agent: CodingAgent,
     gateway_url: &str,
     plugin_hooks_path: Option<&Path>,
+    generation_token: Option<&str>,
 ) -> Result<bool, String> {
     let mut ok = true;
     ok &= print_check(
@@ -159,11 +181,11 @@ fn doctor_ok(
             let plugin_hooks_path = plugin_hooks_path
                 .ok_or_else(|| "Codex plugin hooks path is required for doctor".to_string())?;
             let provider = codex_provider_installed(gateway_url);
-            let hooks = codex_hooks_installed(plugin_hooks_path)?;
+            let hooks = codex_hooks_installed_with_generation(plugin_hooks_path, generation_token)?;
             ok &= print_check("codex provider alias", provider);
             ok &= print_check("codex hooks", hooks);
             let trust = if hooks {
-                codex_hook_trust_report(plugin_hooks_path)?
+                codex_hook_trust_report_with_generation(plugin_hooks_path, generation_token)?
             } else {
                 empty_codex_hook_trust_report()
             };

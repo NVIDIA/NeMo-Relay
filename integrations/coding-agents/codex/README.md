@@ -23,7 +23,7 @@ used by the installer.
 - `.mcp.json` starts the native `nemo-relay mcp` lifecycle client and requires
   successful gateway initialization.
 - `hooks/hooks.json` contains Codex hook entries that run
-  `nemo-relay hook-forward codex`.
+  `nemo-relay hook-forward codex --forward-only`.
 - `nemo-relay install codex` creates the local marketplace, installs the plugin,
   and persists Codex provider and exact plugin-hook trust using `nemo-relay`
   from `PATH`.
@@ -75,7 +75,8 @@ or reduce the managed Python environment before retrying. Concurrent Codex,
 Claude Code, and configured Hermes processes can share the gateway and
 heartbeat it every 30 seconds. The sidecar
 remains available for 300 idle seconds after the final client closes. If it dies
-while MCP remains open, one coordinated restart is attempted. The MCP server
+while MCP remains open, one endpoint-coordinated restart is attempted across
+all overlapping MCP clients and persistent hook deliveries. The MCP server
 advertises no tools.
 
 On Windows, Relay requests Job Object breakaway only when the host job permits
@@ -93,15 +94,19 @@ provider, Relay, OpenTelemetry, AWS, proxy, certificate, and config-referenced
 credential variable names without storing values.
 
 The installer also derives a per-user HMAC proof from Relay's owner-only
-bootstrap key and places the proof in the managed provider headers. The shared
+bootstrap key and places the proof in the managed provider headers. It writes
+the secret-bearing Codex config with an owner-only mode on Unix or a protected
+owner/System DACL on Windows. The shared
 sidecar requires that proof before it injects a forwarded provider credential,
 then removes the proof before middleware, observability, and upstream
 forwarding. This prevents an unrelated loopback caller from spending the
 sidecar's credentials.
 
-Plugin-owned hook commands pin `http://127.0.0.1:47632` explicitly, so an
-ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from the
-required MCP-managed gateway.
+Installer-owned hook commands pin `http://127.0.0.1:47632` and their private
+install-generation file explicitly. Each delivery temporarily joins the same
+recovery cohort as the MCP clients, so it cannot create an unaccounted second
+replacement. An ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from
+the required MCP-managed gateway.
 
 If the Relay version, user configuration, or forwarded credentials change, an
 MCP client refuses to reuse the incompatible sidecar. `nemo-relay install codex
@@ -136,10 +141,15 @@ nemo-relay run -- codex
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
-enables Codex hooks with CLI config overrides, injects hook commands that use
-`NEMO_RELAY_GATEWAY_URL`, and points Codex at a temporary `nemo-relay-openai`
-provider alias that uses the gateway URL while preserving Codex's OpenAI auth
-path.
+enables Codex hooks with CLI config overrides, injects hook commands that embed
+the gateway URL, and points Codex at a temporary `nemo-relay-openai` provider
+alias while preserving Codex's OpenAI auth path. It trusts only the exact
+generated session-hook commands and disables the known local and source Relay
+plugin hook identities in Codex's process-local CLI layer. It does not replace
+or rewrite the selected profile. An enabled Relay plugin MCP authenticates,
+borrows, and monitors that exact dynamic gateway, while only the wrapper hooks
+remain enabled for that process. Those hooks authenticate the wrapper gateway
+before sending lifecycle payloads.
 
 Inspect the launch without starting Codex:
 
@@ -300,7 +310,9 @@ codex plugin add nemo-relay-plugin@nemo-relay
 
 That path reads `.agents/plugins/marketplace.json` from the repository and
 installs this Codex plugin from `integrations/coding-agents/codex`. Source hooks
-invoke `nemo-relay hook-forward codex` directly.
+use `nemo-relay hook-forward codex --forward-only` to post to the gateway
+started by required MCP without an installer-owned generation fence. They
+cannot launch or recover Relay.
 
 Treat the source marketplace path as discovery or manifest validation. Use
 `nemo-relay install codex` for the complete provider, environment-forwarding,

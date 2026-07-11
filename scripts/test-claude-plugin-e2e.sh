@@ -30,7 +30,11 @@ cleanup() {
         kill "$provider_pid" 2>/dev/null || true
         wait "$provider_pid" 2>/dev/null || true
     fi
-    rm -rf "$work"
+    if [[ "${RELAY_E2E_KEEP_WORK:-0}" == "1" ]]; then
+        echo "Claude Code E2E workspace retained at $work" >&2
+    else
+        rm -rf "$work"
+    fi
 }
 trap cleanup EXIT
 
@@ -115,11 +119,13 @@ plugins = json.loads(subprocess.check_output(["claude", "plugin", "list", "--jso
 relay = [item for item in plugins if item.get("id") == "nemo-relay-plugin@nemo-relay-local"]
 assert len(relay) == 1, relay
 server = relay[0]["mcpServers"]["nemo-relay"]
-assert server["args"] == ["mcp", "--agent", "claude"], server
+assert server["args"] == ["mcp"], server
 assert server["env"]["NEMO_RELAY_GATEWAY_BIND"] == "127.0.0.1:47632", server
 generation = Path(server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"])
 assert generation == plugin_root / ".nemo-relay-generation", generation
 assert generation.is_file(), generation
+generation_token = server["env"]["NEMO_RELAY_MCP_GENERATION"]
+assert generation_token == generation.read_text().splitlines()[0].strip(), server
 assert server["alwaysLoad"] is True, server
 PY
 
@@ -172,7 +178,90 @@ assert '"hasTools":false' in log, log
 PY
 }
 
+run_transparent_claude() {
+    output="$work/claude-transparent.json"
+    stderr="$work/claude-transparent.stderr"
+    debug="$work/claude-transparent.debug.log"
+    (
+        cd "$work/workspace"
+        nemo-relay run \
+            --config "$XDG_CONFIG_HOME/nemo-relay/config.toml" \
+            -- \
+            claude \
+            --settings "$work/claude-user-settings.json" \
+            -p "ping" \
+            --output-format json \
+            --no-session-persistence \
+            --tools "" \
+            --debug-file "$debug"
+    ) >"$output" 2>"$stderr"
+    python3 - "$output" "$stderr" "$debug" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output, stderr, debug = map(Path, sys.argv[1:])
+result = json.loads(output.read_text())
+assert result["subtype"] == "success", (result, stderr.read_text())
+assert result["result"] == "pong", result
+log = debug.read_text()
+assert 1 <= log.count("Hook SessionStart:startup") <= 2, log
+assert 1 <= log.count("Hook UserPromptSubmit") <= 2, log
+assert 1 <= log.count('Hook Stop (Stop) success') <= 2, log
+assert 1 <= log.count("SessionEnd:other") <= 2, log
+assert log.count('MCP server "plugin:nemo-relay-plugin:nemo-relay": Successfully connected') == 1, log
+PY
+}
+
+# The transparent wrapper preserves the explicit Claude settings source. The installed Relay MCP
+# borrows the dynamic gateway, while its persistent hooks exit without duplicating ATOF delivery.
+cat >"$work/claude-user-settings.json" <<'EOF'
+{
+  "model": "claude-haiku-4-5",
+  "enabledPlugins": {
+    "nemo-relay-plugin@nemo-relay-local": true
+  }
+}
+EOF
+cp "$HOME/.claude/settings.json" "$work/claude-settings-before-transparent.json"
+cp "$work/claude-user-settings.json" "$work/claude-user-settings-before-transparent.json"
+: >"$provider_log"
+events="$work/atof/events.jsonl"
+rm -f "$events"
 wait_for_relay_port_release
+run_transparent_claude
+wait_for_relay_port_release
+cmp "$HOME/.claude/settings.json" "$work/claude-settings-before-transparent.json"
+cmp "$work/claude-user-settings.json" "$work/claude-user-settings-before-transparent.json"
+python3 - "$provider_log" "$events" <<'PY'
+import json
+import sys
+from urllib.parse import urlparse
+
+requests = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+messages = [row for row in requests if urlparse(row["path"]).path.endswith("/messages")]
+assert len(messages) == 1, requests
+assert messages[0]["model"] == "claude-haiku-4-5", messages
+events = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8") if line.strip()]
+turn_starts = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("name") == "claude-code-turn"
+    and event.get("scope_category") == "start"
+]
+turn_ends = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("name") == "claude-code-turn"
+    and event.get("scope_category") == "end"
+]
+assert len(turn_starts) == len(turn_ends) == 1, (turn_starts, turn_ends)
+PY
+nemo-relay doctor --plugin claude-code --install-dir "$work/install"
+
+wait_for_relay_port_release
+: >"$provider_log"
+rm -f "$events"
 for run_id in $(seq 1 10); do
     run_claude "$run_id"
     wait_for_relay_port_release
@@ -252,7 +341,10 @@ assert len(llm_starts) == len(llm_ends) == 12, (len(llm_starts), len(llm_ends))
 session_ids = {event["metadata"]["session_id"] for event in turn_starts}
 assert len(session_ids) == 12, session_ids
 
-debug_logs = list(work.glob("claude-*.debug.log"))
+debug_logs = [
+    path for path in work.glob("claude-*.debug.log")
+    if path.name != "claude-transparent.debug.log"
+]
 assert len(debug_logs) == 12, debug_logs
 PY
 

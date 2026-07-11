@@ -826,7 +826,9 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         crate::agent_process::resolve_executable("/definitely/missing"),
         None
     );
-    let binary = temp.path().join("agent-bin");
+    let binary = temp
+        .path()
+        .join(format!("agent-bin{}", std::env::consts::EXE_SUFFIX));
     std::fs::write(&binary, "").unwrap();
     assert_eq!(
         crate::agent_process::resolve_executable(binary.to_str().unwrap()).as_deref(),

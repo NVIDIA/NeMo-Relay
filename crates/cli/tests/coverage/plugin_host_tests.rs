@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::{BTreeSet, VecDeque};
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -16,6 +18,8 @@ use toml_edit::{DocumentMut, Item, Value as TomlValue};
 
 use super::*;
 use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
+
+const TEST_PLUGIN_GENERATION: &str = "test-generation";
 
 #[derive(Default)]
 struct FakeCodexHooksClient {
@@ -82,7 +86,47 @@ impl CodexHooksClient for FakeCodexHooksClient {
 }
 
 fn expected_plugin_command() -> String {
-    expected_plugin_hook_command().unwrap()
+    let relay = current_exe().unwrap();
+    let relay = relay.canonicalize().unwrap_or(relay);
+    let relay = portable_executable_path(relay);
+    codex_plugin_hook_command(
+        &relay,
+        Path::new("/tmp/nemo-relay-plugin/.nemo-relay-generation"),
+        TEST_PLUGIN_GENERATION,
+    )
+    .unwrap()
+}
+
+fn write_plugin_generation_for_hooks(path: &Path) {
+    let plugin_root = path.parent().and_then(Path::parent).unwrap();
+    fs::create_dir_all(plugin_root).unwrap();
+    fs::write(
+        plugin_root.join(crate::install_generation::GENERATION_FILE_NAME),
+        format!("{TEST_PLUGIN_GENERATION}\n"),
+    )
+    .unwrap();
+}
+
+fn expected_plugin_command_for_hooks(path: &Path) -> String {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|value| {
+            value
+                .get("hooks")?
+                .as_object()?
+                .values()
+                .next()?
+                .as_array()?
+                .first()?
+                .get("hooks")?
+                .as_array()?
+                .first()?
+                .get("command")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(expected_plugin_command)
 }
 
 fn empty_codex_hooks_client() -> FakeCodexHooksClient {
@@ -95,11 +139,12 @@ fn empty_codex_hooks_client() -> FakeCodexHooksClient {
 fn write_plugin_hooks(plugin_root: &Path) -> PathBuf {
     let path = plugin_root.join("hooks").join("hooks.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_plugin_generation_for_hooks(&path);
     fs::write(
         &path,
         serde_json::to_vec_pretty(&generated_hooks(
             CodingAgent::Codex,
-            &expected_plugin_command(),
+            &expected_plugin_hook_command(&path).unwrap(),
         ))
         .unwrap(),
     )
@@ -119,13 +164,14 @@ fn codex_hook_metadata(
     } else {
         hooks_path.to_path_buf()
     };
+    write_plugin_generation_for_hooks(&hooks_path);
     if !hooks_path.exists() {
         fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
         fs::write(
             &hooks_path,
             serde_json::to_vec_pretty(&generated_hooks(
                 CodingAgent::Codex,
-                &expected_plugin_command(),
+                &expected_plugin_command_for_hooks(&hooks_path),
             ))
             .unwrap(),
         )
@@ -135,7 +181,7 @@ fn codex_hook_metadata(
         key: key.into(),
         event_name: event_name.into(),
         handler_type: "command".into(),
-        command: Some(expected_plugin_command()),
+        command: Some(expected_plugin_command_for_hooks(&hooks_path)),
         source_path: hooks_path.display().to_string(),
         source: "plugin".into(),
         plugin_id: Some(CODEX_PLUGIN_ID.into()),
@@ -892,7 +938,10 @@ fn codex_auto_trust_rejects_modified_loaded_plugin_hook_file() {
     .unwrap();
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
-    let hooks = required_codex_hook_metadata(&reported_hooks_path, "untrusted", true);
+    let mut hooks = required_codex_hook_metadata(&reported_hooks_path, "untrusted", true);
+    for hook in &mut hooks {
+        hook.command = Some(expected_plugin_command());
+    }
     let mut client = FakeCodexHooksClient {
         hook_lists: VecDeque::from([Ok(hooks)]),
         ..FakeCodexHooksClient::default()
@@ -1110,6 +1159,438 @@ fn repeated_codex_install_does_not_overwrite_original_backup() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn codex_install_tightens_the_secret_bearing_config_to_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn codex_reinstall_refreshes_a_stale_backup_before_overwriting_user_changes() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let user_owned = "model_provider = \"local\"\ncustom = \"preserve-me\"\n";
+    fs::write(&path, user_owned).unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    assert_eq!(fs::read_to_string(backup_path(&path)).unwrap(), user_owned);
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), user_owned);
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
+fn codex_reinstall_sanitizes_managed_fields_from_a_partial_edit_backup() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let installed = fs::read_to_string(&path).unwrap();
+    let partially_edited = installed.replacen(
+        "model_provider = \"nemo-relay-openai\"",
+        "model_provider = \"local\"",
+        1,
+    );
+    assert_ne!(installed, partially_edited);
+    fs::write(&path, partially_edited).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let backup = fs::read_to_string(backup_path(&path)).unwrap();
+    assert!(backup.contains("model_provider = \"local\""));
+    assert!(!backup.contains("nemo-relay-openai"));
+    assert!(!backup.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("model_provider = \"local\""));
+    assert!(!uninstalled.contains("nemo-relay-openai"));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
+fn codex_uninstall_migrates_a_contaminated_legacy_backup() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        "model_provider = \"openai\"\ncustom = \"preserve-me\"\n",
+    )
+    .unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    // Older partial-reinstall logic could replace the original backup with the complete
+    // generated config. Uninstall must recognize its authenticated proof and not restore it.
+    let contaminated = fs::read(&path).unwrap();
+    fs::write(backup_path(&path), contaminated).unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("custom = \"preserve-me\""));
+    assert!(!uninstalled.contains("nemo-relay-openai"));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!uninstalled.contains("hooks = true"));
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
+fn codex_backup_migration_preserves_user_provider_extensions() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let extended = fs::read_to_string(&path).unwrap().replace(
+        "name = \"NeMo Relay\"",
+        "name = \"NeMo Relay\"\nuser_option = \"keep\"",
+    );
+    fs::write(&path, &extended).unwrap();
+    fs::write(backup_path(&path), &extended).unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("user_option = \"keep\""));
+    assert!(!uninstalled.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!uninstalled.contains("hooks = true"));
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
+fn codex_reinstall_round_trips_user_provider_fields_and_headers() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let mut extended = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let provider = extended["model_providers"]["nemo-relay-openai"]
+        .as_table_mut()
+        .unwrap();
+    provider["user_option"] = Item::Value(TomlValue::from("keep"));
+    provider["http_headers"]
+        .as_inline_table_mut()
+        .unwrap()
+        .insert("x-user-header", TomlValue::from("keep-header"));
+    fs::write(&path, extended.to_string()).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let reinstalled = fs::read_to_string(&path).unwrap();
+    assert!(reinstalled.contains("user_option = \"keep\""));
+    assert!(reinstalled.contains("x-user-header = \"keep-header\""));
+    assert!(reinstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    let backup = fs::read_to_string(backup_path(&path)).unwrap();
+    assert!(backup.contains("model_provider = \"openai\""));
+    assert!(backup.contains("user_option = \"keep\""));
+    assert!(backup.contains("x-user-header = \"keep-header\""));
+    assert!(!backup.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(backup.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("model_provider = \"openai\""));
+    assert!(uninstalled.contains("user_option = \"keep\""));
+    assert!(uninstalled.contains("x-user-header = \"keep-header\""));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(!uninstalled.contains("hooks = true"));
+}
+
+#[test]
+fn codex_direct_uninstall_preserves_a_complete_extended_provider_inactively() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut extended = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let provider = extended["model_providers"]["nemo-relay-openai"]
+        .as_table_mut()
+        .unwrap();
+    provider["user_option"] = Item::Value(TomlValue::from("keep"));
+    provider["http_headers"]
+        .as_inline_table_mut()
+        .unwrap()
+        .insert("x-user-header", TomlValue::from("keep-header"));
+    fs::write(&path, extended.to_string()).unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("model_provider = \"openai\""));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains("name = \"NeMo Relay\""));
+    assert!(uninstalled.contains("user_option = \"keep\""));
+    assert!(uninstalled.contains("x-user-header = \"keep-header\""));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!uninstalled.contains("hooks = true"));
+}
+
+#[test]
+fn codex_uninstall_sanitizes_an_extended_contaminated_backup_without_the_key() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\ncustom = \"keep\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let provider = installed["model_providers"]["nemo-relay-openai"]
+        .as_table_mut()
+        .unwrap();
+    provider["user_option"] = Item::Value(TomlValue::from("keep"));
+    provider["http_headers"]
+        .as_inline_table_mut()
+        .unwrap()
+        .insert("x-user-header", TomlValue::from("keep-header"));
+    fs::write(&path, installed.to_string()).unwrap();
+    fs::write(backup_path(&path), fs::read(&path).unwrap()).unwrap();
+    let key_path = crate::config::user_config_dir()
+        .unwrap()
+        .join("bootstrap/fingerprint-hmac.key");
+    fs::remove_file(key_path).unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("custom = \"keep\""));
+    assert!(!uninstalled.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains("user_option = \"keep\""));
+    assert!(uninstalled.contains("x-user-header = \"keep-header\""));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!uninstalled.contains("hooks = true"));
+}
+
+#[test]
+fn codex_uninstall_sanitizes_an_extended_contaminated_backup_after_key_rotation() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\ncustom = \"keep\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let provider = installed["model_providers"]["nemo-relay-openai"]
+        .as_table_mut()
+        .unwrap();
+    provider["user_option"] = Item::Value(TomlValue::from("keep"));
+    provider["http_headers"]
+        .as_inline_table_mut()
+        .unwrap()
+        .insert("x-user-header", TomlValue::from("keep-header"));
+    fs::write(&path, installed.to_string()).unwrap();
+    fs::write(backup_path(&path), fs::read(&path).unwrap()).unwrap();
+    let key_path = crate::config::user_config_dir()
+        .unwrap()
+        .join("bootstrap/fingerprint-hmac.key");
+    fs::write(key_path, [0x5a; 32]).unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let uninstalled = fs::read_to_string(&path).unwrap();
+    assert!(uninstalled.contains("custom = \"keep\""));
+    assert!(!uninstalled.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(uninstalled.contains(&format!("base_url = \"{DEFAULT_URL}\"")));
+    assert!(uninstalled.contains("user_option = \"keep\""));
+    assert!(uninstalled.contains("x-user-header = \"keep-header\""));
+    assert!(!uninstalled.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!uninstalled.contains("hooks = true"));
+}
+
+#[test]
+fn codex_reinstall_repairs_a_rotated_client_proof_and_keeps_custom_headers() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let mut installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    installed["model_providers"]["nemo-relay-openai"]["http_headers"]
+        .as_inline_table_mut()
+        .unwrap()
+        .insert("x-user-header", TomlValue::from("keep-header"));
+    fs::write(&path, installed.to_string()).unwrap();
+    let key_path = crate::config::user_config_dir()
+        .unwrap()
+        .join("bootstrap/fingerprint-hmac.key");
+    fs::write(key_path, [0x3c; 32]).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let reinstalled = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let token = codex_provider_client_token(&reinstalled).unwrap();
+    assert!(
+        BootstrapChallengeKey::load_existing()
+            .unwrap()
+            .unwrap()
+            .verify_client_token(token)
+    );
+    assert_eq!(
+        codex_provider_header(&reinstalled, "x-user-header").and_then(TomlValue::as_str),
+        Some("keep-header")
+    );
+    let backup = fs::read_to_string(backup_path(&path)).unwrap();
+    assert!(!backup.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(backup.contains("x-user-header = \"keep-header\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_install_rollback_restores_original_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let codex_dir = dir.path().join(".codex");
+    let path = codex_dir.join("config.toml");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let error = install_codex_with_trust(
+        DEFAULT_URL,
+        &expected_plugin_command(),
+        |_home, _config, _command| Err("injected trust failure".into()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("injected trust failure"), "{error}");
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "model_provider = \"openai\"\n"
+    );
+    assert_eq!(
+        fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn codex_install_rollback_restores_the_original_windows_dacl() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let codex_dir = dir.path().join(".codex");
+    let path = codex_dir.join("config.toml");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    set_windows_dacl(&path, "D:P(A;;FA;;;SY)(A;;GRGW;;;WD)");
+    let original_dacl = crate::file_io::read_windows_dacl(&path).unwrap();
+
+    let error = install_codex_with_trust(
+        DEFAULT_URL,
+        &expected_plugin_command(),
+        |_home, _config, _command| Err("injected trust failure".into()),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("injected trust failure"), "{error}");
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "model_provider = \"openai\"\n"
+    );
+    assert_eq!(
+        crate::file_io::read_windows_dacl(&path).unwrap(),
+        original_dacl
+    );
+}
+
+#[cfg(windows)]
+fn set_windows_dacl(path: &Path, sddl: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        SetFileSecurityW,
+    };
+
+    let sddl = std::ffi::OsStr::new(sddl)
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: The SDDL is NUL-terminated and the output pointer is valid.
+    assert_ne!(
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        },
+        0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    // SAFETY: The path and descriptor are valid for the duration of the call.
+    let result = unsafe {
+        SetFileSecurityW(
+            path.as_ptr(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor,
+        )
+    };
+    // SAFETY: The descriptor was allocated by ConvertStringSecurityDescriptor... above.
+    unsafe { LocalFree(descriptor.cast()) };
+    assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
+}
+
 #[test]
 fn codex_upgrade_adds_client_proof_without_replacing_original_backup() {
     let dir = tempdir().unwrap();
@@ -1269,6 +1750,7 @@ fn codex_hooks_installed_requires_generated_plugin_local_groups() {
     let plugin_root = dir.path().join("plugin");
     let path = plugin_root.join("hooks").join("hooks.json");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
+    write_plugin_generation_for_hooks(&path);
     fs::write(
         &path,
         serde_json::to_vec_pretty(&json!({
@@ -1293,6 +1775,37 @@ fn codex_hooks_installed_requires_generated_plugin_local_groups() {
     assert!(!codex_hooks_installed(&path).unwrap());
     write_plugin_hooks(&plugin_root);
     assert!(codex_hooks_installed(&path).unwrap());
+}
+
+#[test]
+fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
+    let dir = tempdir().unwrap();
+    let plugin_root = dir.path().join("plugin");
+    let hooks_path = plugin_root.join("hooks").join("hooks.json");
+    let generation_path = plugin_root.join(crate::install_generation::GENERATION_FILE_NAME);
+    let generation_lock = dir.path().join("generation-transaction.lock");
+    let token = crate::install_generation::write_new_generation_with_token_at(
+        &generation_path,
+        &generation_lock,
+    )
+    .unwrap();
+    let relay = current_exe().unwrap();
+    let relay = portable_executable_path(relay.canonicalize().unwrap_or(relay));
+    let command = codex_plugin_hook_command(&relay, &generation_path, &token).unwrap();
+    fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
+    fs::write(
+        &hooks_path,
+        serde_json::to_vec_pretty(&generated_hooks(CodingAgent::Codex, &command)).unwrap(),
+    )
+    .unwrap();
+    let _transaction = crate::install_generation::GenerationRetirement::acquire(&generation_path)
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        codex_hooks_installed_with_generation(&hooks_path, Some(&token)).unwrap(),
+        "installer-owned validation must use its verified token instead of reacquiring its lock"
+    );
 }
 
 #[cfg(not(windows))]
@@ -1817,6 +2330,28 @@ supports_websockets = false
 }
 
 #[test]
+fn codex_uninstall_removes_proof_from_a_user_modified_provider() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex/config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path).unwrap();
+    assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    let modified = installed.replacen(DEFAULT_URL, "http://127.0.0.1:49999", 1);
+    assert_ne!(installed, modified);
+    fs::write(&path, modified).unwrap();
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    let updated = fs::read_to_string(&path).unwrap();
+
+    assert!(updated.contains("base_url = \"http://127.0.0.1:49999\""));
+    assert!(!updated.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
 fn codex_uninstall_without_backup_preserves_user_changed_provider_url() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -1991,7 +2526,7 @@ fn claude_enable_rolls_back_backup_when_settings_write_fails() {
         .unwrap(),
     )
     .unwrap();
-    fs::create_dir(settings.with_extension("json.tmp")).unwrap();
+    crate::file_io::fail_next_atomic_write(&settings);
 
     let error = enable_claude_provider(DEFAULT_URL).unwrap_err();
 
@@ -2447,6 +2982,66 @@ fn sidecar_reaper_removes_only_the_exited_process_records() {
     assert!(!pid_path.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn sidecar_reaper_terminates_descendants_left_by_an_exited_gateway() {
+    let dir = tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let owner_path = sidecar_owner_path(dir.path(), url);
+    let pid_path = sidecar_pid_path(dir.path(), url);
+    let descendant_pid_path = dir.path().join("descendant.pid");
+    let endpoint_lock = lock_sidecar_endpoint(dir.path(), url).unwrap();
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", "sleep 30 & echo $! > \"$1\"; exit 0", "sh"])
+        .arg(&descendant_pid_path);
+    configure_detached_sidecar(&mut command);
+    let child = command.spawn().unwrap();
+    let pid = child.id();
+    write_sidecar_owner(
+        &owner_path,
+        pid,
+        url,
+        "test-shutdown-token",
+        Some("test-fingerprint"),
+    )
+    .unwrap();
+    fs::write(&pid_path, pid.to_string()).unwrap();
+    handoff_sidecar_to_reaper(
+        child,
+        owner_path.clone(),
+        pid_path.clone(),
+        sidecar_lock_path(dir.path(), url),
+    )
+    .unwrap();
+    drop(endpoint_lock);
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !descendant_pid_path.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let descendant_pid = fs::read_to_string(&descendant_pid_path)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        // SAFETY: Signal 0 only checks whether the finite test process is still present.
+        let descendant_gone = unsafe { libc::kill(descendant_pid, 0) } == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if descendant_gone && !owner_path.exists() && !pid_path.exists() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            // SAFETY: Best-effort cleanup of the finite test process on assertion failure.
+            unsafe { libc::kill(descendant_pid, libc::SIGKILL) };
+            panic!("sidecar descendant {descendant_pid} survived direct gateway exit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn sidecar_reaper_does_not_block_other_cleanup_on_a_contended_lock() {
     let dir = tempdir().unwrap();
@@ -2562,17 +3157,33 @@ fn runtime_dir_prefers_explicit_runtime_base_without_user_segment() {
 }
 
 #[test]
-fn codex_hook_command_uses_cmd_quoting_for_windows_paths() {
+fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe");
-    let command = codex_hook_command_for_platform(&relay, DEFAULT_URL, true);
-
+    let generation =
+        std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\plugin\.nemo-relay-generation");
     assert_eq!(
-        command,
-        r#""C:\Program Files\NeMo 100%%cd:~,%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
+        shell_quote_arg_for_platform(relay.to_str().unwrap(), true),
+        r#""C:\Program Files\NeMo 100%%cd:~,%\bin\nemo-relay.exe""#
     );
     assert_eq!(
-        codex_plugin_hook_command_for_platform(&relay, true),
-        r#""C:\Program Files\NeMo 100%%cd:~,%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
+        crate::installer::decode_windows_hook_command(&codex_plugin_hook_command_for_platform(
+            &relay,
+            &generation,
+            "test-generation",
+            true,
+        ))
+        .unwrap(),
+        vec![
+            relay.display().to_string(),
+            "hook-forward".into(),
+            "codex".into(),
+            "--gateway-url".into(),
+            DEFAULT_URL.into(),
+            "--generation-file".into(),
+            generation.display().to_string(),
+            "--generation-token".into(),
+            "test-generation".into(),
+        ]
     );
     assert_eq!(
         shell_quote_arg_for_platform("foo&bar", true),
@@ -2585,29 +3196,78 @@ fn codex_hook_command_uses_cmd_quoting_for_windows_paths() {
 #[test]
 fn generated_windows_hook_command_executes_exact_arguments() {
     let temp = tempfile::tempdir().unwrap();
-    let bin = temp.path().join("Relay & %USERPROFILE% Tools");
+    let bin = temp.path().join("Relay & %USERPROFILE% !^ Tools");
     std::fs::create_dir(&bin).unwrap();
-    let relay = bin.join("nemo-relay.cmd");
+    let relay = bin.join("nemo-relay.exe");
+    compile_windows_hook_test_relay(&relay);
     let marker = temp.path().join("hook-ran.txt");
-    std::fs::write(
-        &relay,
-        "@echo off\r\n\
-         @if not \"%~1\"==\"hook-forward\" exit /b 11\r\n\
-         @if not \"%~2\"==\"codex\" exit /b 12\r\n\
-         @if not \"%~3\"==\"--gateway-url\" exit /b 13\r\n\
-         @if not \"%~4\"==\"http://127.0.0.1:47632\" exit /b 14\r\n\
-         @echo ok>\"%NEMO_RELAY_HOOK_MARKER%\"\r\n",
-    )
-    .unwrap();
-    let command = codex_plugin_hook_command_for_platform(&relay, true);
-    let status = std::process::Command::new("cmd.exe")
-        .args(["/d", "/v:off", "/s", "/c", &command])
+    let input_marker = temp.path().join("hook-input.txt");
+    let generation = temp.path().join("Generation & %USERPROFILE%");
+    let command = codex_plugin_hook_command(&relay, &generation, "test-generation").unwrap();
+    let mut child = std::process::Command::new("cmd.exe")
+        .arg("/C")
+        .arg(&command)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .env("NEMO_RELAY_HOOK_MARKER", &marker)
+        .env("NEMO_RELAY_HOOK_INPUT_MARKER", &input_marker)
+        .env("NEMO_RELAY_HOOK_GENERATION", &generation)
+        .env("NEMO_RELAY_HOOK_EMIT_OUTPUT", "1")
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(b"ping\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success(), "{command}");
+    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
+    assert_eq!(std::fs::read(input_marker).unwrap(), b"ping\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "hook-stdout"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "hook-stderr"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn generated_windows_hook_command_propagates_the_relay_exit_code() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = temp.path().join("relay failure.exe");
+    compile_windows_hook_test_relay(&relay);
+    let generation = temp.path().join("generation");
+    let command = codex_plugin_hook_command(&relay, &generation, "test-generation").unwrap();
+
+    let status = std::process::Command::new("cmd.exe")
+        .arg("/C")
+        .arg(&command)
+        .env("NEMO_RELAY_HOOK_GENERATION", &generation)
+        .env("NEMO_RELAY_HOOK_EXIT_CODE", "23")
         .status()
         .unwrap();
 
-    assert!(status.success(), "{command}");
-    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
+    assert_eq!(status.code(), Some(23), "{command}");
+}
+
+#[cfg(windows)]
+fn compile_windows_hook_test_relay(output: &Path) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/windows_hook_relay.rs");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let compiled = std::process::Command::new(rustc)
+        .arg(source)
+        .args(["--edition", "2024", "-o"])
+        .arg(output)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "failed to compile native hook fixture: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
 }
 
 #[test]
@@ -2628,17 +3288,17 @@ fn windows_sidecar_flags_only_request_permitted_job_breakaway() {
 }
 
 #[test]
-fn codex_hook_command_uses_posix_single_quote_escaping() {
+fn posix_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from("/tmp/NeMo $Relay`test'/bin/nemo-relay");
-    let command = codex_hook_command_for_platform(&relay, DEFAULT_URL, false);
-
+    let generation =
+        std::path::PathBuf::from("/tmp/NeMo $Relay`test'/plugin/.nemo-relay-generation");
     assert_eq!(
-        command,
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632"
+        shell_quote_arg_for_platform(relay.to_str().unwrap(), false),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay'"
     );
     assert_eq!(
-        codex_plugin_hook_command_for_platform(&relay, false),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632"
+        codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", false),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632 --generation-file '/tmp/NeMo $Relay`test'\\''/plugin/.nemo-relay-generation' --generation-token test-generation"
     );
     assert_eq!(shell_quote_arg_for_platform("", false), "''");
     assert_eq!(
@@ -2691,7 +3351,11 @@ fn ensure_sidecar_releases_lock_when_startup_fails_fast() {
     let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &runtime);
 
     let error = loopback_bind("not a loopback url")
-        .and_then(|bind| GatewaySpec::new(CodingAgent::Codex, bind).ensure())
+        .and_then(|bind| {
+            GatewaySpec::new(bind)
+                .acquire()
+                .map(|result| result.endpoint)
+        })
         .unwrap_err();
 
     assert!(error.contains("loopback URL"));
@@ -2710,7 +3374,7 @@ fn healthz_rejects_foreign_success_response() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
-        for _ in 0..4 {
+        for _ in 0..3 {
             let (mut stream, _) = listener.accept().unwrap();
             let _ = read_http_request(&mut stream);
             stream
@@ -2721,7 +3385,10 @@ fn healthz_rejects_foreign_success_response() {
         }
     });
 
-    let error = ensure_sidecar_bind(CodingAgent::Codex, address).unwrap_err();
+    let error = GatewaySpec::new(address)
+        .acquire()
+        .err()
+        .expect("foreign listener unexpectedly acquired");
     assert!(
         error.contains("not a compatible NeMo Relay gateway"),
         "{error}"
@@ -2743,25 +3410,27 @@ fn startup_reprobes_a_transient_foreign_health_result_after_locking() {
             .unwrap();
         drop(starting);
 
-        let (mut ready, _) = listener.accept().unwrap();
-        let _ = read_http_request(&mut ready);
         let body = format!(
             r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
             env!("CARGO_PKG_VERSION"),
             BOOTSTRAP_PROTOCOL_VERSION
         );
-        ready
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
+        for _ in 0..2 {
+            let (mut ready, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut ready);
+            ready
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
                 )
-                .as_bytes(),
-            )
-            .unwrap();
+                .unwrap();
+        }
     });
 
-    let endpoint = ensure_sidecar_bind(CodingAgent::Codex, address).unwrap();
+    let endpoint = GatewaySpec::new(address).acquire().unwrap().endpoint;
 
     assert_eq!(endpoint.address, address);
     handle.join().unwrap();
@@ -2781,33 +3450,30 @@ fn active_startup_lock_waits_for_relay_identity_instead_of_rejecting_listener() 
     let lock_path = sidecar_lock_path(&state, &url);
     let owner_lock = lock_sidecar_endpoint(&state, &url).unwrap();
     let handle = thread::spawn(move || {
-        let (mut starting, _) = listener.accept().unwrap();
-        let _ = read_http_request(&mut starting);
-        starting
-            .write_all(b"HTTP/1.1 503 Starting\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .unwrap();
-        drop(starting);
+        thread::sleep(Duration::from_millis(50));
         drop(owner_lock);
 
-        let (mut ready, _) = listener.accept().unwrap();
-        let _ = read_http_request(&mut ready);
         let body = format!(
             r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
             env!("CARGO_PKG_VERSION"),
             BOOTSTRAP_PROTOCOL_VERSION
         );
-        ready
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
+        for _ in 0..2 {
+            let (mut ready, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut ready);
+            ready
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
                 )
-                .as_bytes(),
-            )
-            .unwrap();
+                .unwrap();
+        }
     });
 
-    let endpoint = ensure_sidecar_bind(CodingAgent::Codex, address).unwrap();
+    let endpoint = GatewaySpec::new(address).acquire().unwrap().endpoint;
 
     assert_eq!(endpoint.address, address);
     assert_eq!(endpoint.url, format!("http://{address}"));
@@ -2829,7 +3495,7 @@ fn start_sidecar_reports_child_exit_before_healthz_ready() {
     fs::set_permissions(&relay, permissions).unwrap();
     let _binary = EnvVarGuard::set_path("NEMO_RELAY_PLUGIN_BINARY", &relay);
 
-    let error = start_sidecar(CodingAgent::Codex, "http://127.0.0.1:0", dir.path()).unwrap_err();
+    let error = start_sidecar("http://127.0.0.1:0", dir.path()).unwrap_err();
 
     assert!(error.contains("exited before becoming ready"), "{error}");
     assert!(!dir.path().join("codex-sidecar.pid").exists());
@@ -2966,8 +3632,15 @@ fn codex_install_hooks_persist_custom_gateway_url() {
         .as_str()
         .unwrap();
 
-    assert!(command.contains("hook-forward codex"));
-    assert!(command.contains("--gateway-url http://127.0.0.1:47633"));
+    assert!(crate::hook_assertions::command_has_arguments(
+        command,
+        &[
+            "hook-forward",
+            "codex",
+            "--gateway-url",
+            "http://127.0.0.1:47633",
+        ]
+    ));
 }
 
 #[test]
@@ -3055,6 +3728,7 @@ fn codex_install_does_not_write_provider_config_when_hooks_are_invalid() {
     .unwrap();
     let plugin_hooks = dir.path().join("plugin").join("hooks").join("hooks.json");
     fs::create_dir_all(plugin_hooks.parent().unwrap()).unwrap();
+    write_plugin_generation_for_hooks(&plugin_hooks);
     fs::write(&plugin_hooks, "{ invalid json").unwrap();
 
     let error = install_codex(DEFAULT_URL, &plugin_hooks).unwrap_err();
@@ -3148,7 +3822,7 @@ fn codex_install_config_rolls_back_backup_when_write_fails() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
     fs::write(&path, "model_provider = \"openai\"\n").unwrap();
-    fs::create_dir(path.with_extension("toml.tmp")).unwrap();
+    crate::file_io::fail_next_atomic_write(&path);
 
     let error = install_codex_config(&path, DEFAULT_URL).unwrap_err();
 
@@ -3221,7 +3895,7 @@ fn codex_install_rolls_back_hooks_when_provider_config_write_fails() {
         "model_provider = \"openai\"\n",
     )
     .unwrap();
-    fs::create_dir(codex_dir.join("config.toml.tmp")).unwrap();
+    crate::file_io::fail_next_atomic_write(&codex_dir.join("config.toml"));
     let hooks_path = codex_dir.join("hooks.json");
     let original_hooks = serde_json::to_vec_pretty(&json!({
         "hooks": {
@@ -3597,6 +4271,7 @@ fn plugin_host_entrypoints_reject_unsupported_agents_and_report_json() {
     let plugin_root = dir.path().join("plugin");
     let plugin_hooks = plugin_root.join("hooks").join("hooks.json");
     fs::create_dir_all(plugin_hooks.parent().unwrap()).unwrap();
+    write_plugin_generation_for_hooks(&plugin_hooks);
     fs::write(
         &plugin_hooks,
         serde_json::to_vec_pretty(&json!({

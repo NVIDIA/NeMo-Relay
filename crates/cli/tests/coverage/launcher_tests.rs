@@ -37,6 +37,14 @@ impl EnvScope {
             values: previous,
         }
     }
+
+    fn without_managed_bootstrap() -> Self {
+        Self::set(&[
+            (crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, None),
+            ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
+            (crate::config::BOOTSTRAP_FINGERPRINT_ENV, None),
+        ])
+    }
 }
 
 impl Drop for EnvScope {
@@ -240,6 +248,7 @@ fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
 
 #[test]
 fn prepares_codex_config_overrides() {
+    let _guard = current_dir_lock().lock().unwrap();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -254,6 +263,7 @@ fn prepares_codex_config_overrides() {
     )
     .unwrap();
 
+    assert!(!prepared.argv.iter().any(|arg| arg == "--profile"));
     assert!(prepared.argv.contains(&"features.hooks=true".into()));
     assert!(
         prepared
@@ -285,6 +295,25 @@ fn prepares_codex_config_overrides() {
             .iter()
             .any(|arg| arg.contains("hooks.SessionStart"))
     );
+    let trust = prepared
+        .argv
+        .iter()
+        .find(|arg| arg.starts_with("hooks.state={"))
+        .unwrap();
+    let expected_hooks = generated_hooks(CodingAgent::Codex, "ignored")["hooks"]
+        .as_object()
+        .unwrap()
+        .len();
+    assert_eq!(
+        trust.matches("trusted_hash=\"sha256:").count(),
+        expected_hooks
+    );
+    assert_eq!(trust.matches("enabled=true").count(), expected_hooks);
+    assert!(
+        prepared
+            .env
+            .contains(&(crate::config::TRANSPARENT_RUN_ENV.into(), "1".into()))
+    );
     let path = prepared
         .env
         .iter()
@@ -306,6 +335,7 @@ fn prepares_codex_config_overrides() {
     {
         assert_eq!(entries.last(), Some(&current_exe_dir));
     }
+    prepared.restore().unwrap();
 }
 
 #[test]
@@ -333,6 +363,94 @@ fn prepares_codex_with_hooks_when_auth_missing() {
     .unwrap();
 
     assert!(prepared.argv.iter().any(|arg| arg == "features.hooks=true"));
+}
+
+#[test]
+fn codex_session_hook_trust_matches_codex_discovery_identity() {
+    let generated = generated_hooks(CodingAgent::Codex, "echo relay-probe");
+    let group = generated["hooks"]["UserPromptSubmit"][0]
+        .as_object()
+        .unwrap();
+    let handler = &group["hooks"].as_array().unwrap()[0];
+    assert_eq!(
+        codex_command_hook_hash("user_prompt_submit", group, handler).unwrap(),
+        "sha256:83a9834ee494ffbd4acc85377c579d2c954f9797a9b8832924a326a6a44b0660"
+    );
+
+    let state = codex_session_hook_state_override(&generated).unwrap();
+    assert_eq!(
+        state.matches("trusted_hash=\"sha256:").count(),
+        generated["hooks"].as_object().unwrap().len()
+    );
+    assert!(state.contains("/<session-flags>/config.toml:user_prompt_submit:0:0"));
+    assert!(
+        state.contains("sha256:83a9834ee494ffbd4acc85377c579d2c954f9797a9b8832924a326a6a44b0660")
+    );
+    assert_eq!(
+        state.matches("enabled=true").count(),
+        generated["hooks"].as_object().unwrap().len()
+    );
+    assert_eq!(
+        state.matches("enabled=false").count(),
+        generated["hooks"].as_object().unwrap().len() * 2
+    );
+    assert!(
+        state
+            .contains("nemo-relay-plugin@nemo-relay-local:hooks/hooks.json:user_prompt_submit:0:0")
+    );
+    assert!(state.contains("nemo-relay-plugin@nemo-relay:hooks/hooks.json:user_prompt_submit:0:0"));
+}
+
+#[test]
+fn codex_preserves_profiles_and_prompt_arguments_without_temporary_config() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::Codex,
+        vec![
+            "codex".into(),
+            "--profile".into(),
+            "root".into(),
+            "exec".into(),
+            "--profile=work".into(),
+            "ping".into(),
+            "--".into(),
+            "codex".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
+    assert_eq!(&prepared.argv[separator..], &["--", "codex"]);
+    assert!(
+        prepared.argv[..separator]
+            .windows(2)
+            .any(|pair| pair == ["--profile", "root"])
+    );
+    assert!(
+        prepared.argv[..separator]
+            .iter()
+            .any(|arg| arg == "--profile=work")
+    );
+    assert_eq!(
+        prepared
+            .argv
+            .iter()
+            .filter(|arg| arg.as_str() == "codex")
+            .count(),
+        2
+    );
+    assert!(
+        prepared.argv[1..separator]
+            .iter()
+            .any(|arg| arg == "features.hooks=true")
+    );
 }
 
 #[test]
@@ -483,28 +601,48 @@ fn exporter_destinations_cover_invalid_disabled_and_missing_plugin_configs() {
 }
 
 #[test]
-fn insert_after_agent_uses_last_matching_agent_or_first_word_fallback() {
+fn insert_after_host_uses_the_authoritative_executable_index() {
     let mut argv = vec![
         "wrapper".to_string(),
         "codex".to_string(),
-        "subcommand".to_string(),
-        "/usr/local/bin/codex".to_string(),
+        "exec".to_string(),
+        "--".to_string(),
+        "codex".to_string(),
     ];
-    insert_after_agent(&mut argv, CodingAgent::Codex, ["--config".to_string()]);
+    insert_after_host(&mut argv, 1, ["--config".to_string()]);
     assert_eq!(
         argv,
-        vec![
-            "wrapper",
-            "codex",
-            "subcommand",
-            "/usr/local/bin/codex",
-            "--config"
-        ]
+        vec!["wrapper", "codex", "--config", "exec", "--", "codex"]
     );
+}
 
-    let mut wrapped = vec!["agent-wrapper".to_string(), "run".to_string()];
-    insert_after_agent(&mut wrapped, CodingAgent::Hermes, ["--hook".to_string()]);
-    assert_eq!(wrapped, vec!["agent-wrapper", "--hook", "run"]);
+#[test]
+fn invocation_resolves_wrapper_host_before_appending_pass_through_arguments() {
+    let agents = AgentConfigs {
+        codex: AgentCommandConfig {
+            command: Some("wrapper -- codex".into()),
+            hooks_path: None,
+        },
+        ..AgentConfigs::default()
+    };
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: None,
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: false,
+        print: false,
+        command: vec!["exec".into(), "--".into(), "codex".into()],
+    };
+
+    let invocation = resolve_agent_invocation(&command, &agents).unwrap();
+    assert_eq!(invocation.host_index, 2);
+    assert_eq!(
+        invocation.argv,
+        vec!["wrapper", "--", "codex", "exec", "--", "codex"]
+    );
 }
 
 #[test]
@@ -580,7 +718,7 @@ fn prepares_claude_dry_run_without_writing_plugin() {
 }
 
 #[test]
-fn prepares_claude_dry_inserts_plugin_dir_after_last_agent_executable() {
+fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -664,7 +802,17 @@ fn prepares_hermes_hook_environment() {
         .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
         .expect("Hermes overlay path");
     let hooks = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
-    assert!(hooks.contains("hook-forward hermes"));
+    let hooks: serde_json::Value = serde_yaml::from_str(&hooks).unwrap();
+    assert!(crate::hook_assertions::value_has_command_arguments(
+        &hooks,
+        &[
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            "http://127.0.0.1:1234",
+            "--transparent-run",
+        ],
+    ));
     assert!(overlay.join("state.db").exists());
     assert_eq!(
         std::fs::read_to_string(overlay.join("cache/entry")).unwrap(),
@@ -744,16 +892,32 @@ fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config(
     let second_overlay = overlay(&second);
 
     assert_ne!(first_overlay, second_overlay);
-    assert!(
-        std::fs::read_to_string(first_overlay.join("config.yaml"))
-            .unwrap()
-            .contains("hook-forward hermes")
-    );
-    assert!(
-        std::fs::read_to_string(second_overlay.join("config.yaml"))
-            .unwrap()
-            .contains("hook-forward hermes")
-    );
+    let first_config: serde_json::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(first_overlay.join("config.yaml")).unwrap())
+            .unwrap();
+    let second_config: serde_json::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(second_overlay.join("config.yaml")).unwrap())
+            .unwrap();
+    assert!(crate::hook_assertions::value_has_command_arguments(
+        &first_config,
+        &[
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            "http://127.0.0.1:4001",
+            "--transparent-run",
+        ],
+    ));
+    assert!(crate::hook_assertions::value_has_command_arguments(
+        &second_config,
+        &[
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            "http://127.0.0.1:4002",
+            "--transparent-run",
+        ],
+    ));
     assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
 
     first.restore().unwrap();
@@ -771,7 +935,13 @@ fn hermes_overlay_does_not_link_an_ancestor_entry_that_contains_it() {
     let overlay = source_home.path().join("overlay");
     std::fs::create_dir(&overlay).unwrap();
 
-    populate_hermes_overlay(&overlay, source_home.path(), &source_config).unwrap();
+    populate_hermes_overlay(
+        &overlay,
+        source_home.path(),
+        &source_config,
+        "http://127.0.0.1:1234",
+    )
+    .unwrap();
 
     assert!(!overlay.join("overlay").exists());
     assert!(overlay.join("config.yaml").exists());
@@ -889,8 +1059,17 @@ hooks:
         .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
         .unwrap();
     let patched = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
-    assert!(patched.contains("hook-forward hermes"));
     let patched_yaml: serde_json::Value = serde_yaml::from_str(&patched).unwrap();
+    assert!(crate::hook_assertions::value_has_command_arguments(
+        &patched_yaml,
+        &[
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            "http://s",
+            "--transparent-run",
+        ],
+    ));
     assert!(patched_yaml["mcp_servers"].get("nemo-relay").is_none());
     assert_eq!(
         patched_yaml["mcp_servers"]["filesystem"]["command"],
@@ -924,12 +1103,161 @@ fn prepares_claude_temp_plugin() {
         .unwrap();
     let plugin_dir = PathBuf::from(&prepared.argv[plugin_index + 1]);
     assert!(plugin_dir.join("hooks/hooks.json").exists());
+    assert_eq!(prepared.argv[plugin_index + 2], "--settings");
+    let settings_path = PathBuf::from(&prepared.argv[plugin_index + 3]);
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+    assert_eq!(
+        settings["env"]["ANTHROPIC_BASE_URL"],
+        "http://127.0.0.1:1234"
+    );
+    let hooks: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(plugin_dir.join("hooks/hooks.json")).unwrap())
+            .unwrap();
+    assert!(crate::hook_assertions::value_has_command_arguments(
+        &hooks,
+        &[
+            "hook-forward",
+            "claude",
+            "--gateway-url",
+            "http://127.0.0.1:1234",
+            "--transparent-run",
+        ],
+    ));
     assert!(
         prepared
             .env
             .contains(&("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()))
     );
     prepared.restore().unwrap();
+    assert!(!plugin_dir.exists());
+}
+
+#[test]
+fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("claude-settings.json");
+    let original = br#"{"model":"claude-user-setting-sentinel","enabledPlugins":{"other@market":true,"nemo-relay-plugin@nemo-relay-local":true},"env":{"PRIVATE":"kept"}}"#;
+    std::fs::write(&source, original).unwrap();
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::ClaudeCode,
+        vec![
+            "claude".into(),
+            "--settings".into(),
+            source.display().to_string(),
+            "--settings={\"model\":\"ignored-second-source\"}".into(),
+            "--print".into(),
+            "ping".into(),
+            "--".into(),
+            "--settings".into(),
+            "literal-prompt-value".into(),
+        ],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.argv[1], "--plugin-dir");
+    assert_eq!(prepared.argv[3], "--settings");
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&prepared.argv[4]).unwrap()).unwrap();
+    assert_eq!(overlay["model"], "claude-user-setting-sentinel");
+    assert_eq!(overlay["enabledPlugins"]["other@market"], true);
+    assert_eq!(
+        overlay["enabledPlugins"]["nemo-relay-plugin@nemo-relay-local"],
+        true
+    );
+    assert_eq!(overlay["env"]["PRIVATE"], "kept");
+    assert_eq!(
+        overlay["env"]["ANTHROPIC_BASE_URL"],
+        "http://127.0.0.1:1234"
+    );
+    assert_ne!(overlay["model"], "ignored-second-source");
+    assert!(
+        prepared
+            .argv
+            .windows(2)
+            .any(|pair| { pair == ["--settings", source.to_string_lossy().as_ref()] })
+    );
+    assert!(
+        prepared
+            .argv
+            .iter()
+            .any(|arg| arg.contains("ignored-second-source"))
+    );
+    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
+    assert_eq!(
+        &prepared.argv[separator..],
+        &["--", "--settings", "literal-prompt-value"]
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+    prepared.restore().unwrap();
+}
+
+#[test]
+fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
+    let inline = vec![
+        "claude".into(),
+        "--settings={\"model\":\"kept\",\"env\":{\"PRIVATE\":\"yes\"}}".into(),
+    ];
+    let overlay = claude_settings_overlay(&inline, 0, "http://127.0.0.1:4321").unwrap();
+    assert_eq!(overlay["model"], "kept");
+    assert_eq!(overlay["env"]["PRIVATE"], "yes");
+    assert_eq!(
+        overlay["env"]["ANTHROPIC_BASE_URL"],
+        "http://127.0.0.1:4321"
+    );
+
+    let after_separator = vec![
+        "claude".into(),
+        "--".into(),
+        "--settings".into(),
+        "prompt-value".into(),
+    ];
+    let overlay = claude_settings_overlay(&after_separator, 0, "http://127.0.0.1:4321").unwrap();
+    assert_eq!(overlay.as_object().unwrap().len(), 1);
+
+    let missing = vec!["claude".into(), "--settings".into(), "--".into()];
+    assert!(
+        claude_settings_overlay(&missing, 0, "http://127.0.0.1:4321")
+            .unwrap_err()
+            .to_string()
+            .contains("missing its value")
+    );
+
+    let malformed_env = vec!["claude".into(), "--settings={\"env\":true}".into()];
+    assert!(
+        claude_settings_overlay(&malformed_env, 0, "http://127.0.0.1:4321")
+            .unwrap_err()
+            .to_string()
+            .contains("field `env` must be a JSON object")
+    );
+}
+
+#[test]
+fn claude_prompt_named_like_the_host_does_not_capture_relay_flags() {
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedRun::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into(), "--".into(), "claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap();
+    let separator = prepared.argv.iter().position(|arg| arg == "--").unwrap();
+    assert_eq!(&prepared.argv[separator..], &["--", "claude"]);
+    assert_eq!(prepared.argv[1], "--plugin-dir");
 }
 
 #[test]
@@ -1110,16 +1438,90 @@ entrypoint = "acme.worker:create_plugin"
 
 #[tokio::test]
 async fn wait_for_health_reports_unready_gateway() {
-    let error = wait_for_health("http://127.0.0.1:1")
+    let error = wait_for_health("http://127.0.0.1:1", "test-fingerprint")
         .await
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains("gateway did not become ready"));
+    assert!(error.contains("gateway did not become ready"), "{error}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper_pid_path = temp.path().join("wrapper.pid");
+    let descendant_pid_path = temp.path().join("descendant.pid");
+    let script = temp.path().join("test-agent");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho $$ > \"$1\"\nsh -c 'echo $$ > \"$1\"; while :; do :; done' descendant \"$2\" &\nwait \"$!\"\n",
+    )
+    .unwrap();
+    make_executable(&script);
+    let overlay = temp.path().join("private-overlay");
+    std::fs::create_dir_all(&overlay).unwrap();
+    let prepared = PreparedRun {
+        argv: vec![
+            script.display().to_string(),
+            wrapper_pid_path.display().to_string(),
+            descendant_pid_path.display().to_string(),
+        ],
+        host_index: 0,
+        env: Vec::new(),
+        temp_dirs: vec![overlay.clone()],
+        notes: Vec::new(),
+    };
+    let observed_wrapper_pid_path = wrapper_pid_path.clone();
+    let observed_descendant_pid_path = descendant_pid_path.clone();
+    let task = tokio::spawn(async move {
+        for _ in 0..500 {
+            if observed_wrapper_pid_path.exists() && observed_descendant_pid_path.exists() {
+                return Err(CliError::Launch("injected gateway failure".into()));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Err(CliError::Launch(
+            "test agent did not publish its process ID".into(),
+        ))
+    });
+    let (shutdown_tx, _shutdown_rx) = oneshot::channel();
+    let running_server = RunningGateway { shutdown_tx, task };
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        supervise_prepared_run(&prepared, running_server),
+    )
+    .await
+    .expect("agent supervision did not finish")
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("injected gateway failure"), "{error}");
+    assert!(!overlay.exists());
+    for pid_path in [wrapper_pid_path, descendant_pid_path] {
+        let pid = std::fs::read_to_string(pid_path).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            // SAFETY: Signal 0 performs an existence check and does not alter the target process.
+            let result = unsafe { libc::kill(pid.trim().parse().unwrap(), 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "agent process {pid} was not reaped"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
 }
 
 #[tokio::test]
 async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails() {
+    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvScope::without_managed_bootstrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
@@ -1164,6 +1566,9 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
 
 #[tokio::test]
 async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
+    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvScope::without_managed_bootstrap();
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
     let temp = tempfile::tempdir().unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
     std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
@@ -1193,11 +1598,19 @@ async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
         .iter()
         .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
         .unwrap();
-    assert!(
-        std::fs::read_to_string(overlay.join("config.yaml"))
-            .unwrap()
-            .contains("hook-forward hermes")
-    );
+    let overlay_config: serde_json::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(overlay.join("config.yaml")).unwrap())
+            .unwrap();
+    assert!(crate::hook_assertions::value_has_command_arguments(
+        &overlay_config,
+        &[
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            "http://127.0.0.1:1234",
+            "--transparent-run",
+        ],
+    ));
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let error = execute_live_run(
@@ -1210,7 +1623,7 @@ async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
     .unwrap_err()
     .to_string();
 
-    assert!(error.contains("gateway did not become ready"));
+    assert!(error.contains("gateway did not become ready"), "{error}");
     assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
     assert!(!overlay.exists());
 }

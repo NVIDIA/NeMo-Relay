@@ -3,71 +3,23 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use base64::Engine;
 use futures_util::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
-use crate::config::{CodingAgent, GatewayMode, HookForwardCommand};
+use crate::config::{
+    CodingAgent, GATEWAY_URL_ENV, GatewayMode, HookForwardCommand, TRANSPARENT_RUN_ENV,
+};
 use crate::error::CliError;
-
-// Claude Code validates plugin hooks.json against a strict event-name whitelist — one unknown
-// event rejects the entire plugin's hooks (no hooks register, silently). Both Claude vectors
-// (the transparent-run temp plugin and the marketplace plugin) are plugin hooks.json, so every
-// event here must exist in the minimum Claude Code release prescribed by `coding_agent`.
-// Codex receives a separate event schema because ignored unknown events would make generated
-// hooks impossible to discover and trust exhaustively.
-const CLAUDE_HOOK_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "UserPromptExpansion",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PermissionRequest",
-    "SubagentStart",
-    "SubagentStop",
-    "Notification",
-    "Stop",
-    "PreCompact",
-    "PostCompact",
-    "SessionEnd",
-];
-
-const CODEX_HOOK_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PermissionRequest",
-    "SubagentStart",
-    "SubagentStop",
-    "Stop",
-    "PreCompact",
-    "PostCompact",
-];
+use crate::install_generation::{ActiveGenerationGuard, InstallGeneration};
 
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
+const HOOK_GATEWAY_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
+const HOOK_GATEWAY_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
-
-pub(crate) const HERMES_HOOK_EVENTS: &[&str] = &[
-    "on_session_start",
-    "on_session_end",
-    "on_session_finalize",
-    "on_session_reset",
-    "pre_llm_call",
-    "post_llm_call",
-    "pre_api_request",
-    "post_api_request",
-    // Observer-only failure telemetry. Older Hermes versions ignore unknown hook names during
-    // install, while newer versions use this to close failed provider attempts.
-    "api_request_error",
-    "pre_tool_call",
-    "post_tool_call",
-    "subagent_start",
-    "subagent_stop",
-];
 
 /// Forwards a hook payload from an installed shell command to a running gateway.
 ///
@@ -75,20 +27,73 @@ pub(crate) const HERMES_HOOK_EVENTS: &[&str] = &[
 /// marks. Delivery failures are fail-open by default to avoid blocking coding agents, but
 /// `--fail-closed` converts missing URLs, HTTP failures, and upstream errors into process errors.
 pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliError> {
+    // A transparent wrapper can coexist with any installed Relay plugin. Its process marker makes
+    // persistent plugin hooks inert, while only the wrapper-owned command carries
+    // `--transparent-run` and forwards to the process-private gateway. This avoids rewriting host
+    // plugin settings and works for both installer and source-marketplace plugin identities.
+    if transparent_run_active() && !command.transparent_run {
+        return Ok(());
+    }
     validate_optional_json("session metadata", command.session_metadata.as_deref())?;
     let fail_closed =
         command.fail_closed || std::env::var("NEMO_RELAY_FAIL_CLOSED").ok().as_deref() == Some("1");
     let destination = hook_destination(&command);
-    let recovery = match destination
-        .recover
-        .then(|| recovery_plan(command.agent, &destination.gateway_url))
+    let persistent = match (destination.lifecycle != HookGatewayLifecycle::Transparent)
+        .then(|| recovery_plan(&destination.gateway_url))
         .transpose()
     {
-        Ok(recovery) => recovery,
+        Ok(persistent) => persistent,
         Err(error) => return handle_hook_error(error, fail_closed),
     };
+    let transparent_gateway = match command
+        .transparent_run
+        .then(|| transparent_gateway_spec(&destination.gateway_url))
+        .transpose()
+    {
+        Ok(gateway) => gateway,
+        Err(error) => return handle_hook_error(error, fail_closed),
+    };
+    let mut generation_guard = if destination.lifecycle == HookGatewayLifecycle::Recover {
+        let install_host = command.agent.install_arg();
+        let Some(generation_file) = command.generation_file.clone() else {
+            return handle_hook_error(
+                CliError::Launch(format!(
+                    "persistent {} hook is missing its install-generation fence; run `nemo-relay install {install_host} --force`",
+                    command.agent.label()
+                )),
+                fail_closed,
+            );
+        };
+        let Some(generation_token) = command.generation_token.as_deref() else {
+            return handle_hook_error(
+                CliError::Launch(format!(
+                    "persistent {} hook is missing its expected install-generation identity; run `nemo-relay install {install_host} --force`",
+                    command.agent.label()
+                )),
+                fail_closed,
+            );
+        };
+        match InstallGeneration::capture_guarded_expected(generation_file, generation_token) {
+            Ok((_generation, guard)) => Some(guard),
+            Err(error) => return handle_hook_error(CliError::Launch(error), fail_closed),
+        }
+    } else {
+        None
+    };
+    if destination.lifecycle == HookGatewayLifecycle::Existing {
+        let gateway = persistent
+            .as_ref()
+            .expect("existing persistent destinations resolve a gateway")
+            .gateway
+            .clone();
+        if let Err(error) =
+            wait_for_existing_gateway(gateway, destination.gateway_url.clone()).await
+        {
+            return handle_hook_error(error, fail_closed);
+        }
+    }
     let input = match read_hook_payload(
-        recovery
+        persistent
             .as_ref()
             .map_or(crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES, |launch| {
                 launch.max_hook_payload_bytes
@@ -97,37 +102,76 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliE
         Ok(input) => input,
         Err(error) => return handle_hook_error(error, fail_closed),
     };
+    // Keep this short-lived lease through delivery. Hooks therefore share the same endpoint
+    // recovery cohort as overlapping MCP clients instead of creating unaccounted replacements.
+    let mut gateway_acquisition = if destination.lifecycle == HookGatewayLifecycle::Recover {
+        let launch = persistent
+            .as_ref()
+            .expect("recoverable destinations resolve a gateway");
+        let generation_guard = generation_guard
+            .take()
+            .expect("recoverable destinations have an install generation");
+        match acquire_hook_gateway(launch.gateway.clone(), generation_guard).await {
+            Ok(acquisition) => Some(acquisition),
+            Err(error) => return handle_hook_error(error, fail_closed),
+        }
+    } else {
+        None
+    };
+    let verified_gateway = persistent
+        .as_ref()
+        .map(|launch| &launch.gateway)
+        .or(transparent_gateway.as_ref());
+    if let Some(gateway) = verified_gateway {
+        let mut response = send_verified_hook_forward_request(
+            &command,
+            gateway,
+            &destination.gateway_url,
+            input.clone(),
+        )
+        .await?;
+        if response
+            .as_ref()
+            .is_err_and(crate::sidecar::VerifiedHttpError::is_retryable)
+            && destination.lifecycle == HookGatewayLifecycle::Recover
+        {
+            let acquisition = gateway_acquisition
+                .as_mut()
+                .expect("recoverable destinations hold a gateway acquisition");
+            if let Err(start_error) = recover_hook_gateway(acquisition).await {
+                let transport_error = response
+                    .as_ref()
+                    .expect_err("recovery only follows a retryable transport error");
+                let error = format!(
+                    "nemo-relay hook forward failed: {transport_error}; sidecar recovery failed: {start_error}"
+                );
+                eprintln!("{error}");
+                return if fail_closed {
+                    Err(CliError::Install(error))
+                } else {
+                    Ok(())
+                };
+            }
+            let recovered_gateway = persistent
+                .as_ref()
+                .expect("recoverable destinations resolve a persistent gateway");
+            response = send_verified_hook_forward_request(
+                &command,
+                &recovered_gateway.gateway,
+                &destination.gateway_url,
+                input,
+            )
+            .await?;
+        }
+        return handle_verified_hook_forward_response(response, fail_closed);
+    }
+
     let url = format!(
         "{}{}",
         destination.gateway_url.trim_end_matches('/'),
         command.agent.hook_path()
     );
-    if let Some(launch) = recovery.as_ref()
-        && let Err(error) = recover_gateway(launch.gateway.clone()).await
-    {
-        return handle_hook_error(error, fail_closed);
-    }
-    let mut response = send_hook_forward_request(&command, &url, input.clone()).await?;
-    if response.as_ref().is_err_and(reqwest::Error::is_connect) && destination.recover {
-        let launch = recovery
-            .as_ref()
-            .expect("recoverable destinations have a recovery plan");
-        if let Err(start_error) = recover_gateway(launch.gateway.clone()).await {
-            let transport_error = response
-                .as_ref()
-                .expect_err("recovery only follows a transport error");
-            let error = format!(
-                "nemo-relay hook forward failed: {transport_error}; sidecar recovery failed: {start_error}"
-            );
-            eprintln!("{error}");
-            return if fail_closed {
-                Err(CliError::Install(error))
-            } else {
-                Ok(())
-            };
-        }
-        response = send_hook_forward_request(&command, &url, input).await?;
-    }
+    let response = send_hook_forward_request(&command, &url, input).await?;
     handle_hook_forward_response(response, fail_closed).await
 }
 
@@ -163,7 +207,17 @@ fn read_hook_payload_from(reader: impl Read, limit: usize) -> Result<String, Cli
 
 struct HookDestination {
     gateway_url: String,
-    recover: bool,
+    lifecycle: HookGatewayLifecycle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HookGatewayLifecycle {
+    /// A transparent run owns the dynamic gateway and passes its URL through the environment.
+    Transparent,
+    /// A source plugin may use an authenticated shared gateway but never start or recover one.
+    Existing,
+    /// An installed, generation-fenced hook participates in shared gateway recovery.
+    Recover,
 }
 
 // Installed hooks use the shared fixed gateway and may recover it. Transparent runs set the
@@ -172,46 +226,267 @@ struct HookDestination {
 fn hook_destination(command: &HookForwardCommand) -> HookDestination {
     resolve_hook_destination(
         command.gateway_url.clone(),
-        std::env::var("NEMO_RELAY_GATEWAY_URL").ok(),
+        std::env::var(GATEWAY_URL_ENV).ok(),
+        command.forward_only,
+        command.transparent_run,
     )
+}
+
+fn transparent_run_active() -> bool {
+    std::env::var(TRANSPARENT_RUN_ENV).ok().as_deref() == Some("1")
 }
 
 fn resolve_hook_destination(
     command_url: Option<String>,
     environment_url: Option<String>,
+    forward_only: bool,
+    transparent_run: bool,
 ) -> HookDestination {
+    if transparent_run {
+        return HookDestination {
+            gateway_url: command_url
+                .or(environment_url)
+                .unwrap_or_else(|| crate::sidecar::DEFAULT_URL.into()),
+            lifecycle: HookGatewayLifecycle::Transparent,
+        };
+    }
+    if forward_only {
+        return HookDestination {
+            gateway_url: command_url.unwrap_or_else(|| crate::sidecar::DEFAULT_URL.into()),
+            lifecycle: HookGatewayLifecycle::Existing,
+        };
+    }
     if let Some(gateway_url) = command_url {
         return HookDestination {
             gateway_url,
-            recover: true,
+            lifecycle: HookGatewayLifecycle::Recover,
         };
     }
     if let Some(gateway_url) = environment_url {
         return HookDestination {
             gateway_url,
-            recover: false,
+            lifecycle: HookGatewayLifecycle::Transparent,
         };
     }
     HookDestination {
         gateway_url: crate::sidecar::DEFAULT_URL.into(),
-        recover: true,
+        lifecycle: HookGatewayLifecycle::Recover,
     }
 }
 
-fn recovery_plan(
-    agent: CodingAgent,
-    gateway_url: &str,
-) -> Result<crate::sidecar::PluginGatewaySpec, CliError> {
-    let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
-    crate::sidecar::resolve_plugin_gateway(agent, &Default::default(), bind)
+async fn wait_for_existing_gateway(
+    gateway: crate::sidecar::GatewaySpec,
+    gateway_url: String,
+) -> Result<(), CliError> {
+    tokio::task::spawn_blocking(move || {
+        let deadline = Instant::now() + HOOK_GATEWAY_RETRY_TIMEOUT;
+        loop {
+            match gateway.existing_healthy_instance(&gateway_url) {
+                Ok(Some(_instance_id)) => return Ok(()),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Ok(None) => {
+                    return Err(format!(
+                        "no compatible Relay gateway became ready at {gateway_url}; start the plugin's `nemo-relay mcp` bootstrap before using --forward-only"
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await
+    .map_err(|error| CliError::Launch(format!("hook gateway verification task failed: {error}")))?
+    .map_err(CliError::Launch)
 }
 
-async fn recover_gateway(gateway: crate::sidecar::GatewaySpec) -> Result<(), CliError> {
-    tokio::task::spawn_blocking(move || gateway.ensure())
-        .await
-        .map_err(|error| CliError::Launch(format!("hook recovery task failed: {error}")))?
-        .map(|_| ())
-        .map_err(CliError::Launch)
+fn recovery_plan(gateway_url: &str) -> Result<crate::sidecar::PluginGatewaySpec, CliError> {
+    let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
+    crate::sidecar::resolve_plugin_gateway(&Default::default(), bind)
+}
+
+fn transparent_gateway_spec(gateway_url: &str) -> Result<crate::sidecar::GatewaySpec, CliError> {
+    let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
+    Ok(crate::sidecar::GatewaySpec::new(bind)
+        .with_fingerprint(crate::config::transparent_gateway_fingerprint(gateway_url)))
+}
+
+async fn acquire_hook_gateway(
+    gateway: crate::sidecar::GatewaySpec,
+    generation_guard: ActiveGenerationGuard,
+) -> Result<HookGatewayAcquisition, CliError> {
+    tokio::task::spawn_blocking(move || {
+        let (gateway, cohort_guard) = acquire_pinned_hook_gateway(&gateway)?;
+        Ok(HookGatewayAcquisition {
+            gateway,
+            cohort_guard: Some(cohort_guard),
+            _generation_guard: generation_guard,
+        })
+    })
+    .await
+    .map_err(|error| CliError::Launch(format!("hook acquisition task failed: {error}")))?
+    .map_err(CliError::Launch)
+}
+
+fn gateway_cohort_was_retired(error: &str) -> bool {
+    error.contains("was retired by an integration update")
+}
+
+fn acquire_pinned_hook_gateway(
+    gateway: &crate::sidecar::GatewaySpec,
+) -> Result<
+    (
+        crate::sidecar::GatewayAcquisition,
+        crate::sidecar::GatewayCohortGuard,
+    ),
+    String,
+> {
+    retry_retired_gateway_cohort(|| {
+        let acquisition = gateway.acquire()?;
+        let guard = acquisition.guard_cohort()?;
+        Ok((acquisition, guard))
+    })
+}
+
+fn retry_retired_gateway_cohort<T>(
+    operation: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    retry_retired_gateway_cohort_until(Instant::now() + HOOK_GATEWAY_RETRY_TIMEOUT, operation)
+}
+
+fn retry_retired_gateway_cohort_until<T>(
+    deadline: Instant,
+    operation: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    retry_retired_gateway_cohort_with_clock(deadline, Instant::now, std::thread::sleep, operation)
+}
+
+fn retry_retired_gateway_cohort_with_clock<T>(
+    deadline: Instant,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
+    mut operation: impl FnMut() -> Result<T, String>,
+) -> Result<T, String> {
+    loop {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) if gateway_cohort_was_retired(&error) => {
+                let current = now();
+                if current >= deadline {
+                    return Err(error);
+                }
+                let remaining = deadline.saturating_duration_since(current);
+                sleep(HOOK_GATEWAY_RETRY_INTERVAL.min(remaining));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+struct HookGatewayAcquisition {
+    gateway: crate::sidecar::GatewayAcquisition,
+    // The shared endpoint guard blocks replacement while allowing concurrent deliveries; the
+    // generation guard separately prevents this host's installed command from being retired.
+    // Both remain held until the HTTP response is accepted or delivery fails.
+    cohort_guard: Option<crate::sidecar::GatewayCohortGuard>,
+    _generation_guard: ActiveGenerationGuard,
+}
+
+#[cfg(test)]
+fn hook_generation_guard(generation: &InstallGeneration) -> Result<ActiveGenerationGuard, String> {
+    generation.guard_current()
+}
+
+async fn recover_hook_gateway(acquisition: &mut HookGatewayAcquisition) -> Result<(), CliError> {
+    // Recovery itself needs the endpoint transaction lock. Release the delivery guard, then
+    // reacquire and validate the same cohort before the caller retries the HTTP request.
+    drop(acquisition.cohort_guard.take());
+    let gateway = acquisition.gateway.spec.clone();
+    let expected_instance = acquisition.gateway.endpoint.instance_id.clone();
+    let gateway_url = acquisition.gateway.endpoint.url.clone();
+    let cohort_id = acquisition.gateway.lease.cohort_id().to_string();
+    let refreshed = tokio::task::spawn_blocking(move || {
+        let targeted = gateway
+            .recover(&expected_instance, &cohort_id)
+            .and_then(|endpoint| {
+                crate::sidecar::guard_gateway_cohort(&gateway_url, &cohort_id)
+                    .map(|guard| (endpoint, guard))
+            });
+        match targeted {
+            Ok((endpoint, guard)) => Ok(HookGatewayRefresh::Recovered(endpoint, guard)),
+            Err(error) if gateway_cohort_was_retired(&error) => {
+                let (acquisition, guard) = acquire_pinned_hook_gateway(&gateway)?;
+                Ok(HookGatewayRefresh::Reacquired(acquisition, guard))
+            }
+            Err(error) => Err(error),
+        }
+    })
+    .await
+    .map_err(|error| CliError::Launch(format!("hook recovery task failed: {error}")))?
+    .map_err(CliError::Launch)?;
+    match refreshed {
+        HookGatewayRefresh::Recovered(endpoint, guard) => {
+            acquisition.gateway.endpoint = endpoint;
+            acquisition.cohort_guard = Some(guard);
+        }
+        HookGatewayRefresh::Reacquired(gateway, guard) => {
+            acquisition.gateway = gateway;
+            acquisition.cohort_guard = Some(guard);
+        }
+    }
+    Ok(())
+}
+
+enum HookGatewayRefresh {
+    Recovered(
+        crate::sidecar::GatewayEndpoint,
+        crate::sidecar::GatewayCohortGuard,
+    ),
+    Reacquired(
+        crate::sidecar::GatewayAcquisition,
+        crate::sidecar::GatewayCohortGuard,
+    ),
+}
+
+async fn send_verified_hook_forward_request(
+    command: &HookForwardCommand,
+    gateway: &crate::sidecar::GatewaySpec,
+    gateway_url: &str,
+    input: String,
+) -> Result<Result<crate::sidecar::VerifiedHttpResponse, crate::sidecar::VerifiedHttpError>, CliError>
+{
+    let headers = gateway_headers(
+        command.profile.as_deref(),
+        command.session_metadata.as_deref(),
+        command.gateway_mode,
+    )?
+    .iter()
+    .map(|(name, value)| {
+        value
+            .to_str()
+            .map(|value| (name.as_str().to_string(), value.to_string()))
+            .map_err(|error| {
+                CliError::Install(format!(
+                    "hook header {name} is not valid HTTP text: {error}"
+                ))
+            })
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    let gateway = gateway.clone();
+    let gateway_url = gateway_url.to_string();
+    let path = command.agent.hook_path().to_string();
+    tokio::task::spawn_blocking(move || {
+        gateway.post_verified(
+            &gateway_url,
+            &path,
+            &headers,
+            input.as_bytes(),
+            HOOK_FORWARD_TIMEOUT,
+            MAX_HOOK_RESPONSE_BYTES,
+        )
+    })
+    .await
+    .map_err(|error| CliError::Launch(format!("verified hook request task failed: {error}")))
 }
 
 // Sends the hook payload with gateway-specific headers translated from CLI flags. The reqwest
@@ -255,22 +530,7 @@ async fn handle_hook_forward_response(
                     return Ok(());
                 }
             };
-            if !status.is_success() {
-                if let Some(reason) = guardrail_rejection_reason(&body) {
-                    return Err(CliError::GuardrailRejected(reason));
-                }
-                eprintln!("nemo-relay hook forward failed with HTTP {status}");
-                if fail_closed {
-                    return Err(CliError::Install(format!(
-                        "hook forward failed with HTTP {status}"
-                    )));
-                }
-                return Ok(());
-            }
-            if !body.is_empty() {
-                println!("{body}");
-            }
-            Ok(())
+            handle_hook_forward_status(status, body, fail_closed)
         }
         Err(error) => {
             eprintln!("nemo-relay hook forward failed: {error}");
@@ -281,6 +541,59 @@ async fn handle_hook_forward_response(
             }
         }
     }
+}
+
+fn handle_verified_hook_forward_response(
+    response: Result<crate::sidecar::VerifiedHttpResponse, crate::sidecar::VerifiedHttpError>,
+    fail_closed: bool,
+) -> Result<(), CliError> {
+    match response {
+        Ok(response) => {
+            let status = reqwest::StatusCode::from_u16(response.status).map_err(|error| {
+                CliError::Install(format!(
+                    "verified hook response had an invalid status: {error}"
+                ))
+            })?;
+            handle_hook_forward_status(
+                status,
+                String::from_utf8_lossy(&response.body).into_owned(),
+                fail_closed,
+            )
+        }
+        Err(error) => {
+            eprintln!("nemo-relay hook forward failed: {error}");
+            if fail_closed {
+                Err(CliError::Install(format!(
+                    "verified hook forward failed: {error}"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+fn handle_hook_forward_status(
+    status: reqwest::StatusCode,
+    body: String,
+    fail_closed: bool,
+) -> Result<(), CliError> {
+    if !status.is_success() {
+        if let Some(reason) = guardrail_rejection_reason(&body) {
+            return Err(CliError::GuardrailRejected(reason));
+        }
+        eprintln!("nemo-relay hook forward failed with HTTP {status}");
+        if fail_closed {
+            return Err(CliError::Install(format!(
+                "hook forward failed with HTTP {status}"
+            )));
+        }
+        return Ok(());
+    }
+    if !body.is_empty() {
+        println!("{body}");
+    }
+    Ok(())
 }
 
 async fn read_hook_response(response: reqwest::Response) -> Result<String, CliError> {
@@ -317,61 +630,289 @@ fn guardrail_rejection_reason(body: &str) -> Option<String> {
 /// The returned value always has a top-level `hooks` object. Claude/Codex use command hook
 /// groups with optional tool matchers, while Hermes uses direct command entries.
 pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
-    match agent {
-        CodingAgent::ClaudeCode => claude_hooks(command),
-        CodingAgent::Codex => codex_hooks(command),
-        CodingAgent::Hermes => hermes_hooks(command),
+    if agent.uses_direct_hook_entries() {
+        direct_hooks(agent.hook_events(), command)
+    } else {
+        grouped_hooks(agent.hook_events(), command)
     }
 }
 
 /// Canonical persistent hook command used by every supported host.
-pub(crate) fn persistent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
-    persistent_hook_forward_command_for_platform(relay, agent, cfg!(windows))
+pub(crate) fn persistent_hook_forward_command(
+    relay: &Path,
+    agent: CodingAgent,
+    generation_file: &Path,
+    generation_token: &str,
+) -> Result<String, String> {
+    hook_command(
+        relay,
+        &persistent_hook_arguments(agent, generation_file, generation_token),
+    )
 }
 
-/// Canonical transparent hook command. The launched agent receives its dynamic gateway through
-/// `NEMO_RELAY_GATEWAY_URL`, so the command must not persist a fixed endpoint.
-pub(crate) fn transparent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
-    transparent_hook_forward_command_for_platform(relay, agent, cfg!(windows))
+/// Canonical transparent hook command. It embeds the process-private dynamic gateway so hook hosts
+/// that filter inherited environment variables cannot redirect delivery to the fixed endpoint.
+pub(crate) fn transparent_hook_forward_command(
+    relay: &Path,
+    agent: CodingAgent,
+    gateway_url: &str,
+) -> Result<String, String> {
+    hook_command(relay, &transparent_hook_arguments(agent, gateway_url))
 }
 
+#[cfg(test)]
 pub(crate) fn transparent_hook_forward_command_for_platform(
     relay: &Path,
     agent: CodingAgent,
+    gateway_url: &str,
     windows: bool,
 ) -> String {
-    format!(
-        "{} hook-forward {}",
-        crate::plugin_host::shell_quote_for_platform(relay, windows),
-        agent.as_arg()
+    hook_command_for_platform(
+        relay,
+        &transparent_hook_arguments(agent, gateway_url),
+        windows,
     )
 }
 
+#[cfg(test)]
 pub(crate) fn persistent_hook_forward_command_for_platform(
     relay: &Path,
     agent: CodingAgent,
+    generation_file: &Path,
+    generation_token: &str,
     windows: bool,
 ) -> String {
-    format!(
-        "{} hook-forward {} --gateway-url {}",
-        crate::plugin_host::shell_quote_for_platform(relay, windows),
-        agent.as_arg(),
-        crate::plugin_host::shell_quote_arg_for_platform(crate::sidecar::DEFAULT_URL, windows)
+    hook_command_for_platform(
+        relay,
+        &persistent_hook_arguments(agent, generation_file, generation_token),
+        windows,
     )
 }
 
-fn claude_hooks(command: &str) -> Value {
-    hooks_for_events(CLAUDE_HOOK_EVENTS, command, true)
+fn transparent_hook_arguments(agent: CodingAgent, gateway_url: &str) -> Vec<String> {
+    vec![
+        "hook-forward".into(),
+        agent.as_arg().into(),
+        "--gateway-url".into(),
+        gateway_url.into(),
+        "--transparent-run".into(),
+    ]
 }
 
-fn codex_hooks(command: &str) -> Value {
-    hooks_for_events(CODEX_HOOK_EVENTS, command, true)
+fn persistent_hook_arguments(
+    agent: CodingAgent,
+    generation_file: &Path,
+    generation_token: &str,
+) -> Vec<String> {
+    vec![
+        "hook-forward".into(),
+        agent.as_arg().into(),
+        "--gateway-url".into(),
+        crate::sidecar::DEFAULT_URL.into(),
+        "--generation-file".into(),
+        generation_file.display().to_string(),
+        "--generation-token".into(),
+        generation_token.into(),
+    ]
 }
 
-// Generates Hermes YAML-compatible hook groups. Hermes expects direct command entries rather than
-// the nested `type = command` group format used by Claude and Codex.
-pub(crate) fn hermes_hooks(command: &str) -> Value {
-    let hooks: serde_json::Map<String, Value> = HERMES_HOOK_EVENTS
+fn hook_command(relay: &Path, arguments: &[String]) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        return encoded_windows_hook_command(&windows_powershell_launcher()?, relay, arguments);
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(posix_hook_command(relay, arguments))
+    }
+}
+
+#[cfg(test)]
+fn hook_command_for_platform(relay: &Path, arguments: &[String], windows: bool) -> String {
+    if windows {
+        return encoded_windows_hook_command(
+            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+            relay,
+            arguments,
+        )
+        .expect("test hook command must fit within the Windows command-line limit");
+    }
+    posix_hook_command(relay, arguments)
+}
+
+#[cfg(any(not(windows), test))]
+fn posix_hook_command(relay: &Path, arguments: &[String]) -> String {
+    std::iter::once(relay.display().to_string())
+        .chain(arguments.iter().cloned())
+        .map(|argument| crate::plugin_host::shell_quote_arg_for_platform(&argument, false))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+// `cmd.exe` accepts at most 8,191 characters. Leave room for `/C` and the executable path added
+// by the hook host instead of generating a command that will be truncated at runtime.
+const MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS: usize = 8_000;
+
+/// Encode a native Relay invocation so Windows hook hosts can pass it through `cmd.exe /C` as one
+/// argument without corrupting quotes in canonical paths. Windows PowerShell is part of the
+/// supported Windows platform; it only launches the Rust binary and preserves its standard I/O.
+#[cfg(any(windows, test))]
+fn encoded_windows_hook_command(
+    powershell: &str,
+    relay: &Path,
+    arguments: &[String],
+) -> Result<String, String> {
+    const PREFIX: &str = "$ErrorActionPreference='Stop'; & ";
+    const SUFFIX: &str = "; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE";
+
+    let invocation = std::iter::once(relay.display().to_string())
+        .chain(arguments.iter().cloned())
+        .map(|argument| format!("'{}'", argument.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let script = format!("{PREFIX}{invocation}{SUFFIX}");
+    let bytes = script
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let command =
+        format!("{powershell} -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}");
+    if command.encode_utf16().count() > MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS {
+        return Err(format!(
+            "generated Windows coding-agent hook command exceeds the {MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS}-character safety limit; shorten the Relay or plugin installation path"
+        ));
+    }
+    Ok(command)
+}
+
+#[cfg(windows)]
+fn windows_powershell_launcher() -> Result<String, String> {
+    let powershell = windows_powershell_path()?;
+    if !Path::new(&powershell).is_file() {
+        return Err(format!(
+            "trusted Windows PowerShell launcher is missing at {powershell}; install Windows PowerShell before configuring coding-agent hooks"
+        ));
+    }
+    Ok(powershell)
+}
+
+#[cfg(windows)]
+fn windows_powershell_path() -> Result<String, String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+
+    let mut buffer = vec![0_u16; 260];
+    let length = loop {
+        // SAFETY: `buffer` is writable for its declared length and remains live for the call.
+        let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        if length == 0 {
+            return Err(format!(
+                "failed to resolve the trusted Windows system directory: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if (length as usize) < buffer.len() {
+            break length as usize;
+        }
+        buffer.resize(length as usize + 1, 0);
+    };
+    let system = std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
+    let powershell = system.join("WindowsPowerShell/v1.0/powershell.exe");
+    let powershell = powershell
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "trusted Windows PowerShell path is not valid Unicode".to_string())?
+        .replace('\\', "/");
+    if !safe_windows_launcher_token(&powershell) {
+        return Err(format!(
+            "trusted Windows PowerShell path {powershell} contains characters that cannot be represented safely in coding-agent hook commands"
+        ));
+    }
+    Ok(powershell)
+}
+
+fn safe_windows_launcher_token(launcher: &str) -> bool {
+    !launcher.is_empty()
+        && launcher.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '/' | ':' | '.' | '_' | '-')
+        })
+        && launcher
+            .to_ascii_lowercase()
+            .ends_with("/system32/windowspowershell/v1.0/powershell.exe")
+}
+
+/// Decode only the exact PowerShell envelope emitted by [`encoded_windows_hook_command`].
+///
+/// Hermes uses this to migrate and replace Relay-owned hooks whose generation arguments change.
+pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
+    const COMMAND_SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
+    const SCRIPT_PREFIX: &str = "$ErrorActionPreference='Stop'; & ";
+    const SCRIPT_SUFFIX: &str = "; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE";
+
+    if command.encode_utf16().count() > MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS {
+        return None;
+    }
+    let (launcher, encoded) = command.split_once(COMMAND_SEPARATOR)?;
+    if !safe_windows_launcher_token(launcher) {
+        return None;
+    }
+    #[cfg(windows)]
+    if !launcher.eq_ignore_ascii_case(&windows_powershell_path().ok()?) {
+        return None;
+    }
+    if encoded.is_empty() || encoded.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let pairs = bytes.chunks_exact(2);
+    if !pairs.remainder().is_empty() {
+        return None;
+    }
+    let script = String::from_utf16(
+        &pairs
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>(),
+    )
+    .ok()?;
+    let invocation = script
+        .strip_prefix(SCRIPT_PREFIX)?
+        .strip_suffix(SCRIPT_SUFFIX)?;
+    parse_powershell_single_quoted_arguments(invocation)
+}
+
+fn parse_powershell_single_quoted_arguments(mut raw: &str) -> Option<Vec<String>> {
+    let mut arguments = Vec::new();
+    while !raw.is_empty() {
+        raw = raw.strip_prefix('\'')?;
+        let mut argument = String::new();
+        loop {
+            let quote = raw.find('\'')?;
+            argument.push_str(&raw[..quote]);
+            raw = &raw[quote + 1..];
+            if let Some(rest) = raw.strip_prefix('\'') {
+                argument.push('\'');
+                raw = rest;
+            } else {
+                break;
+            }
+        }
+        arguments.push(argument);
+        if raw.is_empty() {
+            break;
+        }
+        raw = raw.strip_prefix(' ')?;
+        if raw.is_empty() {
+            return None;
+        }
+    }
+    (!arguments.is_empty()).then_some(arguments)
+}
+
+fn direct_hooks(events: &[&str], command: &str) -> Value {
+    let hooks: serde_json::Map<String, Value> = events
         .iter()
         .map(|event| {
             (
@@ -389,12 +930,12 @@ pub(crate) fn hermes_hooks(command: &str) -> Value {
 // Generates hook groups for Claude/Codex events and adds a wildcard matcher to tool events when
 // the target agent requires matcher-scoped tool hooks. Non-tool events omit matchers so they fire
 // for the full lifecycle.
-fn hooks_for_events(events: &[&str], command: &str, matcher_for_tools: bool) -> Value {
+fn grouped_hooks(events: &[&str], command: &str) -> Value {
     let hooks: serde_json::Map<String, Value> = events
         .iter()
         .map(|event| {
             let mut group = serde_json::Map::new();
-            if matcher_for_tools && event_matches_tools(event) {
+            if event_matches_tools(event) {
                 group.insert("matcher".into(), json!("*"));
             }
             group.insert(

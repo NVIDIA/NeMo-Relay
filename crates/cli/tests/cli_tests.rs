@@ -22,6 +22,15 @@ fn gateway_bin() -> &'static str {
     env!("CARGO_BIN_EXE_nemo-relay")
 }
 
+const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
+
+fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
+    let generation = temp.join("plugin/.nemo-relay-generation");
+    std::fs::create_dir_all(generation.parent().unwrap()).unwrap();
+    std::fs::write(&generation, format!("{ACTIVE_GENERATION_TOKEN}\n")).unwrap();
+    generation
+}
+
 fn toml_basic_string(value: &str) -> String {
     let escaped = value
         .chars()
@@ -166,6 +175,65 @@ fn cli_version_exits_successfully() {
 }
 
 #[test]
+fn managed_mcp_launch_removes_unresolved_environment_placeholders_before_cli_parsing() {
+    let output = Command::new(gateway_bin())
+        .env("NEMO_RELAY_MCP_GENERATION_FILE", "/tmp/managed-generation")
+        .env("NEMO_RELAY_MCP_GENERATION", "managed-token")
+        .env(
+            "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES",
+            "${NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES}",
+        )
+        .env(
+            "NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES",
+            "${NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES}",
+        )
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+}
+
+#[test]
+fn ordinary_cli_launch_does_not_hide_invalid_environment_values() {
+    let output = Command::new(gateway_bin())
+        .env_remove("NEMO_RELAY_MCP_GENERATION_FILE")
+        .env_remove("NEMO_RELAY_MCP_GENERATION")
+        .env(
+            "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES",
+            "${NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES}",
+        )
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid digit found in string"));
+}
+
+#[test]
+fn managed_mcp_launch_rejects_unresolved_generation_placeholders() {
+    let output = Command::new(gateway_bin())
+        .env(
+            "NEMO_RELAY_MCP_GENERATION_FILE",
+            "${NEMO_RELAY_MCP_GENERATION_FILE}",
+        )
+        .env("NEMO_RELAY_MCP_GENERATION", "${NEMO_RELAY_MCP_GENERATION}")
+        .arg("mcp")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("generation"), "{stderr}");
+}
+
+#[test]
 fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
     let output = Command::new(gateway_bin())
         .args(["mcp", "--help"])
@@ -206,8 +274,8 @@ fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let owner = wait_for_owned_sidecar(temp.path(), "codex", None);
-    let address = sidecar_address(temp.path(), "codex");
+    let owner = wait_for_owned_sidecar(temp.path(), None);
+    let address = sidecar_address(temp.path());
     let mut stdin = child.stdin.take().unwrap();
     stdin
         .write_all(
@@ -230,8 +298,8 @@ fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
         serde_json::json!("nemo-relay")
     );
     let log = std::fs::read_to_string(
-        find_runtime_file(temp.path(), "codex-sidecar.log")
-            .expect("Codex sidecar log should exist"),
+        find_runtime_file(temp.path(), "gateway-sidecar.log")
+            .expect("gateway sidecar log should exist"),
     )
     .unwrap();
     assert!(log.contains("Gateway        http://127.0.0.1:"));
@@ -263,11 +331,59 @@ fn cli_mcp_starts_gateway_even_when_stdio_closes_before_request() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    assert!(find_runtime_file(temp.path(), "codex-sidecar.log").is_some());
-    let owner = wait_for_owned_sidecar(temp.path(), "codex", None);
-    let address = sidecar_address(temp.path(), "codex");
+    assert!(find_runtime_file(temp.path(), "gateway-sidecar.log").is_some());
+    let owner = wait_for_owned_sidecar(temp.path(), None);
+    let address = sidecar_address(temp.path());
     stop_owned_sidecar(&owner);
     wait_for_port_closed(address);
+}
+
+#[test]
+fn cli_mcp_rejects_an_unauthenticated_transparent_gateway() {
+    let temp = tempfile::tempdir().unwrap();
+    let body = format!(
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"transparent"}}"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    let (gateway_url, received) = spawn_single_request_server(200, &body);
+    let mut child = Command::new(gateway_bin())
+        .args(["--bind", "127.0.0.1:1", "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_TRANSPARENT_RUN", "1")
+        .env("NEMO_RELAY_GATEWAY_URL", &gateway_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        )
+        .unwrap();
+
+    let output = wait_child_with_output(child);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("authenticated NeMo Relay gateway"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(
+        received
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .starts_with("GET /healthz ")
+    );
+    assert!(find_runtime_file(temp.path(), "gateway-sidecar.log").is_none());
+    assert!(find_runtime_file(temp.path(), "codex.owner.json").is_none());
 }
 
 #[cfg(unix)]
@@ -313,10 +429,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
         serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
     let server = &config["mcp_servers"]["nemo-relay"];
     assert_eq!(server["command"], gateway_bin());
-    assert_eq!(
-        server["args"],
-        serde_json::json!(["mcp", "--agent", "hermes"])
-    );
+    assert_eq!(server["args"], serde_json::json!(["mcp"]));
     assert_eq!(server["env"]["NEMO_RELAY_GATEWAY_BIND"], "127.0.0.1:47632");
     assert_eq!(server["env"]["OPENAI_API_KEY"], "${OPENAI_API_KEY}");
     assert!(
@@ -390,30 +503,38 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
 }
 
 fn start_mcp_client(temp: &std::path::Path, bind: SocketAddr) -> (Child, ChildStdin) {
-    start_mcp_client_for_agent(temp, bind, "codex")
-}
-
-fn start_mcp_client_for_agent(
-    temp: &std::path::Path,
-    bind: SocketAddr,
-    agent: &str,
-) -> (Child, ChildStdin) {
-    start_mcp_client_with_idle_timeout(temp, bind, agent, "1")
+    start_mcp_client_with_idle_timeout(temp, bind, "1")
 }
 
 fn start_mcp_client_with_idle_timeout(
     temp: &std::path::Path,
     bind: SocketAddr,
-    agent: &str,
     idle_timeout_secs: &str,
 ) -> (Child, ChildStdin) {
-    let mut child = Command::new(gateway_bin())
-        .args(["--bind", &bind.to_string(), "mcp", "--agent", agent])
+    start_mcp_client_with_generation(temp, bind, idle_timeout_secs, None)
+}
+
+fn start_mcp_client_with_generation(
+    temp: &std::path::Path,
+    bind: SocketAddr,
+    idle_timeout_secs: &str,
+    generation: Option<&std::path::Path>,
+) -> (Child, ChildStdin) {
+    let mut command = Command::new(gateway_bin());
+    command
+        .args(["--bind", &bind.to_string(), "mcp"])
         .env("HOME", temp)
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
         .env("TMPDIR", temp)
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs)
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", idle_timeout_secs);
+    if let Some(generation) = generation {
+        let token = std::fs::read_to_string(generation).unwrap();
+        command
+            .env("NEMO_RELAY_MCP_GENERATION_FILE", generation)
+            .env("NEMO_RELAY_MCP_GENERATION", token.trim());
+    }
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -455,8 +576,13 @@ fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
         let address = probe.local_addr().unwrap();
         drop(probe);
         let gateway_url = format!("http://{address}");
+        let generation = write_active_generation(temp.path());
         let mut hook = Command::new(gateway_bin())
             .args(["hook-forward", agent, "--gateway-url", &gateway_url])
+            .arg("--generation-file")
+            .arg(&generation)
+            .arg("--generation-token")
+            .arg(ACTIVE_GENERATION_TOKEN)
             .env("HOME", temp.path())
             .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
             .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
@@ -479,12 +605,11 @@ fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
             String::from_utf8_lossy(&hook_output.stderr)
         );
 
-        let (mut mcp, mcp_stdin) =
-            start_mcp_client_with_idle_timeout(temp.path(), address, agent, "10");
+        let (mut mcp, mcp_stdin) = start_mcp_client_with_idle_timeout(temp.path(), address, "10");
         drop(mcp_stdin);
         assert!(wait_child(&mut mcp).success());
 
-        let owner = wait_for_owned_sidecar(temp.path(), agent, None);
+        let owner = wait_for_owned_sidecar(temp.path(), None);
         assert_eq!(owner["url"], gateway_url);
         stop_owned_sidecar(&owner);
         wait_for_port_closed(address);
@@ -524,14 +649,27 @@ fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
 }
 
 fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
-    run_fake_bootstrap_listener_with_hook_delay(proof, None)
+    run_fake_bootstrap_listener_with_options(proof, None, false)
 }
 
 fn run_fake_bootstrap_listener_with_hook_delay(
     proof: FakeBootstrapProof,
     hook_delay: Option<Duration>,
 ) -> (Output, Vec<String>) {
+    run_fake_bootstrap_listener_with_options(proof, hook_delay, false)
+}
+
+fn run_forward_only_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
+    run_fake_bootstrap_listener_with_options(proof, None, true)
+}
+
+fn run_fake_bootstrap_listener_with_options(
+    proof: FakeBootstrapProof,
+    hook_delay: Option<Duration>,
+    forward_only: bool,
+) -> (Output, Vec<String>) {
     let temp = tempfile::tempdir().unwrap();
+    let generation = write_active_generation(temp.path());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -584,15 +722,34 @@ fn run_fake_bootstrap_listener_with_hook_delay(
                     r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
                     env!("CARGO_PKG_VERSION")
                 );
+                let keep_alive = matches!(proof, FakeBootstrapProof::Valid)
+                    && bootstrap_request_header(&request, "connection")
+                        .is_some_and(|value| value.eq_ignore_ascii_case("keep-alive"));
                 stream
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\n{proof_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
+                            "HTTP/1.1 200 OK\r\n{proof_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n{body}",
+                            body.len(),
+                            if keep_alive { "keep-alive" } else { "close" }
                         )
                         .as_bytes(),
                     )
                     .unwrap();
+                if keep_alive {
+                    let request = read_http_request(&mut stream);
+                    server_requests.lock().unwrap().push(request);
+                    if let Some(delay) = hook_delay {
+                        thread::sleep(delay);
+                    }
+                    let body = r#"{"continue":true}"#;
+                    let _ = stream.write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    );
+                }
             } else {
                 if let Some(delay) = hook_delay {
                     thread::sleep(delay);
@@ -609,13 +766,23 @@ fn run_fake_bootstrap_listener_with_hook_delay(
         }
     });
 
-    let mut child = Command::new(gateway_bin())
-        .args([
-            "hook-forward",
-            "codex",
-            "--gateway-url",
-            &format!("http://{address}"),
-        ])
+    let mut command = Command::new(gateway_bin());
+    command.args([
+        "hook-forward",
+        "codex",
+        "--gateway-url",
+        &format!("http://{address}"),
+    ]);
+    if forward_only {
+        command.arg("--forward-only");
+    } else {
+        command
+            .arg("--generation-file")
+            .arg(&generation)
+            .arg("--generation-token")
+            .arg(ACTIVE_GENERATION_TOKEN);
+    }
+    let mut child = command
         .env("HOME", temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
@@ -698,6 +865,7 @@ fn run_codex_hook_with_launch_resolution_error(
     payload: &[u8],
     invalid_idle_timeout: bool,
 ) -> Output {
+    let generation = write_active_generation(temp);
     let mut command = Command::new(gateway_bin());
     command
         .args([
@@ -706,6 +874,10 @@ fn run_codex_hook_with_launch_resolution_error(
             "--gateway-url",
             "http://127.0.0.1:1",
         ])
+        .arg("--generation-file")
+        .arg(generation)
+        .arg("--generation-token")
+        .arg(ACTIVE_GENERATION_TOKEN)
         .env("HOME", temp)
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
@@ -757,10 +929,10 @@ fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
     }
 }
 
-fn sidecar_address(temp: &std::path::Path, agent: &str) -> SocketAddr {
+fn sidecar_address(temp: &std::path::Path) -> SocketAddr {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let log_path = find_runtime_file(temp, &format!("{agent}-sidecar.log"));
+        let log_path = find_runtime_file(temp, "gateway-sidecar.log");
         if let Some(log_path) = log_path.as_ref()
             && let Ok(log) = std::fs::read_to_string(log_path)
             && let Some(address) = log.lines().find_map(|line| {
@@ -837,32 +1009,113 @@ fn wait_child(child: &mut Child) -> ExitStatus {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            let mut stderr = String::new();
-            if let Some(mut child_stderr) = child.stderr.take() {
-                let _ = child_stderr.read_to_string(&mut stderr);
-            }
-            panic!("child process did not exit within 10 seconds; stderr: {stderr}");
+            panic!("child process did not exit within 10 seconds");
         }
         thread::sleep(Duration::from_millis(20));
     }
 }
 
 fn wait_child_with_output(mut child: Child) -> Output {
+    fn read_pipe(
+        pipe: Option<impl Read + Send + 'static>,
+    ) -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result = match pipe {
+                Some(mut pipe) => {
+                    let mut bytes = Vec::new();
+                    pipe.read_to_end(&mut bytes).map(|_| bytes)
+                }
+                None => Ok(Vec::new()),
+            };
+            let _ = sender.send(result);
+        });
+        receiver
+    }
+
+    let stdout = read_pipe(child.stdout.take());
+    let stderr = read_pipe(child.stderr.take());
     let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            return child.wait_with_output().unwrap();
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            let output = child.wait_with_output().unwrap();
-            panic!(
-                "child process did not exit within 10 seconds; stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            let _ = child.wait();
+            panic!("child process did not exit within 10 seconds");
         }
         thread::sleep(Duration::from_millis(20));
+    };
+    let remaining = || deadline.saturating_duration_since(Instant::now());
+    let stdout = stdout
+        .recv_timeout(remaining())
+        .expect("child stdout remained open after process exit")
+        .unwrap();
+    let stderr = stderr
+        .recv_timeout(remaining())
+        .expect("child stderr remained open after process exit")
+        .unwrap();
+    Output {
+        status,
+        stdout,
+        stderr,
     }
+}
+
+fn run_persistent_hook(
+    temp: &std::path::Path,
+    address: SocketAddr,
+    generation: &std::path::Path,
+    fail_closed: bool,
+) -> Output {
+    run_persistent_hook_with_token(
+        temp,
+        address,
+        generation,
+        ACTIVE_GENERATION_TOKEN,
+        fail_closed,
+    )
+}
+
+fn run_persistent_hook_with_token(
+    temp: &std::path::Path,
+    address: SocketAddr,
+    generation: &std::path::Path,
+    generation_token: &str,
+    fail_closed: bool,
+) -> Output {
+    let mut command = Command::new(gateway_bin());
+    command
+        .args([
+            "hook-forward",
+            "codex",
+            "--gateway-url",
+            &format!("http://{address}"),
+            "--generation-file",
+        ])
+        .arg(generation)
+        .arg("--generation-token")
+        .arg(generation_token)
+        .env("HOME", temp)
+        .env("XDG_CONFIG_HOME", temp.join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.join("runtime"))
+        .env("TMPDIR", temp)
+        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if fail_closed {
+        command.arg("--fail-closed");
+    }
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"session_id\":\"hook-session\",\"hook_event_name\":\"SessionStart\"}")
+        .unwrap();
+    wait_child_with_output(child)
 }
 
 fn wait_for_port_closed(address: SocketAddr) {
@@ -879,11 +1132,7 @@ fn wait_for_port_closed(address: SocketAddr) {
     }
 }
 
-fn wait_for_owned_sidecar(
-    temp: &std::path::Path,
-    agent: &str,
-    previous_pid: Option<u64>,
-) -> serde_json::Value {
+fn wait_for_owned_sidecar(temp: &std::path::Path, previous_pid: Option<u64>) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         for path in find_runtime_files_matching(temp, "sidecar-", ".owner.json") {
@@ -898,7 +1147,7 @@ fn wait_for_owned_sidecar(
         }
         assert!(
             Instant::now() < deadline,
-            "owned {agent} sidecar was not published under {}",
+            "owned gateway sidecar was not published under {}",
             temp.display()
         );
         thread::sleep(Duration::from_millis(20));
@@ -952,53 +1201,38 @@ fn relay_health(address: SocketAddr) -> serde_json::Value {
 
 #[test]
 fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
-    for (first_agent, second_agent) in [
-        ("codex", "claude"),
-        ("claude", "codex"),
-        ("codex", "hermes"),
-        ("hermes", "codex"),
-        ("claude", "hermes"),
-        ("hermes", "claude"),
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let (mut first, first_stdin) =
-            start_mcp_client_for_agent(temp.path(), "127.0.0.1:0".parse().unwrap(), first_agent);
-        let address = sidecar_address(temp.path(), first_agent);
-        let (mut second, second_stdin) =
-            start_mcp_client_for_agent(temp.path(), address, second_agent);
+    let temp = tempfile::tempdir().unwrap();
+    let (mut first, first_stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
+    let address = sidecar_address(temp.path());
+    let (mut second, second_stdin) = start_mcp_client(temp.path(), address);
 
-        drop(first_stdin);
-        assert!(wait_child(&mut first).success());
-        let health = relay_health(address);
-        assert_eq!(health["service"], "nemo-relay");
-        assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(health["bootstrap_protocol"], 2);
-        assert!(
-            health["instance_id"]
-                .as_str()
-                .is_some_and(|instance_id| !instance_id.is_empty()),
-            "the shared gateway should publish its process identity"
-        );
-        assert!(
-            find_runtime_file(temp.path(), &format!("{second_agent}-sidecar.log")).is_none(),
-            "the second MCP client should adopt the first host's gateway"
-        );
+    drop(first_stdin);
+    assert!(wait_child(&mut first).success());
+    let health = relay_health(address);
+    assert_eq!(health["service"], "nemo-relay");
+    assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(health["bootstrap_protocol"], 2);
+    assert!(
+        health["instance_id"]
+            .as_str()
+            .is_some_and(|instance_id| !instance_id.is_empty()),
+        "the shared gateway should publish its process identity"
+    );
 
-        drop(second_stdin);
-        assert!(wait_child(&mut second).success());
-        wait_for_port_closed(address);
-    }
+    drop(second_stdin);
+    assert!(wait_child(&mut second).success());
+    wait_for_port_closed(address);
 }
 
 #[test]
 fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
     let temp = tempfile::tempdir().unwrap();
     let (mut client, _stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
-    let first = wait_for_owned_sidecar(temp.path(), "codex", None);
+    let first = wait_for_owned_sidecar(temp.path(), None);
     let first_pid = first["pid"].as_u64().unwrap();
 
     stop_owned_sidecar(&first);
-    let second = wait_for_owned_sidecar(temp.path(), "codex", Some(first_pid));
+    let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
     assert_ne!(second["pid"], first["pid"]);
 
     stop_owned_sidecar(&second);
@@ -1012,13 +1246,9 @@ fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
 #[test]
 fn cli_mcp_staggered_clients_share_one_endpoint_restart_budget() {
     let temp = tempfile::tempdir().unwrap();
-    let (mut fast_client, _fast_stdin) = start_mcp_client_with_idle_timeout(
-        temp.path(),
-        "127.0.0.1:0".parse().unwrap(),
-        "codex",
-        "1",
-    );
-    let first = wait_for_owned_sidecar(temp.path(), "codex", None);
+    let (mut fast_client, _fast_stdin) =
+        start_mcp_client_with_idle_timeout(temp.path(), "127.0.0.1:0".parse().unwrap(), "1");
+    let first = wait_for_owned_sidecar(temp.path(), None);
     let first_pid = first["pid"].as_u64().unwrap();
     let address = first["url"]
         .as_str()
@@ -1030,10 +1260,10 @@ fn cli_mcp_staggered_clients_share_one_endpoint_restart_budget() {
     // Offset the heartbeat phases while keeping the persistent fingerprint identical.
     thread::sleep(Duration::from_millis(150));
     let (mut slow_client, _slow_stdin) =
-        start_mcp_client_with_idle_timeout(temp.path(), address, "claude", "1");
+        start_mcp_client_with_idle_timeout(temp.path(), address, "1");
 
     stop_owned_sidecar(&first);
-    let second = wait_for_owned_sidecar(temp.path(), "codex", Some(first_pid));
+    let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
     let second_pid = second["pid"].as_u64().unwrap();
     stop_owned_sidecar(&second);
 
@@ -1052,6 +1282,198 @@ fn cli_mcp_staggered_clients_share_one_endpoint_restart_budget() {
         !unexpected,
         "a staggered MCP client restarted the endpoint a second time"
     );
+}
+
+#[test]
+fn cli_hook_recovery_consumes_the_same_restart_as_an_overlapping_mcp() {
+    let temp = tempfile::tempdir().unwrap();
+    let generation = temp.path().join("plugin/.nemo-relay-generation");
+    std::fs::create_dir_all(generation.parent().unwrap()).unwrap();
+    std::fs::write(&generation, "active-generation\n").unwrap();
+    let (mut mcp, _stdin) = start_mcp_client_with_generation(
+        temp.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        "1",
+        Some(&generation),
+    );
+    let first = wait_for_owned_sidecar(temp.path(), None);
+    let first_pid = first["pid"].as_u64().unwrap();
+    let address = first["url"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("http://")
+        .unwrap()
+        .parse::<SocketAddr>()
+        .unwrap();
+
+    stop_owned_sidecar(&first);
+    let hook = run_persistent_hook(temp.path(), address, &generation, true);
+    assert!(
+        hook.status.success(),
+        "hook recovery failed: {}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
+    let second_pid = second["pid"].as_u64().unwrap();
+    stop_owned_sidecar(&second);
+
+    assert!(!wait_child(&mut mcp).success());
+    let unexpected = find_runtime_files_matching(temp.path(), "sidecar-", ".owner.json")
+        .into_iter()
+        .filter_map(|path| std::fs::read(path).ok())
+        .filter_map(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .any(|owner| {
+            owner["pid"]
+                .as_u64()
+                .is_some_and(|pid| pid != first_pid && pid != second_pid)
+        });
+    assert!(!unexpected, "the MCP performed an unaccounted third launch");
+}
+
+#[test]
+fn cli_retired_persistent_hook_cannot_restart_the_gateway() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let generation = temp.path().join("plugin/.nemo-relay-generation");
+    std::fs::create_dir_all(generation.parent().unwrap()).unwrap();
+    std::fs::write(&generation, "retired:old-generation\n").unwrap();
+
+    let hook = run_persistent_hook(temp.path(), address, &generation, true);
+
+    assert!(!hook.status.success());
+    assert!(
+        String::from_utf8_lossy(&hook.stderr).contains("has been retired"),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    TcpListener::bind(address).expect("a retired hook unexpectedly bound the gateway endpoint");
+}
+
+#[test]
+fn cli_cached_mcp_and_hook_cannot_adopt_a_replacement_at_the_same_generation_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let generation = temp.path().join("plugin/.nemo-relay-generation");
+    std::fs::create_dir_all(generation.parent().unwrap()).unwrap();
+    let cached_token = "cached-generation";
+    std::fs::write(&generation, "replacement-generation\n").unwrap();
+
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let mcp = Command::new(gateway_bin())
+        .args(["--bind", &address.to_string(), "mcp"])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .env("NEMO_RELAY_MCP_GENERATION_FILE", &generation)
+        .env("NEMO_RELAY_MCP_GENERATION", cached_token)
+        .output()
+        .unwrap();
+    assert!(!mcp.status.success());
+    assert!(
+        String::from_utf8_lossy(&mcp.stderr).contains("has been retired"),
+        "{}",
+        String::from_utf8_lossy(&mcp.stderr)
+    );
+    drop(TcpListener::bind(address).expect("a stale MCP unexpectedly started the gateway"));
+
+    let hook =
+        run_persistent_hook_with_token(temp.path(), address, &generation, cached_token, true);
+    assert!(!hook.status.success());
+    assert!(
+        String::from_utf8_lossy(&hook.stderr).contains("has been retired"),
+        "{}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+    TcpListener::bind(address).expect("a stale hook unexpectedly started the gateway");
+}
+
+#[test]
+fn cli_unfenced_persistent_hook_cannot_start_the_gateway() {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let gateway_url = format!("http://{address}");
+    let mut hook = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "codex",
+            "--gateway-url",
+            &gateway_url,
+            "--fail-closed",
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hook.stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"session_id\":\"legacy-hook\",\"hook_event_name\":\"SessionStart\"}")
+        .unwrap();
+
+    let output = wait_child_with_output(hook);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("missing its install-generation fence"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    TcpListener::bind(address).expect("an unfenced hook unexpectedly started the gateway");
+}
+
+#[test]
+fn cli_path_only_persistent_hook_requires_its_expected_generation_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let generation = write_active_generation(temp.path());
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let mut hook = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "codex",
+            "--gateway-url",
+            &format!("http://{address}"),
+            "--generation-file",
+        ])
+        .arg(&generation)
+        .arg("--fail-closed")
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hook.stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"session_id\":\"legacy-hook\",\"hook_event_name\":\"SessionStart\"}")
+        .unwrap();
+
+    let output = wait_child_with_output(hook);
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("missing its expected install-generation identity"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    TcpListener::bind(address).expect("a path-only hook unexpectedly started the gateway");
 }
 
 #[test]
@@ -2516,6 +2938,366 @@ fn cli_run_rejects_zero_body_limit_env() {
     assert!(stderr.contains("greater than 0"));
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_transparent_run_preserves_interactive_terminal_job_control() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let xdg = temp.path().join("xdg");
+    let runtime = temp.path().join("runtime");
+    for directory in [&home, &xdg, &runtime] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let agent = temp.path().join("interactive-codex");
+    std::fs::write(
+        &agent,
+        r#"#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+
+delay_after_continue = False
+
+def handle_continue(_signal, _frame):
+    if delay_after_continue:
+        print("AGENT_BG_DELAY", flush=True)
+        time.sleep(1.5)
+
+signal.signal(signal.SIGCONT, handle_continue)
+
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.143.0")
+    raise SystemExit(0)
+
+print(f"AGENT_READY:{os.getppid()}:{os.getpgrp()}", flush=True)
+for line in sys.stdin:
+    value = line.strip()
+    if value == "delay-next-continue":
+        delay_after_continue = True
+        print("AGENT_DELAY_ARMED", flush=True)
+    else:
+        print(f"AGENT_READ:{value}", flush=True)
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[agents.codex]\ncommand = {}\n",
+            toml_basic_string(agent.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    let driver = temp.path().join("pty-driver.py");
+    std::fs::write(
+        &driver,
+        r#"import errno
+import os
+import pty
+import re
+import select
+import signal
+import shlex
+import sys
+import termios
+import time
+
+relay, config, home, xdg, runtime = sys.argv[1:]
+pid, master = pty.fork()
+if pid == 0:
+    env = os.environ.copy()
+    env.update({
+        "HOME": home,
+        "XDG_CONFIG_HOME": xdg,
+        "XDG_RUNTIME_DIR": runtime,
+        "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS": "1",
+        "PS1": "RELAY_SHELL> ",
+        "ENV": "/dev/null",
+        "BASH_ENV": "/dev/null",
+    })
+    os.execve("/bin/sh", ["sh", "-i"], env)
+
+attributes = termios.tcgetattr(master)
+attributes[3] &= ~(termios.ECHO | getattr(termios, "ECHONL", 0))
+termios.tcsetattr(master, termios.TCSANOW, attributes)
+
+buffer = bytearray()
+cursor = 0
+reaped = False
+master_open = True
+relay_pid = None
+relay_group = None
+agent_group = None
+
+def read_until(token, timeout=10):
+    global cursor
+    deadline = time.monotonic() + timeout
+    expected = token.encode()
+    while time.monotonic() < deadline:
+        index = buffer.find(expected, cursor)
+        if index >= 0:
+            observed = bytes(buffer[cursor:index + len(expected)])
+            cursor = index + len(expected)
+            return observed.decode(errors="replace")
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(master, 4096)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+        if not chunk:
+            break
+        buffer.extend(chunk)
+    raise AssertionError(f"did not observe {token!r}; output={buffer.decode(errors='replace')!r}")
+
+def wait_until_present(token, timeout=10):
+    deadline = time.monotonic() + timeout
+    expected = token.encode()
+    while time.monotonic() < deadline:
+        if expected in buffer:
+            return
+        ready, _, _ = select.select([master], [], [], 0.1)
+        if not ready:
+            continue
+        chunk = os.read(master, 4096)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+    raise AssertionError(f"did not observe {token!r}; output={buffer.decode(errors='replace')!r}")
+
+def safe_kill_group(process_group):
+    if process_group is None or process_group <= 0 or process_group == pid:
+        return
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+try:
+    read_until("RELAY_SHELL> ")
+    relay_command = " ".join(shlex.quote(value) for value in [relay, "--config", config, "run", "--agent", "codex"])
+    # Keep a non-exec wrapper in Relay's shell job so suspension must target the whole group.
+    wrapped_command = f"{relay_command}; relay_status=$?; exit $relay_status"
+    os.write(master, f"/bin/sh -c {shlex.quote(wrapped_command)}\n".encode())
+
+    read_until("AGENT_READY:")
+    read_until("\n")
+    match = re.search(rb"AGENT_READY:(\d+):(\d+)", buffer)
+    assert match is not None, buffer
+    relay_pid = int(match.group(1))
+    agent_group = int(match.group(2))
+    relay_group = os.getpgid(relay_pid)
+    assert relay_group != agent_group, (relay_group, agent_group, buffer)
+    assert os.tcgetpgrp(master) == agent_group, (os.tcgetpgrp(master), agent_group, buffer)
+
+    os.write(master, b"first-line\n")
+    read_until("AGENT_READ:first-line")
+
+    os.write(master, b"\x1a")
+    read_until("RELAY_SHELL> ")
+    assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
+
+    os.write(master, b"bg\n")
+    read_until("RELAY_SHELL> ")
+    time.sleep(0.1)
+    assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
+    os.write(master, b"echo BG_SHELL_OK\n")
+    read_until("BG_SHELL_OK")
+    read_until("RELAY_SHELL> ")
+    os.write(master, b"jobs\n")
+    read_until("Stopped")
+    read_until("RELAY_SHELL> ")
+
+    os.write(master, b"fg\n")
+    os.write(master, b"second-line\n")
+    read_until("AGENT_READ:second-line")
+
+    # Exercise `fg` while the background agent is still running instead of already stopped on a
+    # terminal read. Relay must notice that its owner group became foreground and transfer the
+    # terminal to the child without requiring a second `fg`.
+    os.write(master, b"delay-next-continue\n")
+    read_until("AGENT_DELAY_ARMED")
+    os.write(master, b"\x1a")
+    read_until("RELAY_SHELL> ")
+    os.write(master, b"bg\n")
+    read_until("RELAY_SHELL> ")
+    wait_until_present("AGENT_BG_DELAY")
+    assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
+    os.write(master, b"fg\n")
+    os.write(master, b"third-line\n")
+    read_until("AGENT_READ:third-line")
+
+    os.write(master, b"\x03")
+    read_until("RELAY_SHELL> ")
+    os.write(master, b"exit\n")
+    os.close(master)
+    master_open = False
+    observed, status = os.waitpid(pid, 0)
+    reaped = True
+    assert observed == pid and (os.WIFEXITED(status) or os.WIFSIGNALED(status)), status
+finally:
+    if not reaped:
+        safe_kill_group(agent_group)
+        safe_kill_group(relay_group)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if master_open:
+            os.close(master)
+            master_open = False
+        try:
+            os.waitpid(pid, 0)
+        except ChildProcessError:
+            pass
+    if master_open:
+        os.close(master)
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new("python3")
+        .arg(&driver)
+        .arg(gateway_bin())
+        .arg(&config)
+        .arg(&home)
+        .arg(&xdg)
+        .arg(&runtime)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "PTY driver failed:\nstdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_transparent_run_forwards_non_tty_termination_to_the_agent_tree() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let xdg = temp.path().join("xdg");
+    let runtime = temp.path().join("runtime");
+    for directory in [&home, &xdg, &runtime] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let agent = temp.path().join("non-tty-codex");
+    std::fs::write(
+        &agent,
+        r#"#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+import time
+
+if sys.argv[1:] == ["--version"]:
+    print("codex-cli 0.143.0")
+    raise SystemExit(0)
+
+descendant = subprocess.Popen(["sleep", "30"])
+pid_path = os.environ["NEMO_RELAY_TEST_AGENT_PIDS"]
+temporary_pid_path = f"{pid_path}.tmp-{os.getpid()}"
+with open(temporary_pid_path, "w") as output:
+    output.write(f"{os.getpid()} {descendant.pid}")
+os.replace(temporary_pid_path, pid_path)
+while True:
+    time.sleep(1)
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[agents.codex]\ncommand = {}\n",
+            toml_basic_string(agent.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    for (signal, signal_name) in [
+        (libc::SIGHUP, "SIGHUP"),
+        (libc::SIGINT, "SIGINT"),
+        (libc::SIGQUIT, "SIGQUIT"),
+        (libc::SIGTERM, "SIGTERM"),
+    ] {
+        let pids = temp.path().join(format!("agent-pids-{signal_name}"));
+        let mut relay = Command::new(gateway_bin())
+            .args([
+                "--config",
+                config.to_str().unwrap(),
+                "run",
+                "--agent",
+                "codex",
+            ])
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env("NEMO_RELAY_TEST_AGENT_PIDS", &pids)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pids.is_file() {
+            if Instant::now() >= deadline {
+                let _ = relay.kill();
+                let output = relay.wait_with_output().unwrap();
+                panic!(
+                    "agent PID file was not created for {signal_name}; stderr: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let supervised_pids = std::fs::read_to_string(&pids)
+            .unwrap()
+            .split_whitespace()
+            .map(|value| value.parse::<i32>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(supervised_pids.len(), 2);
+
+        // SAFETY: Relay's PID is live and owned by this test; each signal is caught and forwarded.
+        assert_eq!(unsafe { libc::kill(relay.id() as i32, signal) }, 0);
+        let status = wait_child(&mut relay);
+        assert!(!status.success());
+
+        for pid in supervised_pids {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                // SAFETY: Signal zero is a read-only existence check for the recorded child PID.
+                let result = unsafe { libc::kill(pid, 0) };
+                if result == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "coding-agent process {pid} survived Relay {signal_name}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+}
+
 #[test]
 fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
@@ -2544,7 +3326,7 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
         .write_all(br#"{"hook_event_name":"sessionStart"}"#)
         .unwrap();
     let output = child.wait_with_output().unwrap();
-    let request = received.recv().unwrap();
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
 
     assert!(output.status.success());
     assert_eq!(
@@ -2555,6 +3337,234 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     assert!(request.contains("x-nemo-relay-config-profile: coverage"));
     assert!(request.contains("x-nemo-relay-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));
+}
+
+#[test]
+fn cli_forward_only_unfenced_hook_posts_to_an_authenticated_gateway_without_recovery() {
+    let (output, requests) = run_forward_only_fake_bootstrap_listener(FakeBootstrapProof::Valid);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.starts_with("POST /hooks/codex "))
+    );
+}
+
+#[test]
+fn cli_forward_only_unfenced_hook_rejects_a_foreign_listener_before_posting() {
+    let (output, requests) = run_forward_only_fake_bootstrap_listener(FakeBootstrapProof::Missing);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("foreign process"));
+    assert!(requests.iter().all(|request| !request.starts_with("POST ")));
+}
+
+#[test]
+fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_closes() {
+    let temp = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let key_path = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("bootstrap")
+        .join("fingerprint-hmac.key");
+    std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+    let key = [0x5a_u8; 32];
+    std::fs::write(&key_path, key).unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let server_stopped = stopped.clone();
+    let server_requests = requests.clone();
+    let server = thread::spawn(move || -> Result<usize, String> {
+        listener.set_nonblocking(true).unwrap();
+        for phase in 0..2 {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            let (mut stream, _) = loop {
+                if server_stopped.load(Ordering::Relaxed) {
+                    return Err(format!(
+                        "hook-forward exited before authenticated health phase {phase}"
+                    ));
+                }
+                match listener.accept() {
+                    Ok(connection) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return Err(format!(
+                                "timed out waiting for authenticated health phase {phase}"
+                            ));
+                        }
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => return Err(format!("bootstrap listener failed: {error}")),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let request = read_http_request(&mut stream);
+            server_requests.lock().unwrap().push(request.clone());
+            if request.starts_with("POST ") {
+                return Err(format!(
+                    "received lifecycle payload before authenticated health phase {phase}"
+                ));
+            }
+            if !request.starts_with("GET /healthz ") {
+                return Err(format!(
+                    "unexpected request during authenticated health phase {phase}: {request}"
+                ));
+            }
+            let fingerprint =
+                bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint")
+                    .ok_or_else(|| format!("health phase {phase} omitted its fingerprint"))?;
+            let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce")
+                .ok_or_else(|| format!("health phase {phase} omitted its nonce"))?;
+            let proof = fake_bootstrap_proof(&key, fingerprint, nonce);
+            let body = format!(
+                r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"phase-{phase}"}}"#,
+                env!("CARGO_PKG_VERSION")
+            );
+            let connection = if phase == 0 { "close" } else { "keep-alive" };
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .map_err(|error| format!("health phase {phase} response failed: {error}"))?;
+            // After proving identity on the second connection, close it before reading a body.
+            // The same listening port now behaves as the replacement foreign process.
+        }
+        let replacement_deadline = Instant::now() + Duration::from_secs(12);
+        while !server_stopped.load(Ordering::Relaxed) && Instant::now() < replacement_deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let request = read_http_request(&mut stream);
+                    server_requests.lock().unwrap().push(request);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("replacement listener failed: {error}"),
+            }
+        }
+        Ok(2)
+    });
+
+    let mut child = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "codex",
+            "--gateway-url",
+            &format!("http://{address}"),
+            "--forward-only",
+            "--fail-closed",
+        ])
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+        .env("TMPDIR", temp.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"session_id\":\"replacement-race\"}")
+        .unwrap();
+    let output = wait_child_with_output(child);
+    stopped.store(true, Ordering::Relaxed);
+    let authenticated_phases = server.join().unwrap().unwrap();
+    let requests = Arc::try_unwrap(requests).unwrap().into_inner().unwrap();
+
+    assert_eq!(authenticated_phases, 2);
+    assert!(!output.status.success());
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .count(),
+        0,
+        "replacement listener received a lifecycle payload: {requests:#?}"
+    );
+}
+
+#[test]
+fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway() {
+    let persistent = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "codex",
+            "--gateway-url",
+            "http://127.0.0.1:1",
+            "--forward-only",
+            "--fail-closed",
+        ])
+        .env("NEMO_RELAY_TRANSPARENT_RUN", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"{\"secret\":\"must-not-leave-stdin\"}")?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(persistent.status.success());
+    assert!(persistent.stdout.is_empty());
+    assert!(persistent.stderr.is_empty());
+
+    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let owned = Command::new(gateway_bin())
+        .args([
+            "hook-forward",
+            "codex",
+            "--transparent-run",
+            "--fail-closed",
+        ])
+        .env("NEMO_RELAY_TRANSPARENT_RUN", "1")
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"{\"session_id\":\"owned\"}")?;
+            child.wait_with_output()
+        })
+        .unwrap();
+    assert!(!owned.status.success());
+    assert!(
+        String::from_utf8_lossy(&owned.stderr).contains("verified hook forward failed"),
+        "{}",
+        String::from_utf8_lossy(&owned.stderr)
+    );
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(request.starts_with("GET /healthz "));
+    assert!(!request.contains(r#"{"session_id":"owned"}"#));
 }
 
 #[test]
@@ -2602,7 +3612,7 @@ fn cli_hook_forward_hermes_shell_hook_returns_empty_object() {
         .write_all(br#"{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}"#)
         .unwrap();
     let output = child.wait_with_output().unwrap();
-    let request = received.recv().unwrap();
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
 
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"{}"#);
@@ -2625,7 +3635,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
         .unwrap();
     child.stdin.take().unwrap().write_all(b"{}").unwrap();
     let output = child.wait_with_output().unwrap();
-    let request = received.recv().unwrap();
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
 
     assert!(!output.status.success());
     assert!(request.contains("POST /hooks/hermes HTTP/1.1"));
@@ -2648,7 +3658,7 @@ fn cli_hook_forward_exits_two_for_guardrail_rejection() {
         .unwrap();
     child.stdin.take().unwrap().write_all(b"{}").unwrap();
     let output = child.wait_with_output().unwrap();
-    let request = received.recv().unwrap();
+    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
 
     assert_eq!(output.status.code(), Some(2));
     assert!(request.contains("POST /hooks/codex HTTP/1.1"));

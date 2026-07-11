@@ -3,18 +3,14 @@
 
 //! Pure Hermes YAML generation, migration, and ownership recognition.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
 use crate::error::CliError;
-use crate::install_generation::GENERATION_FILE_ENV;
-use crate::installer::{hermes_hooks, merge_hooks};
-use crate::sidecar::DEFAULT_BIND;
+use crate::installer::{generated_hooks, merge_hooks};
 
-pub(super) const MCP_SERVER_NAME: &str = "nemo-relay";
-const ALWAYS_FORWARDED_CREDENTIALS: &[&str] = &["ANTHROPIC_API_KEY", "OPENAI_API_KEY"];
+pub(super) use crate::mcp::SERVER_NAME as MCP_SERVER_NAME;
 
 pub(super) fn user_config_path_with_override(
     default_home: &Path,
@@ -29,26 +25,52 @@ pub(super) fn user_config_path_with_override(
 
 /// Rewrites the Relay-owned portion of a Hermes config for a transparent run. The fixed MCP
 /// client is removed because the wrapper already owns a dynamic gateway.
-pub(crate) fn transparent_config(existing: &str, relay: &Path) -> Result<String, CliError> {
+pub(crate) fn transparent_config(
+    existing: &str,
+    relay: &Path,
+    gateway_url: &str,
+) -> Result<String, CliError> {
     let mut root = parse_yaml_object(Some(existing), "Hermes config")?;
     strip_managed_hooks(&mut root)?;
     remove_managed_mcp(&mut root)?;
     let command = crate::installer::transparent_hook_forward_command(
         relay,
         crate::config::CodingAgent::Hermes,
-    );
-    let root = merge_hooks(root, hermes_hooks(&command))?;
+        gateway_url,
+    )
+    .map_err(CliError::Install)?;
+    let root = merge_hooks(
+        root,
+        generated_hooks(crate::config::CodingAgent::Hermes, &command),
+    )?;
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }
 
-pub(crate) fn persistent_hook_command(relay: &Path) -> String {
-    persistent_hook_command_for_platform(relay, cfg!(windows))
+pub(crate) fn persistent_hook_command(
+    relay: &Path,
+    generation: &Path,
+    generation_token: &str,
+) -> Result<String, String> {
+    crate::installer::persistent_hook_forward_command(
+        relay,
+        crate::config::CodingAgent::Hermes,
+        generation,
+        generation_token,
+    )
 }
 
-pub(super) fn persistent_hook_command_for_platform(relay: &Path, windows: bool) -> String {
+#[cfg(test)]
+pub(super) fn persistent_hook_command_for_platform(
+    relay: &Path,
+    generation: &Path,
+    generation_token: &str,
+    windows: bool,
+) -> String {
     crate::installer::persistent_hook_forward_command_for_platform(
         relay,
         crate::config::CodingAgent::Hermes,
+        generation,
+        generation_token,
         windows,
     )
 }
@@ -58,6 +80,7 @@ pub(super) fn persistent_config(
     relay: &Path,
     command: &str,
     generation: &Path,
+    generation_token: &str,
     environment: &[String],
 ) -> Result<Value, CliError> {
     let mut root = parse_yaml_object(existing, "Hermes config")?;
@@ -69,11 +92,14 @@ pub(super) fn persistent_config(
         )));
     }
     strip_managed_hooks(&mut root)?;
-    root = merge_hooks(root, hermes_hooks(command))?;
+    root = merge_hooks(
+        root,
+        generated_hooks(crate::config::CodingAgent::Hermes, command),
+    )?;
     let servers = object_field_mut(&mut root, "mcp_servers", "mcp_servers")?;
     servers.insert(
         MCP_SERVER_NAME.into(),
-        expected_mcp_server(relay, generation, environment),
+        expected_mcp_server(relay, generation, generation_token, environment),
     );
     Ok(root)
 }
@@ -81,41 +107,25 @@ pub(super) fn persistent_config(
 pub(super) fn expected_mcp_server(
     relay: &Path,
     generation: &Path,
+    generation_token: &str,
     environment: &[String],
 ) -> Value {
-    let mut forwarded = Map::from_iter([
-        ("NEMO_RELAY_GATEWAY_BIND".into(), json!(DEFAULT_BIND)),
-        (
-            GENERATION_FILE_ENV.into(),
-            json!(generation.display().to_string()),
-        ),
-    ]);
+    let mut server = crate::mcp::persistent_server(relay, generation, generation_token);
+    let forwarded = server
+        .get_mut("env")
+        .and_then(Value::as_object_mut)
+        .expect("persistent MCP server environment is an object");
     for name in environment {
         forwarded.insert(name.clone(), json!(format!("${{{name}}}")));
     }
-    json!({
-        "command": relay.display().to_string(),
-        "args": ["mcp", "--agent", "hermes"],
-        "env": forwarded,
-    })
+    server
 }
 
 pub(super) fn forwarded_environment_names(
     environment: &[String],
     plugin_config: Option<&Value>,
 ) -> Vec<String> {
-    let present = environment.iter().cloned().collect::<BTreeSet<_>>();
-    let referenced = crate::mcp_environment::config_referenced_names(plugin_config)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
     crate::mcp_environment::forwarded_names(environment.iter().cloned(), plugin_config)
-        .into_iter()
-        .filter(|name| {
-            present.contains(name)
-                || referenced.contains(name)
-                || ALWAYS_FORWARDED_CREDENTIALS.contains(&name.as_str())
-        })
-        .collect()
 }
 
 pub(super) fn strip_managed_hooks(root: &mut Value) -> Result<(), CliError> {
@@ -176,14 +186,28 @@ pub(super) fn remove_managed_mcp(root: &mut Value) -> Result<(), CliError> {
 }
 
 pub(super) fn is_managed_mcp_server(server: &Value) -> bool {
-    server
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(is_relay_executable)
-        && server.get("args") == Some(&json!(["mcp", "--agent", "hermes"]))
+    crate::mcp::is_managed_server(server, is_relay_executable)
 }
 
 pub(crate) fn is_managed_hook_command(command: &str) -> bool {
+    if let Some(arguments) = crate::installer::decode_windows_hook_command(command) {
+        if arguments.len() < 3
+            || !is_relay_executable(&arguments[0])
+            || arguments[1] != "hook-forward"
+            || arguments[2] != "hermes"
+        {
+            return false;
+        }
+        let options = &arguments[3..];
+        return options.is_empty()
+            || (options.len() == 3
+                && options[0] == "--gateway-url"
+                && options[2] == "--transparent-run")
+            || (options.len() == 6
+                && options[0] == "--gateway-url"
+                && options[2] == "--generation-file"
+                && options[4] == "--generation-token");
+    }
     [" hook-forward hermes", " plugin-shim hook hermes"]
         .into_iter()
         .any(|separator| {

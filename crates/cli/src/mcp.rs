@@ -9,25 +9,103 @@ mod session;
 mod transport;
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::process::ExitCode;
 
-use crate::config::{CodingAgent, ServerArgs};
-use crate::error::CliError;
+use serde_json::{Value, json};
 
-pub(crate) async fn run(
-    agent: CodingAgent,
-    server_args: &ServerArgs,
-) -> Result<ExitCode, CliError> {
+use crate::config::ServerArgs;
+use crate::error::CliError;
+use crate::install_generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
+
+pub(crate) const SERVER_NAME: &str = "nemo-relay";
+const LAUNCH_ARGS: &[&str] = &["mcp"];
+
+pub(crate) async fn run(server_args: &ServerArgs) -> Result<ExitCode, CliError> {
+    if transparent_run_active() {
+        // An installed plugin can still be enabled inside `nemo-relay run`. In that process the
+        // wrapper already owns a healthy dynamic gateway, so this MCP instance authenticates and
+        // monitors it instead of launching the fixed persistent sidecar.
+        let gateway_url = std::env::var(crate::config::GATEWAY_URL_ENV).map_err(|_| {
+            CliError::Launch(format!(
+                "{} is required when {}=1",
+                crate::config::GATEWAY_URL_ENV,
+                crate::config::TRANSPARENT_RUN_ENV
+            ))
+        })?;
+        let bootstrap_fingerprint = crate::config::transparent_gateway_fingerprint(&gateway_url);
+        let lease = gateway::GatewayLease::borrow(gateway_url, bootstrap_fingerprint).await?;
+        let frames = transport::spawn_stdin_reader()?;
+        session::run(lease, frames, tokio::io::stdout()).await?;
+        return Ok(ExitCode::SUCCESS);
+    }
     // Starting the MCP process is the lifecycle boundary. Acquire the shared gateway before
     // reading protocol frames so hosts can rely on process startup rather than their individual
     // initialize and hook ordering.
-    let lease = gateway::GatewayPlan::resolve(agent, server_args)
+    let lease = gateway::GatewayPlan::resolve(server_args)
         .await?
         .acquire()
         .await?;
     let frames = transport::spawn_stdin_reader()?;
     session::run(lease, frames, tokio::io::stdout()).await?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Builds the host-independent persistent MCP launch contract.
+///
+/// Host adapters add only schema-specific activation and environment-forwarding fields. Keeping
+/// the command, arguments, fixed gateway bind, and generation fence here ensures Codex, Claude
+/// Code, and Hermes launch the same process.
+pub(crate) fn persistent_server(
+    relay: &Path,
+    generation_file: &Path,
+    generation_token: &str,
+) -> Value {
+    json!({
+        "command": relay,
+        "args": LAUNCH_ARGS,
+        "env": {
+            "NEMO_RELAY_GATEWAY_BIND": crate::sidecar::DEFAULT_BIND,
+            (GENERATION_FILE_ENV): generation_file,
+            (GENERATION_TOKEN_ENV): generation_token
+        }
+    })
+}
+
+/// Returns whether a server entry is owned by Relay's current or legacy MCP launch contract.
+///
+/// Legacy `--agent` spellings are accepted only for migration. New configurations always use the
+/// single host-neutral `nemo-relay mcp` command.
+pub(crate) fn is_managed_server(
+    server: &Value,
+    relay_executable: impl FnOnce(&str) -> bool,
+) -> bool {
+    let executable_matches = server
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(relay_executable);
+    if !executable_matches {
+        return false;
+    }
+    if server.get("args") == Some(&json!(LAUNCH_ARGS)) {
+        return true;
+    }
+    let Some(arguments) = server.get("args").and_then(Value::as_array) else {
+        return false;
+    };
+    arguments.len() == 3
+        && arguments[0] == "mcp"
+        && arguments[1] == "--agent"
+        && arguments[2]
+            .as_str()
+            .is_some_and(|agent| matches!(agent, "claude" | "codex" | "hermes"))
+}
+
+fn transparent_run_active() -> bool {
+    std::env::var(crate::config::TRANSPARENT_RUN_ENV)
+        .ok()
+        .as_deref()
+        == Some("1")
 }
 
 fn default_mcp_bind() -> SocketAddr {
@@ -37,26 +115,12 @@ fn default_mcp_bind() -> SocketAddr {
 }
 
 #[cfg(test)]
-async fn run_session<R, W>(
-    bind: SocketAddr,
-    gateway_url: String,
-    sidecar_args: Vec<std::ffi::OsString>,
-    bootstrap_fingerprint: String,
-    heartbeat_interval: std::time::Duration,
-    reader: R,
-    writer: W,
-) -> Result<(), CliError>
+async fn run_session<R, W>(reader: R, writer: W) -> Result<(), CliError>
 where
     R: tokio::io::AsyncBufRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let lease = gateway::GatewayPlan::test_lease(
-        bind,
-        gateway_url,
-        sidecar_args,
-        bootstrap_fingerprint,
-        heartbeat_interval,
-    );
+    let lease = gateway::GatewayLease::test_pending();
     session::serve_with_lease(lease, reader, writer).await
 }
 

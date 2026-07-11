@@ -9,15 +9,15 @@ use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
-use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::config::{
-    AgentConfigs, CodingAgent, EasyPathCommand, GatewayConfig, ResolvedConfig, RunCommand,
-    ServerArgs, any_config_file_exists, resolve_run_config,
+    AgentConfigs, CodingAgent, EasyPathCommand, GatewayConfig, RELAY_PLUGIN_ID,
+    RELAY_SOURCE_PLUGIN_ID, ResolvedConfig, RunCommand, ServerArgs, any_config_file_exists,
+    resolve_run_config,
 };
 use crate::error::CliError;
 use crate::installer::{generated_hooks, transparent_hook_forward_command};
@@ -110,9 +110,13 @@ impl TransparentRun {
         } else {
             crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
         };
-        let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
+        let invocation = resolve_agent_invocation(&command, &resolved.agents)?;
+        let agent = invocation.agent;
         if !dry_run {
-            let probe = crate::agent_process::version_probe_argv(agent, &argv);
+            let probe = crate::agent_process::version_probe_argv(
+                agent,
+                &invocation.argv[..=invocation.host_index],
+            );
             validate_agent_version(agent, &probe).await?;
         }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -120,7 +124,7 @@ impl TransparentRun {
         let gateway_url = format!("http://{address}");
         resolved.gateway.bind = address;
 
-        let prepared = PreparedRun::new(agent, argv, &gateway_url, &resolved, dry_run)?;
+        let prepared = PreparedRun::from_invocation(invocation, &gateway_url, &resolved, dry_run)?;
         Ok(Self {
             agent,
             prepared,
@@ -179,53 +183,114 @@ async fn execute_live_run_with_dynamic(
     gateway_url: &str,
     prepared: PreparedRun,
 ) -> Result<ExitCode, CliError> {
-    let running_server = RunningGateway::start(listener, gateway_config, dynamic_plugins);
-    if let Err(error) = wait_for_health(gateway_url).await {
+    let bootstrap_fingerprint = crate::config::transparent_gateway_fingerprint(gateway_url);
+    let running_server = RunningGateway::start(
+        listener,
+        gateway_config,
+        dynamic_plugins,
+        bootstrap_fingerprint.clone(),
+    );
+    if let Err(error) = wait_for_health(gateway_url, &bootstrap_fingerprint).await {
         let restore = prepared.restore();
         let server_result = running_server.stop().await;
         restore?;
         server_result?;
         return Err(error);
     }
-    let status = prepared.spawn_and_wait().await;
-    let restore = prepared.restore();
-    let server_result = running_server.stop().await;
-    restore?;
-    server_result?;
+    supervise_prepared_run(&prepared, running_server).await
+}
 
-    Ok(exit_code(status?))
+async fn supervise_prepared_run(
+    prepared: &PreparedRun,
+    mut running_server: RunningGateway,
+) -> Result<ExitCode, CliError> {
+    let mut child = match prepared.spawn().await {
+        Ok(child) => child,
+        Err(error) => {
+            let restore = prepared.restore();
+            let server_result = running_server.stop().await;
+            restore?;
+            server_result?;
+            return Err(error);
+        }
+    };
+
+    tokio::select! {
+        status = child.wait() => {
+            let restore = prepared.restore();
+            let server_result = running_server.stop().await;
+            restore?;
+            server_result?;
+            Ok(exit_code(status?))
+        }
+        gateway_result = running_server.wait() => {
+            let child_result = child.terminate().await;
+            let restore = prepared.restore();
+            restore?;
+            child_result?;
+            match gateway_result {
+                Err(error) => Err(error),
+                Ok(()) => Err(CliError::Launch(
+                    "transparent Relay gateway stopped before the coding agent exited".into(),
+                )),
+            }
+        }
+    }
 }
 
 // Resolves the launched agent and argv from either an explicit command or a configured per-agent
 // command. Agent inference only happens from argv[0] when `--agent` was omitted, so explicit agent
 // selection can wrap commands whose executable name is not recognizable.
-fn resolve_agent_and_argv(
-    command: &RunCommand,
-    agents: &AgentConfigs,
-) -> Result<(CodingAgent, Vec<String>), CliError> {
-    let argv = resolved_argv(command, agents)?;
-    let agent = resolved_agent(command, &argv)?;
-    Ok((agent, argv))
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentInvocation {
+    agent: CodingAgent,
+    argv: Vec<String>,
+    host_index: usize,
 }
 
-// Resolves the full argv to spawn. When `--agent` is set (the easy-path and explicit `--agent`
-// flows both go through this case), the configured agent command is the base argv and anything
-// after `--` is appended as pass-through args. When `--agent` is absent, `command.command` IS
-// the full argv (e.g., `nemo-relay run -- codex --model X` runs that exact command and infers
-// the agent from argv[0]).
-fn resolved_argv(command: &RunCommand, agents: &AgentConfigs) -> Result<Vec<String>, CliError> {
+fn resolve_agent_invocation(
+    command: &RunCommand,
+    agents: &AgentConfigs,
+) -> Result<AgentInvocation, CliError> {
     if let Some(agent) = command.agent {
         let mut argv = configured_command(agent, agents)
             .unwrap_or_else(|| vec![default_command_for(agent).to_string()]);
+        let host_index = argv
+            .iter()
+            .rposition(|argument| CodingAgent::infer(argument) == Some(agent))
+            .unwrap_or(0);
         argv.extend(command.command.iter().cloned());
-        return Ok(argv);
+        return Ok(AgentInvocation {
+            agent,
+            argv,
+            host_index,
+        });
     }
     if command.command.is_empty() {
         return Err(CliError::Launch(
             "missing command; pass -- <agent-command> or --agent with a configured command".into(),
         ));
     }
-    Ok(command.command.clone())
+    let argv = command.command.clone();
+    let agent = CodingAgent::infer(&argv[0]).ok_or_else(|| {
+        CliError::Launch(format!(
+            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, or --agent hermes",
+            argv[0]
+        ))
+    })?;
+    Ok(AgentInvocation {
+        agent,
+        argv,
+        host_index: 0,
+    })
+}
+
+#[cfg(test)]
+fn resolve_agent_and_argv(
+    command: &RunCommand,
+    agents: &AgentConfigs,
+) -> Result<(CodingAgent, Vec<String>), CliError> {
+    resolve_agent_invocation(command, agents).map(|invocation| (invocation.agent, invocation.argv))
 }
 
 // Default agent binary names used when no `[agents.<name>] command = "..."` override is in the
@@ -273,20 +338,6 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
         .map_err(CliError::Launch)
 }
 
-// Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
-// intentionally late so configured commands and direct CLI commands share the same validation path.
-fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, CliError> {
-    if let Some(agent) = command.agent {
-        return Ok(agent);
-    }
-    CodingAgent::infer(&argv[0]).ok_or_else(|| {
-        CliError::Launch(format!(
-            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, or --agent hermes",
-            argv[0]
-        ))
-    })
-}
-
 // Splits a configured command string into argv words for run mode. This intentionally uses simple
 // whitespace splitting because config command values are a convenience fallback; complex shell
 // commands should be passed after `--` by the caller.
@@ -298,6 +349,7 @@ fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<S
 
 struct PreparedRun {
     argv: Vec<String>,
+    host_index: usize,
     env: Vec<(String, String)>,
     temp_dirs: Vec<PathBuf>,
     notes: Vec<String>,
@@ -315,18 +367,26 @@ impl RunningGateway {
         listener: TcpListener,
         config: crate::config::GatewayConfig,
         dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+        bootstrap_fingerprint: String,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
-            server::serve_listener_with_dynamic(
+            server::serve_transparent_listener_with_dynamic(
                 listener,
                 config,
                 dynamic_plugins,
+                bootstrap_fingerprint,
                 Some(shutdown_rx),
             )
             .await
         });
         Self { shutdown_tx, task }
+    }
+
+    async fn wait(&mut self) -> Result<(), CliError> {
+        (&mut self.task)
+            .await
+            .map_err(|error| CliError::Launch(format!("gateway task failed: {error}")))?
     }
 
     // Requests shutdown and joins the server task. The send can fail only if the task already exited;
@@ -340,9 +400,23 @@ impl RunningGateway {
 }
 
 impl PreparedRun {
-    // Builds the launch plan and applies only the preparation needed by the selected agent.
-    // Dry-run preparation records equivalent notes and argv/env changes without writing temporary
-    // hook files or patching user/project configuration.
+    fn from_invocation(
+        invocation: AgentInvocation,
+        gateway_url: &str,
+        resolved: &ResolvedConfig,
+        dry_run: bool,
+    ) -> Result<Self, CliError> {
+        Self::build(
+            invocation.agent,
+            invocation.argv,
+            invocation.host_index,
+            gateway_url,
+            resolved,
+            dry_run,
+        )
+    }
+
+    #[cfg(test)]
     fn new(
         agent: CodingAgent,
         argv: Vec<String>,
@@ -350,9 +424,35 @@ impl PreparedRun {
         resolved: &ResolvedConfig,
         dry_run: bool,
     ) -> Result<Self, CliError> {
+        let boundary = argv
+            .iter()
+            .position(|argument| argument == "--")
+            .unwrap_or(argv.len());
+        let host_index = argv[..boundary]
+            .iter()
+            .rposition(|argument| CodingAgent::infer(argument) == Some(agent))
+            .unwrap_or(0);
+        Self::build(agent, argv, host_index, gateway_url, resolved, dry_run)
+    }
+
+    // Builds the launch plan and applies only the preparation needed by the selected agent.
+    // Dry-run preparation records equivalent notes and argv/env changes without writing temporary
+    // hook files or patching user/project configuration.
+    fn build(
+        agent: CodingAgent,
+        argv: Vec<String>,
+        host_index: usize,
+        gateway_url: &str,
+        resolved: &ResolvedConfig,
+        dry_run: bool,
+    ) -> Result<Self, CliError> {
         let mut run = Self {
             argv,
-            env: vec![("NEMO_RELAY_GATEWAY_URL".into(), gateway_url.into())],
+            host_index,
+            env: vec![
+                (crate::config::GATEWAY_URL_ENV.into(), gateway_url.into()),
+                (crate::config::TRANSPARENT_RUN_ENV.into(), "1".into()),
+            ],
             temp_dirs: Vec::new(),
             notes: Vec::new(),
         };
@@ -362,12 +462,12 @@ impl PreparedRun {
         match agent {
             CodingAgent::ClaudeCode => {
                 if dry_run {
-                    run.prepare_claude_dry(gateway_url);
+                    run.prepare_claude_dry(gateway_url)?;
                 } else {
                     run.prepare_claude(gateway_url)?;
                 }
             }
-            CodingAgent::Codex => run.prepare_codex(gateway_url),
+            CodingAgent::Codex => run.prepare_codex(gateway_url)?,
             CodingAgent::Hermes => {
                 if dry_run {
                     run.prepare_hermes_dry(resolved.agents.hermes.hooks_path.as_deref())?;
@@ -381,23 +481,27 @@ impl PreparedRun {
 
     // Records the Claude Code argv/env changes that would be made during a real run. The temporary
     // plugin path is symbolic so printed dry-run output is deterministic and non-mutating.
-    fn prepare_claude_dry(&mut self, gateway_url: &str) {
-        insert_after_agent(
+    fn prepare_claude_dry(&mut self, gateway_url: &str) -> Result<(), CliError> {
+        insert_after_host(
             &mut self.argv,
-            CodingAgent::ClaudeCode,
+            self.host_index,
             [
                 "--plugin-dir".into(),
                 "<temporary-claude-plugin-dir>".into(),
+                "--settings".into(),
+                "<temporary-claude-settings>".into(),
             ],
         );
         self.env
             .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
         self.notes
             .push("would generate a temporary Claude Code plugin directory".into());
+        Ok(())
     }
 
-    // Creates a temporary Claude Code plugin containing gateway hooks and points Claude at both
-    // that plugin directory and the gateway Anthropic-compatible gateway URL.
+    // Creates a temporary Claude Code plugin containing gateway hooks and a process-private
+    // settings overlay. Claude applies the first `--settings` argument, so the overlay preserves
+    // the caller's first explicit settings source while overriding only the gateway URL.
     fn prepare_claude(&mut self, gateway_url: &str) -> Result<(), CliError> {
         let root = temp_dir("nemo-relay-claude-plugin")?;
         std::fs::create_dir_all(root.join(".claude-plugin"))?;
@@ -411,20 +515,31 @@ impl PreparedRun {
             }))
             .map_err(|error| CliError::Launch(error.to_string()))?,
         )?;
+        let hook_command = transparent_hook_forward_command(
+            &transparent_hook_executable(),
+            CodingAgent::ClaudeCode,
+            gateway_url,
+        )
+        .map_err(CliError::Launch)?;
         write_hooks(
             &root.join("hooks/hooks.json"),
-            generated_hooks(
-                CodingAgent::ClaudeCode,
-                &transparent_hook_forward_command(
-                    &transparent_hook_executable(),
-                    CodingAgent::ClaudeCode,
-                ),
-            ),
+            generated_hooks(CodingAgent::ClaudeCode, &hook_command),
         )?;
-        insert_after_agent(
+        let settings_path = root.join("settings.json");
+        let settings = claude_settings_overlay(&self.argv, self.host_index, gateway_url)?;
+        let settings_bytes = serde_json::to_vec_pretty(&settings)
+            .map_err(|error| CliError::Launch(error.to_string()))?;
+        crate::file_io::atomic_write_private(&settings_path, &settings_bytes)
+            .map_err(CliError::Launch)?;
+        insert_after_host(
             &mut self.argv,
-            CodingAgent::ClaudeCode,
-            ["--plugin-dir".into(), root.display().to_string()],
+            self.host_index,
+            [
+                "--plugin-dir".into(),
+                root.display().to_string(),
+                "--settings".into(),
+                settings_path.display().to_string(),
+            ],
         );
         self.env
             .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
@@ -436,7 +551,7 @@ impl PreparedRun {
     // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // current supported Codex releases. The centralized host policy validates the version first.
-    fn prepare_codex(&mut self, gateway_url: &str) {
+    fn prepare_codex(&mut self, gateway_url: &str) -> Result<(), CliError> {
         // Codex resolves auth via `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/
         // manager.rs`): `auth_mode=ApiKey` uses `OPENAI_API_KEY`, `auth_mode=Chatgpt` uses the
         // OAuth token from `~/.codex/auth.json`. With `requires_openai_auth=true` the provider
@@ -464,8 +579,13 @@ impl PreparedRun {
                  or pass `--openai-base-url` to an upstream that needs no key."
             );
         }
-        let hook_command =
-            transparent_hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
+        let hook_command = transparent_hook_forward_command(
+            &transparent_hook_executable(),
+            CodingAgent::Codex,
+            gateway_url,
+        )
+        .map_err(CliError::Launch)?;
+        let hook_groups = generated_hooks(CodingAgent::Codex, &hook_command);
         let mut args = vec![
             "--config".to_string(),
             "features.hooks=true".to_string(),
@@ -474,15 +594,14 @@ impl PreparedRun {
             "--config".to_string(),
             codex_gateway_provider_config(gateway_url),
         ];
-        for (event, groups) in generated_hooks(CodingAgent::Codex, &hook_command)["hooks"]
-            .as_object()
-            .into_iter()
-            .flatten()
-        {
+        for (event, groups) in hook_groups["hooks"].as_object().into_iter().flatten() {
             args.push("--config".to_string());
             args.push(format!("hooks.{event}={}", hook_groups_toml(groups)));
         }
-        insert_after_agent(&mut self.argv, CodingAgent::Codex, args);
+        args.push("--config".to_string());
+        args.push(codex_session_hook_state_override(&hook_groups)?);
+        insert_after_host(&mut self.argv, self.host_index, args);
+        Ok(())
     }
 
     // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. A
@@ -495,7 +614,14 @@ impl PreparedRun {
                 source_config.display()
             ))
         })?;
-        let overlay_home = create_hermes_overlay(source_home, &source_config)?;
+        let gateway_url = self
+            .env
+            .iter()
+            .find_map(|(name, value)| {
+                (name == crate::config::GATEWAY_URL_ENV).then_some(value.as_str())
+            })
+            .expect("transparent runs always define their gateway URL");
+        let overlay_home = create_hermes_overlay(source_home, &source_config, gateway_url)?;
         self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
         self.env
             .push(("HERMES_HOME".into(), overlay_home.display().to_string()));
@@ -519,15 +645,16 @@ impl PreparedRun {
         Ok(())
     }
 
-    // Spawns the prepared child process with injected environment and waits for its exit status.
+    // Spawns the prepared child process with injected environment.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
-    async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, CliError> {
+    async fn spawn(&self) -> Result<crate::agent_process::SupervisedChild, CliError> {
         let mut command = crate::agent_process::tokio_command(&self.argv);
         for (name, value) in &self.env {
             command.env(name, value);
         }
-        let mut child = command.spawn()?;
-        child.wait().await.map_err(CliError::from)
+        crate::agent_process::SupervisedChild::spawn(&mut command)
+            .await
+            .map_err(CliError::from)
     }
 
     // Removes process-private plugin and configuration directories after the child exits.
@@ -622,6 +749,225 @@ impl PreparedRun {
         for note in &self.notes {
             println!("note = {note}");
         }
+    }
+}
+
+// Claude Code honors only the first `--settings` source. Preserve that source in the generated
+// overlay so inserting Relay's process-private gateway setting cannot discard user configuration.
+fn claude_settings_overlay(
+    argv: &[String],
+    host_index: usize,
+    gateway_url: &str,
+) -> Result<Value, CliError> {
+    let mut settings = match first_claude_settings(argv, host_index)? {
+        Some(source) => read_claude_settings(source)?,
+        None => json!({}),
+    };
+    let object = settings.as_object_mut().ok_or_else(|| {
+        CliError::Launch("Claude Code --settings must contain a JSON object".into())
+    })?;
+    let environment = object.entry("env").or_insert_with(|| json!({}));
+    let environment = environment.as_object_mut().ok_or_else(|| {
+        CliError::Launch("Claude Code --settings field `env` must be a JSON object".into())
+    })?;
+    environment.insert(
+        "ANTHROPIC_BASE_URL".into(),
+        Value::String(gateway_url.into()),
+    );
+    Ok(settings)
+}
+
+fn first_claude_settings(argv: &[String], host_index: usize) -> Result<Option<&str>, CliError> {
+    let boundary = argv
+        .iter()
+        .skip(host_index + 1)
+        .position(|argument| argument == "--")
+        .map_or(argv.len(), |offset| host_index + 1 + offset);
+    let mut index = host_index + 1;
+    while index < boundary {
+        if argv[index] == "--settings" {
+            if index + 1 >= boundary || argv[index + 1].is_empty() {
+                return Err(CliError::Launch(
+                    "Claude Code --settings is missing its value".into(),
+                ));
+            }
+            return Ok(Some(argv[index + 1].as_str()));
+        }
+        if let Some(source) = argv[index].strip_prefix("--settings=") {
+            if source.is_empty() {
+                return Err(CliError::Launch(
+                    "Claude Code --settings is missing its value".into(),
+                ));
+            }
+            return Ok(Some(source));
+        }
+        index += 1;
+    }
+    Ok(None)
+}
+
+fn read_claude_settings(source: &str) -> Result<Value, CliError> {
+    let raw = if source.trim_start().starts_with('{') {
+        source.to_string()
+    } else {
+        std::fs::read_to_string(source).map_err(|error| {
+            CliError::Launch(format!(
+                "failed to read Claude Code settings {}: {error}",
+                Path::new(source).display()
+            ))
+        })?
+    };
+    serde_json::from_str(&raw).map_err(|error| {
+        CliError::Launch(format!(
+            "failed to parse Claude Code --settings JSON: {error}"
+        ))
+    })
+}
+
+// Session hook definitions and their exact trust state share Codex's process-local CLI layer. This
+// authorizes only the generated Relay command without rewriting the active user profile or using
+// the process-wide hook-trust bypass.
+fn codex_session_hook_state_override(generated: &Value) -> Result<String, CliError> {
+    let events = generated
+        .get("hooks")
+        .and_then(Value::as_object)
+        .ok_or_else(|| CliError::Launch("generated Codex hooks were malformed".into()))?;
+    let mut states = Vec::new();
+    for (event, groups) in events {
+        let groups = groups.as_array().ok_or_else(|| {
+            CliError::Launch(format!(
+                "generated Codex {event} hook groups were malformed"
+            ))
+        })?;
+        let event_key = codex_hook_event_key(event);
+        for (group_index, group) in groups.iter().enumerate() {
+            let group = group.as_object().ok_or_else(|| {
+                CliError::Launch(format!("generated Codex {event} hook group was malformed"))
+            })?;
+            let handlers = group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    CliError::Launch(format!(
+                        "generated Codex {event} hook handlers were malformed"
+                    ))
+                })?;
+            for (handler_index, handler) in handlers.iter().enumerate() {
+                let hash = codex_command_hook_hash(&event_key, group, handler)?;
+                let key = format!(
+                    "/<session-flags>/config.toml:{event_key}:{group_index}:{handler_index}"
+                );
+                states.push(format!(
+                    "{}={{trusted_hash={},enabled=true}}",
+                    toml_string(&key),
+                    toml_string(&hash)
+                ));
+                for plugin_id in [RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID] {
+                    let key = format!(
+                        "{plugin_id}:hooks/hooks.json:{event_key}:{group_index}:{handler_index}"
+                    );
+                    states.push(format!("{}={{enabled=false}}", toml_string(&key)));
+                }
+            }
+        }
+    }
+    Ok(format!("hooks.state={{{}}}", states.join(",")))
+}
+
+fn codex_hook_event_key(event: &str) -> String {
+    let mut normalized = String::with_capacity(event.len() + 2);
+    for (index, character) in event.chars().enumerate() {
+        if character.is_ascii_uppercase() {
+            if index > 0 {
+                normalized.push('_');
+            }
+            normalized.push(character.to_ascii_lowercase());
+        } else {
+            normalized.push(character);
+        }
+    }
+    normalized
+}
+
+fn codex_command_hook_hash(
+    event_key: &str,
+    group: &serde_json::Map<String, Value>,
+    handler: &Value,
+) -> Result<String, CliError> {
+    use sha2::{Digest, Sha256};
+
+    let handler = handler.as_object().ok_or_else(|| {
+        CliError::Launch(format!(
+            "generated Codex {event_key} command hook was malformed"
+        ))
+    })?;
+    if handler.get("type").and_then(Value::as_str) != Some("command") {
+        return Err(CliError::Launch(format!(
+            "generated Codex {event_key} hook was not a command"
+        )));
+    }
+    let command = handler
+        .get(if cfg!(windows) {
+            "commandWindows"
+        } else {
+            "command"
+        })
+        .or_else(|| handler.get("command"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CliError::Launch(format!(
+                "generated Codex {event_key} hook command was missing"
+            ))
+        })?;
+    let timeout = handler
+        .get("timeout")
+        .and_then(Value::as_u64)
+        .unwrap_or(600)
+        .max(1);
+    let mut normalized_handler = serde_json::Map::new();
+    normalized_handler.insert("type".into(), Value::String("command".into()));
+    normalized_handler.insert("command".into(), Value::String(command.into()));
+    normalized_handler.insert("timeout".into(), Value::Number(timeout.into()));
+    normalized_handler.insert("async".into(), Value::Bool(false));
+    if let Some(status) = handler.get("statusMessage").and_then(Value::as_str) {
+        normalized_handler.insert("statusMessage".into(), Value::String(status.into()));
+    }
+    let mut identity = serde_json::Map::new();
+    identity.insert("event_name".into(), Value::String(event_key.into()));
+    if let Some(matcher) = group.get("matcher").and_then(Value::as_str) {
+        identity.insert("matcher".into(), Value::String(matcher.into()));
+    }
+    identity.insert(
+        "hooks".into(),
+        Value::Array(vec![Value::Object(normalized_handler)]),
+    );
+    let canonical = canonical_json(Value::Object(identity));
+    let bytes = serde_json::to_vec(&canonical)
+        .map_err(|error| CliError::Launch(format!("failed to hash Codex hook: {error}")))?;
+    let digest = Sha256::digest(bytes);
+    Ok(format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+fn canonical_json(value: Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let mut entries = object.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonical_json(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.into_iter().map(canonical_json).collect()),
+        other => other,
     }
 }
 
@@ -771,19 +1117,23 @@ fn exit_code(status: std::process::ExitStatus) -> ExitCode {
 
 // Polls the ephemeral gateway health endpoint for roughly one second before launching the agent.
 // Startup failures return a launcher error so the child command is never run against a dead proxy.
-async fn wait_for_health(gateway_url: &str) -> Result<(), CliError> {
-    let client = Client::new();
-    let url = format!("{}/healthz", gateway_url.trim_end_matches('/'));
+async fn wait_for_health(gateway_url: &str, bootstrap_fingerprint: &str) -> Result<(), CliError> {
     for _ in 0..50 {
-        if let Ok(response) = client.get(&url).send().await
-            && response.status().is_success()
+        let gateway_url = gateway_url.to_string();
+        let bootstrap_fingerprint = bootstrap_fingerprint.to_string();
+        if tokio::task::spawn_blocking(move || {
+            crate::sidecar::healthz_compatible(&gateway_url, &bootstrap_fingerprint)
+        })
+        .await
+        .map_err(|error| CliError::Launch(format!("gateway readiness task failed: {error}")))?
         {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     Err(CliError::Launch(format!(
-        "gateway did not become ready at {url}"
+        "gateway did not become ready at {}/healthz",
+        gateway_url.trim_end_matches('/')
     )))
 }
 
@@ -859,21 +1209,16 @@ fn path_with_transparent_hook_dir() -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
-// Inserts generated agent flags immediately after the last argv element that looks like the agent
-// executable. Falling back to index 0 keeps wrapper commands usable by inserting after the first
-// word when the agent cannot be found later in argv.
-fn insert_after_agent(
+// The invocation resolver determines this index before pass-through arguments are appended. Using
+// it here prevents a prompt token named `codex` or `claude` from becoming an accidental insertion
+// target while preserving configured wrapper prefixes.
+fn insert_after_host(
     argv: &mut Vec<String>,
-    agent: CodingAgent,
+    host_index: usize,
     args: impl IntoIterator<Item = String>,
 ) {
-    let index = argv
-        .iter()
-        .enumerate()
-        .filter_map(|(index, arg)| (CodingAgent::infer(arg) == Some(agent)).then_some(index))
-        .next_back()
-        .unwrap_or(0);
-    argv.splice(index + 1..index + 1, args);
+    debug_assert!(host_index < argv.len());
+    argv.splice(host_index + 1..host_index + 1, args);
 }
 
 // Writes pretty JSON hook config to a path whose parent has already been created by the caller.
@@ -889,7 +1234,11 @@ fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
 // Creates a per-process Hermes home whose user state points at the original profile while the
 // config and hook approval files remain private to this transparent run. Hermes has no standalone
 // config-file override, so `HERMES_HOME` is its supported process-scoped configuration boundary.
-fn create_hermes_overlay(source_home: &Path, source_config: &Path) -> Result<PathBuf, CliError> {
+fn create_hermes_overlay(
+    source_home: &Path,
+    source_config: &Path,
+    gateway_url: &str,
+) -> Result<PathBuf, CliError> {
     // Prefer a sibling of HERMES_HOME so Windows file hard links remain on one volume. Fall back
     // to the OS temp directory when the profile parent is not writable; regular files then use a
     // copy fallback, while profile directories remain live through junctions.
@@ -899,7 +1248,7 @@ fn create_hermes_overlay(source_home: &Path, source_config: &Path) -> Result<Pat
         .and_then(|parent| private_temp_dir(parent, ".nemo-relay-hermes-home").ok())
         .map(Ok)
         .unwrap_or_else(|| temp_dir("nemo-relay-hermes-home"))?;
-    if let Err(error) = populate_hermes_overlay(&overlay, source_home, source_config) {
+    if let Err(error) = populate_hermes_overlay(&overlay, source_home, source_config, gateway_url) {
         let _ = std::fs::remove_dir_all(&overlay);
         return Err(error);
     }
@@ -910,6 +1259,7 @@ fn populate_hermes_overlay(
     overlay: &Path,
     source_home: &Path,
     source_config: &Path,
+    gateway_url: &str,
 ) -> Result<(), CliError> {
     let absolute_overlay = overlay
         .canonicalize()
@@ -942,7 +1292,7 @@ fn populate_hermes_overlay(
         .map(|path| path.canonicalize().unwrap_or(path))
         .map(crate::plugin_host::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"));
-    let contents = crate::hermes::transparent_config(&existing, &relay)?;
+    let contents = crate::hermes::transparent_config(&existing, &relay, gateway_url)?;
     std::fs::write(overlay.join("config.yaml"), contents)?;
     Ok(())
 }
@@ -978,22 +1328,23 @@ fn link_hermes_state(source: &Path, destination: &Path, directory: bool) -> Resu
 
 #[cfg(windows)]
 fn create_windows_junction(source: &Path, destination: &Path) -> Result<(), CliError> {
+    use std::os::windows::process::CommandExt;
+
     // Directory junctions do not require Developer Mode or SeCreateSymbolicLinkPrivilege. Paths
     // travel through environment variables so the fixed cmd program never interpolates user
     // content into shell syntax; delayed expansion is disabled for literal exclamation marks.
-    let status = std::process::Command::new(
+    let mut command = std::process::Command::new(
         std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe")),
-    )
-    .args([
-        "/d",
-        "/v:off",
-        "/s",
-        "/c",
-        "mklink /J \"%NEMO_RELAY_JUNCTION_DEST%\" \"%NEMO_RELAY_JUNCTION_SOURCE%\" >nul",
-    ])
-    .env("NEMO_RELAY_JUNCTION_SOURCE", source)
-    .env("NEMO_RELAY_JUNCTION_DEST", destination)
-    .status()?;
+    );
+    command.args(["/d", "/e:on", "/v:off", "/s", "/c"]);
+    // `cmd.exe` parses the command after `/c` itself rather than with the Windows CRT rules used
+    // by `Command::arg`. The outer quote pair is required so the inner path quotes survive `/s`.
+    command
+        .raw_arg(r#""mklink /J "%NEMO_RELAY_JUNCTION_DEST%" "%NEMO_RELAY_JUNCTION_SOURCE%" >nul""#);
+    let status = command
+        .env("NEMO_RELAY_JUNCTION_SOURCE", source)
+        .env("NEMO_RELAY_JUNCTION_DEST", destination)
+        .status()?;
     if status.success() {
         Ok(())
     } else {
@@ -1055,12 +1406,15 @@ fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
 
 fn private_temp_dir(parent: &Path, prefix: &str) -> Result<PathBuf, CliError> {
     let path = parent.join(format!("{prefix}-{}", uuid::Uuid::now_v7()));
-    let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
         builder.mode(0o700);
-    }
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     builder.create(&path)?;
     Ok(path)
 }

@@ -18,7 +18,7 @@ same local hook and gateway controls as Claude Code.
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
 - `.mcp.json` starts the native `nemo-relay mcp` lifecycle client.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-relay hook-forward claude`.
+  `nemo-relay hook-forward claude --forward-only`.
 
 ## Captured Events
 
@@ -53,9 +53,15 @@ nemo-relay run -- claude
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
-creates a temporary Claude plugin directory, passes it with `--plugin-dir`, sets
-`ANTHROPIC_BASE_URL` for the launched process, and removes the temporary plugin
-when Claude exits.
+creates a temporary Claude plugin directory, and passes it with `--plugin-dir`.
+It also creates a private settings overlay that preserves the caller's first
+explicit `--settings` object and overrides only `ANTHROPIC_BASE_URL` for the
+launched process. Relay removes both temporary artifacts when Claude exits and
+does not rewrite the source settings or user-level plugin state. An enabled
+Relay plugin MCP authenticates, borrows, and monitors the wrapper-owned dynamic
+gateway, and its persistent hooks become no-ops for this process; only the
+temporary hook source delivers lifecycle data after authenticating that
+gateway.
 
 Inspect the launch without starting Claude Code:
 
@@ -211,9 +217,11 @@ claude plugin install nemo-relay-plugin@nemo-relay --scope user
 
 That path reads `.claude-plugin/marketplace.json` from the repository and
 installs this Claude Code plugin from `integrations/coding-agents/claude-code`.
-The source plugin starts `nemo-relay mcp` and its hooks invoke
-`nemo-relay hook-forward claude` directly. Use `nemo-relay install
-claude-code` for complete provider routing and generation-fenced upgrades.
+The source plugin starts `nemo-relay mcp`; its hooks use the explicit
+`--forward-only` mode to post to that existing gateway without an
+installer-owned generation fence. They cannot launch or recover Relay. Use
+`nemo-relay install claude-code` for complete provider routing and
+generation-fenced upgrades.
 
 Create a local Claude Code marketplace and copy the plugin under that
 marketplace root:
@@ -264,8 +272,9 @@ claude --plugin-dir "$PLUGIN_ROOT"
 ```
 
 Hook commands in the source `hooks/hooks.json` template use
-`nemo-relay hook-forward claude`, so source marketplace installs rely on
-the same `nemo-relay` executable available on `PATH`.
+`nemo-relay hook-forward claude --forward-only`, so source marketplace installs
+rely on the same `nemo-relay` executable available on `PATH` and on their
+`alwaysLoad` MCP entry for gateway startup.
 
 If you set up the marketplace manually for development, use the top-level
 installer commands for provider routing and rollback:

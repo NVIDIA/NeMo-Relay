@@ -12,19 +12,22 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
 
-use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, CodingAgent};
+use crate::config::{
+    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, CodingAgent, RELAY_PLUGIN_ID,
+};
 use crate::installer::generated_hooks;
 #[cfg(test)]
 use crate::installer::merge_hooks;
 
 use super::codex_app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
 use super::shared::{
-    FileSnapshot, atomic_write, backup, backup_path, current_exe, ensure_table, home_dir,
-    portable_executable_path, read_json_object, remove_backup, restore_file_snapshot, shell_quote,
-    shell_quote_arg_for_platform, snapshot_optional_file, write_json,
+    FileSnapshot, atomic_write, atomic_write_private, backup, backup_path, current_exe,
+    ensure_table, home_dir, portable_executable_path, read_json_object, remove_backup,
+    restore_file_snapshot, shell_quote, shell_quote_arg_for_platform, snapshot_optional_file,
+    write_json,
 };
 
-pub(super) const CODEX_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
+pub(super) const CODEX_PLUGIN_ID: &str = RELAY_PLUGIN_ID;
 pub(super) const CODEX_PLUGIN_HOOK_KEY_PREFIX: &str =
     "nemo-relay-plugin@nemo-relay-local:hooks/hooks.json:";
 
@@ -77,11 +80,21 @@ pub(crate) fn restore_codex_setup(snapshot: &CodexSetupSnapshot) -> Result<(), S
     }
 }
 
+#[cfg(test)]
 pub(super) fn install_codex(
     gateway_url: &str,
     plugin_hooks_path: &Path,
 ) -> Result<ExitCode, String> {
-    let expected_command = expected_plugin_hook_command()?;
+    install_codex_with_generation(gateway_url, plugin_hooks_path, None)
+}
+
+pub(super) fn install_codex_with_generation(
+    gateway_url: &str,
+    plugin_hooks_path: &Path,
+    generation_token: Option<&str>,
+) -> Result<ExitCode, String> {
+    let expected_command =
+        expected_plugin_hook_command_with_token(plugin_hooks_path, generation_token)?;
     validate_plugin_hooks(plugin_hooks_path, &expected_command)?;
     install_codex_with_trust(
         gateway_url,
@@ -168,19 +181,6 @@ pub(super) fn uninstall_codex_with_client(
     Ok(ExitCode::SUCCESS)
 }
 
-const GENERATED_CODEX_HOOK_EVENTS: &[(&str, &str)] = &[
-    ("sessionstart", "SessionStart"),
-    ("userpromptsubmit", "UserPromptSubmit"),
-    ("pretooluse", "PreToolUse"),
-    ("posttooluse", "PostToolUse"),
-    ("permissionrequest", "PermissionRequest"),
-    ("subagentstart", "SubagentStart"),
-    ("subagentstop", "SubagentStop"),
-    ("stop", "Stop"),
-    ("precompact", "PreCompact"),
-    ("postcompact", "PostCompact"),
-];
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct CodexHookTrustReport {
     trusted: Vec<String>,
@@ -226,9 +226,10 @@ impl CodexHookTrustReport {
 
 pub(super) fn empty_codex_hook_trust_report() -> CodexHookTrustReport {
     CodexHookTrustReport {
-        missing_required: GENERATED_CODEX_HOOK_EVENTS
+        missing_required: CodingAgent::Codex
+            .hook_events()
             .iter()
-            .map(|(_, display)| (*display).to_string())
+            .map(|event| (*event).to_string())
             .collect(),
         ..CodexHookTrustReport::default()
     }
@@ -237,8 +238,16 @@ pub(super) fn empty_codex_hook_trust_report() -> CodexHookTrustReport {
 pub(super) fn codex_hook_trust_report(
     plugin_hooks_path: &Path,
 ) -> Result<CodexHookTrustReport, String> {
+    codex_hook_trust_report_with_generation(plugin_hooks_path, None)
+}
+
+pub(super) fn codex_hook_trust_report_with_generation(
+    plugin_hooks_path: &Path,
+    generation_token: Option<&str>,
+) -> Result<CodexHookTrustReport, String> {
     let home = home_dir()?;
-    let expected_command = expected_plugin_hook_command()?;
+    let expected_command =
+        expected_plugin_hook_command_with_token(plugin_hooks_path, generation_token)?;
     validate_plugin_hooks(plugin_hooks_path, &expected_command)?;
     let mut client = CodexAppServerClient::start()?;
     codex_hook_trust_report_with_client(&mut client, &home, &expected_command)
@@ -353,9 +362,7 @@ fn relay_codex_plugin_hooks(
             hook.source == "plugin"
                 && hook.plugin_id.as_deref() == Some(CODEX_PLUGIN_ID)
                 && hook.handler_type == "command"
-                && GENERATED_CODEX_HOOK_EVENTS
-                    .iter()
-                    .any(|(event, _)| normalize_hook_event(&hook.event_name) == *event)
+                && is_generated_codex_hook_event(&hook.event_name)
         })
         .collect())
 }
@@ -560,11 +567,49 @@ fn restore_hook_trust_after_failure(
     Err(original_error)
 }
 
-pub(super) fn expected_plugin_hook_command() -> Result<String, String> {
+#[cfg(test)]
+pub(super) fn expected_plugin_hook_command(plugin_hooks_path: &Path) -> Result<String, String> {
+    expected_plugin_hook_command_with_token(plugin_hooks_path, None)
+}
+
+fn expected_plugin_hook_command_with_token(
+    plugin_hooks_path: &Path,
+    generation_token: Option<&str>,
+) -> Result<String, String> {
     let relay = current_exe()?;
     let relay = relay.canonicalize().unwrap_or(relay);
     let relay = portable_executable_path(relay);
-    Ok(codex_plugin_hook_command(&relay))
+    let generation_path = plugin_generation_file(plugin_hooks_path)?;
+    let captured;
+    let generation_token = match generation_token {
+        Some(token) => token,
+        None => {
+            captured =
+                crate::install_generation::InstallGeneration::capture(generation_path.clone())?;
+            captured.token()
+        }
+    };
+    codex_plugin_hook_command(&relay, &generation_path, generation_token)
+}
+
+fn plugin_generation_file(plugin_hooks_path: &Path) -> Result<PathBuf, String> {
+    let generation = plugin_hooks_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join(crate::install_generation::GENERATION_FILE_NAME))
+        .ok_or_else(|| {
+            format!(
+                "Codex plugin hooks path {} is not inside a plugin hooks directory",
+                plugin_hooks_path.display()
+            )
+        })?;
+    if generation.is_absolute() {
+        Ok(generation)
+    } else {
+        env::current_dir()
+            .map(|current| current.join(generation))
+            .map_err(|error| format!("failed to resolve the Codex plugin generation path: {error}"))
+    }
 }
 
 fn validate_plugin_hooks(path: &Path, expected_command: &str) -> Result<(), String> {
@@ -592,27 +637,39 @@ pub(super) fn codex_hook_trust_report_for(hooks: &[CodexHookMetadata]) -> CodexH
             report.disabled.push(hook.key.clone());
         }
     }
-    report.missing_required = GENERATED_CODEX_HOOK_EVENTS
+    report.missing_required = CodingAgent::Codex
+        .hook_events()
         .iter()
-        .filter(|(normalized, _)| {
+        .filter(|event| {
+            let normalized = normalize_hook_event(event);
             !hooks
                 .iter()
-                .any(|hook| normalize_hook_event(&hook.event_name) == *normalized)
+                .any(|hook| normalize_hook_event(&hook.event_name) == normalized)
         })
-        .map(|(_, display)| (*display).to_string())
+        .map(|event| (*event).to_string())
         .collect();
-    report.duplicate_required = GENERATED_CODEX_HOOK_EVENTS
+    report.duplicate_required = CodingAgent::Codex
+        .hook_events()
         .iter()
-        .filter(|(normalized, _)| {
+        .filter(|event| {
+            let normalized = normalize_hook_event(event);
             hooks
                 .iter()
-                .filter(|hook| normalize_hook_event(&hook.event_name) == *normalized)
+                .filter(|hook| normalize_hook_event(&hook.event_name) == normalized)
                 .count()
                 > 1
         })
-        .map(|(_, display)| (*display).to_string())
+        .map(|event| (*event).to_string())
         .collect();
     report
+}
+
+fn is_generated_codex_hook_event(event: &str) -> bool {
+    let normalized = normalize_hook_event(event);
+    CodingAgent::Codex
+        .hook_events()
+        .iter()
+        .any(|expected| normalize_hook_event(expected) == normalized)
 }
 
 fn normalize_hook_event(event: &str) -> String {
@@ -658,16 +715,35 @@ pub(super) fn prepare_codex_config(path: &Path) -> Result<(), String> {
 }
 
 pub(super) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(), String> {
-    let client_token = BootstrapChallengeKey::load()
-        .map_err(|error| error.to_string())?
-        .client_token();
+    let challenge = BootstrapChallengeKey::load().map_err(|error| error.to_string())?;
+    let client_token = challenge.client_token();
     let raw = read_optional_text(path)?;
     let mut doc = raw
         .parse::<DocumentMut>()
         .map_err(|error| format!("invalid TOML in {}: {error}", path.display()))?;
     let backup_snapshot = snapshot_optional_file(&backup_path(path))?;
-    if !codex_config_doc_has_managed_install(&doc, gateway_url) {
-        backup(path)?;
+    let has_managed_proof =
+        codex_provider_client_token(&doc).is_some_and(|token| challenge.verify_client_token(token));
+    let provider_extensions = codex_provider_user_extensions(&doc, gateway_url);
+    let unmodified_managed_install = codex_config_doc_has_managed_install(&doc, gateway_url)
+        && has_managed_proof
+        && codex_provider_has_only_generated_fields(&doc);
+    if !unmodified_managed_install
+        && let Err(error) = refresh_codex_config_backup(
+            path,
+            &raw,
+            &doc,
+            gateway_url,
+            has_managed_proof,
+            &challenge,
+        )
+    {
+        return match restore_file_snapshot(&backup_snapshot) {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{error}; additionally failed to restore the Codex backup: {restore_error}"
+            )),
+        };
     }
     doc["model_provider"] = value("nemo-relay-openai");
     ensure_table(&mut doc, "features")["hooks"] = value(true);
@@ -683,12 +759,349 @@ pub(super) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
     headers.insert(BOOTSTRAP_CLIENT_TOKEN_HEADER, TomlValue::from(client_token));
     provider["http_headers"] = Item::Value(TomlValue::InlineTable(headers));
     providers["nemo-relay-openai"] = Item::Table(provider);
+    if let Some(extensions) = provider_extensions.as_ref() {
+        merge_codex_provider_extensions(&mut doc, extensions);
+    }
 
-    if let Err(error) = atomic_write(path, doc.to_string().as_bytes()) {
+    if let Err(error) = atomic_write_private(path, doc.to_string().as_bytes()) {
         restore_file_snapshot(&backup_snapshot)?;
         return Err(error);
     }
     Ok(())
+}
+
+/// Refresh the uninstall baseline without carrying installer-owned fields forward.
+///
+/// A user can edit one field of an installed config before a forced reinstall. The current file
+/// then contains both that user change and Relay's provider, hook flag, and client proof. Reusing
+/// the whole file as the new backup would make those generated fields survive uninstall. Apply
+/// the same ownership rules as uninstall to reconstruct the user baseline first.
+fn refresh_codex_config_backup(
+    path: &Path,
+    raw: &str,
+    current: &DocumentMut,
+    gateway_url: &str,
+    has_managed_proof: bool,
+    challenge: &BootstrapChallengeKey,
+) -> Result<(), String> {
+    let previous = read_codex_backup_doc_for_refresh(path)?
+        .map(|backup| sanitize_codex_backup_doc(backup, gateway_url, Some(challenge)));
+    if previous.is_none() && !has_managed_proof {
+        if !path.exists() {
+            return Ok(());
+        }
+        return atomic_write_private(&backup_path(path), raw.as_bytes());
+    }
+
+    let empty = DocumentMut::new();
+    let previous = previous.as_ref().unwrap_or(&empty);
+    let mut baseline = current.clone();
+    let preserved_provider = codex_extended_provider_without_proof(&baseline, gateway_url);
+    let provider_is_managed = codex_provider_item_is_managed(&baseline, gateway_url);
+    restore_codex_config_from_backup(&mut baseline, previous, provider_is_managed, false);
+    restore_codex_client_proof_from_backup(&mut baseline, previous, Some(challenge));
+    if let Some(provider) = preserved_provider {
+        ensure_table(&mut baseline, "model_providers")
+            .insert("nemo-relay-openai", Item::Table(provider));
+    }
+    remove_empty_table(&mut baseline, "model_providers");
+    remove_empty_table(&mut baseline, "features");
+    atomic_write_private(&backup_path(path), baseline.to_string().as_bytes())
+}
+
+fn read_codex_backup_doc_for_refresh(path: &Path) -> Result<Option<DocumentMut>, String> {
+    let backup = backup_path(path);
+    let raw = match fs::read_to_string(&backup) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!("failed to read {}: {error}", backup.display()));
+        }
+    };
+    // A stale backup from an interrupted or older installation is not a trustworthy baseline.
+    // The enclosing install transaction still snapshots and restores its bytes on later failure.
+    Ok(raw.parse::<DocumentMut>().ok())
+}
+
+fn restore_codex_client_proof_from_backup(
+    doc: &mut DocumentMut,
+    backup: &DocumentMut,
+    challenge: Option<&BootstrapChallengeKey>,
+) {
+    let current_is_managed = codex_provider_header(doc, BOOTSTRAP_CLIENT_TOKEN_HEADER)
+        .and_then(TomlValue::as_str)
+        .is_some_and(|token| {
+            challenge.is_some_and(|challenge| challenge.verify_client_token(token))
+        });
+    if !current_is_managed {
+        return;
+    }
+    let replacement = codex_provider_header(backup, BOOTSTRAP_CLIENT_TOKEN_HEADER)
+        .filter(|value| {
+            !value.as_str().is_some_and(|token| {
+                challenge.is_some_and(|challenge| challenge.verify_client_token(token))
+            })
+        })
+        .cloned();
+    let Some(provider) = doc
+        .get_mut("model_providers")
+        .and_then(Item::as_table_mut)
+        .and_then(|providers| providers.get_mut("nemo-relay-openai"))
+        .and_then(Item::as_table_mut)
+    else {
+        return;
+    };
+    let Some(headers) = provider.get_mut("http_headers") else {
+        return;
+    };
+
+    let remove_headers = if let Some(headers) = headers.as_inline_table_mut() {
+        if !headers.contains_key(BOOTSTRAP_CLIENT_TOKEN_HEADER) {
+            return;
+        }
+        match replacement {
+            Some(value) => {
+                headers.insert(BOOTSTRAP_CLIENT_TOKEN_HEADER, value);
+            }
+            None => {
+                headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+            }
+        }
+        headers.is_empty()
+    } else if let Some(headers) = headers.as_table_mut() {
+        if !headers.contains_key(BOOTSTRAP_CLIENT_TOKEN_HEADER) {
+            return;
+        }
+        match replacement {
+            Some(value) => {
+                headers.insert(BOOTSTRAP_CLIENT_TOKEN_HEADER, Item::Value(value));
+            }
+            None => {
+                headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+            }
+        }
+        headers.is_empty()
+    } else {
+        false
+    };
+    if remove_headers {
+        provider.remove("http_headers");
+    }
+}
+
+/// Remove installer-owned state from a backup produced by an older partial-reinstall bug.
+///
+/// The client proof is the ownership signal: only a token authenticated by this user's current
+/// bootstrap key permits cleanup. Exact generated providers are removed wholesale. A provider
+/// edited by the user is retained, with only Relay's reserved proof and hook feature removed.
+fn sanitize_codex_backup_doc(
+    mut backup: DocumentMut,
+    gateway_url: &str,
+    challenge: Option<&BootstrapChallengeKey>,
+) -> DocumentMut {
+    let reserved_token =
+        codex_provider_header(&backup, BOOTSTRAP_CLIENT_TOKEN_HEADER).and_then(TomlValue::as_str);
+    let has_managed_proof = reserved_token.is_some_and(|token| {
+        challenge.is_some_and(|challenge| challenge.verify_client_token(token))
+    });
+    let provider_is_managed = codex_provider_item_is_managed(&backup, gateway_url);
+    let has_generated_lineage = provider_is_managed && reserved_token.is_some();
+    if !has_managed_proof && !has_generated_lineage {
+        return backup;
+    }
+
+    if provider_is_managed {
+        let preserved_provider = codex_extended_provider_without_proof(&backup, gateway_url);
+        if top_level_item_is_str(&backup, "model_provider", "nemo-relay-openai") {
+            backup.as_table_mut().remove("model_provider");
+        }
+        if let Some(providers) = backup
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+        {
+            providers.remove("nemo-relay-openai");
+        }
+        if let Some(provider) = preserved_provider {
+            ensure_table(&mut backup, "model_providers")
+                .insert("nemo-relay-openai", Item::Table(provider));
+        }
+    } else {
+        let empty = DocumentMut::new();
+        restore_codex_client_proof_from_backup(&mut backup, &empty, challenge);
+    }
+    remove_table_item_if_bool(&mut backup, "features", "hooks", true);
+    remove_empty_table(&mut backup, "model_providers");
+    remove_empty_table(&mut backup, "features");
+    backup
+}
+
+/// Extract fields a user added to an otherwise generated provider table.
+fn codex_provider_user_extensions(doc: &DocumentMut, gateway_url: &str) -> Option<Table> {
+    if !codex_provider_item_is_managed(doc, gateway_url) {
+        return None;
+    }
+    let mut extensions = doc
+        .get("model_providers")?
+        .as_table()?
+        .get("nemo-relay-openai")?
+        .as_table()?
+        .clone();
+    for key in [
+        "name",
+        "base_url",
+        "wire_api",
+        "requires_openai_auth",
+        "supports_websockets",
+    ] {
+        extensions.remove(key);
+    }
+    remove_codex_provider_header(&mut extensions, BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    (!extensions.is_empty()).then_some(extensions)
+}
+
+fn codex_extended_provider_without_proof(doc: &DocumentMut, gateway_url: &str) -> Option<Table> {
+    codex_provider_user_extensions(doc, gateway_url)?;
+    let mut provider = doc
+        .get("model_providers")?
+        .as_table()?
+        .get("nemo-relay-openai")?
+        .as_table()?
+        .clone();
+    remove_codex_provider_header(&mut provider, BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    Some(provider)
+}
+
+fn remove_codex_provider_header(provider: &mut Table, name: &str) {
+    let Some(headers) = provider.get_mut("http_headers") else {
+        return;
+    };
+    let remove_headers = if let Some(headers) = headers.as_inline_table_mut() {
+        headers.remove(name);
+        headers.is_empty()
+    } else if let Some(headers) = headers.as_table_mut() {
+        headers.remove(name);
+        headers.is_empty()
+    } else {
+        false
+    };
+    if remove_headers {
+        provider.remove("http_headers");
+    }
+}
+
+fn merge_codex_provider_extensions(doc: &mut DocumentMut, extensions: &Table) {
+    let providers = ensure_table(doc, "model_providers");
+    if !providers
+        .get("nemo-relay-openai")
+        .is_some_and(Item::is_table)
+    {
+        providers["nemo-relay-openai"] = Item::Table(Table::new());
+    }
+    let provider = providers["nemo-relay-openai"]
+        .as_table_mut()
+        .expect("provider table was just inserted");
+    for (key, item) in extensions.iter() {
+        if key == "http_headers" {
+            merge_codex_provider_headers(provider, item);
+        } else {
+            provider.insert(key, item.clone());
+        }
+    }
+}
+
+fn merge_codex_provider_headers(provider: &mut Table, extensions: &Item) {
+    let Some(entries) = codex_header_entries(extensions) else {
+        provider.insert("http_headers", extensions.clone());
+        return;
+    };
+    let Some(headers) = provider.get_mut("http_headers") else {
+        provider.insert("http_headers", extensions.clone());
+        return;
+    };
+    if let Some(headers) = headers.as_inline_table_mut() {
+        for (name, value) in entries {
+            headers.insert(&name, value);
+        }
+    } else if let Some(headers) = headers.as_table_mut() {
+        for (name, value) in entries {
+            headers.insert(&name, Item::Value(value));
+        }
+    } else {
+        *headers = extensions.clone();
+    }
+}
+
+fn codex_header_entries(headers: &Item) -> Option<Vec<(String, TomlValue)>> {
+    if let Some(headers) = headers.as_inline_table() {
+        return Some(
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect(),
+        );
+    }
+    headers.as_table().and_then(|headers| {
+        headers
+            .iter()
+            .map(|(name, item)| {
+                item.as_value()
+                    .cloned()
+                    .map(|value| (name.to_string(), value))
+            })
+            .collect::<Option<Vec<_>>>()
+    })
+}
+
+fn codex_provider_has_only_generated_fields(doc: &DocumentMut) -> bool {
+    let Some(provider) = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("nemo-relay-openai"))
+        .and_then(Item::as_table)
+    else {
+        return false;
+    };
+    let generated_fields = [
+        "name",
+        "base_url",
+        "wire_api",
+        "requires_openai_auth",
+        "supports_websockets",
+        "http_headers",
+    ];
+    if provider.len() != generated_fields.len()
+        || !generated_fields
+            .iter()
+            .all(|field| provider.contains_key(field))
+    {
+        return false;
+    }
+    let Some(headers) = provider.get("http_headers") else {
+        return false;
+    };
+    headers.as_inline_table().is_some_and(|headers| {
+        headers.len() == 1 && headers.contains_key(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+    }) || headers.as_table().is_some_and(|headers| {
+        headers.len() == 1 && headers.contains_key(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+    })
+}
+
+pub(super) fn codex_provider_header<'a>(doc: &'a DocumentMut, name: &str) -> Option<&'a TomlValue> {
+    let headers = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("nemo-relay-openai"))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("http_headers"))?;
+    headers
+        .as_inline_table()
+        .and_then(|headers| headers.get(name))
+        .or_else(|| {
+            headers
+                .as_table()
+                .and_then(|headers| headers.get(name))
+                .and_then(Item::as_value)
+        })
 }
 
 pub(super) fn read_optional_text(path: &Path) -> Result<String, String> {
@@ -712,7 +1125,10 @@ pub(super) fn uninstall_codex_config(
     let mut doc = raw
         .parse::<DocumentMut>()
         .map_err(|error| format!("invalid TOML in {}: {error}", path.display()))?;
-    let backup_doc = read_codex_backup_doc(path)?;
+    let challenge = BootstrapChallengeKey::load_existing().map_err(|error| error.to_string())?;
+    let backup_doc = read_codex_backup_doc(path)?
+        .map(|backup| sanitize_codex_backup_doc(backup, gateway_url, challenge.as_ref()));
+    let preserved_provider = codex_extended_provider_without_proof(&doc, gateway_url);
     let provider_is_managed = codex_provider_item_is_managed(&doc, gateway_url);
     match backup_doc.as_ref() {
         Some(backup_doc) => {
@@ -725,6 +1141,16 @@ pub(super) fn uninstall_codex_config(
         }
         None => remove_codex_config_without_backup(&mut doc, provider_is_managed, preserve_hooks),
     }
+    if let Some(provider) = preserved_provider {
+        ensure_table(&mut doc, "model_providers")
+            .insert("nemo-relay-openai", Item::Table(provider));
+    }
+    let empty_backup = DocumentMut::new();
+    restore_codex_client_proof_from_backup(
+        &mut doc,
+        backup_doc.as_ref().unwrap_or(&empty_backup),
+        challenge.as_ref(),
+    );
 
     remove_empty_table(&mut doc, "model_providers");
     remove_empty_table(&mut doc, "features");
@@ -1126,8 +1552,18 @@ pub(super) fn codex_provider_client_token(doc: &DocumentMut) -> Option<&str> {
 }
 
 pub(super) fn codex_hooks_installed(path: &Path) -> Result<bool, String> {
+    codex_hooks_installed_with_generation(path, None)
+}
+
+pub(super) fn codex_hooks_installed_with_generation(
+    path: &Path,
+    generation_token: Option<&str>,
+) -> Result<bool, String> {
     let value = read_json_object(path)?;
-    let generated = generated_hooks(CodingAgent::Codex, &expected_plugin_hook_command()?);
+    let generated = generated_hooks(
+        CodingAgent::Codex,
+        &expected_plugin_hook_command_with_token(path, generation_token)?,
+    );
     Ok(value == generated)
 }
 
@@ -1145,28 +1581,32 @@ pub(super) fn codex_hook_command(gateway_url: &str) -> String {
     )
 }
 
-pub(super) fn codex_plugin_hook_command(relay: &Path) -> String {
-    codex_plugin_hook_command_for_platform(relay, cfg!(windows))
-}
-
-pub(super) fn codex_plugin_hook_command_for_platform(relay: &Path, windows: bool) -> String {
-    crate::installer::persistent_hook_forward_command_for_platform(
+pub(super) fn codex_plugin_hook_command(
+    relay: &Path,
+    generation: &Path,
+    generation_token: &str,
+) -> Result<String, String> {
+    crate::installer::persistent_hook_forward_command(
         relay,
         CodingAgent::Codex,
-        windows,
+        generation,
+        generation_token,
     )
 }
 
 #[cfg(test)]
-pub(super) fn codex_hook_command_for_platform(
+pub(super) fn codex_plugin_hook_command_for_platform(
     relay: &Path,
-    gateway_url: &str,
+    generation: &Path,
+    generation_token: &str,
     windows: bool,
 ) -> String {
-    format!(
-        "{} hook-forward codex --gateway-url {}",
-        crate::plugin_host::shell_quote_for_platform(relay, windows),
-        shell_quote_arg_for_platform(gateway_url, windows)
+    crate::installer::persistent_hook_forward_command_for_platform(
+        relay,
+        CodingAgent::Codex,
+        generation,
+        generation_token,
+        windows,
     )
 }
 

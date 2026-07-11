@@ -86,27 +86,14 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 #[test]
 fn cli_parses_native_mcp_subcommand_and_bind_override() {
     let cli = Cli::try_parse_from(["nemo-relay", "mcp"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Some(Command::Mcp(command)) if command.agent == CodingAgent::Codex
-    ));
+    assert!(matches!(cli.command, Some(Command::Mcp)));
     assert!(cli.server.bind.is_none());
 
     let cli = Cli::try_parse_from(["nemo-relay", "--bind", "127.0.0.1:4041", "mcp"]).unwrap();
-    assert!(matches!(cli.command, Some(Command::Mcp(_))));
+    assert!(matches!(cli.command, Some(Command::Mcp)));
     assert_eq!(cli.server.bind.unwrap().to_string(), "127.0.0.1:4041");
 
-    let cli = Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "claude"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Some(Command::Mcp(command)) if command.agent == CodingAgent::ClaudeCode
-    ));
-
-    let cli = Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "hermes"]).unwrap();
-    assert!(matches!(
-        cli.command,
-        Some(Command::Mcp(command)) if command.agent == CodingAgent::Hermes
-    ));
+    assert!(Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "codex"]).is_err());
 }
 
 #[test]

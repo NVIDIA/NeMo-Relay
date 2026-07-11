@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table};
 
-pub(super) use crate::file_io::atomic_write;
+pub(super) use crate::file_io::{
+    atomic_write, atomic_write_private, atomic_write_with_permissions,
+};
+#[cfg(windows)]
+use crate::file_io::{atomic_write_with_windows_dacl, read_windows_dacl};
 pub(super) use crate::sidecar::{current_exe, healthz};
 
 pub(crate) fn shell_quote(path: &Path) -> String {
@@ -56,7 +60,7 @@ fn cmd_quote_arg(raw: &str) -> String {
                 // cmd expands percent variables even inside quotes. Insert a zero-length
                 // substring expansion before the literal percent, matching Rust's hardened
                 // batch-file encoder, so values such as `%USERPROFILE%` remain literal.
-                '%' => escaped.push_str("%%cd:~,%%"),
+                '%' => escaped.push_str("%%cd:~,%"),
                 // Double quotes are represented by a paired quote inside a quoted cmd token.
                 '"' => escaped.push_str("\"\""),
                 _ => escaped.push(ch),
@@ -155,6 +159,9 @@ pub(super) fn print_info(label: &str, message: &str) {
 pub(super) struct FileSnapshot {
     path: PathBuf,
     bytes: Option<Vec<u8>>,
+    permissions: Option<fs::Permissions>,
+    #[cfg(windows)]
+    dacl: Option<Vec<u8>>,
 }
 
 pub(super) fn snapshot_optional_file(path: &Path) -> Result<FileSnapshot, String> {
@@ -162,10 +169,21 @@ pub(super) fn snapshot_optional_file(path: &Path) -> Result<FileSnapshot, String
         Ok(bytes) => Ok(FileSnapshot {
             path: path.to_path_buf(),
             bytes: Some(bytes),
+            permissions: fs::metadata(path).ok().map(|value| value.permissions()),
+            #[cfg(windows)]
+            dacl: Some(read_windows_dacl(path).map_err(|error| {
+                format!(
+                    "failed to read access control for {}: {error}",
+                    path.display()
+                )
+            })?),
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileSnapshot {
             path: path.to_path_buf(),
             bytes: None,
+            permissions: None,
+            #[cfg(windows)]
+            dacl: None,
         }),
         Err(error) => Err(format!("failed to read {}: {error}", path.display())),
     }
@@ -173,7 +191,11 @@ pub(super) fn snapshot_optional_file(path: &Path) -> Result<FileSnapshot, String
 
 pub(super) fn restore_file_snapshot(snapshot: &FileSnapshot) -> Result<(), String> {
     if let Some(bytes) = snapshot.bytes.as_deref() {
-        return atomic_write(&snapshot.path, bytes);
+        #[cfg(windows)]
+        if let Some(dacl) = snapshot.dacl.as_deref() {
+            return atomic_write_with_windows_dacl(&snapshot.path, bytes, dacl);
+        }
+        return atomic_write_with_permissions(&snapshot.path, bytes, snapshot.permissions.as_ref());
     }
     match fs::remove_file(&snapshot.path) {
         Ok(()) => Ok(()),

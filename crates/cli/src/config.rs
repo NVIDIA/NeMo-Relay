@@ -35,6 +35,8 @@ use crate::plugins::policy::DynamicPluginHostPolicy;
 
 pub(crate) const BOOTSTRAP_FINGERPRINT_ENV: &str = "NEMO_RELAY_BOOTSTRAP_FINGERPRINT";
 pub(crate) const PLUGIN_IDLE_TIMEOUT_ENV: &str = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
+pub(crate) const RELAY_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
+pub(crate) const RELAY_SOURCE_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay";
 /// Maximum regular-file size hashed into persistent gateway identity (512 MiB).
 pub(crate) const MAX_BOOTSTRAP_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -101,10 +103,9 @@ pub(crate) enum Command {
                       advertises no MCP tools.",
         after_help = "Examples:\n  \
                       nemo-relay mcp\n  \
-                      nemo-relay mcp --agent hermes\n  \
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
-    Mcp(McpCommand),
+    Mcp,
     /// Run the interactive setup (writes `.nemo-relay/config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -126,14 +127,6 @@ pub(crate) enum Command {
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
     #[command(hide = true)]
     HookForward(HookForwardCommand),
-}
-
-/// Host identity for the lifecycle-bound MCP client.
-#[derive(Debug, Clone, Args)]
-pub(crate) struct McpCommand {
-    /// Coding-agent host that launched this MCP client.
-    #[arg(long, value_enum, default_value = "codex")]
-    pub(crate) agent: CodingAgent,
 }
 
 /// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
@@ -498,6 +491,8 @@ impl ServerArgs {
 
 pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
+pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
+pub(crate) const TRANSPARENT_RUN_ENV: &str = "NEMO_RELAY_TRANSPARENT_RUN";
 
 #[derive(Debug, Clone)]
 pub(crate) struct GatewayConfig {
@@ -516,6 +511,25 @@ pub(crate) struct HookForwardCommand {
     pub(crate) agent: CodingAgent,
     #[arg(long)]
     pub(crate) gateway_url: Option<String>,
+    /// Private install-generation fence used by generated persistent hooks.
+    #[arg(long, hide = true)]
+    pub(crate) generation_file: Option<PathBuf>,
+    /// Immutable generation identity paired with `generation_file` by installed hooks.
+    #[arg(long, hide = true)]
+    pub(crate) generation_token: Option<String>,
+    /// Forward to an existing gateway without starting or recovering Relay.
+    #[arg(
+        long,
+        conflicts_with_all = ["generation_file", "generation_token"]
+    )]
+    pub(crate) forward_only: bool,
+    /// Marks the process-private hook source injected by `nemo-relay run`.
+    #[arg(
+        long,
+        hide = true,
+        conflicts_with_all = ["generation_file", "generation_token", "forward_only"]
+    )]
+    pub(crate) transparent_run: bool,
     #[arg(long)]
     pub(crate) profile: Option<String>,
     #[arg(long)]
@@ -582,11 +596,9 @@ impl IntegrationHost {
     }
 
     pub(crate) const fn as_arg(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::ClaudeCode => "claude-code",
-            Self::Hermes => "hermes",
-            Self::All => "all",
+        match self.agent() {
+            Some(agent) => agent.install_arg(),
+            None => "all",
         }
     }
 
@@ -1176,11 +1188,26 @@ const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
 const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
 const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
+const TRANSPARENT_GATEWAY_DOMAIN: &[u8] = b"nemo-relay/transparent-gateway/v1\0";
 const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
     b"nemo-relay/python-environment-attestation/v1\0";
 
 /// Private proof installed into supported coding-agent provider configuration.
 pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
+
+/// Stable health-proof context shared by a transparent wrapper and plugin-owned MCP client.
+pub(crate) fn transparent_gateway_fingerprint(gateway_url: &str) -> String {
+    let mut context = digest::Context::new(&digest::SHA256);
+    context.update(TRANSPARENT_GATEWAY_DOMAIN);
+    context.update(gateway_url.as_bytes());
+    let encoded = context
+        .finish()
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("transparent-sha256:{encoded}")
+}
 
 /// Per-user secret used to authenticate a managed bootstrap listener without exposing key bytes.
 #[derive(Clone)]
@@ -1420,6 +1447,13 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
             parent.display()
         ))
     })?;
+    #[cfg(windows)]
+    crate::file_io::protect_private_windows_path(parent).map_err(|error| {
+        CliError::Config(format!(
+            "failed to protect bootstrap state directory {}: {error}",
+            parent.display()
+        ))
+    })?;
     #[cfg(unix)]
     fs::set_permissions(parent, {
         use std::os::unix::fs::PermissionsExt;
@@ -1432,19 +1466,29 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
         ))
     })?;
 
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|error| {
+    #[cfg(windows)]
+    let mut file = crate::file_io::open_private_windows_file(path).map_err(|error| {
         CliError::Config(format!(
             "failed to open bootstrap HMAC key {}: {error}",
             path.display()
         ))
     })?;
+    #[cfg(not(windows))]
+    let mut file = {
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(path).map_err(|error| {
+            CliError::Config(format!(
+                "failed to open bootstrap HMAC key {}: {error}",
+                path.display()
+            ))
+        })?
+    };
     let lock_deadline = Instant::now() + lock_timeout;
     loop {
         match try_lock_exclusive(&file) {

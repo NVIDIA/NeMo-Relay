@@ -392,6 +392,7 @@ async fn healthz_rejects_a_different_persistent_gateway_fingerprint() {
         test_config(),
         Some("expected-fingerprint".into()),
         Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        false,
         None,
     ));
     let response = app
@@ -423,6 +424,7 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         test_config(),
         Some("expected-fingerprint".into()),
         Some(key.clone()),
+        true,
         None,
     );
     let mut headers = HeaderMap::new();
@@ -440,6 +442,15 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
 
     let foreground = AppState::new(test_config());
     assert!(foreground.allows_environment_provider_auth(&HeaderMap::new()));
+
+    let transparent = AppState::new_with_bootstrap(
+        test_config(),
+        Some("transparent-fingerprint".into()),
+        Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
+        false,
+        None,
+    );
+    assert!(transparent.allows_environment_provider_auth(&HeaderMap::new()));
 }
 
 #[tokio::test]
@@ -449,6 +460,7 @@ async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
         test_config(),
         Some("expected-fingerprint".into()),
         Some(challenge_key.clone()),
+        true,
         None,
     );
     let activity = state.last_activity.clone();
@@ -512,6 +524,7 @@ async fn bootstrap_shutdown_requires_the_private_owner_token() {
         test_config(),
         None,
         None,
+        false,
         Some(BootstrapShutdown {
             token: "private-token".into(),
             sender: Arc::new(std::sync::Mutex::new(Some(sender))),

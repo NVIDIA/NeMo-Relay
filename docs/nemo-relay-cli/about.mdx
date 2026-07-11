@@ -20,6 +20,13 @@ model traffic through the gateway, and diagnose local configuration. The
 `nemo-relay-cli` Cargo package remains available for source-based installation
 and unsupported platforms.
 
+Persistent integrations use one lifecycle path:
+
+`Codex / Claude Code / Hermes Agent` → `nemo-relay mcp` → `shared Relay gateway`
+
+The host-specific layer installs and emits canonical lifecycle hooks. The MCP
+process is host-neutral and keeps the shared user-level gateway available.
+
 ## Start Here When
 
 Use these guides when you need to:

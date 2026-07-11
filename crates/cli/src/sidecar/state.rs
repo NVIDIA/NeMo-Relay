@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::file_io::{LockAttempt, atomic_write, try_lock_exclusive};
+use crate::file_io::{LockAttempt, atomic_write, try_lock_exclusive, try_lock_shared};
 
 use super::health::{RelayHealth, probe, request_shutdown};
 use super::{BOOTSTRAP_PROTOCOL_VERSION, GatewayEndpoint, SIDECAR_LOCK_TIMEOUT};
@@ -75,20 +75,41 @@ pub(super) struct RecoveryEpoch {
     service: String,
     bootstrap_protocol: u64,
     url: String,
+    cohort_id: String,
     pub(super) instance_id: String,
     pub(super) restarts: u8,
     pub(super) pending: bool,
 }
 
 impl RecoveryEpoch {
-    pub(super) fn new(url: &str, instance_id: &str) -> Self {
+    pub(super) fn new(url: &str, cohort_id: &str, instance_id: &str) -> Self {
         Self {
             service: "nemo-relay".into(),
             bootstrap_protocol: BOOTSTRAP_PROTOCOL_VERSION,
             url: url.into(),
+            cohort_id: cohort_id.into(),
             instance_id: instance_id.into(),
             restarts: 0,
             pending: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct RecoveryCohort {
+    service: String,
+    bootstrap_protocol: u64,
+    url: String,
+    cohort_id: String,
+}
+
+impl RecoveryCohort {
+    fn new(url: &str) -> Self {
+        Self {
+            service: "nemo-relay".into(),
+            bootstrap_protocol: BOOTSTRAP_PROTOCOL_VERSION,
+            url: url.into(),
+            cohort_id: uuid::Uuid::now_v7().to_string(),
         }
     }
 }
@@ -97,6 +118,9 @@ impl RecoveryEpoch {
 pub(crate) struct EndpointLease {
     file: Option<fs::File>,
     path: PathBuf,
+    runtime: PathBuf,
+    url: String,
+    cohort_id: String,
     fresh_epoch: bool,
 }
 
@@ -108,9 +132,11 @@ impl EndpointLease {
                 runtime.display()
             )
         })?;
-        let registry_path = runtime.join(format!("{}-leases.lock", lock_name(url)));
+        let registry_path = lease_registry_path(runtime, url);
         let _registry = lock_file_for(&registry_path, SIDECAR_LOCK_TIMEOUT)?;
-        let prefix = format!("{}-lease-", lock_name(url));
+        let cohort_id = current_or_create_recovery_cohort(runtime, url)?;
+        let all_leases_prefix = format!("{}-lease-", lock_name(url));
+        let prefix = format!("{all_leases_prefix}{cohort_id}-");
         let mut active = false;
         let entries = fs::read_dir(runtime).map_err(|error| {
             format!(
@@ -123,7 +149,7 @@ impl EndpointLease {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if !name.starts_with(&prefix) || !name.ends_with(".lock") {
+            if !name.starts_with(&all_leases_prefix) || !name.ends_with(".lock") {
                 continue;
             }
             let path = entry.path();
@@ -142,7 +168,8 @@ impl EndpointLease {
                     drop(file);
                     let _ = fs::remove_file(path);
                 }
-                Ok(LockAttempt::Contended) => active = true,
+                Ok(LockAttempt::Contended) if name.starts_with(&prefix) => active = true,
+                Ok(LockAttempt::Contended) => {}
                 Err(error) => {
                     return Err(format!(
                         "failed to inspect bootstrap lease {}: {error}",
@@ -188,6 +215,9 @@ impl EndpointLease {
         Ok(Self {
             file: Some(file),
             path,
+            runtime: runtime.to_path_buf(),
+            url: url.to_string(),
+            cohort_id,
             fresh_epoch: !active,
         })
     }
@@ -195,12 +225,99 @@ impl EndpointLease {
     pub(crate) fn fresh_epoch(&self) -> bool {
         self.fresh_epoch
     }
+
+    pub(crate) fn cohort_id(&self) -> &str {
+        &self.cohort_id
+    }
 }
 
 impl Drop for EndpointLease {
     fn drop(&mut self) {
+        // Acquisition and release share this registry lock. This closes the handoff race where a
+        // new lease could observe the old lease as active immediately before it disappeared and
+        // become the sole client of an exhausted recovery epoch.
+        let Ok(_registry) = lock_file_for(
+            &lease_registry_path(&self.runtime, &self.url),
+            SIDECAR_LOCK_TIMEOUT,
+        ) else {
+            // Releasing without the registry would reintroduce the last-client handoff race.
+            // Conservatively retain the advisory lock until process exit; a later process can
+            // clean up the lease file after the operating system releases the descriptor.
+            if let Some(file) = self.file.take() {
+                std::mem::forget(file);
+            }
+            return;
+        };
         drop(self.file.take());
         let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn lease_registry_path(runtime: &Path, url: &str) -> PathBuf {
+    runtime.join(format!("{}-leases.lock", lock_name(url)))
+}
+
+fn recovery_cohort_path(runtime: &Path, url: &str) -> PathBuf {
+    runtime.join(format!("sidecar-{}.cohort.json", lock_name(url)))
+}
+
+fn current_or_create_recovery_cohort(runtime: &Path, url: &str) -> Result<String, String> {
+    if let Some(cohort) = read_recovery_cohort(runtime, url)? {
+        return Ok(cohort.cohort_id);
+    }
+    let cohort = RecoveryCohort::new(url);
+    write_recovery_cohort(runtime, &cohort)?;
+    Ok(cohort.cohort_id)
+}
+
+fn read_recovery_cohort(runtime: &Path, url: &str) -> Result<Option<RecoveryCohort>, String> {
+    let path = recovery_cohort_path(runtime, url);
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to read gateway recovery cohort {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let cohort = serde_json::from_slice::<RecoveryCohort>(&raw).map_err(|error| {
+        format!(
+            "invalid gateway recovery cohort {}: {error}",
+            path.display()
+        )
+    })?;
+    if cohort.service != "nemo-relay"
+        || cohort.bootstrap_protocol != BOOTSTRAP_PROTOCOL_VERSION
+        || cohort.url != url
+        || cohort.cohort_id.is_empty()
+    {
+        return Err(format!(
+            "incompatible gateway recovery cohort {}",
+            path.display()
+        ));
+    }
+    Ok(Some(cohort))
+}
+
+fn write_recovery_cohort(runtime: &Path, cohort: &RecoveryCohort) -> Result<(), String> {
+    let path = recovery_cohort_path(runtime, &cohort.url);
+    let bytes = serde_json::to_vec(cohort)
+        .map_err(|error| format!("failed to encode gateway recovery cohort: {error}"))?;
+    atomic_write(&path, &bytes)
+}
+
+pub(super) fn validate_recovery_cohort(
+    runtime: &Path,
+    url: &str,
+    expected: &str,
+) -> Result<(), String> {
+    match read_recovery_cohort(runtime, url)? {
+        Some(cohort) if cohort.cohort_id == expected => Ok(()),
+        _ => Err(format!(
+            "shared Relay gateway lifecycle at {url} was retired by an integration update"
+        )),
     }
 }
 
@@ -279,6 +396,11 @@ pub(crate) fn lock_endpoint(runtime: &Path, url: &str) -> Result<fs::File, Strin
     lock_endpoint_for(runtime, url, SIDECAR_LOCK_TIMEOUT)
 }
 
+pub(crate) fn lock_endpoint_shared(runtime: &Path, url: &str) -> Result<fs::File, String> {
+    let path = lock_path(runtime, url);
+    lock_file_for_mode(&path, SIDECAR_LOCK_TIMEOUT, false)
+}
+
 pub(crate) fn lock_endpoint_for(
     runtime: &Path,
     url: &str,
@@ -289,10 +411,19 @@ pub(crate) fn lock_endpoint_for(
 }
 
 fn lock_file_for(path: &Path, timeout: Duration) -> Result<fs::File, String> {
+    lock_file_for_mode(path, timeout, true)
+}
+
+fn lock_file_for_mode(path: &Path, timeout: Duration, exclusive: bool) -> Result<fs::File, String> {
     let lock = open_lock(path)?;
     let deadline = Instant::now() + timeout;
     loop {
-        match try_lock_exclusive(&lock) {
+        let result = if exclusive {
+            try_lock_exclusive(&lock)
+        } else {
+            try_lock_shared(&lock)
+        };
+        match result {
             Ok(LockAttempt::Acquired) => return Ok(lock),
             Ok(LockAttempt::Contended) => {
                 if Instant::now() >= deadline {
@@ -320,6 +451,7 @@ pub(super) fn recovery_path(runtime: &Path, url: &str) -> PathBuf {
 pub(super) fn read_recovery_epoch(
     runtime: &Path,
     url: &str,
+    cohort_id: &str,
 ) -> Result<Option<RecoveryEpoch>, String> {
     let path = recovery_path(runtime, url);
     let raw = match fs::read(&path) {
@@ -337,6 +469,7 @@ pub(super) fn read_recovery_epoch(
     if epoch.service != "nemo-relay"
         || epoch.bootstrap_protocol != BOOTSTRAP_PROTOCOL_VERSION
         || epoch.url != url
+        || epoch.cohort_id != cohort_id
         || epoch.instance_id.is_empty()
         || epoch.restarts > 1
     {
@@ -469,13 +602,84 @@ pub(crate) fn validate_owner(
     }
 }
 
-pub(crate) fn stop_owned(target_url: &str) -> Result<(), String> {
+/// Stop a plugin-owned endpoint and begin a fresh recovery cohort as one serialized operation.
+///
+/// The endpoint and lease-registry locks prevent a heartbeat or hook from recovering the old
+/// gateway between shutdown and cohort rotation. If shutdown fails, both lifecycle files are
+/// restored byte-for-byte so the still-active clients retain their original recovery budget.
+pub(crate) fn stop_owned_and_reset(target_url: &str) -> Result<(), String> {
+    stop_owned_and_reset_after_rotation(target_url, || {})
+}
+
+fn stop_owned_and_reset_after_rotation(
+    target_url: &str,
+    after_rotation: impl FnOnce(),
+) -> Result<(), String> {
     let runtime = state_dir()?;
+    create_private_runtime_dir(&runtime).map_err(|error| {
+        format!(
+            "failed to create bootstrap state directory {}: {error}",
+            runtime.display()
+        )
+    })?;
+    let _endpoint = lock_endpoint(&runtime, target_url)?;
+    let _registry = lock_file_for(
+        &lease_registry_path(&runtime, target_url),
+        SIDECAR_LOCK_TIMEOUT,
+    )?;
+    let cohort_path = recovery_cohort_path(&runtime, target_url);
+    let epoch_path = recovery_path(&runtime, target_url);
+    let cohort_snapshot = read_optional_bytes(&cohort_path)?;
+    let epoch_snapshot = read_optional_bytes(&epoch_path)?;
+    let replacement = RecoveryCohort::new(target_url);
+    let result = write_recovery_cohort(&runtime, &replacement)
+        .and_then(|()| remove_optional_state_file(&epoch_path))
+        .and_then(|()| {
+            after_rotation();
+            stop_owned_matching_records(&runtime, target_url, true)
+        });
+    if let Err(error) = result {
+        let mut rollback_errors = Vec::new();
+        if let Err(restore_error) = restore_optional_bytes(&cohort_path, cohort_snapshot.as_deref())
+        {
+            rollback_errors.push(restore_error);
+        }
+        if let Err(restore_error) = restore_optional_bytes(&epoch_path, epoch_snapshot.as_deref()) {
+            rollback_errors.push(restore_error);
+        }
+        return if rollback_errors.is_empty() {
+            Err(error)
+        } else {
+            Err(format!(
+                "{error}; additionally failed to restore gateway recovery state: {}",
+                rollback_errors.join("; ")
+            ))
+        };
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn stop_owned(target_url: &str) -> Result<(), String> {
+    let runtime = state_dir()?;
+    stop_owned_matching_records(&runtime, target_url, false)
+}
+
+fn stop_owned_matching_records(
+    runtime: &Path,
+    target_url: &str,
+    endpoint_is_locked: bool,
+) -> Result<(), String> {
     let mut errors = Vec::new();
-    for owner_path in owner_paths(&runtime)? {
+    for owner_path in owner_paths(runtime)? {
         match read_owner_record(&owner_path) {
             Ok(Some(owner)) if owner.url == target_url => {
-                if let Err(error) = stop_owned_record(&runtime, &owner_path) {
+                let result = if endpoint_is_locked {
+                    stop_owned_record_after_lock(runtime, &owner_path)
+                } else {
+                    stop_owned_record(runtime, &owner_path)
+                };
+                if let Err(error) = result {
                     errors.push(error);
                 }
             }
@@ -487,6 +691,29 @@ pub(crate) fn stop_owned(target_url: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(errors.join("; "))
+    }
+}
+
+fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("failed to read {}: {error}", path.display())),
+    }
+}
+
+fn restore_optional_bytes(path: &Path, bytes: Option<&[u8]>) -> Result<(), String> {
+    match bytes {
+        Some(bytes) => atomic_write(path, bytes),
+        None => remove_optional_state_file(path),
+    }
+}
+
+fn remove_optional_state_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to remove {}: {error}", path.display())),
     }
 }
 
@@ -542,6 +769,10 @@ pub(crate) fn stop_owned_record(runtime: &Path, owner_path: &Path) -> Result<(),
         return Ok(());
     };
     let _lock = lock_endpoint(runtime, &initial_owner.url)?;
+    stop_owned_record_after_lock(runtime, owner_path)
+}
+
+fn stop_owned_record_after_lock(runtime: &Path, owner_path: &Path) -> Result<(), String> {
     let Some(owner) = read_owner_record(owner_path)? else {
         return Ok(());
     };

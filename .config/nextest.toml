@@ -3,3 +3,11 @@
 
 [profile.ci]
 junit = { path = "rust_junit_report.xml" }
+
+[[profile.ci.overrides]]
+filter = 'test(windows_supervision_assigns_before_a_wrapper_can_spawn_a_descendant)'
+slow-timeout = { period = "20s", terminate-after = 2 }
+
+[[profile.ci.overrides]]
+filter = 'test(cli_hook_recovery_consumes_the_same_restart_as_an_overlapping_mcp)'
+slow-timeout = { period = "20s", terminate-after = 2 }

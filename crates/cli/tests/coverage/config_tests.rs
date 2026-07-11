@@ -1599,6 +1599,189 @@ fn managed_bootstrap_environment_is_not_forwarded_from_codex() {
 }
 
 #[test]
+fn mcp_environment_policy_handles_unresolved_values_and_historical_names_per_platform() {
+    assert!(
+        crate::mcp_environment::unresolved_self_placeholder_for_platform(
+            "AWS_ROLE_ARN",
+            "${AWS_ROLE_ARN}",
+            false,
+        )
+    );
+    assert!(
+        !crate::mcp_environment::unresolved_self_placeholder_for_platform(
+            "AWS_ROLE_ARN",
+            "${aws_role_arn}",
+            false,
+        )
+    );
+    assert!(
+        crate::mcp_environment::unresolved_self_placeholder_for_platform(
+            "AWS_ROLE_ARN",
+            "${aws_role_arn}",
+            true,
+        )
+    );
+    assert!(
+        !crate::mcp_environment::unresolved_self_placeholder_for_platform(
+            "AWS_ROLE_ARN",
+            "real-value",
+            true,
+        )
+    );
+
+    for allowed in ["AWS_PROFILE", "NEMO_RELAY_CUSTOM", "OTEL_CUSTOM"] {
+        assert!(
+            crate::mcp_environment::previously_forwardable_name_for_platform(allowed, false),
+            "rejected {allowed}"
+        );
+    }
+    assert!(crate::mcp_environment::previously_forwardable_name_for_platform("Aws_Custom", true,));
+    for rejected in [
+        "UNRELATED_SECRET",
+        "NEMO_RELAY_WORKER_TOKEN",
+        "NEMO_RELAY_TEST_CAPTURE",
+    ] {
+        assert!(
+            !crate::mcp_environment::previously_forwardable_name_for_platform(rejected, true),
+            "accepted {rejected}"
+        );
+    }
+}
+
+#[test]
+fn transparent_gateway_fingerprint_is_stable_and_endpoint_specific() {
+    let first = transparent_gateway_fingerprint("http://127.0.0.1:41001");
+    let repeated = transparent_gateway_fingerprint("http://127.0.0.1:41001");
+    let second = transparent_gateway_fingerprint("http://127.0.0.1:41002");
+
+    assert_eq!(first, repeated);
+    assert_ne!(first, second);
+    assert!(first.starts_with("transparent-sha256:"));
+    assert_eq!(first.len(), "transparent-sha256:".len() + 64);
+}
+
+#[test]
+fn bootstrap_health_proofs_and_client_tokens_reject_every_malformed_shape() {
+    let key = BootstrapChallengeKey::from_bytes(&[7_u8; BOOTSTRAP_HMAC_KEY_BYTES]);
+    let other = BootstrapChallengeKey::from_bytes(&[8_u8; BOOTSTRAP_HMAC_KEY_BYTES]);
+    let fingerprint = "hmac-sha256:fixture";
+    let nonce = "nonce";
+    let proof = key.proof(fingerprint, nonce);
+
+    assert!(key.verify(fingerprint, nonce, &proof));
+    assert!(!key.verify("other", nonce, &proof));
+    assert!(!key.verify(fingerprint, "other", &proof));
+    for malformed in [
+        "missing-prefix",
+        "hmac-sha256:short",
+        "hmac-sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    ] {
+        assert!(!key.verify(fingerprint, nonce, malformed));
+    }
+
+    let token = key.client_token();
+    assert!(key.verify_client_token(&token));
+    assert!(!other.verify_client_token(&token));
+    for malformed in [
+        "missing-prefix",
+        "hmac-sha256:short",
+        "hmac-sha256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+    ] {
+        assert!(!key.verify_client_token(malformed));
+    }
+
+    assert!(
+        !verify_python_environment_attestation("source", "environment", "missing-prefix").unwrap()
+    );
+    assert!(
+        !verify_python_environment_attestation("source", "environment", "hmac-sha256:short")
+            .unwrap()
+    );
+}
+
+#[test]
+fn bootstrap_hmac_state_reports_invalid_path_and_existing_key_shapes() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+
+    let root_error = load_or_create_bootstrap_hmac_key_at(Path::new("/")).unwrap_err();
+    assert!(
+        root_error.to_string().contains("no parent directory"),
+        "{root_error}"
+    );
+
+    let parent_file = temp.path().join("not-a-directory");
+    std::fs::write(&parent_file, b"file").unwrap();
+    let parent_error = load_or_create_bootstrap_hmac_key_at(&parent_file.join("key")).unwrap_err();
+    assert!(
+        parent_error.to_string().contains("failed to create"),
+        "{parent_error}"
+    );
+
+    let directory_key = temp.path().join("directory-key");
+    std::fs::create_dir(&directory_key).unwrap();
+    let open_error = load_or_create_bootstrap_hmac_key_at(&directory_key).unwrap_err();
+    assert!(
+        open_error.to_string().contains("failed to open"),
+        "{open_error}"
+    );
+
+    let configured_key = xdg
+        .join("nemo-relay")
+        .join("bootstrap")
+        .join("fingerprint-hmac.key");
+    std::fs::create_dir_all(configured_key.parent().unwrap()).unwrap();
+    std::fs::write(&configured_key, b"short").unwrap();
+    let existing_error = BootstrapChallengeKey::load_existing()
+        .err()
+        .expect("corrupt existing bootstrap key was accepted");
+    assert!(
+        existing_error.to_string().contains("invalid length 5"),
+        "{existing_error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bounded_identity_reader_reports_missing_unreadable_and_invalid_utf8_inputs() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing");
+    let missing_error = read_bounded_regular_file(&missing, "fixture").unwrap_err();
+    assert!(
+        missing_error.contains("failed to inspect"),
+        "{missing_error}"
+    );
+
+    let unreadable = temp.path().join("unreadable");
+    std::fs::write(&unreadable, b"contents").unwrap();
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let unreadable_result = read_bounded_regular_file(&unreadable, "fixture");
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let unreadable_error = unreadable_result.unwrap_err();
+    assert!(
+        unreadable_error.contains("failed to read"),
+        "{unreadable_error}"
+    );
+
+    let manifest = temp.path().join("invalid-utf8.toml");
+    std::fs::write(&manifest, [0xff_u8]).unwrap();
+    let utf8_error = load_bounded_dynamic_plugin_manifest_bytes(&manifest).unwrap_err();
+    assert!(
+        utf8_error.to_string().contains("is not UTF-8"),
+        "{utf8_error}"
+    );
+
+    assert_eq!(
+        resolve_dynamic_plugin_relative_path(Path::new("/manifest.toml"), "/artifact"),
+        PathBuf::from("/artifact")
+    );
+}
+
+#[test]
 fn persistent_server_resolution_excludes_project_config_and_fingerprints_credentials() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
@@ -1686,12 +1869,8 @@ fn plugin_launch_carries_effective_hook_limit_below_and_above_default() {
             format!("[gateway]\nmax_hook_payload_bytes = {limit}\n"),
         )
         .unwrap();
-        for agent in [CodingAgent::Codex, CodingAgent::ClaudeCode] {
-            let launch =
-                crate::sidecar::resolve_plugin_gateway(agent, &ServerArgs::default(), bind)
-                    .unwrap();
-            assert_eq!(launch.max_hook_payload_bytes, limit);
-        }
+        let launch = crate::sidecar::resolve_plugin_gateway(&ServerArgs::default(), bind).unwrap();
+        assert_eq!(launch.max_hook_payload_bytes, limit);
     }
 }
 
@@ -1717,6 +1896,27 @@ fn bootstrap_hmac_key_creation_is_concurrency_safe_and_stable() {
 
     assert!(keys.windows(2).all(|pair| pair[0] == pair[1]));
     assert_eq!(std::fs::metadata(path).unwrap().len(), 32);
+}
+
+#[cfg(windows)]
+#[test]
+fn bootstrap_hmac_key_uses_and_repairs_a_private_windows_dacl() {
+    let temp = tempfile::tempdir().unwrap();
+    set_test_windows_dacl(temp.path(), "D:P(A;;FA;;;WD)");
+    let path = temp.path().join("state/fingerprint-hmac.key");
+
+    let original = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+
+    assert!(crate::file_io::windows_path_is_private(path.parent().unwrap()).unwrap());
+    assert!(crate::file_io::windows_path_is_private(&path).unwrap());
+
+    set_test_windows_dacl(&path, "D:P(A;;FA;;;WD)");
+    assert!(!crate::file_io::windows_path_is_private(&path).unwrap());
+
+    let reloaded = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+
+    assert_eq!(reloaded, original);
+    assert!(crate::file_io::windows_path_is_private(&path).unwrap());
 }
 
 #[test]
@@ -1869,6 +2069,18 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
         "persistent hook identity must trust only the authenticated environment marker"
     );
 
+    let resolved = load_shared_config_scoped(None, None, true).unwrap();
+    let active = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert_eq!(active.len(), 1);
+    assert!(active[0].activation_snapshot.is_some());
+    let snapshot_fingerprint = persistent_bootstrap_fingerprint(&resolved, &active).unwrap();
+    assert!(snapshot_fingerprint.starts_with("hmac-sha256:"));
+    assert!(
+        crate::plugins::lifecycle::test_python_environment_digest_calls() > 0,
+        "activation must verify the complete environment before snapshotting it"
+    );
+    crate::plugins::lifecycle::reset_test_python_environment_digest_calls();
+
     std::fs::write(
         environment.join("site-packages/fixture.py"),
         b"fixture = 'mutated'\n",
@@ -1882,7 +2094,6 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
     );
     assert_eq!(before.bootstrap_fingerprint, after.bootstrap_fingerprint);
 
-    let resolved = load_shared_config_scoped(None, None, true).unwrap();
     let error = active_dynamic_plugin_components(None, &resolved)
         .unwrap_err()
         .to_string();
@@ -2566,4 +2777,53 @@ unknown_component = "error"
         left["runtime"]["policy"]["policy"]["unknown_field"].as_str(),
         Some("warn")
     );
+}
+
+#[cfg(windows)]
+fn set_test_windows_dacl(path: &std::path::Path, sddl: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        SetFileSecurityW,
+    };
+
+    let sddl = std::ffi::OsStr::new(sddl)
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: The SDDL is NUL-terminated and the output pointer is valid.
+    assert_ne!(
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        },
+        0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+    let path = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    // SAFETY: The path and descriptor remain valid for the duration of the call.
+    let result = unsafe {
+        SetFileSecurityW(
+            path.as_ptr(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor,
+        )
+    };
+    // SAFETY: The descriptor was allocated by ConvertStringSecurityDescriptor... above.
+    unsafe { LocalFree(descriptor.cast()) };
+    assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
 }

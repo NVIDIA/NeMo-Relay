@@ -122,6 +122,9 @@ pub(crate) fn tokio_command(argv: &[String]) -> tokio::process::Command {
     command
 }
 
+mod supervision;
+pub(crate) use supervision::SupervisedChild;
+
 #[cfg(test)]
 #[path = "../tests/coverage/agent_process_tests.rs"]
 mod tests;

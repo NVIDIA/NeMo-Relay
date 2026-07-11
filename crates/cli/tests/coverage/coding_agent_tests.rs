@@ -6,10 +6,12 @@ use super::*;
 #[test]
 fn agent_descriptors_are_complete_and_unique() {
     let arguments = CodingAgent::ALL.map(CodingAgent::as_arg);
+    let install_arguments = CodingAgent::ALL.map(CodingAgent::install_arg);
     let executables = CodingAgent::ALL.map(CodingAgent::executable);
     let hook_paths = CodingAgent::ALL.map(CodingAgent::hook_path);
 
     assert_eq!(arguments, ["claude", "codex", "hermes"]);
+    assert_eq!(install_arguments, ["claude-code", "codex", "hermes"]);
     assert_eq!(executables, ["claude", "codex", "hermes"]);
     assert_eq!(
         hook_paths,
@@ -18,6 +20,24 @@ fn agent_descriptors_are_complete_and_unique() {
     assert_eq!(CodingAgent::ClaudeCode.label(), "Claude Code");
     assert_eq!(CodingAgent::Codex.label(), "Codex");
     assert_eq!(CodingAgent::Hermes.label(), "Hermes Agent");
+    assert_eq!(CodingAgent::ClaudeCode.hook_events().len(), 14);
+    assert_eq!(CodingAgent::Codex.hook_events().len(), 10);
+    assert_eq!(CodingAgent::Hermes.hook_events().len(), 13);
+    assert!(!CodingAgent::ClaudeCode.uses_direct_hook_entries());
+    assert!(!CodingAgent::Codex.uses_direct_hook_entries());
+    assert!(CodingAgent::Hermes.uses_direct_hook_entries());
+    for agent in CodingAgent::ALL {
+        let events = agent.hook_events();
+        assert!(events.iter().all(|event| !event.is_empty()));
+        assert_eq!(
+            events
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            events.len(),
+            "{agent:?} declares duplicate lifecycle events"
+        );
+    }
 }
 
 #[test]

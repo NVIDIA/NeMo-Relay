@@ -26,12 +26,14 @@ use self::files::{
     acquire_install_lock, read_optional_utf8, remove_optional_file, replace_optional_file,
 };
 use self::trust::{json_bytes, parse_json_object, trusted_hooks, verify_trust};
+use crate::config::CodingAgent;
 use crate::error::CliError;
 use crate::file_io::atomic_write;
 #[cfg(test)]
 use crate::install_generation::GENERATION_FILE_NAME;
-use crate::install_generation::{GENERATION_FILE_ENV, GenerationRetirement};
-use crate::installer::HERMES_HOOK_EVENTS;
+use crate::install_generation::{
+    GENERATION_FILE_ENV, GENERATION_TOKEN_ENV, GenerationRetirement, InstallGeneration,
+};
 use crate::sidecar::DEFAULT_BIND;
 pub(crate) use config::{persistent_hook_command, transparent_config};
 
@@ -60,11 +62,12 @@ pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<Path
         .filter_map(|(name, _)| name.into_string().ok())
         .collect::<Vec<_>>();
     let mut retirement = retire_generation_before_gateway_stop(&paths)?;
-    let result = install_persistent_with(
+    let result = install_persistent_with_generation(
         paths,
         &relay,
         &environment,
         plugin_config.as_ref(),
+        retirement.as_ref(),
         SystemTime::now(),
         atomic_write,
     );
@@ -124,7 +127,12 @@ fn finish_generation_mutation<T>(
     operation: &str,
 ) -> Result<T, CliError> {
     match result {
-        Ok(value) => Ok(value),
+        Ok(value) => {
+            if let Some(retirement) = retirement {
+                retirement.commit_replacement();
+            }
+            Ok(value)
+        }
         Err(error) => {
             let Some(retirement) = retirement else {
                 return Err(error);
@@ -197,7 +205,8 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
             relay.display()
         ));
     }
-    let command = persistent_hook_command(&relay);
+    let generation = InstallGeneration::capture(paths.generation.clone())?;
+    let command = persistent_hook_command(&relay, &paths.generation, generation.token())?;
     verify_hook_definitions(&config, &command)?;
     verify_trust(&paths.allowlist, &command)?;
 
@@ -217,10 +226,12 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
     if Path::new(configured_generation) != paths.generation {
         return Err("Hermes Relay MCP generation fence points at the wrong file".into());
     }
-    let generation = fs::read_to_string(&paths.generation)
-        .map_err(|error| format!("failed to read {}: {error}", paths.generation.display()))?;
-    if generation.trim().is_empty() || generation.trim().starts_with("retired:") {
-        return Err("Hermes Relay MCP generation fence is not active".into());
+    let configured_token = mcp_env
+        .get(GENERATION_TOKEN_ENV)
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Hermes Relay MCP expected generation identity is missing".to_string())?;
+    if configured_token != generation.token() {
+        return Err("Hermes Relay MCP expected generation identity is stale".into());
     }
 
     let plugin_config = crate::config::user_plugin_runtime_config().map_err(|e| e.to_string())?;
@@ -239,7 +250,7 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
     }
     Ok(format!(
         "MCP lifecycle and {} hooks trusted at {}",
-        HERMES_HOOK_EVENTS.len(),
+        CodingAgent::Hermes.hook_events().len(),
         paths.config.display()
     ))
 }
@@ -264,10 +275,13 @@ pub(crate) fn configured_relay_executable(config_path: &Path) -> Result<PathBuf,
 
 fn relay_executable_from_config(config: &Value) -> Result<PathBuf, String> {
     let server = config
-        .pointer("/mcp_servers/nemo-relay")
-        .ok_or_else(|| "Hermes MCP server `nemo-relay` is missing".to_string())?;
+        .get("mcp_servers")
+        .and_then(|servers| servers.get(MCP_SERVER_NAME))
+        .ok_or_else(|| format!("Hermes MCP server `{MCP_SERVER_NAME}` is missing"))?;
     if !is_managed_mcp_server(server) {
-        return Err("Hermes MCP server `nemo-relay` is not a managed Relay MCP client".into());
+        return Err(format!(
+            "Hermes MCP server `{MCP_SERVER_NAME}` is not a managed Relay MCP client"
+        ));
     }
     Ok(PathBuf::from(
         server
@@ -277,11 +291,27 @@ fn relay_executable_from_config(config: &Value) -> Result<PathBuf, String> {
     ))
 }
 
+#[cfg(test)]
 fn install_persistent_with<W>(
     paths: PersistentPaths,
     relay: &Path,
     environment: &[String],
     plugin_config: Option<&Value>,
+    now: SystemTime,
+    write: W,
+) -> Result<Vec<PathBuf>, CliError>
+where
+    W: FnMut(&Path, &[u8]) -> Result<(), String>,
+{
+    install_persistent_with_generation(paths, relay, environment, plugin_config, None, now, write)
+}
+
+fn install_persistent_with_generation<W>(
+    paths: PersistentPaths,
+    relay: &Path,
+    environment: &[String],
+    plugin_config: Option<&Value>,
+    generation_transaction: Option<&GenerationRetirement>,
     now: SystemTime,
     mut write: W,
 ) -> Result<Vec<PathBuf>, CliError>
@@ -295,14 +325,16 @@ where
         .collect::<Result<Vec<_>, _>>()?;
     let existing_config = read_optional_utf8(&paths.config)?;
     let existing_allowlist = read_optional_utf8(&paths.allowlist)?;
-    let command = persistent_hook_command(relay);
     let environment = forwarded_environment_names(environment, plugin_config);
     let token = uuid::Uuid::now_v7().to_string();
+    let command =
+        persistent_hook_command(relay, &paths.generation, &token).map_err(CliError::Install)?;
     let config = persistent_config(
         existing_config.as_deref(),
         relay,
         &command,
         &paths.generation,
+        &token,
         &environment,
     )?;
     let allowlist = trusted_hooks(existing_allowlist.as_deref(), &command, relay, now)?;
@@ -316,7 +348,14 @@ where
         write(&paths.generation, &generation)?;
         write(&paths.allowlist, &allowlist)?;
         write(&paths.config, &config)?;
-        verify_install(&paths, relay, &command, &environment, &token)
+        verify_install(
+            &paths,
+            relay,
+            &command,
+            &environment,
+            &token,
+            generation_transaction,
+        )
     })();
     if let Err(error) = result {
         return rollback_error("install", error, &snapshots, &mut write);
@@ -427,11 +466,12 @@ fn verify_install(
     command: &str,
     environment: &[String],
     token: &str,
+    generation_transaction: Option<&GenerationRetirement>,
 ) -> Result<(), String> {
     let raw = fs::read_to_string(&paths.config)
         .map_err(|error| format!("failed to verify {}: {error}", paths.config.display()))?;
     let config = parse_yaml_object(Some(&raw), "Hermes config").map_err(|e| e.to_string())?;
-    let expected = expected_mcp_server(relay, &paths.generation, environment);
+    let expected = expected_mcp_server(relay, &paths.generation, token, environment);
     if config.pointer("/mcp_servers/nemo-relay") != Some(&expected) {
         return Err("Hermes MCP server did not persist exactly".into());
     }
@@ -453,16 +493,20 @@ fn verify_install(
         return Err("stale Hermes Relay hook approvals remain".into());
     }
 
-    let actual = fs::read_to_string(&paths.generation)
-        .map_err(|error| format!("failed to verify {}: {error}", paths.generation.display()))?;
-    if actual.trim() != token {
+    let actual_token = match generation_transaction {
+        Some(transaction) => transaction.active_visible_token()?,
+        None => InstallGeneration::capture(paths.generation.clone())?
+            .token()
+            .to_owned(),
+    };
+    if actual_token != token {
         return Err("Hermes MCP generation did not persist exactly".into());
     }
     Ok(())
 }
 
 fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> {
-    for event in HERMES_HOOK_EVENTS {
+    for event in CodingAgent::Hermes.hook_events() {
         let groups = config
             .pointer(&format!("/hooks/{event}"))
             .and_then(Value::as_array)
@@ -501,7 +545,8 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
         }
     }
     managed.sort_unstable();
-    let mut expected = HERMES_HOOK_EVENTS
+    let mut expected = CodingAgent::Hermes
+        .hook_events()
         .iter()
         .map(|event| (*event, command))
         .collect::<Vec<_>>();

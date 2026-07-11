@@ -39,19 +39,19 @@ impl Drop for EnvVarRestore {
 #[test]
 fn gateway_spec_is_the_complete_compatibility_contract() {
     let bind = "127.0.0.1:47632".parse().unwrap();
-    let first = GatewaySpec::new(CodingAgent::Codex, bind)
+    let first = GatewaySpec::new(bind)
         .with_launch_args(vec![
             OsString::from("--openai-base-url"),
             OsString::from("mock"),
         ])
         .with_fingerprint("fingerprint-a");
-    let same = GatewaySpec::new(CodingAgent::Codex, bind)
+    let same = GatewaySpec::new(bind)
         .with_launch_args(vec![
             OsString::from("--openai-base-url"),
             OsString::from("mock"),
         ])
         .with_fingerprint("fingerprint-a");
-    let different = GatewaySpec::new(CodingAgent::Codex, bind)
+    let different = GatewaySpec::new(bind)
         .with_launch_args(vec![
             OsString::from("--openai-base-url"),
             OsString::from("other"),
@@ -67,27 +67,64 @@ fn gateway_spec_is_the_complete_compatibility_contract() {
 fn endpoint_recovery_epoch_rejects_a_staggered_second_replacement() {
     let state = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:47632";
-    write_recovery_epoch(state.path(), &RecoveryEpoch::new(url, "gateway-1")).unwrap();
+    let cohort = "cohort-1";
+    write_recovery_epoch(state.path(), &RecoveryEpoch::new(url, cohort, "gateway-1")).unwrap();
 
-    reconcile_gateway_epoch(state.path(), url, false, "gateway-2").unwrap();
-    let recovered = read_recovery_epoch(state.path(), url).unwrap().unwrap();
+    reconcile_gateway_epoch(state.path(), url, cohort, false, "gateway-2").unwrap();
+    let recovered = read_recovery_epoch(state.path(), url, cohort)
+        .unwrap()
+        .unwrap();
     assert_eq!(recovered.instance_id, "gateway-2");
     assert_eq!(recovered.restarts, 1);
 
-    let error = reconcile_gateway_epoch(state.path(), url, false, "gateway-3").unwrap_err();
+    let error = reconcile_gateway_epoch(state.path(), url, cohort, false, "gateway-3").unwrap_err();
     assert!(error.contains("replaced again"), "{error}");
-    let unchanged = read_recovery_epoch(state.path(), url).unwrap().unwrap();
+    let unchanged = read_recovery_epoch(state.path(), url, cohort)
+        .unwrap()
+        .unwrap();
     assert_eq!(unchanged.instance_id, "gateway-2");
     assert_eq!(unchanged.restarts, 1);
 }
 
 #[test]
 fn gateway_spec_rejects_non_loopback_bind_before_launch() {
-    let error = GatewaySpec::new(CodingAgent::Codex, "0.0.0.0:47632".parse().unwrap())
-        .ensure()
-        .unwrap_err();
+    let error = GatewaySpec::new("0.0.0.0:47632".parse().unwrap())
+        .acquire()
+        .err()
+        .expect("non-loopback gateway unexpectedly acquired");
 
     assert!(error.contains("require a loopback bind address"), "{error}");
+}
+
+#[test]
+fn fixed_acquisition_revalidates_a_captured_cohort_before_launch() {
+    let _environment = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let state = tempfile::tempdir().unwrap();
+    let runtime = state.path().join("runtime");
+    let _state = EnvVarRestore::set(BOOTSTRAP_STATE_DIR_ENV, state.path().to_str().unwrap());
+    let _runtime = EnvVarRestore::set("XDG_RUNTIME_DIR", runtime.to_str().unwrap());
+    let missing_binary = state.path().join("must-not-be-launched");
+    let _binary = EnvVarRestore::set("NEMO_RELAY_PLUGIN_BINARY", missing_binary.to_str().unwrap());
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let url = format!("http://{address}");
+    let stale = EndpointLease::acquire(state.path(), &url).unwrap();
+
+    stop_owned_sidecar_and_reset(&url).unwrap();
+    let error = GatewaySpec::new(address)
+        .acquire_with_lease(stale)
+        .err()
+        .expect("a retired cohort unexpectedly acquired the endpoint");
+
+    assert!(
+        error.contains("retired by an integration update"),
+        "{error}"
+    );
+    assert!(!error.contains("NEMO_RELAY_PLUGIN_BINARY"), "{error}");
+    TcpListener::bind(address).expect("retired acquisition unexpectedly started a listener");
 }
 
 #[test]
@@ -219,13 +256,8 @@ fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
         BOOTSTRAP_PROTOCOL_VERSION
     );
     let (address, server) = one_health_response(compatible_body);
-    let endpoint = start_sidecar_bind(
-        &GatewaySpec::new(CodingAgent::Codex, address),
-        dir.path(),
-        dir.path(),
-        None,
-    )
-    .unwrap();
+    let endpoint =
+        start_sidecar_bind(&GatewaySpec::new(address), dir.path(), dir.path(), None).unwrap();
     assert_eq!(endpoint.address, address);
     server.join().unwrap();
 
@@ -234,24 +266,14 @@ fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
         BOOTSTRAP_PROTOCOL_VERSION
     );
     let (address, server) = one_health_response(incompatible_body);
-    let error = start_sidecar_bind(
-        &GatewaySpec::new(CodingAgent::Codex, address),
-        dir.path(),
-        dir.path(),
-        None,
-    )
-    .unwrap_err();
+    let error =
+        start_sidecar_bind(&GatewaySpec::new(address), dir.path(), dir.path(), None).unwrap_err();
     assert!(error.contains("different version"), "{error}");
     server.join().unwrap();
 
     let (address, server) = one_health_response("{}".into());
-    let error = start_sidecar_bind(
-        &GatewaySpec::new(CodingAgent::Codex, address),
-        dir.path(),
-        dir.path(),
-        None,
-    )
-    .unwrap_err();
+    let error =
+        start_sidecar_bind(&GatewaySpec::new(address), dir.path(), dir.path(), None).unwrap_err();
     assert!(error.contains("not a compatible NeMo Relay"), "{error}");
     server.join().unwrap();
 }
@@ -373,9 +395,10 @@ fn gateway_start_reports_an_uncreatable_runtime_directory() {
     let _config = EnvVarRestore::set("XDG_CONFIG_HOME", dir.path().to_str().unwrap());
     let bind = unused_loopback_address();
 
-    let error = GatewaySpec::new(CodingAgent::Codex, bind)
-        .ensure()
-        .unwrap_err();
+    let error = GatewaySpec::new(bind)
+        .acquire()
+        .err()
+        .expect("gateway unexpectedly acquired with an invalid runtime directory");
 
     assert!(error.contains("failed to create"), "{error}");
     assert!(error.contains(&runtime.display().to_string()), "{error}");
@@ -397,9 +420,10 @@ fn gateway_start_reports_an_uncreatable_state_directory() {
     std::fs::write(&state, "file").unwrap();
     let bind = unused_loopback_address();
 
-    let error = GatewaySpec::new(CodingAgent::Codex, bind)
-        .ensure()
-        .unwrap_err();
+    let error = GatewaySpec::new(bind)
+        .acquire()
+        .err()
+        .expect("gateway unexpectedly acquired with an invalid state directory");
 
     assert!(error.contains("failed to create"), "{error}");
     assert!(error.contains(&state.display().to_string()), "{error}");
@@ -421,13 +445,43 @@ fn gateway_start_reports_an_unopenable_endpoint_lock() {
     let endpoint_lock = sidecar_lock_path(&state, &url);
     std::fs::create_dir_all(&endpoint_lock).unwrap();
 
-    let error = GatewaySpec::new(CodingAgent::Codex, bind)
-        .ensure()
-        .unwrap_err();
+    let error = GatewaySpec::new(bind)
+        .acquire()
+        .err()
+        .expect("gateway unexpectedly acquired with an invalid endpoint lock");
 
     assert!(error.contains("failed to open sidecar lock"), "{error}");
     assert!(
         error.contains(&endpoint_lock.display().to_string()),
         "{error}"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_handle_inheritance_suppression_is_scoped() {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{
+        GetHandleInformation, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = std::fs::File::create(dir.path().join("captured-output.log")).unwrap();
+    let handle = file.as_raw_handle().cast();
+    // SAFETY: `handle` is a live file handle uniquely owned by this test.
+    assert_ne!(
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) },
+        0
+    );
+    {
+        let _guard = super::process::HandleInheritanceGuard::suppress([handle]).unwrap();
+        let mut flags = 0;
+        // SAFETY: `handle` remains live and `flags` is writable storage.
+        assert_ne!(unsafe { GetHandleInformation(handle, &mut flags) }, 0);
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    }
+    let mut flags = 0;
+    // SAFETY: Dropping the guard restored the live handle before this query.
+    assert_ne!(unsafe { GetHandleInformation(handle, &mut flags) }, 0);
+    assert_ne!(flags & HANDLE_FLAG_INHERIT, 0);
 }

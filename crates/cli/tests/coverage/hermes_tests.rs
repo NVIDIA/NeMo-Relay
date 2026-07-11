@@ -10,10 +10,17 @@ use serde_json::{Value, json};
 use super::*;
 use crate::config::CodingAgent;
 
+const TEST_GENERATION_TOKEN: &str = "test-generation";
+
 fn relay_binary(root: &Path) -> PathBuf {
     let path = root.join("NeMo Relay's bin").join("nemo-relay");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, b"relay").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     path
 }
 
@@ -75,20 +82,52 @@ fn install_uses_the_native_hermes_allowlist_lock() {
 #[test]
 fn hook_command_round_trips_paths_and_recognizes_owned_legacy_spellings() {
     let relay = Path::new("/tmp/NeMo $Relay`test'/bin/nemo-relay");
+    let generation = Path::new("/tmp/generation");
     assert_eq!(
-        persistent_hook_command_for_platform(relay, false),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:47632"
+        persistent_hook_command_for_platform(relay, generation, TEST_GENERATION_TOKEN, false),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:47632 --generation-file /tmp/generation --generation-token test-generation"
     );
     assert_eq!(
-        persistent_hook_command_for_platform(
+        crate::installer::decode_windows_hook_command(&persistent_hook_command_for_platform(
             Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
+            Path::new(r"C:\Temp\generation"),
+            TEST_GENERATION_TOKEN,
             true,
-        ),
-        r#""C:\Program Files\NeMo 100%%cd:~,%%\bin\nemo-relay.exe" hook-forward hermes --gateway-url http://127.0.0.1:47632"#
+        ))
+        .unwrap(),
+        vec![
+            r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe",
+            "hook-forward",
+            "hermes",
+            "--gateway-url",
+            crate::sidecar::DEFAULT_URL,
+            "--generation-file",
+            r"C:\Temp\generation",
+            "--generation-token",
+            TEST_GENERATION_TOKEN,
+        ]
     );
     assert_eq!(
-        crate::installer::transparent_hook_forward_command(relay, CodingAgent::Hermes),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes"
+        crate::installer::transparent_hook_forward_command_for_platform(
+            relay,
+            CodingAgent::Hermes,
+            "http://127.0.0.1:1234",
+            false,
+        ),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run"
+    );
+    let encoded = persistent_hook_command_for_platform(
+        Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
+        Path::new(r"C:\Temp\generation"),
+        TEST_GENERATION_TOKEN,
+        true,
+    );
+    let encoded_codex = crate::installer::persistent_hook_forward_command_for_platform(
+        Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
+        CodingAgent::Codex,
+        Path::new(r"C:\Temp\generation"),
+        TEST_GENERATION_TOKEN,
+        true,
     );
     for command in [
         "nemo-relay hook-forward hermes",
@@ -96,6 +135,7 @@ fn hook_command_round_trips_paths_and_recognizes_owned_legacy_spellings() {
         "'/old/plugin-shim hook hermes/nemo-relay' plugin-shim hook hermes",
         "'/old install/nemo-relay' plugin-shim hook hermes --gateway-url http://127.0.0.1:47632",
         r#""C:\Program Files\NeMo 100%%\nemo-relay.exe" plugin-shim hook hermes"#,
+        &encoded,
     ] {
         assert!(
             is_managed_hook_command(command),
@@ -107,13 +147,14 @@ fn hook_command_round_trips_paths_and_recognizes_owned_legacy_spellings() {
         "echo nemo-relay hook-forward hermes",
         "nemo-relay plugin-shim hook codex",
         "nemo-relay-safe plugin-shim hook hermes",
+        &encoded_codex,
     ] {
         assert!(!is_managed_hook_command(command), "overmatched: {command}");
     }
 }
 
 #[test]
-fn forwarded_environment_is_minimal_and_includes_explicit_config_references() {
+fn forwarded_environment_includes_static_dynamic_and_config_referenced_names() {
     let environment = vec![
         "AWS_REGION".into(),
         "NEMO_RELAY_CUSTOM".into(),
@@ -133,9 +174,10 @@ fn forwarded_environment_is_minimal_and_includes_explicit_config_references() {
     assert!(names.contains(&"NEMO_RELAY_CUSTOM".into()));
     assert!(names.contains(&"CUSTOM_EXPORT_TOKEN".into()));
     assert!(names.contains(&"AWS_PRIVATE_SECRET".into()));
+    assert!(names.contains(&"AWS_PROFILE".into()));
+    assert!(names.contains(&"OTEL_EXPORTER_OTLP_ENDPOINT".into()));
     assert!(!names.contains(&"NEMO_RELAY_WORKER_TOKEN".into()));
     assert!(!names.contains(&"UNRELATED_SECRET".into()));
-    assert!(!names.contains(&"OTEL_EXPORTER_OTLP_ENDPOINT".into()));
 }
 
 #[test]
@@ -143,7 +185,7 @@ fn persistent_config_migrates_owned_state_and_preserves_unrelated_config() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay);
+    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let existing = r#"
 model: keep-me
 mcp_servers:
@@ -168,6 +210,7 @@ hooks:
         &relay,
         &command,
         &generation,
+        TEST_GENERATION_TOKEN,
         &["AWS_REGION".into()],
     )
     .unwrap();
@@ -179,7 +222,12 @@ hooks:
     );
     assert_eq!(
         merged["mcp_servers"][MCP_SERVER_NAME],
-        expected_mcp_server(&relay, &generation, &["AWS_REGION".into()])
+        expected_mcp_server(
+            &relay,
+            &generation,
+            TEST_GENERATION_TOKEN,
+            &["AWS_REGION".into()]
+        )
     );
     assert_eq!(
         merged["mcp_servers"][MCP_SERVER_NAME]["env"]["AWS_REGION"],
@@ -205,7 +253,7 @@ hooks:
         merged["hooks"]["custom_event"][0]["command"],
         json!("keep-custom")
     );
-    for event in HERMES_HOOK_EVENTS {
+    for event in CodingAgent::Hermes.hook_events() {
         let groups = merged["hooks"][event].as_array().unwrap();
         assert_eq!(
             groups
@@ -223,7 +271,7 @@ fn persistent_config_rejects_a_foreign_server_with_the_reserved_name() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay);
+    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let existing = r#"
 model: keep-me
 mcp_servers:
@@ -232,9 +280,16 @@ mcp_servers:
     args: [serve]
 "#;
 
-    let error = persistent_config(Some(existing), &relay, &command, &generation, &[])
-        .unwrap_err()
-        .to_string();
+    let error = persistent_config(
+        Some(existing),
+        &relay,
+        &command,
+        &generation,
+        TEST_GENERATION_TOKEN,
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("not managed by Relay"), "{error}");
     assert!(error.contains("rename or remove"), "{error}");
@@ -266,7 +321,8 @@ fn foreign_reserved_server_aborts_install_before_any_file_changes() {
 fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
-    let command = persistent_hook_command(&relay);
+    let generation = temp.path().join(GENERATION_FILE_NAME);
+    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let existing = json!({
         "schema": 7,
         "approvals": [
@@ -291,8 +347,8 @@ fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
             .iter()
             .any(|entry| entry["command"] == json!("custom-hook"))
     );
-    assert_eq!(approvals.len(), HERMES_HOOK_EVENTS.len() + 1);
-    for event in HERMES_HOOK_EVENTS {
+    assert_eq!(approvals.len(), CodingAgent::Hermes.hook_events().len() + 1);
+    for event in CodingAgent::Hermes.hook_events() {
         let entries = approvals
             .iter()
             .filter(|entry| entry["event"] == json!(event) && entry["command"] == json!(command))
@@ -310,13 +366,29 @@ fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
 fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
-    let command = persistent_hook_command(&relay);
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let mut config = persistent_config(None, &relay, &command, &generation, &[]).unwrap();
+    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let mut config = persistent_config(
+        None,
+        &relay,
+        &command,
+        &generation,
+        TEST_GENERATION_TOKEN,
+        &[],
+    )
+    .unwrap();
     config["hooks"]["unexpected_event"] = json!([{"command": command, "timeout": 30}]);
     let error = verify_hook_definitions(&config, &command).unwrap_err();
     assert!(error.contains("unexpected Relay hook"));
-    let mut malformed = persistent_config(None, &relay, &command, &generation, &[]).unwrap();
+    let mut malformed = persistent_config(
+        None,
+        &relay,
+        &command,
+        &generation,
+        TEST_GENERATION_TOKEN,
+        &[],
+    )
+    .unwrap();
     malformed["hooks"]["unexpected_event"] = json!({"command": command});
     let error = verify_hook_definitions(&malformed, &command).unwrap_err();
     assert!(error.contains("must be an array"));
@@ -357,10 +429,31 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
         install_persistent_with(paths.clone(), &relay, &environment, None, now, atomic_write)
             .unwrap();
     assert_eq!(written, paths.all());
-    let first_generation = std::fs::read_to_string(&paths.generation).unwrap();
+    let first_generation =
+        crate::install_generation::InstallGeneration::capture(paths.generation.clone())
+            .unwrap()
+            .token()
+            .to_owned();
+    let first_config = yaml(&paths.config);
+    let first_command = first_config["hooks"]["on_session_start"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        first_config["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_TOKEN_ENV],
+        json!(first_generation)
+    );
+    assert!(crate::hook_assertions::command_has_arguments(
+        &first_command,
+        &["--generation-token", &first_generation]
+    ));
 
     install_persistent_with(paths.clone(), &relay, &environment, None, now, atomic_write).unwrap();
-    let second_generation = std::fs::read_to_string(&paths.generation).unwrap();
+    let second_generation =
+        crate::install_generation::InstallGeneration::capture(paths.generation.clone())
+            .unwrap()
+            .token()
+            .to_owned();
     assert_ne!(first_generation, second_generation);
 
     let config = yaml(&paths.config);
@@ -378,6 +471,22 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
         json!(paths.generation.display().to_string())
     );
     assert_eq!(
+        config["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_TOKEN_ENV],
+        json!(second_generation)
+    );
+    assert_ne!(
+        first_config["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_TOKEN_ENV],
+        config["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_TOKEN_ENV]
+    );
+    assert!(crate::hook_assertions::command_has_arguments(
+        &first_command,
+        &["--generation-token", &first_generation]
+    ));
+    assert!(!crate::hook_assertions::command_has_arguments(
+        &first_command,
+        &["--generation-token", &second_generation]
+    ));
+    assert_eq!(
         config["mcp_servers"][MCP_SERVER_NAME]["env"]["OTEL_SERVICE_NAME"],
         json!("${OTEL_SERVICE_NAME}")
     );
@@ -386,7 +495,59 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
             .as_array()
             .unwrap()
             .len(),
-        HERMES_HOOK_EVENTS.len()
+        CodingAgent::Hermes.hook_events().len()
+    );
+}
+
+#[test]
+fn reinstall_verifies_generation_through_the_existing_retirement_transaction() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
+    let first_token = InstallGeneration::capture(paths.generation.clone())
+        .unwrap()
+        .token()
+        .to_owned();
+    let mut retirement = GenerationRetirement::acquire(&paths.generation)
+        .unwrap()
+        .unwrap();
+    retirement.invalidate_for_replacement().unwrap();
+
+    let result = install_persistent_with_generation(
+        paths.clone(),
+        &relay,
+        &[],
+        None,
+        Some(&retirement),
+        UNIX_EPOCH,
+        atomic_write,
+    );
+    finish_generation_mutation(result, Some(&mut retirement), "install").unwrap();
+    drop(retirement);
+
+    let second_token = InstallGeneration::capture(paths.generation)
+        .unwrap()
+        .token()
+        .to_owned();
+    assert_ne!(first_token, second_token);
+}
+
+#[test]
+fn diagnosis_rejects_a_stale_mcp_generation_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
+    let mut config = yaml(&paths.config);
+    config["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_TOKEN_ENV] = json!("stale-generation");
+    std::fs::write(&paths.config, serde_yaml::to_string(&config).unwrap()).unwrap();
+
+    let error = diagnose_persistent(&paths.config).unwrap_err();
+
+    assert!(
+        error.contains("expected generation identity is stale"),
+        "{error}"
     );
 }
 
@@ -437,6 +598,108 @@ fn install_rolls_back_config_allowlist_and_generation_after_write_failure() {
             path.display()
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn install_rollback_restores_original_file_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+    let originals = [
+        (&paths.config, b"model: original\n".as_slice(), 0o640),
+        (
+            &paths.allowlist,
+            b"{\"approvals\":[{\"event\":\"x\",\"command\":\"custom\"}]}\n".as_slice(),
+            0o644,
+        ),
+        (
+            &paths.generation,
+            b"original-generation\n".as_slice(),
+            0o600,
+        ),
+    ];
+    for (path, bytes, mode) in originals {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    let expected_modes = paths
+        .all()
+        .map(|path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777);
+    let writes = Cell::new(0);
+
+    install_persistent_with(
+        paths.clone(),
+        &relay,
+        &[],
+        None,
+        UNIX_EPOCH,
+        |path, bytes| {
+            let write = writes.get() + 1;
+            writes.set(write);
+            if write == 3 {
+                return Err("injected config write failure".into());
+            }
+            atomic_write(path, bytes)?;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| error.to_string())
+        },
+    )
+    .unwrap_err();
+
+    for (index, path) in paths.all().iter().enumerate() {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            expected_modes[index],
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn composed_install_rollback_restores_the_visible_preexisting_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+    install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
+    let previous =
+        crate::install_generation::InstallGeneration::capture(paths.generation.clone()).unwrap();
+    let mut retirement = GenerationRetirement::acquire(&paths.generation)
+        .unwrap()
+        .unwrap();
+    retirement.invalidate_for_replacement().unwrap();
+    let writes = Cell::new(0);
+
+    let result = install_persistent_with(
+        paths.clone(),
+        &relay,
+        &[],
+        None,
+        UNIX_EPOCH,
+        |path, bytes| {
+            let write = writes.get() + 1;
+            writes.set(write);
+            if write == 3 {
+                return Err("injected composed install failure".into());
+            }
+            atomic_write(path, bytes)
+        },
+    );
+    let error = finish_generation_mutation(result, Some(&mut retirement), "install")
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("injected composed install failure"),
+        "{error}"
+    );
+    previous.verify_current().unwrap();
+    crate::install_generation::InstallGeneration::capture(paths.generation).unwrap();
 }
 
 #[test]
@@ -558,6 +821,43 @@ fn uninstall_rolls_back_every_file_when_commit_fails() {
 }
 
 #[test]
+fn composed_uninstall_rollback_restores_the_visible_preexisting_generation() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+    std::fs::write(&paths.config, "model: keep\n").unwrap();
+    std::fs::write(&paths.allowlist, "{\"owner\":\"keep\"}\n").unwrap();
+    install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
+    let previous =
+        crate::install_generation::InstallGeneration::capture(paths.generation.clone()).unwrap();
+    let mut retirement = GenerationRetirement::acquire(&paths.generation)
+        .unwrap()
+        .unwrap();
+    retirement.invalidate_for_replacement().unwrap();
+    let writes = Cell::new(0);
+
+    let result = uninstall_persistent_with(paths.clone(), |path, bytes| {
+        let write = writes.get() + 1;
+        writes.set(write);
+        if write == 2 {
+            return Err("injected composed uninstall failure".into());
+        }
+        atomic_write(path, bytes)
+    });
+    let error = finish_generation_mutation(result, Some(&mut retirement), "uninstall")
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("injected composed uninstall failure"),
+        "{error}"
+    );
+    previous.verify_current().unwrap();
+    crate::install_generation::InstallGeneration::capture(paths.generation).unwrap();
+}
+
+#[test]
 fn uninstall_noops_without_creating_a_hermes_home() {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("missing-hermes-home");
@@ -598,7 +898,12 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
     std::fs::write(
         &roots[1].config,
         serde_yaml::to_string(&json!({
-            "mcp_servers": {MCP_SERVER_NAME: expected_mcp_server(&relay, &roots[1].generation, &[])}
+            "mcp_servers": {MCP_SERVER_NAME: expected_mcp_server(
+                &relay,
+                &roots[1].generation,
+                TEST_GENERATION_TOKEN,
+                &[]
+            )}
         }))
         .unwrap(),
     )
@@ -607,7 +912,11 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
         &roots[2].config,
         serde_yaml::to_string(&json!({
             "hooks": {
-                "on_session_start": [{"command": persistent_hook_command(&relay)}]
+                "on_session_start": [{"command": persistent_hook_command(
+                    &relay,
+                    &roots[2].generation,
+                    TEST_GENERATION_TOKEN
+                ).unwrap()}]
             }
         }))
         .unwrap(),
@@ -618,7 +927,11 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
         serde_json::to_vec(&json!({
             "approvals": [{
                 "event": "on_session_start",
-                "command": persistent_hook_command(&relay)
+                "command": persistent_hook_command(
+                    &relay,
+                    &roots[3].generation,
+                    TEST_GENERATION_TOKEN
+                ).unwrap()
             }]
         }))
         .unwrap(),
@@ -638,7 +951,12 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
 fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
-    let command = crate::installer::transparent_hook_forward_command(&relay, CodingAgent::Hermes);
+    let command = crate::installer::transparent_hook_forward_command(
+        &relay,
+        CodingAgent::Hermes,
+        "http://127.0.0.1:1234",
+    )
+    .unwrap();
     let existing = format!(
         r#"
 mcp_servers:
@@ -654,15 +972,17 @@ hooks:
 "#,
         relay = relay.display()
     );
-    let patched: Value =
-        serde_yaml::from_str(&transparent_config(&existing, &relay).unwrap()).unwrap();
+    let patched: Value = serde_yaml::from_str(
+        &transparent_config(&existing, &relay, "http://127.0.0.1:1234").unwrap(),
+    )
+    .unwrap();
 
     assert!(patched["mcp_servers"].get(MCP_SERVER_NAME).is_none());
     assert_eq!(
         patched["mcp_servers"]["filesystem"]["command"],
         json!("fs-mcp")
     );
-    for event in HERMES_HOOK_EVENTS {
+    for event in CodingAgent::Hermes.hook_events() {
         let groups = patched["hooks"][event].as_array().unwrap();
         assert_eq!(
             groups

@@ -7,29 +7,45 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+use crate::install_generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
+
 const BASE_MCP_ENV_VARS: &[&str] = &[
+    "ALL_PROXY",
     "ANTHROPIC_API_KEY",
     "APPDATA",
     "AWS_ACCESS_KEY_ID",
     "AWS_ALLOW_HTTP",
+    "AWS_CA_BUNDLE",
     "AWS_CONFIG_FILE",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
     "AWS_DEFAULT_REGION",
+    "AWS_EC2_METADATA_DISABLED",
     "AWS_ENDPOINT_URL",
     "AWS_PROFILE",
     "AWS_REGION",
+    "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME",
+    "AWS_SDK_LOAD_CONFIG",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
     "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_STS_REGIONAL_ENDPOINTS",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
     "HOME",
     "HTTPS_PROXY",
     "HTTP_PROXY",
     "LOCALAPPDATA",
     "NEMO_RELAY_ANTHROPIC_BASE_URL",
+    "NEMO_RELAY_GATEWAY_URL",
     "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES",
     "NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES",
     "NEMO_RELAY_OPENAI_BASE_URL",
     "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS",
     "NEMO_RELAY_PYTHON",
+    "NEMO_RELAY_TRANSPARENT_RUN",
     "NO_PROXY",
     "OPENAI_API_KEY",
     "OTEL_EXPORTER_OTLP_COMPRESSION",
@@ -52,6 +68,7 @@ const BASE_MCP_ENV_VARS: &[&str] = &[
     "USERPROFILE",
     "XDG_CONFIG_HOME",
     "XDG_RUNTIME_DIR",
+    "all_proxy",
     "http_proxy",
     "https_proxy",
     "no_proxy",
@@ -66,8 +83,8 @@ const BLOCKED_MCP_ENV_VARS: &[&str] = &[
     "NEMO_RELAY_CONFIG_SCOPE",
     "NEMO_RELAY_FAIL_CLOSED",
     "NEMO_RELAY_GATEWAY_BIND",
-    "NEMO_RELAY_GATEWAY_URL",
     "NEMO_RELAY_HOST_SOCKET",
+    "NEMO_RELAY_MCP_GENERATION",
     "NEMO_RELAY_MCP_GENERATION_FILE",
     "NEMO_RELAY_NATIVE_ABI_VERSION",
     "NEMO_RELAY_PLUGIN_BINARY",
@@ -95,10 +112,10 @@ pub(crate) fn forwarded_names_for_platform(
     config: Option<&Value>,
     windows: bool,
 ) -> Vec<String> {
-    let mut names = BASE_MCP_ENV_VARS
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect::<BTreeSet<_>>();
+    let mut names = BTreeSet::new();
+    for name in BASE_MCP_ENV_VARS {
+        insert_name(&mut names, (*name).to_string(), windows);
+    }
     for name in environment {
         if prefix_allowed(&name, windows) && !blocked(&name) {
             insert_name(&mut names, name, windows);
@@ -110,19 +127,64 @@ pub(crate) fn forwarded_names_for_platform(
     names.into_iter().collect()
 }
 
-pub(crate) fn config_referenced_names(config: Option<&Value>) -> Vec<String> {
-    config_referenced_names_for_platform(config, cfg!(windows))
+/// Removes unresolved `${NAME}` values injected by MCP hosts before CLI parsing.
+///
+/// Hermes forwards environment names through placeholder values rather than a separate
+/// `env_vars` list. When a variable is absent, Hermes preserves the self-placeholder. Relay must
+/// treat that value as unset before clap reads numeric or socket-valued environment options. The
+/// generation fence scopes this cleanup to managed persistent MCP launches; internal variables
+/// remain untouched so malformed or retired generation identities fail closed during validation.
+pub(crate) fn remove_unresolved_mcp_placeholders() {
+    if std::env::var_os(GENERATION_FILE_ENV).is_none()
+        || std::env::var_os(GENERATION_TOKEN_ENV).is_none()
+    {
+        return;
+    }
+    let unresolved = std::env::vars_os()
+        .filter_map(|(name, value)| {
+            let name_text = name.to_str()?;
+            let value = value.to_str()?;
+            (!blocked(name_text)
+                && unresolved_self_placeholder_for_platform(name_text, value, cfg!(windows)))
+            .then_some(name)
+        })
+        .collect::<Vec<_>>();
+    for name in unresolved {
+        // SAFETY: The synchronous CLI entrypoint calls this before constructing the Tokio runtime,
+        // so no other thread can read or write the process environment concurrently.
+        unsafe { std::env::remove_var(name) };
+    }
 }
 
-pub(crate) fn config_referenced_names_for_platform(
-    config: Option<&Value>,
-    windows: bool,
-) -> Vec<String> {
-    let mut names = BTreeSet::new();
-    if let Some(config) = config {
-        collect_config_names(config, &mut names, windows);
+pub(crate) fn forwarded_names_match_for_platform(left: &str, right: &str, windows: bool) -> bool {
+    if windows {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
     }
-    names.into_iter().collect()
+}
+
+/// Returns whether a name could have been captured from an earlier process environment.
+///
+/// Arbitrary config-referenced names remain in the current expected set. Historical extras are
+/// therefore limited to the static allowlist and approved dynamic prefixes.
+pub(crate) fn previously_forwardable_name_for_platform(name: &str, windows: bool) -> bool {
+    !blocked(name)
+        && (BASE_MCP_ENV_VARS
+            .iter()
+            .any(|base| forwarded_names_match_for_platform(name, base, windows))
+            || prefix_allowed(name, windows))
+}
+
+pub(crate) fn unresolved_self_placeholder_for_platform(
+    name: &str,
+    value: &str,
+    windows: bool,
+) -> bool {
+    value
+        .strip_prefix("${")
+        .and_then(|value| value.strip_suffix('}'))
+        .is_some_and(|placeholder| forwarded_names_match_for_platform(name, placeholder, windows))
 }
 
 fn prefix_allowed(name: &str, windows: bool) -> bool {

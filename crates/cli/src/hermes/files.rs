@@ -153,18 +153,31 @@ pub(super) fn remove_optional_file(path: &Path) -> Result<(), String> {
 pub(super) struct FileSnapshot {
     path: PathBuf,
     bytes: Option<Vec<u8>>,
+    permissions: Option<fs::Permissions>,
 }
 
 impl FileSnapshot {
     pub(super) fn capture(path: &Path) -> Result<Self, CliError> {
         match fs::read(path) {
-            Ok(bytes) => Ok(Self {
-                path: path.to_path_buf(),
-                bytes: Some(bytes),
-            }),
+            Ok(bytes) => {
+                let permissions = fs::metadata(path)
+                    .map(|metadata| metadata.permissions())
+                    .map_err(|error| {
+                        CliError::Install(format!(
+                            "failed to snapshot permissions on {}: {error}",
+                            path.display()
+                        ))
+                    })?;
+                Ok(Self {
+                    path: path.to_path_buf(),
+                    bytes: Some(bytes),
+                    permissions: Some(permissions),
+                })
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
                 path: path.to_path_buf(),
                 bytes: None,
+                permissions: None,
             }),
             Err(error) => Err(CliError::Install(format!(
                 "failed to snapshot {}: {error}",
@@ -178,7 +191,16 @@ impl FileSnapshot {
         W: FnMut(&Path, &[u8]) -> Result<(), String>,
     {
         if let Some(bytes) = self.bytes.as_deref() {
-            return write(&self.path, bytes);
+            write(&self.path, bytes)?;
+            if let Some(permissions) = self.permissions.as_ref() {
+                fs::set_permissions(&self.path, permissions.clone()).map_err(|error| {
+                    format!(
+                        "failed to restore permissions on {}: {error}",
+                        self.path.display()
+                    )
+                })?;
+            }
+            return Ok(());
         }
         remove_optional_file(&self.path)
     }

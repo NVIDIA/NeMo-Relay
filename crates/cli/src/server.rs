@@ -47,6 +47,7 @@ pub(crate) struct AppState {
     pub(crate) config: GatewayConfig,
     pub(crate) bootstrap_fingerprint: Option<String>,
     pub(crate) bootstrap_challenge_key: Option<BootstrapChallengeKey>,
+    pub(crate) require_provider_client_token: bool,
     pub(crate) http: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
@@ -170,6 +171,7 @@ pub(crate) async fn serve_listener_with_bootstrap(
 }
 
 /// Serves the gateway router and activates enabled dynamic plugin components.
+#[cfg(test)]
 pub(crate) async fn serve_listener_with_dynamic(
     listener: TcpListener,
     config: GatewayConfig,
@@ -181,6 +183,27 @@ pub(crate) async fn serve_listener_with_dynamic(
         config,
         dynamic_plugins,
         None,
+        None,
+        shutdown.map(ShutdownMode::Receiver),
+        None,
+    )
+    .await
+}
+
+/// Serves a wrapper-owned dynamic gateway with authenticated health while keeping foreground
+/// provider-auth semantics. Plugin-owned MCP clients use the proof to borrow only this instance.
+pub(crate) async fn serve_transparent_listener_with_dynamic(
+    listener: TcpListener,
+    config: GatewayConfig,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+    bootstrap_fingerprint: String,
+    shutdown: Option<oneshot::Receiver<()>>,
+) -> Result<(), CliError> {
+    serve_listener_with_dynamic_inner(
+        listener,
+        config,
+        dynamic_plugins,
+        Some(bootstrap_fingerprint),
         None,
         shutdown.map(ShutdownMode::Receiver),
         None,
@@ -208,6 +231,7 @@ async fn serve_listener_with_dynamic_inner(
         .as_ref()
         .map(|_| BootstrapChallengeKey::load())
         .transpose()?;
+    let require_provider_client_token = managed_bootstrap.is_some();
     let plugin_activation =
         PluginActivation::initialize(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) = bootstrap_shutdown_channel();
@@ -215,6 +239,7 @@ async fn serve_listener_with_dynamic_inner(
         config,
         bootstrap_fingerprint,
         bootstrap_challenge_key,
+        require_provider_client_token,
         bootstrap_shutdown,
     );
     let instance_id = state.instance_id.clone();
@@ -331,13 +356,14 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 impl AppState {
     #[cfg(test)]
     fn new(config: GatewayConfig) -> Self {
-        Self::new_with_bootstrap(config, None, None, None)
+        Self::new_with_bootstrap(config, None, None, false, None)
     }
 
     fn new_with_bootstrap(
         config: GatewayConfig,
         bootstrap_fingerprint: Option<String>,
         bootstrap_challenge_key: Option<BootstrapChallengeKey>,
+        require_provider_client_token: bool,
         bootstrap_shutdown: Option<BootstrapShutdown>,
     ) -> Self {
         let sessions = SessionManager::new(config.clone());
@@ -352,6 +378,7 @@ impl AppState {
             config,
             bootstrap_fingerprint,
             bootstrap_challenge_key,
+            require_provider_client_token,
             http,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
@@ -371,7 +398,7 @@ impl AppState {
     /// present the private per-user proof installed into their provider configuration before Relay
     /// can spend a forwarded credential on their behalf.
     pub(crate) fn allows_environment_provider_auth(&self, headers: &HeaderMap) -> bool {
-        if self.bootstrap_fingerprint.is_none() {
+        if !self.require_provider_client_token {
             return true;
         }
         let Some(key) = self.bootstrap_challenge_key.as_ref() else {

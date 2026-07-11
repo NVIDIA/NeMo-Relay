@@ -45,7 +45,7 @@ rewriting the config. Rename or remove the conflicting entry, then retry.
 Installation performs the following changes as one verified transaction:
 
 - Adds `mcp_servers.nemo-relay` with the canonical absolute `nemo-relay`
-  executable and `mcp --agent hermes` arguments.
+  executable and the shared `mcp` argument.
 - Sets the shared gateway bind to `127.0.0.1:47632` and adds a private MCP
   generation fence.
 - Installs one canonical Relay handler for every supported Hermes lifecycle
@@ -67,15 +67,17 @@ and forwarded environment names:
 nemo-relay doctor --plugin hermes
 ```
 
-If you add a Relay, OpenTelemetry, AWS, proxy, certificate, or
-config-referenced credential variable later, run
-`nemo-relay install hermes --force` to add its name to the Hermes MCP
-environment. Generated config stores `${VARIABLE_NAME}` references, never
-secret values.
+Generated config always includes the standard Relay, OpenTelemetry, AWS,
+proxy, certificate, and provider credential names. It stores
+`${VARIABLE_NAME}` references, never secret values; Relay treats an unresolved
+self-reference as unset before parsing its command line. If you later add a
+custom `NEMO_RELAY_`, `OTEL_`, or `AWS_` name or change a config-referenced
+credential name, run `nemo-relay install hermes --force` to add it to the
+Hermes MCP environment.
 
 ## Gateway Lifecycle
 
-Hermes launches `nemo-relay mcp --agent hermes` as a long-lived stdio MCP
+Hermes launches `nemo-relay mcp` as a long-lived stdio MCP
 server. The MCP process does not expose tools. It starts or acquires the gateway
 immediately when the process launches and completes initialization only after
 Relay identity, version, bootstrap protocol, and effective persistent
@@ -84,16 +86,18 @@ configuration are verified.
 Hermes starts MCP discovery in the background, so an early lifecycle hook can
 arrive before the MCP process finishes acquiring the gateway. The installed
 hook command handles that race: it starts or reuses the same gateway under the
-same startup lock before delivery. If delivery then fails before connecting,
-the command performs one coordinated recovery and retries the original payload
-once. The payload is not reconstructed or replaced.
+same startup lock before delivery, guarded by the same install generation as
+the MCP entry. Its temporary endpoint lease makes any replacement spend the
+same recovery allowance as overlapping MCP clients. If delivery then fails
+before connecting, the command retries the original payload once. The payload
+is not reconstructed or replaced.
 
 Concurrent Hermes, Claude Code, and Codex MCP clients can share one compatible
 gateway. Every open MCP client heartbeats the gateway. An endpoint-scoped
-recovery epoch permits one coordinated restart across all overlapping clients,
-even when one client misses the replacement between heartbeat ticks. A second
-failure exits those MCP clients with an error. After the last client closes,
-the gateway exits after 300 idle seconds by default. Set
+recovery cohort permits one coordinated restart across all overlapping clients
+and hooks, even when one client misses the replacement between heartbeat ticks.
+A second failure exits those MCP clients with an error. After the last client
+closes, the gateway exits after 300 idle seconds by default. Set
 `NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS` before setup and launch to choose another
 positive timeout.
 

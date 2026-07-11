@@ -71,7 +71,11 @@ cleanup() {
             kill -KILL "$sidecar_pid" 2>/dev/null || true
         fi
     fi
-    rm -rf "$work"
+    if [[ "${RELAY_E2E_KEEP_WORK:-0}" == "1" ]]; then
+        echo "Codex E2E workspace retained at $work" >&2
+    else
+        rm -rf "$work"
+    fi
 }
 trap cleanup EXIT
 
@@ -377,6 +381,117 @@ PY
         return 1
     fi
 }
+
+run_transparent_codex_ping() {
+    stdout="$work/codex-transparent.stdout"
+    stderr="$work/codex-transparent.stderr"
+    if ! python3 - "$stdout" "$stderr" "$XDG_CONFIG_HOME/nemo-relay/config.toml" "$transparent_project" <<'PY'
+import subprocess
+import sys
+
+stdout_path, stderr_path, relay_config, project = sys.argv[1:]
+with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+    process = subprocess.run(
+        [
+            "nemo-relay",
+            "run",
+            "--config",
+            relay_config,
+            "--",
+            "codex",
+            "--profile",
+            "relay-user-profile",
+            "exec",
+            "--skip-git-repo-check",
+            "ping",
+        ],
+        stdout=stdout,
+        stderr=stderr,
+        cwd=project,
+        timeout=60,
+        check=False,
+    )
+raise SystemExit(process.returncode)
+PY
+    then
+        echo "transparent Codex run with persistent plugin installed failed" >&2
+        cat "$stdout" >&2
+        cat "$stderr" >&2
+        return 1
+    fi
+    grep -qi "pong" "$stdout"
+    python3 - "$stderr" <<'PY'
+import re
+import sys
+from collections import Counter
+
+lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+ansi = re.compile(r"\x1b\[[0-9;]*m")
+started = Counter()
+completed = Counter()
+for raw_line in lines:
+    line = ansi.sub("", raw_line).strip()
+    match = re.search(r"(?:^|\s)hook: (SessionStart|UserPromptSubmit|Stop)( Completed)?$", line)
+    if not match:
+        continue
+    (completed if match.group(2) else started)[match.group(1)] += 1
+expected = Counter({"SessionStart": 1, "UserPromptSubmit": 1, "Stop": 1})
+# The installed plugin remains enabled and its process-local hook exits without forwarding. Codex
+# can therefore report both that hook and the wrapper-owned hook, while the ATOF assertions below
+# still require exactly one delivered lifecycle stream.
+assert all(count <= 2 for count in started.values()), (started, lines)
+assert all(count <= 2 for count in completed.values()), (completed, lines)
+if started or completed:
+    assert set(started) == set(expected) and set(completed) == set(expected), (started, completed, lines)
+    assert started == completed, (started, completed, lines)
+PY
+}
+
+# Transparent mode preserves the selected profile. The installed plugin remains configured, but its
+# MCP borrows the wrapper-owned dynamic gateway and its persistent hooks become process-local no-ops.
+cat >"$CODEX_HOME/relay-user-profile.config.toml" <<'EOF'
+model = "gpt-5.1-codex"
+model_reasoning_effort = "low"
+EOF
+cp "$CODEX_HOME/config.toml" "$work/codex-config-before-transparent.toml"
+cp "$CODEX_HOME/relay-user-profile.config.toml" "$work/codex-profile-before-transparent.toml"
+: >"$provider_log"
+transparent_project="$work/transparent-project"
+mkdir -p "$transparent_project"
+events="$transparent_project/atof/events.jsonl"
+rm -f "$events"
+wait_for_relay_port_release
+run_transparent_codex_ping
+wait_for_relay_port_release
+cmp "$CODEX_HOME/config.toml" "$work/codex-config-before-transparent.toml"
+cmp "$CODEX_HOME/relay-user-profile.config.toml" "$work/codex-profile-before-transparent.toml"
+[[ -z "$(find_sidecar_file 'sidecar-*.owner.json')" ]]
+python3 - "$provider_log" "$events" <<'PY'
+import json
+import sys
+
+requests = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+responses = [row for row in requests if row["method"] == "POST" and row["path"].endswith("/responses")]
+assert len(responses) == 1, requests
+assert responses[0]["model"] == "gpt-5.1-codex", responses
+events = [json.loads(line) for line in open(sys.argv[2], encoding="utf-8") if line.strip()]
+turn_starts = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("name") == "codex-turn"
+    and event.get("scope_category") == "start"
+]
+turn_ends = [
+    event for event in events
+    if event.get("kind") == "scope"
+    and event.get("name") == "codex-turn"
+    and event.get("scope_category") == "end"
+]
+assert len(turn_starts) == len(turn_ends) == 1, (turn_starts, turn_ends)
+assert turn_starts[0].get("data", {}).get("hook_event_name", "").lower() == "userpromptsubmit", turn_starts
+assert turn_ends[0].get("metadata", {}).get("hook_event_name", "").lower() == "stop", turn_ends
+PY
+nemo-relay doctor --plugin codex --install-dir "$install_dir"
 
 # Exercise incompatible configuration handling before collecting acceptance events.
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=300

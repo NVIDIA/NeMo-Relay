@@ -12,17 +12,33 @@ use super::DEFAULT_GATEWAY_URL;
 use super::state::PluginInstallOptions;
 use super::state::PluginLayout;
 
+#[cfg(test)]
 pub(super) fn run_plugin_setup(
     host: IntegrationHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
+    run_plugin_setup_with_generation(host, layout, options, setup_runner, None)
+}
+
+pub(super) fn run_plugin_setup_with_generation(
+    host: IntegrationHost,
+    layout: &PluginLayout,
+    options: &PluginInstallOptions,
+    setup_runner: &dyn PluginSetupRunner,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
     if options.dry_run {
         println!("{}", setup_action_description(host, "configure"));
         return Ok(());
     }
-    setup_runner.setup(host, DEFAULT_GATEWAY_URL, &layout.plugin_root)
+    setup_runner.setup_with_generation(
+        host,
+        DEFAULT_GATEWAY_URL,
+        &layout.plugin_root,
+        generation_token,
+    )
 }
 
 pub(super) fn run_plugin_uninstall(
@@ -38,17 +54,28 @@ pub(super) fn run_plugin_uninstall(
     setup_runner.uninstall(host, DEFAULT_GATEWAY_URL, plugin_root)
 }
 
+#[cfg(test)]
 pub(super) fn run_plugin_doctor(
     host: IntegrationHost,
     plugin_root: &Path,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
+    run_plugin_doctor_with_generation(host, plugin_root, options, setup_runner, None)
+}
+
+pub(super) fn run_plugin_doctor_with_generation(
+    host: IntegrationHost,
+    plugin_root: &Path,
+    options: &PluginInstallOptions,
+    setup_runner: &dyn PluginSetupRunner,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
     if options.dry_run {
         println!("{}", setup_action_description(host, "doctor"));
         return Ok(());
     }
-    setup_runner.doctor(host, DEFAULT_GATEWAY_URL, plugin_root)
+    setup_runner.doctor_with_generation(host, DEFAULT_GATEWAY_URL, plugin_root, generation_token)
 }
 
 pub(super) fn run_plugin_doctor_json(
@@ -97,6 +124,15 @@ pub(super) trait PluginSetupRunner {
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String>;
+    fn setup_with_generation(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+        _generation_token: Option<&str>,
+    ) -> Result<(), String> {
+        self.setup(host, gateway_url, plugin_root)
+    }
     fn uninstall(
         &self,
         host: IntegrationHost,
@@ -109,6 +145,15 @@ pub(super) trait PluginSetupRunner {
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String>;
+    fn doctor_with_generation(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+        _generation_token: Option<&str>,
+    ) -> Result<(), String> {
+        self.doctor(host, gateway_url, plugin_root)
+    }
     fn doctor_json(
         &self,
         host: IntegrationHost,
@@ -160,8 +205,22 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
+        self.setup_with_generation(host, gateway_url, plugin_root, None)
+    }
+
+    fn setup_with_generation(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+        generation_token: Option<&str>,
+    ) -> Result<(), String> {
         match host {
-            IntegrationHost::Codex => plugin_host::install_codex_plugin(gateway_url, plugin_root),
+            IntegrationHost::Codex => plugin_host::install_codex_plugin_with_generation(
+                gateway_url,
+                plugin_root,
+                generation_token,
+            ),
             IntegrationHost::ClaudeCode => plugin_host::enable_claude_provider(gateway_url),
             IntegrationHost::Hermes | IntegrationHost::All => {
                 unreachable!("all is expanded before plugin setup")
@@ -190,10 +249,23 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
+        self.doctor_with_generation(host, gateway_url, plugin_root, None)
+    }
+
+    fn doctor_with_generation(
+        &self,
+        host: IntegrationHost,
+        gateway_url: &str,
+        plugin_root: &Path,
+        generation_token: Option<&str>,
+    ) -> Result<(), String> {
         match host {
-            IntegrationHost::Codex => {
-                plugin_host::doctor_plugin(CodingAgent::Codex, gateway_url, plugin_root)
-            }
+            IntegrationHost::Codex => plugin_host::doctor_plugin_with_generation(
+                CodingAgent::Codex,
+                gateway_url,
+                plugin_root,
+                generation_token,
+            ),
             IntegrationHost::ClaudeCode => {
                 plugin_host::doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root)
             }

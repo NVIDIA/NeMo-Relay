@@ -7,12 +7,128 @@
 use std::env;
 use std::process::{Child, Command};
 #[cfg(windows)]
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
 const SIDECAR_JOB_NAME_ENV: &str = "NEMO_RELAY_SIDECAR_JOB_NAME";
 #[cfg(windows)]
 static RETAINED_SIDECAR_JOB: OnceLock<SidecarJob> = OnceLock::new();
+#[cfg(windows)]
+static SIDECAR_SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(windows)]
+pub(super) struct HandleInheritanceGuard {
+    handles: Vec<windows_sys::Win32::Foundation::HANDLE>,
+}
+
+#[cfg(windows)]
+impl HandleInheritanceGuard {
+    pub(super) fn suppress(
+        handles: impl IntoIterator<Item = windows_sys::Win32::Foundation::HANDLE>,
+    ) -> std::io::Result<Self> {
+        use windows_sys::Win32::Foundation::{
+            GetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+        };
+
+        let mut guard = Self {
+            handles: Vec::new(),
+        };
+        for handle in handles {
+            if handle.is_null() || handle == INVALID_HANDLE_VALUE || guard.handles.contains(&handle)
+            {
+                continue;
+            }
+            let mut flags = 0;
+            // SAFETY: `handle` is a live process handle and `flags` is writable storage.
+            if unsafe { GetHandleInformation(handle, &mut flags) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if flags & HANDLE_FLAG_INHERIT == 0 {
+                continue;
+            }
+            // SAFETY: The mask changes only the inheritance bit on this live handle.
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            guard.handles.push(handle);
+        }
+        Ok(guard)
+    }
+
+    fn restore(&mut self) -> std::io::Result<()> {
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+
+        let mut failed = Vec::new();
+        let mut first_error = None;
+        for handle in self.handles.drain(..).rev() {
+            // SAFETY: Each handle was live and inheritable when this guard suppressed it.
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                failed.push(handle);
+                first_error.get_or_insert_with(std::io::Error::last_os_error);
+            }
+        }
+        self.handles = failed;
+        first_error.map_or(Ok(()), Err)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HandleInheritanceGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn spawn_detached_sidecar(command: &mut Command) -> std::io::Result<Child> {
+    use std::os::windows::io::AsRawHandle;
+
+    // Rust's stable Windows process API passes `bInheritHandles = TRUE`. Temporarily suppress the
+    // host's inherited standard handles so a sidecar launched by a captured hook cannot retain the
+    // hook's output pipes. `Command` creates separate inheritable handles for the explicitly
+    // configured sidecar log files while this lock is held.
+    let _spawn_guard = SIDECAR_SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let standard_handles = [
+        std::io::stdin().as_raw_handle().cast(),
+        std::io::stdout().as_raw_handle().cast(),
+        std::io::stderr().as_raw_handle().cast(),
+    ];
+    let mut inheritance = HandleInheritanceGuard::suppress(standard_handles).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("failed to suppress inherited standard handles: {error}"),
+        )
+    })?;
+    let spawned = command.spawn();
+    let restored = inheritance.restore().map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("failed to restore standard-handle inheritance: {error}"),
+        )
+    });
+    match (spawned, restored) {
+        (Ok(child), Ok(())) => Ok(child),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(mut child), Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error)
+        }
+        (Err(spawn_error), Err(restore_error)) => Err(std::io::Error::new(
+            spawn_error.kind(),
+            format!("{spawn_error}; additionally, {restore_error}"),
+        )),
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn spawn_detached_sidecar(command: &mut Command) -> std::io::Result<Child> {
+    command.spawn()
+}
 
 pub(super) struct DetachedSidecarProcess {
     child: Child,
@@ -39,6 +155,35 @@ impl DetachedSidecarProcess {
         self.child.try_wait()
     }
 
+    /// Observe direct-child exit without releasing the Unix process-group identifier first.
+    pub(super) fn has_exited_for_tree_cleanup(&mut self) -> std::io::Result<bool> {
+        #[cfg(unix)]
+        {
+            let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+            // SAFETY: `information` is writable, the child PID is stable while its `Child` handle
+            // remains unreaped, and WNOWAIT intentionally preserves that zombie until the owned
+            // process group has been terminated.
+            if unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    self.child.id() as libc::id_t,
+                    information.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            } == -1
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: `waitid` initialized the signal information on success. POSIX requires a
+            // zero PID for WNOHANG when the selected child has not changed state.
+            Ok(unsafe { information.assume_init().si_pid() } != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            self.child.try_wait().map(|status| status.is_some())
+        }
+    }
+
     pub(super) fn terminate(&mut self) {
         #[cfg(windows)]
         if let Some(job) = self.job.as_ref() {
@@ -47,10 +192,42 @@ impl DetachedSidecarProcess {
         terminate_sidecar_process_tree(&mut self.child);
     }
 
-    pub(super) fn terminate_retained_descendants(&self) {
-        #[cfg(windows)]
-        if let Some(job) = self.job.as_ref() {
-            job.terminate();
+    pub(super) fn terminate_retained_descendants(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            let process_group = -(self.child.id() as i32);
+            // SAFETY: Detached sidecars call `setsid` before exec, so the direct child's PID is the
+            // owned process-group ID. Unix exit observation left the leader unreaped to prevent
+            // reuse while this signal is delivered.
+            let terminated = if unsafe { libc::kill(process_group, libc::SIGKILL) } == -1 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            } else {
+                Ok(())
+            };
+            let reaped = self.child.wait().map(|_| ());
+            match (terminated, reaped) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+                (Err(terminate_error), Err(reap_error)) => Err(std::io::Error::new(
+                    terminate_error.kind(),
+                    format!(
+                        "{terminate_error}; additionally failed to reap the sidecar: {reap_error}"
+                    ),
+                )),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            #[cfg(windows)]
+            if let Some(job) = self.job.as_ref() {
+                job.terminate();
+            }
+            Ok(())
         }
     }
 }

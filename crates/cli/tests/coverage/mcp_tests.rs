@@ -184,15 +184,7 @@ async fn mcp_session_serves_stdio_and_stops_heartbeat_on_eof() {
     let (client, server_io) = tokio::io::duplex(4096);
     let (client_reader, mut client_writer) = tokio::io::split(client);
     let (server_reader, server_writer) = tokio::io::split(server_io);
-    let task = tokio::spawn(run_session(
-        "127.0.0.1:9".parse().unwrap(),
-        "http://127.0.0.1:9".into(),
-        Vec::new(),
-        "test-fingerprint".into(),
-        Duration::from_secs(60),
-        BufReader::new(server_reader),
-        server_writer,
-    ));
+    let task = tokio::spawn(run_session(BufReader::new(server_reader), server_writer));
 
     client_writer
         .write_all(
@@ -320,6 +312,64 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
         .expect("compatible gateway did not stop")
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn borrowed_transparent_gateway_is_authenticated_and_monitored() {
+    let _plugin_guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _bootstrap_home = BootstrapConfigHome::enter(&temp.path().join("xdg"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bind = listener.local_addr().unwrap();
+    let url = format!("http://{bind}");
+    let fingerprint = crate::config::transparent_gateway_fingerprint(&url);
+    let config = crate::config::GatewayConfig {
+        bind,
+        ..crate::config::GatewayConfig::default()
+    };
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let gateway = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
+        listener,
+        config,
+        Vec::new(),
+        fingerprint.clone(),
+        Some(shutdown_rx),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let probe_url = url.clone();
+            let probe_fingerprint = fingerprint.clone();
+            if tokio::task::spawn_blocking(move || {
+                crate::sidecar::healthz_compatible(&probe_url, &probe_fingerprint)
+            })
+            .await
+            .unwrap()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("transparent gateway did not become healthy");
+
+    let mut lease =
+        gateway::GatewayLease::borrow_with_interval(url, fingerprint, Duration::from_millis(10))
+            .await
+            .expect("authenticated gateway should be borrowable");
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), gateway)
+        .await
+        .expect("transparent gateway did not stop")
+        .unwrap()
+        .unwrap();
+
+    let error = tokio::time::timeout(Duration::from_secs(5), lease.wait())
+        .await
+        .expect("borrowed gateway heartbeat did not detect shutdown")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no longer available"), "{error}");
 }
 
 #[tokio::test]
@@ -508,8 +558,14 @@ async fn heartbeat_attempts_at_most_one_successful_restart() {
 #[tokio::test]
 async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
     let dir = tempfile::tempdir().unwrap();
-    let generation_path = dir.path().join(GENERATION_FILE_NAME);
-    write_new_generation(&generation_path).unwrap();
+    let plugin_root = dir.path().join("plugin");
+    let generation_path = plugin_root.join(GENERATION_FILE_NAME);
+    let generation_lock = dir.path().join("generation-transaction.lock");
+    crate::install_generation::write_new_generation_with_token_at(
+        &generation_path,
+        &generation_lock,
+    )
+    .unwrap();
     let generation = InstallGeneration::capture(generation_path.clone()).unwrap();
     let health_calls = Arc::new(AtomicUsize::new(0));
     let restart_calls = Arc::new(AtomicUsize::new(0));
@@ -559,8 +615,15 @@ async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
         .unwrap()
         .expect("installed generation should be retired");
     retirement.invalidate_for_replacement().unwrap();
-    std::fs::rename(&generation_path, dir.path().join("retired-generation")).unwrap();
-    write_new_generation(&generation_path).unwrap();
+    // Force installation swaps the whole plugin tree while retaining its external transaction
+    // lock until the replacement is committed.
+    std::fs::rename(&plugin_root, dir.path().join("retired-plugin")).unwrap();
+    crate::install_generation::write_staged_generation_with_token(
+        &generation_path,
+        &generation_lock,
+    )
+    .unwrap();
+    retirement.commit_replacement();
     drop(retirement);
 
     let error = tokio::time::timeout(Duration::from_secs(5), heartbeat)
@@ -584,11 +647,19 @@ fn invalidated_install_generation_can_be_restored_before_rollback_registration()
         .expect("installed generation should be retired");
 
     retirement.invalidate_for_replacement().unwrap();
-    let error = InstallGeneration::capture(generation_path.clone()).unwrap_err();
-    assert!(error.contains("has been retired"), "{error}");
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let verifier = std::thread::spawn(move || result_tx.send(original.verify_current()).unwrap());
+    assert!(
+        result_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "MCP lifecycle verification observed an uncommitted retirement"
+    );
 
     retirement.restore_after_rollback().unwrap();
-    original.verify_current().unwrap();
+    result_rx
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap()
+        .unwrap();
+    verifier.join().unwrap();
     InstallGeneration::capture(generation_path).unwrap();
 }
 
@@ -601,12 +672,14 @@ fn retired_install_generation_remains_retryable_but_not_adoptable() {
         .unwrap()
         .expect("installed generation should be retired");
     retirement.invalidate_for_replacement().unwrap();
+    retirement.commit_replacement();
     drop(retirement);
 
     let mut resumed = GenerationRetirement::acquire(&generation_path)
         .unwrap()
         .expect("a retired generation should support cleanup retry");
     resumed.invalidate_for_replacement().unwrap();
+    resumed.commit_replacement();
     drop(resumed);
 
     let error = InstallGeneration::capture(generation_path).unwrap_err();
@@ -616,4 +689,54 @@ fn retired_install_generation_remains_retryable_but_not_adoptable() {
 #[test]
 fn default_mcp_gateway_uses_plugin_provider_port() {
     assert_eq!(default_mcp_bind().to_string(), "127.0.0.1:47632");
+}
+
+#[test]
+fn persistent_mcp_server_contract_is_host_neutral_and_generation_fenced() {
+    let server = persistent_server(
+        std::path::Path::new("/opt/nemo relay/bin/nemo-relay"),
+        std::path::Path::new("/tmp/plugin/.nemo-relay-generation"),
+        "generation-token",
+    );
+
+    assert_eq!(server["command"], "/opt/nemo relay/bin/nemo-relay");
+    assert_eq!(server["args"], json!(["mcp"]));
+    assert_eq!(
+        server["env"]["NEMO_RELAY_GATEWAY_BIND"],
+        crate::sidecar::DEFAULT_BIND
+    );
+    assert_eq!(
+        server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"],
+        "/tmp/plugin/.nemo-relay-generation"
+    );
+    assert_eq!(
+        server["env"]["NEMO_RELAY_MCP_GENERATION"],
+        "generation-token"
+    );
+}
+
+#[test]
+fn managed_mcp_server_recognizes_one_current_contract_and_legacy_migrations() {
+    let relay = |command: &str| command.ends_with("nemo-relay");
+    assert!(is_managed_server(
+        &json!({"command": "/bin/nemo-relay", "args": ["mcp"]}),
+        relay
+    ));
+    for agent in ["claude", "codex", "hermes"] {
+        assert!(is_managed_server(
+            &json!({
+                "command": "/bin/nemo-relay",
+                "args": ["mcp", "--agent", agent]
+            }),
+            relay
+        ));
+    }
+    for foreign in [
+        json!({"command": "/bin/other", "args": ["mcp"]}),
+        json!({"command": "/bin/nemo-relay", "args": ["mcp", "--agent", "unknown"]}),
+        json!({"command": "/bin/nemo-relay", "args": ["mcp", "--extra"]}),
+        json!({"command": "/bin/nemo-relay"}),
+    ] {
+        assert!(!is_managed_server(&foreign, relay), "{foreign}");
+    }
 }

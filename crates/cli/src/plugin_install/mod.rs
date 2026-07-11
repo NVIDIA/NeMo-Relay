@@ -28,14 +28,16 @@ use host::{
     run_host_plugin_removal, validate_relay_hook_forward, validate_relay_mcp,
 };
 use marketplace::{
-    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config, plugin_uses_mcp,
+    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config,
     write_plugin_marketplace, write_plugin_marketplace_for_generation,
 };
 use operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
 use setup::{
-    PluginSetupRunner, PluginSetupSnapshot, RealPluginSetupRunner, run_plugin_doctor,
-    run_plugin_doctor_json, run_plugin_setup, run_plugin_uninstall,
+    PluginSetupRunner, PluginSetupSnapshot, RealPluginSetupRunner, run_plugin_doctor_json,
+    run_plugin_doctor_with_generation, run_plugin_setup_with_generation, run_plugin_uninstall,
 };
+#[cfg(test)]
+use setup::{run_plugin_doctor, run_plugin_setup};
 use state::{
     CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, PluginInstallOptions,
     PluginLayout, PluginState, default_install_dir, mark_plugin_setup_installed, read_state,
@@ -635,13 +637,11 @@ fn install_host_locked(
 ) -> Result<(), String> {
     let relay = require_relay(options, runner)?;
     validate_relay_hook_forward(&relay, options, runner)?;
-    if plugin_uses_mcp(host) {
-        validate_relay_mcp(&relay, options, runner)?;
-    }
+    validate_relay_mcp(&relay, options, runner)?;
     require_host_cli(host, options, runner)?;
     host::validate_host_version(host, options, runner)?;
     let layout = PluginLayout::new(host, &options.install_dir);
-    let plugin_preflight = if !options.dry_run && plugin_uses_mcp(host) {
+    let plugin_preflight = if !options.dry_run {
         Some(prepare_plugin_install(host, &layout, options, runner)?)
     } else {
         None
@@ -654,9 +654,31 @@ fn install_host_locked(
         return Err(existing_plugin_install_requires_force_error(host));
     }
     let mut force_snapshot = None;
-    let staged = if options.force && !options.dry_run && plugin_uses_mcp(host) {
+    let mut replacement_generation_lock = None;
+    let staged = if options.force && !options.dry_run {
         let preflight = plugin_preflight.expect("MCP plugin force install has preflight state");
-        let staged = stage_plugin_marketplace(host, &relay, &layout, options)?;
+        let initialize_generation_lock = match preflight.generation_retirement.as_ref() {
+            Some(retirement) => !retirement.uses_lock_path(&layout.generation_lock)?,
+            None => true,
+        };
+        let staged =
+            stage_plugin_marketplace(host, &relay, &layout, initialize_generation_lock, options)?;
+        if initialize_generation_lock {
+            replacement_generation_lock = match acquire_replacement_generation_lock(
+                host,
+                &staged.layout.generation_fence,
+                staged.generation_lock_created,
+            ) {
+                Ok(lock) => Some(lock),
+                Err(error) => {
+                    staged.cleanup();
+                    if staged.generation_lock_created {
+                        remove_generation_lock_best_effort(&layout.generation_lock);
+                    }
+                    return Err(error);
+                }
+            };
+        }
         match begin_force_replacement(host, &layout, preflight, options, runner, setup_runner) {
             Ok(mut snapshot) => {
                 if let Err(error) = setup_runner.refresh_gateway() {
@@ -683,13 +705,14 @@ fn install_host_locked(
         None
     };
     if options.force && staged.is_none() {
-        if !options.dry_run && plugin_uses_mcp(host) {
+        if !options.dry_run {
             setup_runner.refresh_gateway()?;
         }
         force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
     }
     if let Some(staged) = staged.as_ref() {
         if let Err(error) = staged.promote(&layout) {
+            staged.cleanup();
             return restore_force_replacement_after_error(
                 host,
                 &layout,
@@ -704,13 +727,77 @@ fn install_host_locked(
             .as_mut()
             .expect("force snapshot exists")
             .replacement_promoted = true;
+        if let Some(lock) = replacement_generation_lock.as_mut()
+            && let Err(error) = lock.retarget_promoted_marker(&layout.generation_fence)
+        {
+            staged.cleanup();
+            return restore_force_replacement_after_error(
+                host,
+                &layout,
+                force_snapshot.as_mut().expect("force snapshot exists"),
+                options,
+                runner,
+                setup_runner,
+                error,
+            );
+        }
         staged.cleanup();
     } else {
-        write_plugin_marketplace(host, &layout, &relay, options)?;
+        let generation_lock_created =
+            !options.dry_run && generation_lock_is_absent(&layout.generation_lock);
+        if let Err(error) = write_plugin_marketplace(host, &layout, &relay, options) {
+            let cleanup_error = (!options.dry_run)
+                .then(|| remove_path(&layout.marketplace_root, options).err())
+                .flatten();
+            if generation_lock_created {
+                remove_generation_lock_best_effort(&layout.generation_lock);
+            }
+            return match cleanup_error {
+                Some(cleanup_error) => Err(format!(
+                    "{error}; additionally failed to remove the incomplete marketplace: {cleanup_error}"
+                )),
+                None => Err(error),
+            };
+        }
+        if !options.dry_run {
+            replacement_generation_lock = match acquire_replacement_generation_lock(
+                host,
+                &layout.generation_fence,
+                generation_lock_created,
+            ) {
+                Ok(lock) => Some(lock),
+                Err(error) => {
+                    let cleanup_error = remove_path(&layout.marketplace_root, options).err();
+                    if generation_lock_created {
+                        remove_generation_lock_best_effort(&layout.generation_lock);
+                    }
+                    return match cleanup_error {
+                        Some(cleanup_error) => Err(format!(
+                            "{error}; additionally failed to remove the incomplete marketplace: {cleanup_error}"
+                        )),
+                        None => Err(error),
+                    };
+                }
+            };
+        }
     }
     if let Err(error) = write_state(&layout, options) {
         let _replacement_retirement = if force_snapshot.is_some() {
-            match retire_replacement_before_rollback(host, &layout, options, setup_runner) {
+            let existing_retirement = replacement_generation_lock
+                .as_mut()
+                .map(ReplacementGenerationLock::retirement_mut)
+                .or_else(|| {
+                    force_snapshot
+                        .as_mut()
+                        .and_then(|snapshot| snapshot.generation_retirement.as_mut())
+                });
+            match retire_replacement_before_rollback(
+                host,
+                &layout,
+                options,
+                setup_runner,
+                existing_retirement,
+            ) {
                 Ok(retirement) => retirement,
                 Err(retirement_error) => {
                     return Err(format!(
@@ -735,27 +822,81 @@ fn install_host_locked(
         return Err(error);
     }
     let mut registration = HostRegistrationProgress::default();
+    let mut registration_state_uncertain = false;
     let mut setup_installed = false;
     let result = (|| {
-        run_host_marketplace_registration(host, &layout.marketplace_root, options, runner)?;
+        let generation_token = replacement_generation_lock
+            .as_ref()
+            .map(ReplacementGenerationLock::retirement)
+            .or_else(|| {
+                force_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.generation_retirement.as_ref())
+            })
+            .map(GenerationRetirement::active_visible_token)
+            .transpose()?;
+        if let Err(error) =
+            run_host_marketplace_registration(host, &layout.marketplace_root, options, runner)
+        {
+            registration_state_uncertain = true;
+            return Err(error);
+        }
         registration.host_marketplace_added = true;
-        run_host_plugin_registration(host, options, runner)?;
+        if let Err(error) = run_host_plugin_registration(host, options, runner) {
+            registration_state_uncertain = true;
+            return Err(error);
+        }
         registration.host_plugin_added = true;
         if !matches!(host, IntegrationHost::Codex) {
             setup_installed = true;
         }
-        run_plugin_setup(host, &layout, options, setup_runner)?;
+        run_plugin_setup_with_generation(
+            host,
+            &layout,
+            options,
+            setup_runner,
+            generation_token.as_deref(),
+        )?;
         setup_installed = true;
         mark_plugin_setup_installed(host, &layout, options)?;
         if !options.skip_doctor {
-            run_plugin_doctor(host, &layout.plugin_root, options, setup_runner)?;
+            run_plugin_doctor_with_generation(
+                host,
+                &layout.plugin_root,
+                options,
+                setup_runner,
+                generation_token.as_deref(),
+            )?;
         }
         Ok(())
     })();
     if let Err(error) = result {
+        if registration_state_uncertain {
+            let observed = host_registration_report(host, options, runner).map_err(|report_error| {
+                format!(
+                    "{error}; refusing destructive rollback because the host registration state could not be verified after a registration command failed: {report_error}"
+                )
+            })?;
+            registration.host_plugin_added |= observed.host_plugin_registered;
+            registration.host_marketplace_added |= observed.host_marketplace_registered;
+        }
         let replacement_may_be_live = force_snapshot.is_some() || registration.host_plugin_added;
         let _replacement_retirement = if replacement_may_be_live {
-            match retire_replacement_before_rollback(host, &layout, options, setup_runner) {
+            let existing_retirement = replacement_generation_lock
+                .as_mut()
+                .map(ReplacementGenerationLock::retirement_mut)
+                .or_else(|| {
+                    force_snapshot
+                        .as_mut()
+                        .and_then(|snapshot| snapshot.generation_retirement.as_mut())
+                });
+            match retire_replacement_before_rollback(
+                host,
+                &layout,
+                options,
+                setup_runner,
+                existing_retirement,
+            ) {
                 Ok(retirement) => retirement,
                 Err(retirement_error) => {
                     return Err(format!(
@@ -795,7 +936,7 @@ fn install_host_locked(
         return Err(error);
     }
     if let Some(snapshot) = force_snapshot {
-        snapshot.commit();
+        snapshot.commit(&layout.generation_lock);
     }
     println!(
         "installed {} plugin marketplace at {}",
@@ -863,7 +1004,9 @@ fn uninstall_host_locked(
             )
         })?;
     }
-    if let Err(error) = setup_runner.refresh_gateway() {
+    if !options.dry_run
+        && let Err(error) = setup_runner.refresh_gateway()
+    {
         if let Some(retirement) = generation_retirement.as_mut()
             && let Err(restore_error) = retirement.restore_after_rollback()
         {
@@ -873,7 +1016,21 @@ fn uninstall_host_locked(
         }
         return Err(error);
     }
-    uninstall_host_with_setup_override(host, options, runner, setup_runner, false)
+    let retired_lock = generation_retirement
+        .as_ref()
+        .map(|retirement| retirement.lock_path().to_owned());
+    if let Some(retirement) = generation_retirement.as_mut() {
+        retirement.release_legacy_lock_for_tree_mutation()?;
+        retirement.commit_replacement();
+    }
+    let result = uninstall_host_with_setup_override(host, options, runner, setup_runner, false);
+    if result.is_ok() {
+        drop(generation_retirement);
+        if let Some(lock_path) = retired_lock {
+            remove_generation_lock_best_effort(&lock_path);
+        }
+    }
+    result
 }
 
 fn retire_installed_generation(
@@ -883,7 +1040,7 @@ fn retire_installed_generation(
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<Option<GenerationRetirement>, String> {
-    if options.dry_run || !plugin_uses_mcp(host) {
+    if options.dry_run {
         return Ok(None);
     }
     let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
@@ -914,8 +1071,28 @@ fn retire_replacement_before_rollback(
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
+    existing_retirement: Option<&mut GenerationRetirement>,
 ) -> Result<Option<GenerationRetirement>, String> {
-    if options.dry_run || !plugin_uses_mcp(host) {
+    if options.dry_run {
+        return Ok(None);
+    }
+    if let Some(retirement) = existing_retirement
+        && retirement.uses_lock_path(&layout.generation_lock)?
+    {
+        let visible = retirement.retire_visible_replacement().map_err(|error| {
+            format!(
+                "failed to retire replacement MCP generation {} before rollback: {error}",
+                layout.generation_fence.display()
+            )
+        })?;
+        if let Err(error) = setup_runner.refresh_gateway() {
+            return match retirement.restore_visible_replacement(visible) {
+                Ok(()) => Err(error),
+                Err(restore_error) => Err(format!(
+                    "{error}; additionally failed to restore the replacement MCP generation after rollback refresh failed: {restore_error}"
+                )),
+            };
+        }
         return Ok(None);
     }
     let mut retirement = GenerationRetirement::acquire(&layout.generation_fence)
@@ -927,7 +1104,15 @@ fn retire_replacement_before_rollback(
             layout.generation_fence.display()
         )
     })?;
-    setup_runner.refresh_gateway()?;
+    if let Err(error) = setup_runner.refresh_gateway() {
+        return match retirement.restore_after_rollback() {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{error}; additionally failed to restore the replacement MCP generation after rollback refresh failed: {restore_error}"
+            )),
+        };
+    }
+    retirement.commit_replacement();
     Ok(Some(retirement))
 }
 
@@ -1164,33 +1349,40 @@ fn collect_host_plugin_readiness(
                 .map(|_| "hook-forward is supported".into()),
         );
         if let Some(plugin) = readiness.plugin.as_ref() {
+            let generation_fence = plugin.join(crate::install_generation::GENERATION_FILE_NAME);
             readiness.push(
                 "Generated hooks",
-                generated_manifest_check(
-                    &plugin.join("hooks").join("hooks.json"),
-                    &plugin_hooks(host, &relay),
-                    "hooks",
-                ),
+                InstallGeneration::capture(generation_fence.clone()).and_then(|generation| {
+                    let expected =
+                        plugin_hooks(host, &relay, &generation_fence, generation.token())?;
+                    generated_manifest_check(
+                        &plugin.join("hooks").join("hooks.json"),
+                        &expected,
+                        "hooks",
+                    )
+                }),
             );
         }
-        if plugin_uses_mcp(host) {
+        readiness.push(
+            "Relay MCP support",
+            validate_relay_mcp(&relay, options, runner)
+                .map(|_| "native mcp subcommand is supported".into()),
+        );
+        if let Some(plugin) = readiness.plugin.as_ref() {
+            let generation_fence = plugin.join(crate::install_generation::GENERATION_FILE_NAME);
+            let mcp_config = plugin_mcp_config_path(plugin);
             readiness.push(
-                "Relay MCP support",
-                validate_relay_mcp(&relay, options, runner)
-                    .map(|_| "native mcp subcommand is supported".into()),
+                "MCP generation fence",
+                InstallGeneration::capture(generation_fence.clone())
+                    .map(|_| format!("valid generation at {}", generation_fence.display())),
             );
-            if let Some(plugin) = readiness.plugin.as_ref() {
-                let generation_fence = plugin.join(crate::install_generation::GENERATION_FILE_NAME);
-                let mcp_config = plugin_mcp_config_path(plugin);
-                readiness.push(
-                    "MCP generation fence",
-                    InstallGeneration::capture(generation_fence.clone())
-                        .map(|_| format!("valid generation at {}", generation_fence.display())),
-                );
-                let check = plugin_mcp_config(host, &relay, &generation_fence)
-                    .and_then(|expected| generated_mcp_config_check(host, &mcp_config, &expected));
-                readiness.push("Generated MCP server", check);
-            }
+            let check =
+                InstallGeneration::capture(generation_fence.clone()).and_then(|generation| {
+                    plugin_mcp_config(host, &relay, &generation_fence, generation.token()).and_then(
+                        |expected| generated_mcp_config_check(host, &mcp_config, &expected),
+                    )
+                });
+            readiness.push("Generated MCP server", check);
         }
     }
 
@@ -1316,6 +1508,15 @@ fn generated_mcp_config_check(
     path: &Path,
     expected: &Value,
 ) -> Result<String, String> {
+    generated_mcp_config_check_for_platform(host, path, expected, cfg!(windows))
+}
+
+fn generated_mcp_config_check_for_platform(
+    host: IntegrationHost,
+    path: &Path,
+    expected: &Value,
+    windows: bool,
+) -> Result<String, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         format!(
             "missing or unreadable MCP server manifest {}: {error}",
@@ -1327,35 +1528,57 @@ fn generated_mcp_config_check(
     if actual == *expected {
         return Ok(format!("valid at {}", path.display()));
     }
-    let expected_server = match host {
-        IntegrationHost::Codex => &expected["nemo-relay"],
-        IntegrationHost::ClaudeCode => &expected["mcpServers"]["nemo-relay"],
-        IntegrationHost::Hermes | IntegrationHost::All => {
-            unreachable!("all is expanded before MCP validation")
-        }
+    if !matches!(host, IntegrationHost::Codex) {
+        return Err(format!(
+            "unexpected MCP server manifest contents at {}; run `nemo-relay install {} --force`",
+            path.display(),
+            host.as_arg()
+        ));
+    }
+    let expected_server = &expected["nemo-relay"];
+    let actual_server = &actual["nemo-relay"];
+    let Some(expected_vars) = mcp_env_var_names(expected_server) else {
+        return Err(format!(
+            "unexpected MCP server manifest contents at {}; run `nemo-relay install {} --force`",
+            path.display(),
+            host.as_arg()
+        ));
     };
-    let actual_server = match host {
-        IntegrationHost::Codex => &actual["nemo-relay"],
-        IntegrationHost::ClaudeCode => &actual["mcpServers"]["nemo-relay"],
-        IntegrationHost::Hermes | IntegrationHost::All => {
-            unreachable!("all is expanded before MCP validation")
-        }
+    let Some(actual_vars) = mcp_env_var_names(actual_server) else {
+        return Err(format!(
+            "unexpected MCP server manifest contents at {}; run `nemo-relay install {} --force`",
+            path.display(),
+            host.as_arg()
+        ));
     };
-    let expected_vars = expected_server["env_vars"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
-    let actual_vars = actual_server["env_vars"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
+    let duplicate = actual_vars.iter().enumerate().any(|(index, name)| {
+        actual_vars[..index].iter().any(|other| {
+            crate::mcp_environment::forwarded_names_match_for_platform(name, other, windows)
+        })
+    });
+    if duplicate
+        || actual_vars.iter().any(|name| {
+            !expected_vars.iter().any(|expected| {
+                crate::mcp_environment::forwarded_names_match_for_platform(name, expected, windows)
+            }) && !crate::mcp_environment::previously_forwardable_name_for_platform(name, windows)
+        })
+    {
+        return Err(format!(
+            "unexpected MCP server manifest contents at {}; run `nemo-relay install {} --force`",
+            path.display(),
+            host.as_arg()
+        ));
+    }
     let missing = expected_vars
-        .difference(&actual_vars)
-        .copied()
+        .iter()
+        .filter(|expected| {
+            !actual_vars.iter().any(|actual| {
+                crate::mcp_environment::forwarded_names_match_for_platform(
+                    expected, actual, windows,
+                )
+            })
+        })
+        .map(String::as_str)
         .collect::<Vec<_>>();
     if !missing.is_empty() {
         return Err(format!(
@@ -1365,10 +1588,35 @@ fn generated_mcp_config_check(
             host.as_arg()
         ));
     }
+    let mut expected_without_vars = expected.clone();
+    let mut actual_without_vars = actual.clone();
+    let expected_server = expected_without_vars
+        .get_mut("nemo-relay")
+        .and_then(Value::as_object_mut);
+    let actual_server = actual_without_vars
+        .get_mut("nemo-relay")
+        .and_then(Value::as_object_mut);
+    if let (Some(expected_server), Some(actual_server)) = (expected_server, actual_server) {
+        expected_server.remove("env_vars");
+        actual_server.remove("env_vars");
+        if actual_without_vars == expected_without_vars {
+            return Ok(format!("valid at {}", path.display()));
+        }
+    }
     Err(format!(
-        "unexpected MCP server manifest contents at {}",
-        path.display()
+        "unexpected MCP server manifest contents at {}; run `nemo-relay install {} --force`",
+        path.display(),
+        host.as_arg()
     ))
+}
+
+fn mcp_env_var_names(server: &Value) -> Option<Vec<String>> {
+    server
+        .get("env_vars")?
+        .as_array()?
+        .iter()
+        .map(|value| value.as_str().map(str::to_owned))
+        .collect()
 }
 
 fn marketplace_manifest_path(host: IntegrationHost, root: &Path) -> PathBuf {
@@ -1401,6 +1649,87 @@ fn plugin_mcp_config_path(root: &Path) -> PathBuf {
 struct StagedPluginMarketplace {
     layout: PluginLayout,
     parent: PathBuf,
+    generation_lock_created: bool,
+}
+
+struct ReplacementGenerationLock {
+    retirement: Option<GenerationRetirement>,
+    lock_path: PathBuf,
+    remove_lock_if_unreferenced: bool,
+}
+
+fn acquire_replacement_generation_lock(
+    host: IntegrationHost,
+    marker_path: &Path,
+    remove_lock_if_unreferenced: bool,
+) -> Result<ReplacementGenerationLock, String> {
+    match GenerationRetirement::acquire(marker_path) {
+        Ok(Some(retirement)) => Ok(ReplacementGenerationLock::new(
+            retirement,
+            remove_lock_if_unreferenced,
+        )),
+        Ok(None) => Err(missing_generation_fence_error(host, marker_path)),
+        Err(cause) => Err(invalid_generation_fence_error(host, marker_path, &cause)),
+    }
+}
+
+impl ReplacementGenerationLock {
+    fn new(retirement: GenerationRetirement, remove_lock_if_unreferenced: bool) -> Self {
+        Self {
+            lock_path: retirement.lock_path().to_owned(),
+            retirement: Some(retirement),
+            remove_lock_if_unreferenced,
+        }
+    }
+
+    fn retirement_mut(&mut self) -> &mut GenerationRetirement {
+        self.retirement
+            .as_mut()
+            .expect("replacement generation transaction remains present")
+    }
+
+    fn retirement(&self) -> &GenerationRetirement {
+        self.retirement
+            .as_ref()
+            .expect("replacement generation transaction remains present")
+    }
+
+    fn retarget_promoted_marker(&mut self, marker_path: &Path) -> Result<(), String> {
+        self.retirement_mut().retarget_promoted_marker(marker_path)
+    }
+}
+
+impl Drop for ReplacementGenerationLock {
+    fn drop(&mut self) {
+        let remove_owned_lock = self.remove_lock_if_unreferenced
+            && self.retirement.as_ref().is_some_and(|retirement| {
+                match fs::metadata(retirement.marker_path()) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                    Err(error) => {
+                        eprintln!(
+                            "warning: retaining MCP generation lock {} because marker {} could not be inspected: {error}",
+                            self.lock_path.display(),
+                            retirement.marker_path().display()
+                        );
+                        false
+                    }
+                    Ok(_) => match retirement.visible_marker_uses_transaction_lock() {
+                        Ok(referenced) => !referenced,
+                        Err(error) => {
+                            eprintln!(
+                                "warning: retaining MCP generation lock {} because its marker reference could not be verified: {error}",
+                                self.lock_path.display()
+                            );
+                            false
+                        }
+                    },
+                }
+            });
+        drop(self.retirement.take());
+        if remove_owned_lock {
+            remove_generation_lock_best_effort(&self.lock_path);
+        }
+    }
 }
 
 impl StagedPluginMarketplace {
@@ -1540,7 +1869,17 @@ impl ForceInstallSnapshot {
             .starts_with(&self.original_marketplace_root)
     }
 
-    fn commit(self) {
+    fn commit(mut self, replacement_lock: &Path) {
+        let obsolete_lock = self.generation_retirement.as_ref().and_then(|retirement| {
+            retirement
+                .uses_lock_path(replacement_lock)
+                .ok()
+                .filter(|same| !same)
+                .map(|_| retirement.lock_path().to_owned())
+        });
+        if let Some(retirement) = self.generation_retirement.as_mut() {
+            retirement.commit_replacement();
+        }
         if self.marketplace_moved {
             match fs::remove_dir_all(&self.backup_marketplace_root) {
                 Ok(()) => {}
@@ -1563,13 +1902,36 @@ impl ForceInstallSnapshot {
                 ),
             }
         }
+        drop(self.generation_retirement.take());
+        if let Some(lock_path) = obsolete_lock {
+            remove_generation_lock_best_effort(&lock_path);
+        }
     }
+}
+
+fn remove_generation_lock_best_effort(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!(
+            "warning: failed to remove retired MCP generation lock {}: {error}",
+            path.display()
+        ),
+    }
+}
+
+fn generation_lock_is_absent(path: &Path) -> bool {
+    matches!(
+        fs::symlink_metadata(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 fn stage_plugin_marketplace(
     host: IntegrationHost,
     relay: &Path,
     target: &PluginLayout,
+    initialize_generation_lock: bool,
     options: &PluginInstallOptions,
 ) -> Result<StagedPluginMarketplace, String> {
     let parent = options.install_dir.join(format!(
@@ -1577,18 +1939,47 @@ fn stage_plugin_marketplace(
         host.as_arg(),
         uuid::Uuid::now_v7()
     ));
+    stage_plugin_marketplace_at(
+        host,
+        relay,
+        target,
+        initialize_generation_lock,
+        options,
+        parent,
+    )
+}
+
+fn stage_plugin_marketplace_at(
+    host: IntegrationHost,
+    relay: &Path,
+    target: &PluginLayout,
+    initialize_generation_lock: bool,
+    options: &PluginInstallOptions,
+    parent: PathBuf,
+) -> Result<StagedPluginMarketplace, String> {
     let layout = PluginLayout::new(host, &parent);
+    let generation_lock_created =
+        initialize_generation_lock && generation_lock_is_absent(&target.generation_lock);
     if let Err(error) = write_plugin_marketplace_for_generation(
         host,
         &layout,
         relay,
         &target.generation_fence,
+        &target.generation_lock,
+        initialize_generation_lock,
         options,
     ) {
         let _ = fs::remove_dir_all(&parent);
+        if generation_lock_created {
+            remove_generation_lock_best_effort(&target.generation_lock);
+        }
         return Err(error);
     }
-    Ok(StagedPluginMarketplace { layout, parent })
+    Ok(StagedPluginMarketplace {
+        layout,
+        parent,
+        generation_lock_created,
+    })
 }
 
 fn begin_force_replacement(
@@ -1655,13 +2046,24 @@ fn begin_force_replacement(
     });
     cleanup_state.host_plugin_removed = !plugin_registered;
     cleanup_state.host_marketplace_removed = !marketplace_registered;
-    let result = run_host_unregistration(
-        host,
-        &mut cleanup_state,
-        &options.install_dir,
-        options,
-        runner,
-    )
+    let result = (|| {
+        if cleanup_state.plugin_setup_installed {
+            run_plugin_uninstall(
+                host,
+                &cleanup_state.plugin_root,
+                options,
+                setup_runner,
+            )?;
+            cleanup_state.plugin_setup_installed = false;
+        }
+        run_host_unregistration(
+            host,
+            &mut cleanup_state,
+            &options.install_dir,
+            options,
+            runner,
+        )
+    })()
     .and_then(|()| {
         if let Some(retirement) = snapshot.generation_retirement.as_mut() {
             retirement.invalidate_for_replacement().map_err(|error| {
@@ -1670,6 +2072,14 @@ fn begin_force_replacement(
                     snapshot.original_generation_fence.display()
                 )
             })?;
+            retirement
+                .release_legacy_lock_for_tree_mutation()
+                .map_err(|error| {
+                    format!(
+                        "failed to release previous MCP generation {} before moving its plugin tree: {error}",
+                        snapshot.original_generation_fence.display()
+                    )
+                })?;
         }
         if snapshot.original_marketplace_root.exists() {
             fs::rename(

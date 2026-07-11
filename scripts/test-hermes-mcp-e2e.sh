@@ -143,13 +143,15 @@ home, doctor_path, relay = map(Path, sys.argv[1:])
 config = (home / "config.yaml").read_text()
 assert "mcp_servers:" in config and "nemo-relay:" in config, config
 assert str(relay.resolve()) in config, config
-assert "- mcp" in config and "- --agent" in config and "- hermes" in config, config
+assert "- mcp" in config and "- --agent" not in config, config
 assert "NEMO_RELAY_GATEWAY_BIND: 127.0.0.1:47632" in config, config
 assert "OPENAI_API_KEY: ${OPENAI_API_KEY}" in config, config
 generation = home / ".nemo-relay-generation"
 assert f"NEMO_RELAY_MCP_GENERATION_FILE: {generation}" in config, config
 assert generation == home / ".nemo-relay-generation", generation
 assert generation.is_file(), generation
+generation_token = generation.read_text().splitlines()[0].strip()
+assert f"NEMO_RELAY_MCP_GENERATION: {generation_token}" in config, config
 
 allowlist = json.loads((home / "shell-hooks-allowlist.json").read_text())
 commands = {
@@ -159,6 +161,7 @@ commands = {
 }
 assert len(commands) == 1, commands
 command = commands.pop()
+assert f"--generation-token {generation_token}" in command, command
 approvals = [entry for entry in allowlist["approvals"] if entry.get("command") == command]
 assert len(approvals) == 13, approvals
 assert len({entry["event"] for entry in approvals}) == 13, approvals

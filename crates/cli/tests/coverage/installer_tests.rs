@@ -3,6 +3,218 @@
 
 use super::*;
 
+struct BootstrapConfigHome {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl BootstrapConfigHome {
+    fn enter(path: &std::path::Path) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", path) };
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for BootstrapConfigHome {
+    fn drop(&mut self) {
+        // SAFETY: This scope still holds the process-wide environment mutex.
+        unsafe {
+            match self.previous.take() {
+                Some(previous) => std::env::set_var("XDG_CONFIG_HOME", previous),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
+    let _plugin_guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _bootstrap_home = BootstrapConfigHome::enter(&temp.path().join("xdg"));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bind = listener.local_addr().unwrap();
+    let gateway_url = format!("http://{bind}");
+    let fingerprint = crate::config::transparent_gateway_fingerprint(&gateway_url);
+    let config = crate::config::GatewayConfig {
+        bind,
+        ..crate::config::GatewayConfig::default()
+    };
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
+        listener,
+        config,
+        Vec::new(),
+        fingerprint.clone(),
+        Some(shutdown_rx),
+    ));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let url = gateway_url.clone();
+            let fingerprint = fingerprint.clone();
+            if tokio::task::spawn_blocking(move || {
+                crate::sidecar::healthz_compatible(&url, &fingerprint)
+            })
+            .await
+            .unwrap()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("wrapper gateway did not become healthy");
+    let command = HookForwardCommand {
+        agent: CodingAgent::Codex,
+        gateway_url: Some(gateway_url.clone()),
+        generation_file: None,
+        generation_token: None,
+        forward_only: false,
+        transparent_run: true,
+        profile: None,
+        session_metadata: None,
+        gateway_mode: None,
+        fail_closed: true,
+    };
+    let gateway = transparent_gateway_spec(&gateway_url).unwrap();
+
+    let response = send_verified_hook_forward_request(
+        &command,
+        &gateway,
+        &gateway_url,
+        json!({
+            "session_id": "verified-transparent-hook",
+            "hook_event_name": "SessionStart"
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(response.status, 200);
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("wrapper gateway did not stop")
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn hook_delivery_generation_guard_blocks_replacement_until_drop() {
+    let dir = tempfile::tempdir().unwrap();
+    let generation_path = dir.path().join(".nemo-relay-generation");
+    crate::install_generation::write_new_generation(&generation_path).unwrap();
+    let generation = InstallGeneration::capture(generation_path.clone()).unwrap();
+    let guard = hook_generation_guard(&generation).unwrap();
+
+    let error = crate::install_generation::GenerationRetirement::acquire_with_timeout(
+        &generation_path,
+        std::time::Duration::from_millis(25),
+    )
+    .err()
+    .expect("hook delivery guard did not block generation retirement");
+    assert!(error.contains("timed out waiting"), "{error}");
+
+    drop(guard);
+    assert!(
+        crate::install_generation::GenerationRetirement::acquire_with_timeout(
+            &generation_path,
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap()
+        .is_some()
+    );
+}
+
+#[test]
+fn hook_gateway_retries_retirement_during_acquisition_and_delivery_pinning() {
+    let mut outcomes = std::collections::VecDeque::from([
+        Err("shared Relay gateway lifecycle was retired by an integration update".to_string()),
+        Err("shared Relay gateway lifecycle was retired by an integration update".to_string()),
+        Ok("pinned"),
+    ]);
+    let mut attempts = 0;
+
+    let result = retry_retired_gateway_cohort(|| {
+        attempts += 1;
+        outcomes.pop_front().unwrap()
+    })
+    .unwrap();
+
+    assert_eq!(result, "pinned");
+    assert_eq!(attempts, 3);
+}
+
+#[test]
+fn hook_gateway_does_not_retry_non_retirement_failures() {
+    let mut attempts = 0;
+    let error = retry_retired_gateway_cohort::<()>(|| {
+        attempts += 1;
+        Err("foreign listener".into())
+    })
+    .unwrap_err();
+
+    assert_eq!(error, "foreign listener");
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn hook_gateway_stops_retrying_retirement_at_its_deadline() {
+    let mut attempts = 0;
+    let error = retry_retired_gateway_cohort_until::<()>(Instant::now(), || {
+        attempts += 1;
+        Err("shared Relay gateway lifecycle was retired by an integration update".into())
+    })
+    .unwrap_err();
+
+    assert!(error.contains("retired by an integration update"));
+    assert_eq!(attempts, 1);
+}
+
+#[test]
+fn hook_gateway_retirement_retries_are_rate_limited() {
+    let mut attempts = 0;
+    let started = Instant::now();
+    let current = std::cell::Cell::new(started);
+    let sleeps = std::cell::RefCell::new(Vec::new());
+    let deadline = started + Duration::from_millis(125);
+    let error = retry_retired_gateway_cohort_with_clock::<()>(
+        deadline,
+        || current.get(),
+        |duration| {
+            sleeps.borrow_mut().push(duration);
+            current.set(current.get() + duration);
+        },
+        || {
+            attempts += 1;
+            Err("shared Relay gateway lifecycle was retired by an integration update".into())
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("retired by an integration update"));
+    assert_eq!(attempts, 4);
+    assert_eq!(
+        sleeps.into_inner(),
+        [
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+            Duration::from_millis(25),
+        ]
+    );
+}
+
 #[test]
 fn hook_payload_reader_normalizes_blank_input_and_accepts_the_exact_limit() {
     assert_eq!(read_hook_payload_from(" \n\t".as_bytes(), 3).unwrap(), "{}");
@@ -43,13 +255,32 @@ fn explicit_persistent_destinations_ignore_ambient_urls() {
     let destination = resolve_hook_destination(
         Some("http://installed".into()),
         Some("http://dynamic".into()),
+        false,
+        false,
     );
     assert_eq!(destination.gateway_url, "http://installed");
-    assert!(destination.recover);
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Recover);
 
-    let destination = resolve_hook_destination(None, Some("http://dynamic".into()));
+    let destination = resolve_hook_destination(None, Some("http://dynamic".into()), false, false);
     assert_eq!(destination.gateway_url, "http://dynamic");
-    assert!(!destination.recover);
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Transparent);
+
+    let destination = resolve_hook_destination(
+        Some("http://source-plugin".into()),
+        Some("http://dynamic".into()),
+        true,
+        false,
+    );
+    assert_eq!(destination.gateway_url, "http://source-plugin");
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
+
+    let destination = resolve_hook_destination(None, Some("http://dynamic".into()), true, false);
+    assert_eq!(destination.gateway_url, crate::sidecar::DEFAULT_URL);
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
+
+    let destination = resolve_hook_destination(Some("http://embedded".into()), None, false, true);
+    assert_eq!(destination.gateway_url, "http://embedded");
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Transparent);
 }
 
 #[test]
@@ -59,7 +290,7 @@ fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
             "Stop": [{ "hooks": [{ "type": "command", "command": "existing" }] }]
         }
     });
-    let generated = claude_hooks("nemo-relay hook-forward claude");
+    let generated = generated_hooks(CodingAgent::ClaudeCode, "nemo-relay hook-forward claude");
     let once = merge_hooks(existing, generated.clone()).unwrap();
     let twice = merge_hooks(once.clone(), generated).unwrap();
     assert_eq!(once, twice);
@@ -75,9 +306,10 @@ fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
 
 #[test]
 fn merge_hooks_rejects_malformed_shapes() {
-    assert!(merge_hooks(json!([]), codex_hooks("cmd")).is_err());
-    assert!(merge_hooks(json!({ "hooks": [] }), codex_hooks("cmd")).is_err());
-    assert!(merge_hooks(json!({ "hooks": { "Stop": {} } }), codex_hooks("cmd")).is_err());
+    let generated = generated_hooks(CodingAgent::Codex, "cmd");
+    assert!(merge_hooks(json!([]), generated.clone()).is_err());
+    assert!(merge_hooks(json!({ "hooks": [] }), generated.clone()).is_err());
+    assert!(merge_hooks(json!({ "hooks": { "Stop": {} } }), generated).is_err());
     assert!(merge_hooks(json!({}), json!({ "hooks": [] })).is_err());
 }
 
@@ -121,22 +353,113 @@ fn generated_hook_dispatch_covers_all_agents() {
         assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
     }
     assert_eq!(
-        transparent_hook_forward_command(Path::new("nemo-relay"), CodingAgent::Hermes),
-        "nemo-relay hook-forward hermes"
+        transparent_hook_forward_command_for_platform(
+            Path::new("nemo-relay"),
+            CodingAgent::Hermes,
+            "http://127.0.0.1:1234",
+            false,
+        ),
+        "nemo-relay hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run"
     );
     assert_eq!(
-        transparent_hook_forward_command(Path::new("/abs/path/to/nemo-relay"), CodingAgent::Codex),
-        "/abs/path/to/nemo-relay hook-forward codex"
+        transparent_hook_forward_command_for_platform(
+            Path::new("/abs/path/to/nemo-relay"),
+            CodingAgent::Codex,
+            "http://127.0.0.1:1234",
+            false,
+        ),
+        "/abs/path/to/nemo-relay hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run"
     );
     let relay = Path::new("/opt/NeMo Relay's & tools/nemo-relay");
     assert_eq!(
-        transparent_hook_forward_command_for_platform(relay, CodingAgent::Codex, false),
-        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex"#
+        transparent_hook_forward_command_for_platform(
+            relay,
+            CodingAgent::Codex,
+            "http://127.0.0.1:1234",
+            false
+        ),
+        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run"#
+    );
+    let native = transparent_hook_forward_command(
+        Path::new("nemo-relay"),
+        CodingAgent::Hermes,
+        "http://127.0.0.1:1234",
+    )
+    .unwrap();
+    if cfg!(windows) {
+        assert_eq!(
+            decode_windows_hook_command(&native).unwrap(),
+            vec![
+                String::from("nemo-relay"),
+                String::from("hook-forward"),
+                String::from("hermes"),
+                String::from("--gateway-url"),
+                String::from("http://127.0.0.1:1234"),
+                String::from("--transparent-run"),
+            ]
+        );
+    } else {
+        assert_eq!(
+            native,
+            transparent_hook_forward_command_for_platform(
+                Path::new("nemo-relay"),
+                CodingAgent::Hermes,
+                "http://127.0.0.1:1234",
+                false,
+            )
+        );
+    }
+    let windows = transparent_hook_forward_command_for_platform(
+        relay,
+        CodingAgent::ClaudeCode,
+        "http://127.0.0.1:1234",
+        true,
+    );
+    let (launcher, encoded) = windows.rsplit_once(' ').unwrap();
+    assert_eq!(
+        launcher,
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand"
+    );
+    assert!(
+        !encoded.is_empty()
+            && encoded
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric()
+                    || matches!(character, '+' | '/' | '='))
     );
     assert_eq!(
-        transparent_hook_forward_command_for_platform(relay, CodingAgent::ClaudeCode, true),
-        r#""/opt/NeMo Relay's & tools/nemo-relay" hook-forward claude"#
+        decode_windows_hook_command(&windows).unwrap(),
+        vec![
+            relay.display().to_string(),
+            "hook-forward".into(),
+            "claude".into(),
+            "--gateway-url".into(),
+            "http://127.0.0.1:1234".into(),
+            "--transparent-run".into(),
+        ]
     );
+    assert!(decode_windows_hook_command("powershell.exe -EncodedCommand invalid").is_none());
+    assert!(
+        decode_windows_hook_command(
+            "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand invalid payload"
+        )
+        .is_none()
+    );
+    let oversized = format!(
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
+        "A".repeat(8_000)
+    );
+    assert!(decode_windows_hook_command(&oversized).is_none());
+
+    let oversized_path = format!("C:/{}nemo-relay.exe", "long/".repeat(2_000));
+    let error = encoded_windows_hook_command(
+        "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
+        Path::new(&oversized_path),
+        &["hook-forward".into(), "codex".into()],
+    )
+    .unwrap_err();
+    assert!(error.contains("exceeds the 8000-character safety limit"));
+    assert!(error.contains("shorten the Relay or plugin installation path"));
 }
 
 #[test]
@@ -214,14 +537,14 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
     assert_eq!(
         claude["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(format!(
-            "nemo-relay hook-forward claude --gateway-url {}",
+            "nemo-relay hook-forward claude --gateway-url {} --forward-only",
             crate::sidecar::DEFAULT_URL
         ))
     );
     assert_eq!(
         codex["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(format!(
-            "nemo-relay hook-forward codex --gateway-url {}",
+            "nemo-relay hook-forward codex --gateway-url {} --forward-only",
             crate::sidecar::DEFAULT_URL
         ))
     );
@@ -230,7 +553,7 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
         generated_hooks(
             CodingAgent::ClaudeCode,
             &format!(
-                "nemo-relay hook-forward claude --gateway-url {}",
+                "nemo-relay hook-forward claude --gateway-url {} --forward-only",
                 crate::sidecar::DEFAULT_URL
             ),
         )["hooks"]
@@ -240,7 +563,7 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
         generated_hooks(
             CodingAgent::Codex,
             &format!(
-                "nemo-relay hook-forward codex --gateway-url {}",
+                "nemo-relay hook-forward codex --gateway-url {} --forward-only",
                 crate::sidecar::DEFAULT_URL
             ),
         )["hooks"]
@@ -294,7 +617,7 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
         serde_json::from_str::<Value>(&std::fs::read_to_string(&codex_mcp_path).unwrap()).unwrap();
     let server = &codex_mcp["nemo-relay"];
     assert_eq!(server["command"], json!("nemo-relay"));
-    assert_eq!(server["args"], json!(["mcp", "--agent", "codex"]));
+    assert_eq!(server["args"], json!(["mcp"]));
     assert_eq!(
         server["env"],
         json!({"NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"})
@@ -303,7 +626,11 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
     assert_eq!(server["startup_timeout_sec"], json!(20));
     assert_eq!(
         server["env_vars"],
-        json!(crate::mcp_environment::forwarded_names(Vec::new(), None))
+        json!(crate::mcp_environment::forwarded_names_for_platform(
+            Vec::new(),
+            None,
+            false,
+        ))
     );
 
     let claude_mcp_path = root.join("claude-code/.mcp.json");
@@ -311,7 +638,7 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
         serde_json::from_str::<Value>(&std::fs::read_to_string(&claude_mcp_path).unwrap()).unwrap();
     let claude_server = &claude_mcp["mcpServers"]["nemo-relay"];
     assert_eq!(claude_server["command"], json!("nemo-relay"));
-    assert_eq!(claude_server["args"], json!(["mcp", "--agent", "claude"]));
+    assert_eq!(claude_server["args"], json!(["mcp"]));
     assert_eq!(
         claude_server["env"],
         json!({"NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"})

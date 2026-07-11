@@ -128,6 +128,15 @@ hooks, exact hook trust, and environment references into
 unset. It preserves unrelated Hermes configuration. Refer to the
 [Hermes Agent guide](/nemo-relay-cli/hermes).
 
+On Windows, the generated hook string uses the built-in Windows PowerShell
+encoded-command envelope. This keeps the outer command free of quoting and
+metacharacters across the different Codex, Claude Code, and Hermes command
+runners. The encoded payload contains only the canonical `nemo-relay.exe` path
+and `hook-forward` arguments. PowerShell launches that Rust binary directly
+and preserves its standard input, standard output, standard error, and exit
+code; the MCP client and gateway remain Rust-native. Install and doctor verify
+the exact generated command and its lifecycle-event ownership.
+
 Start a new Codex CLI process after installation. Restart the Codex desktop app
 if it was already running so it reloads the provider and hook configuration.
 
@@ -142,18 +151,42 @@ open, the client performs one coordinated restart and fails if recovery does
 not succeed. A foreign process on the configured port is rejected with an
 actionable conflict instead of being accepted because it returned HTTP 200.
 Health and readiness include a per-process instance ID. Process-held endpoint
-leases and a private recovery epoch make the one-restart allowance global to
-all overlapping MCP clients, including a client whose heartbeat misses the
-first replacement. A new recovery epoch begins only after the last MCP client
-closes.
+leases and a private recovery cohort make the one-restart allowance global to
+all overlapping MCP clients and in-flight persistent hooks, including a client
+whose heartbeat misses the first replacement. Every heartbeat verifies that
+its cohort is still current, so an integration replacement retires old clients
+deterministically instead of allowing them to adopt the replacement gateway.
+After the last participant closes, the next acquisition starts a fresh recovery
+epoch. A serialized integration replacement explicitly retires the current
+cohort and creates a fresh one even while old leases drain.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
 session startup until the MCP connection is ready. Hermes starts MCP discovery
-asynchronously, so its first lifecycle hook can still run first. The installed
-`hook-forward` command closes that race by starting or reusing the same gateway
-under the same startup lock and retrying the original canonical payload once.
+asynchronously, so its first lifecycle hook can still run first. Every
+installed MCP entry and `hook-forward` command carry both the generation-file
+path and the immutable identity expected at that path. A host process that
+cached an older plugin configuration therefore cannot adopt a replacement
+installation after `--force`. Each hook temporarily joins the same endpoint
+recovery cohort and closes that race by starting or reusing the same gateway
+under the same startup lock. A hook that
+cannot establish the authenticated delivery connection may recover the gateway
+and retry once. Relay does not retry after payload transmission begins.
 The MCP server advertises no tools in any host.
+
+A fixed-endpoint `hook-forward` command without a valid installer-owned
+generation fence fails according to the configured hook failure policy before
+it contacts or launches the gateway. This prevents a legacy hook retained by a
+host process from reviving a retired installation. Run `nemo-relay install
+<host> --force` to replace an unfenced persistent hook. Transparent hook
+commands embed their process-private dynamic gateway URL and do not recover a
+persistent gateway, so they do not require this fence. Source plugins and custom
+automations can opt into `--forward-only` to contact an already-running gateway
+without a fence. That mode waits for an authenticated, configuration-compatible
+Relay gateway and rejects foreign or incompatible listeners before sending the
+payload. Authentication and delivery use the same TCP connection, so a process
+that replaces the listener after a health probe cannot receive lifecycle data.
+The mode never launches or recovers Relay.
 
 Hook recovery retries only connection failures that are known to precede an
 HTTP response. Relay does not claim crash-consistent exactly-once delivery
@@ -173,9 +206,10 @@ guarantees.
 The compatibility fingerprint covers resolved provider, exporter, dynamic
 plugin, and relevant environment settings without exposing their values in the
 health response. For Claude Code and Codex,
-`nemo-relay install <host> --force` generation-fences the replacement MCP
-process and uses a private ownership token to stop the shared fixed-endpoint
-sidecar when necessary. Ownership is keyed by endpoint, not host, so an upgrade
+`nemo-relay install <host> --force` rotates the immutable MCP and hook generation
+identity, then rotates the endpoint recovery cohort and uses a private ownership
+token to stop the shared fixed-endpoint sidecar as one serialized operation.
+Ownership is keyed by endpoint, not host, so an upgrade
 from any installed host can retire a gateway originally started by another.
 Custom managed endpoints are left untouched. Relay never sends its shutdown
 token to an unrelated listener. Hermes installation transactionally rotates
@@ -189,15 +223,19 @@ values—for provider credentials, Relay runtime, OpenTelemetry, AWS, proxies,
 certificates, approved prefixes, and credential variables referenced by user
 observability configuration. Claude Code supplies its normal environment to
 plugin MCP processes. Hermes config stores `${VARIABLE_NAME}` references for
-the provider credentials, currently defined approved variables, and explicit
-credential names referenced by user observability configuration. Rerun
-`nemo-relay install hermes --force` after adding one of those variables.
+the complete standard allowlist, currently defined custom approved variables,
+and explicit credential names referenced by user observability configuration.
+Relay treats unresolved self-references as unset before parsing its command
+line. Rerun `nemo-relay install hermes --force` after adding a custom approved
+name or changing a config-referenced credential name.
 The long-lived managed sidecar substitutes a forwarded provider credential only
 when a request carries provider authorization or Relay's private per-user
 client proof. The Codex installer writes a domain-separated HMAC proof into the
-managed provider's `http_headers`; Relay validates and removes that header
-before middleware, observability, or upstream forwarding. The underlying HMAC
-key remains in Relay's owner-only bootstrap state. Claude Code and Hermes send
+managed provider's `http_headers`; Relay stores the resulting Codex config with
+an owner-only mode on Unix or protected owner/System DACL on Windows before the
+temporary file becomes visible. Relay validates and removes that header before
+middleware, observability, or upstream forwarding. The underlying HMAC key
+remains in Relay's owner-only bootstrap state. Claude Code and Hermes send
 their normal provider authorization. A foreign loopback caller cannot spend
 the sidecar's forwarded credentials. Foreground `nemo-relay --bind` use retains
 environment-key injection for explicit local proxy workflows.
@@ -293,6 +331,13 @@ canonical `--version` output. Interactive `nemo-relay config hermes` now owns
 only transparent-wrapper configuration; use `nemo-relay install hermes` and
 `nemo-relay uninstall hermes` for persistent Hermes state.
 
+The MCP bootstrap is now host-neutral. Generated Codex, Claude Code, and Hermes
+configuration invokes exactly `nemo-relay mcp`; the removed `--agent` option no
+longer parses. A forced install recognizes and replaces the former
+`mcp --agent claude|codex|hermes` entries. Reinstall each persistent integration
+with `nemo-relay install <host> --force` before relying on generated config from
+this release.
+
 This release removes the internal `nemo-relay plugin-shim` command. Existing
 generated installations should be refreshed with
 `nemo-relay install <host> --force`. Use the following public replacements for
@@ -300,8 +345,8 @@ custom automation:
 
 | Removed internal command | Public replacement |
 | --- | --- |
-| `plugin-shim hook <agent>` | `hook-forward <agent>` with the canonical lifecycle payload on standard input |
-| `plugin-shim serve` | `mcp --agent <agent>` for host-managed lifecycle, or `--bind <address>` to run a gateway directly |
+| `plugin-shim hook <agent>` | `hook-forward <agent> --forward-only` with the canonical lifecycle payload on standard input and an existing gateway |
+| `plugin-shim serve` | `mcp` for host-managed lifecycle, or `--bind <address>` to run a gateway directly |
 | `plugin-shim install <agent>` | `install <host>` |
 | `plugin-shim uninstall <agent>` | `uninstall <host>` |
 | `plugin-shim provider claude enable` | `install claude-code` |
@@ -310,7 +355,10 @@ custom automation:
 | `plugin-shim doctor <agent>` | `doctor --plugin <host>` |
 
 Persistent generated hook commands include the fixed gateway URL. Transparent
-wrappers provide `NEMO_RELAY_GATEWAY_URL` for their dynamic gateway. When a
+wrapper hooks embed their dynamic gateway URL, while the process environment
+lets an installed plugin MCP authenticate, borrow, and monitor that exact
+gateway. Transparent hook delivery authenticates the wrapper gateway before
+writing its lifecycle payload. When a
 transparent run uses a recognizable wrapper command, such as `npx codex`, Relay
 checks the host version through that wrapper. Opaque custom wrappers remain
 supported when invoking the configured command with `--version` emits the

@@ -11,8 +11,8 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use super::config::is_managed_hook_command;
+use crate::config::CodingAgent;
 use crate::error::CliError;
-use crate::installer::HERMES_HOOK_EVENTS;
 
 pub(super) fn trusted_hooks(
     existing: Option<&str>,
@@ -41,7 +41,7 @@ pub(super) fn trusted_hooks(
         .and_then(|metadata| metadata.modified())
         .ok()
         .map(timestamp);
-    approvals.extend(HERMES_HOOK_EVENTS.iter().map(|event| {
+    approvals.extend(CodingAgent::Hermes.hook_events().iter().map(|event| {
         json!({
             "event": event,
             "command": command,
@@ -65,7 +65,7 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
         .get("approvals")
         .and_then(Value::as_array)
         .ok_or_else(|| "Hermes shell-hook approvals are missing".to_string())?;
-    for event in HERMES_HOOK_EVENTS {
+    for event in CodingAgent::Hermes.hook_events() {
         let matching = approvals
             .iter()
             .filter(|entry| {
@@ -94,7 +94,8 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
         managed.push((event, candidate));
     }
     managed.sort_unstable();
-    let mut expected = HERMES_HOOK_EVENTS
+    let mut expected = CodingAgent::Hermes
+        .hook_events()
         .iter()
         .map(|event| (*event, command))
         .collect::<Vec<_>>();

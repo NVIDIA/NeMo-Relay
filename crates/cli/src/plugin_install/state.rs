@@ -51,6 +51,7 @@ pub(super) struct PluginLayout {
     pub(super) plugin_manifest: PathBuf,
     pub(super) mcp_config: PathBuf,
     pub(super) generation_fence: PathBuf,
+    pub(super) generation_lock: PathBuf,
     pub(super) hooks_path: PathBuf,
     pub(super) state_path: PathBuf,
 }
@@ -80,6 +81,8 @@ impl PluginLayout {
         };
         let mcp_config = plugin_root.join(".mcp.json");
         let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
+        let generation_lock =
+            install_dir.join(format!(".nemo-relay-{}-mcp-generation.lock", host.as_arg()));
         let hooks_path = plugin_root.join("hooks").join("hooks.json");
         let state_path = state_path(host, install_dir);
         Self {
@@ -90,6 +93,7 @@ impl PluginLayout {
             plugin_manifest,
             mcp_config,
             generation_fence,
+            generation_lock,
             hooks_path,
             state_path,
         }
@@ -253,7 +257,7 @@ pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     }
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
-    fs::write(path, bytes).map_err(|error| format!("failed to write {}: {error}", path.display()))
+    crate::file_io::atomic_write(path, &bytes)
 }
 
 pub(super) fn remove_path(path: &Path, options: &PluginInstallOptions) -> Result<(), String> {

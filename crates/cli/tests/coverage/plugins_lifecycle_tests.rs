@@ -984,6 +984,550 @@ fn runtime_directory_collection_rejects_before_exceeding_bounded_sort_capacity()
 }
 
 #[test]
+fn activation_snapshot_budgets_reject_entry_and_byte_overflow() {
+    let path = Path::new("fixture");
+    let mut entry_budget = SnapshotBudget::default();
+    let entry_error = entry_budget
+        .record_entries(path, MAX_SNAPSHOT_FILES + 1)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        entry_error.contains("entry activation snapshot budget"),
+        "{entry_error}"
+    );
+
+    let mut byte_budget = SnapshotBudget::default();
+    let byte_error = byte_budget
+        .record_bytes(
+            path,
+            usize::try_from(crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES).unwrap() + 1,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        byte_error.contains("byte activation snapshot budget"),
+        "{byte_error}"
+    );
+
+    let mut closure = RuntimeClosureSources {
+        entries: MAX_SNAPSHOT_FILES,
+        ..RuntimeClosureSources::default()
+    };
+    let closure_error = closure.record_entry().unwrap_err().to_string();
+    assert!(
+        closure_error.contains("entry activation snapshot budget"),
+        "{closure_error}"
+    );
+}
+
+#[test]
+fn activation_snapshot_rejects_identity_mismatch_missing_files_and_policy_denial() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.snapshot-contracts");
+
+    let identity_error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.other-plugin",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        identity_error.contains("identity changed"),
+        "{identity_error}"
+    );
+
+    let contents = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        contents.replace("entrypoint = \"plugin.py\"", "entrypoint = \"other.py\""),
+    )
+    .unwrap();
+    std::fs::write(plugin_dir.join("other.py"), b"print('other')\n").unwrap();
+    let entrypoint_error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.snapshot-contracts",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        entrypoint_error.contains("integrity-checked source.artifact"),
+        "{entrypoint_error}"
+    );
+    let closure_error =
+        dynamic_plugin_runtime_closure_digest(manifest.to_string_lossy().as_ref(), None)
+            .unwrap_err()
+            .to_string();
+    assert!(
+        closure_error.contains("integrity-checked source.artifact"),
+        "{closure_error}"
+    );
+
+    std::fs::write(&manifest, contents).unwrap();
+    let blocked = crate::plugins::policy::DynamicPluginHostPolicy {
+        defaults: crate::plugins::policy::DynamicPluginHostPolicyEffect {
+            allowed: Some(false),
+            ..crate::plugins::policy::DynamicPluginHostPolicyEffect::default()
+        },
+        ..crate::plugins::policy::DynamicPluginHostPolicy::default()
+    };
+    let policy_error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.snapshot-contracts",
+        DynamicPluginKind::Worker,
+        None,
+        &blocked,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        policy_error.contains("violates host policy"),
+        "{policy_error}"
+    );
+
+    std::fs::remove_file(plugin_dir.join("plugin.py")).unwrap();
+    let missing_error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.snapshot-contracts",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        missing_error.contains("failed to normalize"),
+        "{missing_error}"
+    );
+}
+
+#[test]
+fn activation_snapshot_copies_declared_signature_into_stable_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_dynamic_manifest_with_options(
+        &plugin_dir,
+        "acme.signed-snapshot",
+        &["plugin_worker"],
+        Some("plugin.py.sig"),
+    );
+    std::fs::write(plugin_dir.join("plugin.py.sig"), b"fixture signature\n").unwrap();
+
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.signed-snapshot",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap();
+
+    let signature_logical = snapshot
+        .identity_files
+        .keys()
+        .find(|path| path.ends_with("plugin.py.sig"))
+        .cloned()
+        .expect("signature is part of the stable snapshot identity");
+    assert!(snapshot.identity_file(&signature_logical).is_some());
+    assert_eq!(
+        snapshot.closure_digest(),
+        dynamic_plugin_runtime_closure_digest(manifest.to_string_lossy().as_ref(), None).unwrap()
+    );
+}
+
+#[test]
+fn python_snapshot_contract_requires_environment_and_trusted_source_digest() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest = write_python_dynamic_manifest(&plugin_dir, "acme.python-contract");
+
+    let snapshot_error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "acme.python-contract",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        snapshot_error.contains("no managed environment"),
+        "{snapshot_error}"
+    );
+    let closure_error =
+        dynamic_plugin_runtime_closure_digest(manifest.to_string_lossy().as_ref(), None)
+            .unwrap_err()
+            .to_string();
+    assert!(
+        closure_error.contains("no managed environment"),
+        "{closure_error}"
+    );
+
+    let contents = std::fs::read_to_string(&manifest).unwrap();
+    let integrity = contents
+        .find("[integrity]")
+        .expect("fixture has integrity section");
+    let load = contents.find("[load]").expect("fixture has load section");
+    std::fs::write(
+        &manifest,
+        format!("{}{}", &contents[..integrity], &contents[load..]),
+    )
+    .unwrap();
+    let digest_error = dynamic_plugin_runtime_closure_digest(
+        manifest.to_string_lossy().as_ref(),
+        Some(temp.path().join("environment").to_string_lossy().as_ref()),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        digest_error.contains("requires integrity.sha256"),
+        "{digest_error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_directory_copy_preserves_python_launcher_and_rejects_special_entries() {
+    use std::ffi::CString;
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("environment");
+    let bin = source.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let interpreter = temp.path().join("managed-python");
+    std::fs::write(&interpreter, b"python").unwrap();
+    symlink(&interpreter, bin.join("python3.11")).unwrap();
+    let destination = temp.path().join("snapshot");
+    let mut copied = HashMap::new();
+    let mut budget = SnapshotBudget::default();
+
+    copy_snapshot_directory(
+        &source,
+        &destination,
+        &mut copied,
+        &mut budget,
+        false,
+        &mut Vec::new(),
+    )
+    .unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(destination.join("bin/python3.11"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!is_python_venv_launcher(Path::new("/")));
+
+    let fifo_source = temp.path().join("fifo-source");
+    std::fs::create_dir(&fifo_source).unwrap();
+    let fifo = fifo_source.join("worker.pipe");
+    let fifo_c = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: `fifo_c` is a valid NUL-terminated path and the mode contains only permission bits.
+    assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+    let special_error = copy_snapshot_directory(
+        &fifo_source,
+        &temp.path().join("fifo-snapshot"),
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        false,
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        special_error.contains("regular file or directory"),
+        "{special_error}"
+    );
+
+    let regular = temp.path().join("regular");
+    std::fs::write(&regular, b"regular").unwrap();
+    let destination_directory = temp.path().join("destination-directory");
+    std::fs::create_dir(&destination_directory).unwrap();
+    let write_error = copy_snapshot_regular_file(
+        &regular,
+        &destination_directory,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        "fixture",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(write_error.contains("failed to write dynamic plugin snapshot file"));
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_directory_walk_rejects_missing_cycles_dangling_links_and_depth() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing");
+    let normalization_error = copy_snapshot_directory(
+        &missing,
+        &temp.path().join("destination"),
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        false,
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        normalization_error.contains("failed to normalize"),
+        "{normalization_error}"
+    );
+
+    let source = temp.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let canonical = source.canonicalize().unwrap();
+    let cycle_error = copy_snapshot_directory_contents(
+        &source,
+        &temp.path().join("cycle-destination"),
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        false,
+        &mut vec![canonical.clone()],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(cycle_error.contains("symlink cycle"), "{cycle_error}");
+
+    let destination_file = temp.path().join("destination-file");
+    std::fs::write(&destination_file, b"file").unwrap();
+    let destination_error = copy_snapshot_directory_contents(
+        &source,
+        &destination_file,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        false,
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        destination_error.contains("failed to create"),
+        "{destination_error}"
+    );
+
+    symlink(temp.path().join("absent-target"), source.join("dangling")).unwrap();
+    let dangling_error = copy_snapshot_directory(
+        &source,
+        &temp.path().join("dangling-destination"),
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        false,
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        dangling_error.contains("failed to resolve"),
+        "{dangling_error}"
+    );
+
+    let closure_cycle = collect_runtime_closure_directory_contents(
+        &source,
+        Path::new("runtime"),
+        false,
+        &mut vec![canonical],
+        &mut RuntimeClosureSources::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(closure_cycle.contains("symlink cycle"), "{closure_cycle}");
+
+    let depth_error = collect_snapshot_files(
+        &source,
+        &source,
+        &mut Vec::new(),
+        Some(MAX_SNAPSHOT_DEPTH),
+        &mut 0,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(depth_error.contains("traversal depth"), "{depth_error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_file_and_closure_helpers_cover_external_and_invalid_sources() {
+    use std::ffi::CString;
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    let manifest = plugin_dir.join("relay-plugin.toml");
+    std::fs::write(&manifest, b"fixture").unwrap();
+    let root = temp.path().join("snapshot");
+    std::fs::create_dir(&root).unwrap();
+
+    let missing_error = copy_snapshot_file(
+        &root,
+        &manifest,
+        "missing.bin",
+        "artifact",
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        missing_error.contains("failed to normalize"),
+        "{missing_error}"
+    );
+
+    let root_error = copy_snapshot_file(
+        &root,
+        &manifest,
+        "/",
+        "library",
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        root_error.contains("has no parent directory"),
+        "{root_error}"
+    );
+
+    let external = temp.path().join("external-artifact.bin");
+    std::fs::write(&external, b"external artifact").unwrap();
+    let (logical, canonical, copied) = copy_snapshot_file(
+        &root,
+        &manifest,
+        external.to_string_lossy().as_ref(),
+        "artifact",
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+    )
+    .unwrap();
+    assert_eq!(logical, external);
+    assert_eq!(canonical, external.canonicalize().unwrap());
+    assert_eq!(std::fs::read(copied).unwrap(), b"external artifact");
+
+    let mut closure = RuntimeClosureSources::default();
+    let closure_missing =
+        collect_declared_runtime_closure_file(&manifest, "missing.bin", "artifact", &mut closure)
+            .unwrap_err()
+            .to_string();
+    assert!(
+        closure_missing.contains("failed to normalize"),
+        "{closure_missing}"
+    );
+    let closure_root =
+        collect_declared_runtime_closure_file(&manifest, "/", "library", &mut closure)
+            .unwrap_err()
+            .to_string();
+    assert!(
+        closure_root.contains("has no parent directory"),
+        "{closure_root}"
+    );
+    collect_declared_runtime_closure_file(
+        &manifest,
+        external.to_string_lossy().as_ref(),
+        "artifact",
+        &mut closure,
+    )
+    .unwrap();
+    assert!(
+        closure
+            .files
+            .keys()
+            .any(|path| path.ends_with("external-artifact.bin"))
+    );
+
+    let missing_directory_error = collect_runtime_closure_directory_contents(
+        &temp.path().join("missing-directory"),
+        Path::new("runtime"),
+        false,
+        &mut Vec::new(),
+        &mut RuntimeClosureSources::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        missing_directory_error.contains("failed to normalize"),
+        "{missing_directory_error}"
+    );
+
+    let walk = temp.path().join("walk");
+    std::fs::create_dir(&walk).unwrap();
+    std::fs::create_dir(walk.join("__pycache__")).unwrap();
+    std::fs::write(walk.join("cached.pyc"), b"cache").unwrap();
+    std::fs::write(walk.join("module.py"), b"module").unwrap();
+    let mut skipped = RuntimeClosureSources::default();
+    collect_runtime_closure_directory(
+        &walk,
+        Path::new("runtime"),
+        true,
+        &mut Vec::new(),
+        &mut skipped,
+    )
+    .unwrap();
+    assert_eq!(skipped.files.len(), 1);
+    assert!(skipped.files.contains_key(Path::new("runtime/module.py")));
+
+    symlink(temp.path().join("absent"), walk.join("dangling")).unwrap();
+    let dangling_error = collect_runtime_closure_directory(
+        &walk,
+        Path::new("runtime"),
+        false,
+        &mut Vec::new(),
+        &mut RuntimeClosureSources::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        dangling_error.contains("failed to resolve"),
+        "{dangling_error}"
+    );
+    std::fs::remove_file(walk.join("dangling")).unwrap();
+
+    let fifo = walk.join("worker.pipe");
+    let fifo_c = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+    // SAFETY: `fifo_c` is a valid NUL-terminated path and the mode contains only permission bits.
+    assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+    let fifo_error = collect_runtime_closure_directory(
+        &walk,
+        Path::new("runtime"),
+        false,
+        &mut Vec::new(),
+        &mut RuntimeClosureSources::default(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        fifo_error.contains("regular file or directory"),
+        "{fifo_error}"
+    );
+
+    let one_file = temp.path().join("one-file");
+    std::fs::create_dir(&one_file).unwrap();
+    std::fs::write(one_file.join("entry"), b"entry").unwrap();
+    let mut entries = MAX_SNAPSHOT_FILES;
+    let entry_error =
+        collect_snapshot_files(&one_file, &one_file, &mut Vec::new(), None, &mut entries)
+            .unwrap_err()
+            .to_string();
+    assert!(entry_error.contains("verification budget"), "{entry_error}");
+
+    make_snapshot_removable(&temp.path().join("already-removed"));
+}
+
+#[test]
 fn python_environment_entry_budget_counts_skipped_cache_entries() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(temp.path().join("ignored.pyc"), b"cache").unwrap();

@@ -10,7 +10,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::config::IntegrationHost;
-use crate::install_generation::{GENERATION_FILE_ENV, write_new_generation};
+use crate::install_generation::{
+    write_new_generation_with_token_at, write_staged_generation_with_token,
+};
 use crate::installer::generated_hooks;
 
 use super::state::{PluginInstallOptions, PluginLayout, remove_path, write_json};
@@ -22,7 +24,15 @@ pub(super) fn write_plugin_marketplace(
     relay: &Path,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
-    write_plugin_marketplace_for_generation(host, layout, relay, &layout.generation_fence, options)
+    write_plugin_marketplace_for_generation(
+        host,
+        layout,
+        relay,
+        &layout.generation_fence,
+        &layout.generation_lock,
+        true,
+        options,
+    )
 }
 
 pub(super) fn write_plugin_marketplace_for_generation(
@@ -30,18 +40,16 @@ pub(super) fn write_plugin_marketplace_for_generation(
     layout: &PluginLayout,
     relay: &Path,
     active_generation_fence: &Path,
+    active_generation_lock: &Path,
+    initialize_generation_lock: bool,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
     if options.dry_run {
         println!("write {}", layout.marketplace_manifest.display());
         println!("write {}", layout.plugin_manifest.display());
-        if plugin_uses_mcp(host) {
-            println!("write {}", layout.mcp_config.display());
-            println!("write {}", layout.generation_fence.display());
-        }
-        if plugin_has_hooks_template(host) {
-            println!("write {}", layout.hooks_path.display());
-        }
+        println!("write {}", layout.mcp_config.display());
+        println!("write {}", layout.generation_fence.display());
+        println!("write {}", layout.hooks_path.display());
         return Ok(());
     }
     remove_path(&layout.plugin_root, options)?;
@@ -52,23 +60,23 @@ pub(super) fn write_plugin_marketplace_for_generation(
             .unwrap_or(&layout.marketplace_root),
     )
     .map_err(|error| format!("failed to create {}: {error}", layout.plugin_root.display()))?;
-    if plugin_has_hooks_template(host) {
-        fs::create_dir_all(layout.hooks_path.parent().unwrap_or(&layout.plugin_root)).map_err(
-            |error| format!("failed to create {}: {error}", layout.hooks_path.display()),
-        )?;
-    }
+    fs::create_dir_all(layout.hooks_path.parent().unwrap_or(&layout.plugin_root))
+        .map_err(|error| format!("failed to create {}: {error}", layout.hooks_path.display()))?;
     write_json(&layout.marketplace_manifest, &marketplace_manifest(host))?;
     write_json(&layout.plugin_manifest, &plugin_manifest(host))?;
-    if plugin_uses_mcp(host) {
-        write_new_generation(&layout.generation_fence)?;
-    }
+    let generation_token = if initialize_generation_lock {
+        write_new_generation_with_token_at(&layout.generation_fence, active_generation_lock)
+    } else {
+        write_staged_generation_with_token(&layout.generation_fence, active_generation_lock)
+    }?;
     write_json(
         &layout.mcp_config,
-        &plugin_mcp_config(host, relay, active_generation_fence)?,
+        &plugin_mcp_config(host, relay, active_generation_fence, &generation_token)?,
     )?;
-    if plugin_has_hooks_template(host) {
-        write_json(&layout.hooks_path, &plugin_hooks(host, relay))?;
-    }
+    write_json(
+        &layout.hooks_path,
+        &plugin_hooks(host, relay, active_generation_fence, &generation_token)?,
+    )?;
     Ok(())
 }
 
@@ -148,9 +156,7 @@ pub(super) fn plugin_manifest(host: IntegrationHost) -> Value {
         "license": "Apache-2.0",
         "keywords": keywords
     });
-    if plugin_uses_mcp(host) {
-        manifest["mcpServers"] = json!("./.mcp.json");
-    }
+    manifest["mcpServers"] = json!("./.mcp.json");
     if matches!(host, IntegrationHost::Codex) {
         manifest["interface"] = json!({
             "displayName": "NeMo Relay Plugin",
@@ -171,36 +177,31 @@ pub(super) fn plugin_mcp_config(
     host: IntegrationHost,
     relay: &Path,
     generation_fence: &Path,
+    generation_token: &str,
 ) -> Result<Value, String> {
     let generation_fence = absolute_or_self(generation_fence);
-    let server = match host {
-        IntegrationHost::Codex => json!({
-            "command": relay,
-            "args": ["mcp", "--agent", "codex"],
-            "env": {
-                "NEMO_RELAY_GATEWAY_BIND": crate::sidecar::DEFAULT_BIND,
-                (GENERATION_FILE_ENV): generation_fence
-            },
-            "env_vars": plugin_mcp_env_vars()?,
-            "required": true,
-            "startup_timeout_sec": 20
-        }),
-        IntegrationHost::ClaudeCode => json!({
-            "command": relay,
-            "args": ["mcp", "--agent", "claude"],
-            "env": {
-                "NEMO_RELAY_GATEWAY_BIND": crate::sidecar::DEFAULT_BIND,
-                (GENERATION_FILE_ENV): generation_fence
-            },
-            "alwaysLoad": true
-        }),
+    let mut server = crate::mcp::persistent_server(relay, &generation_fence, generation_token);
+    let fields = server
+        .as_object_mut()
+        .expect("persistent MCP server is a JSON object");
+    match host {
+        IntegrationHost::Codex => {
+            fields.insert("env_vars".into(), json!(plugin_mcp_env_vars()?));
+            fields.insert("required".into(), json!(true));
+            fields.insert("startup_timeout_sec".into(), json!(20));
+        }
+        IntegrationHost::ClaudeCode => {
+            fields.insert("alwaysLoad".into(), json!(true));
+        }
         IntegrationHost::Hermes | IntegrationHost::All => {
             unreachable!("all is expanded before MCP generation")
         }
-    };
+    }
     Ok(match host {
-        IntegrationHost::Codex => json!({ "nemo-relay": server }),
-        IntegrationHost::ClaudeCode => json!({ "mcpServers": { "nemo-relay": server } }),
+        IntegrationHost::Codex => json!({ (crate::mcp::SERVER_NAME): server }),
+        IntegrationHost::ClaudeCode => {
+            json!({ "mcpServers": { (crate::mcp::SERVER_NAME): server } })
+        }
         IntegrationHost::Hermes | IntegrationHost::All => {
             unreachable!("all is expanded before MCP generation")
         }
@@ -216,14 +217,25 @@ fn absolute_or_self(path: &Path) -> std::path::PathBuf {
         .unwrap_or_else(|_| path.to_owned())
 }
 
-pub(super) fn plugin_hooks(host: IntegrationHost, relay: &Path) -> Value {
+pub(super) fn plugin_hooks(
+    host: IntegrationHost,
+    relay: &Path,
+    generation_fence: &Path,
+    generation_token: &str,
+) -> Result<Value, String> {
     let agent = host
         .agent()
         .expect("all is expanded before hook generation");
-    generated_hooks(
+    let generation_fence = absolute_or_self(generation_fence);
+    Ok(generated_hooks(
         agent,
-        &crate::installer::persistent_hook_forward_command(relay, agent),
-    )
+        &crate::installer::persistent_hook_forward_command(
+            relay,
+            agent,
+            &generation_fence,
+            generation_token,
+        )?,
+    ))
 }
 
 pub(super) fn plugin_mcp_env_vars() -> Result<Vec<String>, String> {
@@ -237,22 +249,4 @@ pub(super) fn plugin_mcp_env_vars_from(
     config: Option<&Value>,
 ) -> Vec<String> {
     crate::mcp_environment::forwarded_names(environment, config)
-}
-
-pub(super) fn plugin_has_hooks_template(host: IntegrationHost) -> bool {
-    match host {
-        IntegrationHost::Codex | IntegrationHost::ClaudeCode => true,
-        IntegrationHost::Hermes | IntegrationHost::All => {
-            unreachable!("all is expanded before hook generation")
-        }
-    }
-}
-
-pub(super) fn plugin_uses_mcp(host: IntegrationHost) -> bool {
-    match host {
-        IntegrationHost::Codex | IntegrationHost::ClaudeCode => true,
-        IntegrationHost::Hermes | IntegrationHost::All => {
-            unreachable!("all is expanded before MCP generation")
-        }
-    }
 }

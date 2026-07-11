@@ -54,7 +54,12 @@ under the active session scope.
 Use the agent shortcuts for no-install local observability. The wrapper starts
 a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and gateway
 configuration into the launched coding agent, and stops the gateway when the
-agent exits.
+agent exits. Relay owns the launched wrapper and its descendants as one process
+tree, so a gateway failure cannot leave an agent running without its private
+gateway and hook configuration. Interactive Unix launches transfer foreground
+terminal ownership and preserve Ctrl-C and Ctrl-Z job control. Non-interactive
+Unix launches forward termination signals to the complete agent process tree
+before Relay removes the injected configuration.
 
 ```bash
 nemo-relay codex
@@ -68,6 +73,14 @@ instead of the built-in shortcut:
 ```bash
 nemo-relay run -- codex
 ```
+
+For Claude Code and Codex, transparent mode leaves the caller's source settings,
+selected profile, and installed plugin state unchanged. A process marker makes
+any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
+persistent hooks exit without forwarding; Codex disables the known Relay plugin
+hook identities in its process-local CLI state. Only the injected wrapper hooks
+deliver events. Hermes gets the same isolation through its process-private
+configuration overlay.
 
 If a launcher or wrapper hides the real agent name, set that wrapper as the
 configured command and pass `--agent`. The same pattern applies to Claude Code,
@@ -330,12 +343,14 @@ map to NeMo Relay LLM start/end events when present. Hermes `pre_llm_call` and
 
 Transparent Claude Code and Codex hooks invoke
 `nemo-relay hook-forward <agent>` with the canonical payload on standard input.
-The wrapper injects `NEMO_RELAY_GATEWAY_URL` for its ephemeral gateway.
+The wrapper-owned hook command embeds its ephemeral gateway URL and is marked
+as transparent so it cannot recover the fixed gateway.
 
 Persistent Claude Code, Codex, and Hermes hooks also use
 `nemo-relay hook-forward <agent>`. A persistent generated command identifies
-the fixed gateway explicitly, preflights its Relay identity, and performs one
-coordinated start or recovery before forwarding the unchanged payload. Hermes
+the fixed gateway and private install-generation fence explicitly, preflights
+its Relay identity, and joins the shared endpoint recovery cohort before
+forwarding the unchanged payload. Hermes
 setup stores the canonical absolute command and trusts its exact event pairs;
 it does not enable global hook auto-acceptance.
 

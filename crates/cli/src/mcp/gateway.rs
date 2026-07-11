@@ -3,64 +3,68 @@
 
 //! Acquisition and liveness lease for a shared coding-agent gateway.
 
-#[cfg(test)]
-use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::config::CodingAgent;
 use crate::config::ServerArgs;
 use crate::error::CliError;
-use crate::install_generation::InstallGeneration;
+use crate::install_generation::{ActiveGenerationGuard, InstallGeneration};
 use crate::sidecar::{GatewayEndpoint, GatewaySpec};
 
 const UNHEALTHY_CONFIRMATIONS: u8 = 3;
 const UNHEALTHY_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(50);
+const BORROWED_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(super) struct GatewayPlan {
     spec: GatewaySpec,
     heartbeat_interval: Duration,
     generation: Option<InstallGeneration>,
+    generation_guard: Option<ActiveGenerationGuard>,
 }
 
 impl GatewayPlan {
-    pub(super) async fn resolve(
-        agent: CodingAgent,
-        server_args: &ServerArgs,
-    ) -> Result<Self, CliError> {
-        let generation = tokio::task::spawn_blocking(InstallGeneration::capture_from_env)
+    pub(super) async fn resolve(server_args: &ServerArgs) -> Result<Self, CliError> {
+        let captured = tokio::task::spawn_blocking(InstallGeneration::capture_guarded_from_env)
             .await
             .map_err(|error| {
                 CliError::Launch(format!("MCP generation capture task failed: {error}"))
             })?
             .map_err(CliError::Launch)?;
+        let (generation, generation_guard) = captured
+            .map(|(generation, guard)| (Some(generation), Some(guard)))
+            .unwrap_or((None, None));
         let bind = server_args.bind.unwrap_or_else(super::default_mcp_bind);
-        let launch = crate::sidecar::resolve_plugin_gateway(agent, server_args, bind)?;
+        let launch = crate::sidecar::resolve_plugin_gateway(server_args, bind)?;
         let heartbeat_interval =
             crate::sidecar::plugin_heartbeat_interval().map_err(CliError::Launch)?;
         Ok(Self {
             spec: launch.gateway,
             heartbeat_interval,
             generation,
+            generation_guard,
         })
     }
 
     pub(super) async fn acquire(mut self) -> Result<GatewayLease, CliError> {
-        let acquisition = acquire_gateway(self.spec.clone(), self.generation.clone()).await?;
+        let acquisition = acquire_gateway(self.spec.clone(), self.generation_guard.take()).await?;
         let endpoint = acquisition.endpoint;
         self.spec = acquisition.spec;
-        let monitor = tokio::spawn(async move { self.monitor(endpoint).await });
-        Ok(GatewayLease {
-            monitor,
-            _endpoint_lease: acquisition.lease,
-        })
+        let monitor = tokio::spawn(async move { self.monitor(endpoint, acquisition.lease).await });
+        Ok(GatewayLease { monitor })
     }
 
-    async fn monitor(self, endpoint: crate::sidecar::GatewayEndpoint) -> Result<(), CliError> {
+    async fn monitor(
+        self,
+        endpoint: crate::sidecar::GatewayEndpoint,
+        endpoint_lease: crate::sidecar::EndpointLease,
+    ) -> Result<(), CliError> {
         let health_spec = self.spec.clone();
         let restart_spec = self.spec.clone();
         let restart_generation = self.generation.clone();
         let verify_generation = self.generation;
+        let recovery_cohort = endpoint_lease.cohort_id().to_string();
+        let verify_cohort = recovery_cohort.clone();
+        let verify_url = endpoint.url.clone();
         maintain_gateway_instances_with_generation(
             self.spec.bind(),
             endpoint,
@@ -80,60 +84,104 @@ impl GatewayPlan {
                     restart_spec.clone(),
                     restart_generation.clone(),
                     expected_instance,
+                    recovery_cohort.clone(),
                 )
             },
             move || {
                 let generation = verify_generation.clone();
-                async move { verify_generation_async(generation).await }
+                let cohort = verify_cohort.clone();
+                let url = verify_url.clone();
+                async move { verify_lifecycle_async(generation, cohort, url).await }
             },
         )
         .await
-    }
-
-    #[cfg(test)]
-    pub(super) fn test_lease(
-        bind: SocketAddr,
-        gateway_url: String,
-        sidecar_args: Vec<OsString>,
-        bootstrap_fingerprint: String,
-        heartbeat_interval: Duration,
-    ) -> GatewayLease {
-        let plan = Self {
-            spec: GatewaySpec::new(CodingAgent::Codex, bind)
-                .with_launch_args(sidecar_args)
-                .with_fingerprint(bootstrap_fingerprint),
-            heartbeat_interval,
-            generation: None,
-        };
-        let instance_id = plan
-            .spec
-            .healthy_instance(&gateway_url)
-            .unwrap_or_else(|| "test-initial-instance".into());
-        let endpoint = crate::sidecar::GatewayEndpoint {
-            address: bind,
-            url: gateway_url,
-            instance_id,
-        };
-        let monitor = tokio::spawn(async move { plan.monitor(endpoint).await });
-        GatewayLease {
-            monitor,
-            _endpoint_lease: None,
-        }
     }
 }
 
 /// An active liveness lease. Dropping it stops heartbeats immediately.
 pub(super) struct GatewayLease {
     monitor: tokio::task::JoinHandle<Result<(), CliError>>,
-    _endpoint_lease: Option<crate::sidecar::EndpointLease>,
 }
 
 impl GatewayLease {
+    #[cfg(test)]
+    pub(super) fn test_pending() -> Self {
+        let monitor = tokio::spawn(std::future::pending::<Result<(), CliError>>());
+        Self { monitor }
+    }
+
+    pub(super) async fn borrow(
+        gateway_url: String,
+        bootstrap_fingerprint: String,
+    ) -> Result<Self, CliError> {
+        Self::borrow_with_interval(
+            gateway_url,
+            bootstrap_fingerprint,
+            BORROWED_HEARTBEAT_INTERVAL,
+        )
+        .await
+    }
+
+    pub(super) async fn borrow_with_interval(
+        gateway_url: String,
+        bootstrap_fingerprint: String,
+        heartbeat_interval: Duration,
+    ) -> Result<Self, CliError> {
+        let expected_instance = authenticated_instance_id(
+            gateway_url.clone(),
+            bootstrap_fingerprint.clone(),
+        )
+        .await?
+        .ok_or_else(|| {
+            CliError::Launch(format!(
+                "{} does not identify the authenticated NeMo Relay gateway owned by this transparent run",
+                crate::config::GATEWAY_URL_ENV
+            ))
+        })?;
+        let monitor = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(heartbeat_interval).await;
+                let current =
+                    authenticated_instance_id(gateway_url.clone(), bootstrap_fingerprint.clone())
+                        .await?;
+                match current {
+                    Some(instance) if instance == expected_instance => {}
+                    Some(instance) => {
+                        return Err(CliError::Launch(format!(
+                            "transparent Relay gateway instance changed from {expected_instance} to {instance}"
+                        )));
+                    }
+                    None => {
+                        return Err(CliError::Launch(format!(
+                            "transparent Relay gateway at {gateway_url} is no longer available"
+                        )));
+                    }
+                }
+            }
+        });
+        Ok(Self { monitor })
+    }
+
     pub(super) async fn wait(&mut self) -> Result<(), CliError> {
         (&mut self.monitor).await.map_err(|error| {
             CliError::Launch(format!("gateway maintenance task failed: {error}"))
         })?
     }
+}
+
+async fn authenticated_instance_id(
+    gateway_url: String,
+    bootstrap_fingerprint: String,
+) -> Result<Option<String>, CliError> {
+    tokio::task::spawn_blocking(move || {
+        crate::sidecar::authenticated_instance_id(&gateway_url, &bootstrap_fingerprint)
+    })
+    .await
+    .map_err(|error| {
+        CliError::Launch(format!(
+            "transparent gateway verification task failed: {error}"
+        ))
+    })
 }
 
 impl Drop for GatewayLease {
@@ -144,13 +192,10 @@ impl Drop for GatewayLease {
 
 async fn acquire_gateway(
     spec: GatewaySpec,
-    generation: Option<InstallGeneration>,
+    generation_guard: Option<ActiveGenerationGuard>,
 ) -> Result<crate::sidecar::GatewayAcquisition, CliError> {
     tokio::task::spawn_blocking(move || {
-        let _generation_guard = generation
-            .as_ref()
-            .map(InstallGeneration::guard_current)
-            .transpose()?;
+        let _generation_guard = generation_guard;
         spec.acquire()
     })
     .await
@@ -162,28 +207,52 @@ async fn recover_gateway(
     spec: GatewaySpec,
     generation: Option<InstallGeneration>,
     expected_instance: String,
+    recovery_cohort: String,
 ) -> Result<GatewayEndpoint, CliError> {
     tokio::task::spawn_blocking(move || {
         let _generation_guard = generation
             .as_ref()
             .map(InstallGeneration::guard_current)
             .transpose()?;
-        spec.recover(&expected_instance)
+        spec.recover(&expected_instance, &recovery_cohort)
     })
     .await
     .map_err(|error| CliError::Launch(format!("gateway recovery task failed: {error}")))?
     .map_err(CliError::Launch)
 }
 
-async fn verify_generation_async(generation: Option<InstallGeneration>) -> Result<(), CliError> {
-    tokio::task::spawn_blocking(move || {
-        generation
-            .as_ref()
-            .map_or(Ok(()), InstallGeneration::verify_current)
-    })
-    .await
-    .map_err(|error| CliError::Launch(format!("MCP generation verification task failed: {error}")))?
-    .map_err(CliError::Launch)
+async fn verify_lifecycle_async(
+    generation: Option<InstallGeneration>,
+    recovery_cohort: String,
+    gateway_url: String,
+) -> Result<(), CliError> {
+    loop {
+        let generation = generation.clone();
+        let recovery_cohort = recovery_cohort.clone();
+        let gateway_url = gateway_url.clone();
+        let current = tokio::task::spawn_blocking(move || {
+            if let Some(generation) = generation.as_ref()
+                && !generation.try_verify_current()?
+            {
+                return Ok(false);
+            }
+            if crate::sidecar::check_gateway_cohort(&gateway_url, &recovery_cohort)?
+                == crate::sidecar::GatewayCohortStatus::UpdateInProgress
+            {
+                return Ok(false);
+            }
+            Ok(true)
+        })
+        .await
+        .map_err(|error| {
+            CliError::Launch(format!("MCP lifecycle verification task failed: {error}"))
+        })?
+        .map_err(CliError::Launch)?;
+        if current {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +350,10 @@ where
             }
             observed_instance =
                 healthy(endpoint.url.clone(), recovery.instance_id().into()).await?;
+            // The health probe can queue or block while an integration replacement rotates the
+            // endpoint cohort. Revalidate before accepting either its instance or its failure so
+            // an old client cannot adopt the replacement across that asynchronous gap.
+            verify_generation().await?;
             if observed_instance.is_some() {
                 break;
             }
