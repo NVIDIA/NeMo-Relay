@@ -25,6 +25,15 @@ pub(crate) struct InstallGeneration {
     token: String,
 }
 
+/// Shared generation lock held across one gateway adoption or startup.
+///
+/// Retirement takes the exclusive side of the same file lock, so an installer cannot invalidate
+/// and stop an endpoint until every startup that observed the old marker has either published a
+/// ready gateway or failed.
+pub(crate) struct ActiveGenerationGuard {
+    _lock: File,
+}
+
 impl InstallGeneration {
     pub(crate) fn capture_from_env() -> Result<Option<Self>, String> {
         env::var_os(GENERATION_FILE_ENV)
@@ -45,6 +54,10 @@ impl InstallGeneration {
     }
 
     pub(crate) fn verify_current(&self) -> Result<(), String> {
+        self.guard_current().map(|_| ())
+    }
+
+    pub(crate) fn guard_current(&self) -> Result<ActiveGenerationGuard, String> {
         let file = open_generation(&self.path).map_err(|_| retired_generation_error(&self.path))?;
         lock_shared_with_timeout(&file, &self.path, DEFAULT_GENERATION_LOCK_TIMEOUT)
             .map_err(|_| retired_generation_error(&self.path))?;
@@ -55,7 +68,7 @@ impl InstallGeneration {
         if locked != self.token || current != self.token {
             return Err(retired_generation_error(&self.path));
         }
-        Ok(())
+        Ok(ActiveGenerationGuard { _lock: file })
     }
 }
 

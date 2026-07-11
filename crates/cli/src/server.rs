@@ -30,7 +30,9 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::adapters::{claude_code, codex, hermes};
-use crate::config::{BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity};
+use crate::config::{
+    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
+};
 use crate::error::CliError;
 use crate::gateway;
 use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
@@ -362,6 +364,23 @@ impl AppState {
         if let Ok(mut last_activity) = self.last_activity.lock() {
             *last_activity = Instant::now();
         }
+    }
+
+    /// Foreground gateways may supply provider credentials from their own environment for simple
+    /// local proxy use. Managed plugin sidecars are long-lived loopback services, so callers must
+    /// present the private per-user proof installed into their provider configuration before Relay
+    /// can spend a forwarded credential on their behalf.
+    pub(crate) fn allows_environment_provider_auth(&self, headers: &HeaderMap) -> bool {
+        if self.bootstrap_fingerprint.is_none() {
+            return true;
+        }
+        let Some(key) = self.bootstrap_challenge_key.as_ref() else {
+            return false;
+        };
+        headers
+            .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|token| key.verify_client_token(token))
     }
 }
 

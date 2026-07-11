@@ -84,7 +84,7 @@ fn hook_command_round_trips_paths_and_recognizes_owned_legacy_spellings() {
             Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
             true,
         ),
-        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward hermes --gateway-url http://127.0.0.1:47632"#
+        r#""C:\Program Files\NeMo 100%%cd:~,%%\bin\nemo-relay.exe" hook-forward hermes --gateway-url http://127.0.0.1:47632"#
     );
     assert_eq!(
         crate::installer::transparent_hook_forward_command(relay, CodingAgent::Hermes),
@@ -316,6 +316,10 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
     config["hooks"]["unexpected_event"] = json!([{"command": command, "timeout": 30}]);
     let error = verify_hook_definitions(&config, &command).unwrap_err();
     assert!(error.contains("unexpected Relay hook"));
+    let mut malformed = persistent_config(None, &relay, &command, &generation, &[]).unwrap();
+    malformed["hooks"]["unexpected_event"] = json!({"command": command});
+    let error = verify_hook_definitions(&malformed, &command).unwrap_err();
+    assert!(error.contains("must be an array"));
 
     let mut allowlist = trusted_hooks(None, &command, &relay, UNIX_EPOCH).unwrap();
     allowlist["approvals"].as_array_mut().unwrap().push(json!({
@@ -327,6 +331,18 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
     std::fs::write(&path, serde_json::to_vec(&allowlist).unwrap()).unwrap();
     let error = verify_trust(&path, &command).unwrap_err();
     assert!(error.contains("unexpected Relay hook approval"));
+
+    let mut missing_event = trusted_hooks(None, &command, &relay, UNIX_EPOCH).unwrap();
+    missing_event["approvals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "command": command,
+            "approved_at": "1970-01-01T00:00:00.000000Z"
+        }));
+    std::fs::write(&path, serde_json::to_vec(&missing_event).unwrap()).unwrap();
+    let error = verify_trust(&path, &command).unwrap_err();
+    assert!(error.contains("missing its event"));
 }
 
 #[test]

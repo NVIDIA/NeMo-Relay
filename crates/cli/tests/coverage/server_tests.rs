@@ -417,6 +417,32 @@ async fn healthz_rejects_a_different_persistent_gateway_fingerprint() {
 }
 
 #[tokio::test]
+async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials() {
+    let key = BootstrapChallengeKey::from_bytes(b"test challenge key");
+    let state = AppState::new_with_bootstrap(
+        test_config(),
+        Some("expected-fingerprint".into()),
+        Some(key.clone()),
+        None,
+    );
+    let mut headers = HeaderMap::new();
+    assert!(!state.allows_environment_provider_auth(&headers));
+    headers.insert(
+        crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_static("hmac-sha256:wrong"),
+    );
+    assert!(!state.allows_environment_provider_auth(&headers));
+    headers.insert(
+        crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        HeaderValue::from_str(&key.client_token()).unwrap(),
+    );
+    assert!(state.allows_environment_provider_auth(&headers));
+
+    let foreground = AppState::new(test_config());
+    assert!(foreground.allows_environment_provider_auth(&HeaderMap::new()));
+}
+
+#[tokio::test]
 async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
     let challenge_key = BootstrapChallengeKey::from_bytes(b"test challenge key");
     let state = AppState::new_with_bootstrap(

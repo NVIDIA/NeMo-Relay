@@ -64,6 +64,24 @@ fn gateway_spec_is_the_complete_compatibility_contract() {
 }
 
 #[test]
+fn endpoint_recovery_epoch_rejects_a_staggered_second_replacement() {
+    let state = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    write_recovery_epoch(state.path(), &RecoveryEpoch::new(url, "gateway-1")).unwrap();
+
+    reconcile_gateway_epoch(state.path(), url, false, "gateway-2").unwrap();
+    let recovered = read_recovery_epoch(state.path(), url).unwrap().unwrap();
+    assert_eq!(recovered.instance_id, "gateway-2");
+    assert_eq!(recovered.restarts, 1);
+
+    let error = reconcile_gateway_epoch(state.path(), url, false, "gateway-3").unwrap_err();
+    assert!(error.contains("replaced again"), "{error}");
+    let unchanged = read_recovery_epoch(state.path(), url).unwrap().unwrap();
+    assert_eq!(unchanged.instance_id, "gateway-2");
+    assert_eq!(unchanged.restarts, 1);
+}
+
+#[test]
 fn gateway_spec_rejects_non_loopback_bind_before_launch() {
     let error = GatewaySpec::new(CodingAgent::Codex, "0.0.0.0:47632".parse().unwrap())
         .ensure()

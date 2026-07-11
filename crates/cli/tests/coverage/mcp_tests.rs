@@ -291,7 +291,7 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
         },
         {
             let restart_calls = restart_calls.clone();
-            move |address| {
+            move |address, _expected_instance| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
                     Ok(crate::sidecar::GatewayEndpoint {
@@ -349,7 +349,7 @@ async fn heartbeat_performs_one_restart_and_tracks_the_recovered_gateway() {
         },
         {
             let restart_calls = restart_calls.clone();
-            move |address| {
+            move |address, _expected_instance| {
                 let restart_calls = restart_calls.clone();
                 async move {
                     restart_calls.fetch_add(1, Ordering::SeqCst);
@@ -404,7 +404,7 @@ async fn heartbeat_ignores_isolated_transient_health_failures() {
         },
         {
             let restart_calls = restart_calls.clone();
-            move |address| {
+            move |address, _expected_instance| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
                     Ok(crate::sidecar::GatewayEndpoint {
@@ -438,7 +438,7 @@ async fn heartbeat_rediscovery_consumes_the_shared_restart_allowance() {
         |_url| async { Ok(false) },
         {
             let restart_calls = restart_calls.clone();
-            move |address| {
+            move |address, _expected_instance| {
                 let restart_calls = restart_calls.clone();
                 async move {
                     let attempt = restart_calls.fetch_add(1, Ordering::SeqCst);
@@ -465,7 +465,9 @@ async fn heartbeat_exits_with_the_restart_failure() {
         "http://dead-gateway".into(),
         Duration::from_millis(1),
         |_url| async { Ok(false) },
-        |_bind| async { Err(CliError::Launch("coordinated restart failed".into())) },
+        |_bind, _expected_instance| async {
+            Err(CliError::Launch("coordinated restart failed".into()))
+        },
     )
     .await
     .unwrap_err();
@@ -483,7 +485,7 @@ async fn heartbeat_attempts_at_most_one_successful_restart() {
         |_url| async { Ok(false) },
         {
             let restart_calls = restart_calls.clone();
-            move |address| {
+            move |address, _expected_instance| {
                 let restart_calls = restart_calls.clone();
                 async move {
                     restart_calls.fetch_add(1, Ordering::SeqCst);
@@ -532,7 +534,7 @@ async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
         },
         {
             let restart_calls = restart_calls.clone();
-            move |address| {
+            move |address, _expected_instance| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
                     Ok(crate::sidecar::GatewayEndpoint {
@@ -609,54 +611,6 @@ fn retired_install_generation_remains_retryable_but_not_adoptable() {
 
     let error = InstallGeneration::capture(generation_path).unwrap_err();
     assert!(error.contains("has been retired"), "{error}");
-}
-
-#[test]
-fn retired_mcp_postcheck_does_not_stop_a_replacement_gateway() {
-    assert_retired_mcp_postcheck_preserves_gateway(2002, "replacement-token");
-}
-
-#[test]
-fn retired_mcp_postcheck_does_not_stop_the_exact_reused_gateway() {
-    assert_retired_mcp_postcheck_preserves_gateway(1001, "retired-token");
-}
-
-fn assert_retired_mcp_postcheck_preserves_gateway(gateway_pid: u32, gateway_token: &str) {
-    let dir = tempfile::tempdir().unwrap();
-    let generation_path = dir.path().join(GENERATION_FILE_NAME);
-    write_new_generation(&generation_path).unwrap();
-    let generation = InstallGeneration::capture(generation_path.clone()).unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let state = dir.path().join("bootstrap-state");
-    std::fs::create_dir(&state).unwrap();
-    let owner_path = crate::sidecar::sidecar_owner_path(&state, &url);
-    let pid_path = crate::sidecar::sidecar_pid_path(&state, &url);
-    crate::sidecar::write_sidecar_owner(
-        &owner_path,
-        gateway_pid,
-        &url,
-        gateway_token,
-        Some("same-bootstrap-fingerprint"),
-    )
-    .unwrap();
-    std::fs::write(&pid_path, gateway_pid.to_string()).unwrap();
-    write_new_generation(&generation_path).unwrap();
-
-    let error = verify_bootstrap_generation(&generation).unwrap_err();
-
-    assert!(error.contains("has been retired"), "{error}");
-    assert!(owner_path.exists());
-    assert_eq!(
-        std::fs::read_to_string(pid_path).unwrap(),
-        gateway_pid.to_string()
-    );
-    assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
-    );
 }
 
 #[test]

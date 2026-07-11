@@ -890,7 +890,15 @@ fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
 // config and hook approval files remain private to this transparent run. Hermes has no standalone
 // config-file override, so `HERMES_HOME` is its supported process-scoped configuration boundary.
 fn create_hermes_overlay(source_home: &Path, source_config: &Path) -> Result<PathBuf, CliError> {
-    let overlay = temp_dir("nemo-relay-hermes-home")?;
+    // Prefer a sibling of HERMES_HOME so Windows file hard links remain on one volume. Fall back
+    // to the OS temp directory when the profile parent is not writable; regular files then use a
+    // copy fallback, while profile directories remain live through junctions.
+    let overlay = source_home
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .and_then(|parent| private_temp_dir(parent, ".nemo-relay-hermes-home").ok())
+        .map(Ok)
+        .unwrap_or_else(|| temp_dir("nemo-relay-hermes-home"))?;
     if let Err(error) = populate_hermes_overlay(&overlay, source_home, source_config) {
         let _ = std::fs::remove_dir_all(&overlay);
         return Err(error);
@@ -949,9 +957,14 @@ fn link_hermes_state(source: &Path, destination: &Path, directory: bool) -> Resu
     #[cfg(windows)]
     {
         if directory {
-            std::os::windows::fs::symlink_dir(source, destination)?;
+            create_windows_junction(source, destination)?;
         } else {
-            std::fs::hard_link(source, destination)?;
+            match std::fs::hard_link(source, destination) {
+                Ok(()) => {}
+                Err(_) => {
+                    std::fs::copy(source, destination)?;
+                }
+            }
         }
         Ok(())
     }
@@ -960,6 +973,35 @@ fn link_hermes_state(source: &Path, destination: &Path, directory: bool) -> Resu
         let _ = directory;
         std::fs::copy(source, destination)?;
         Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn create_windows_junction(source: &Path, destination: &Path) -> Result<(), CliError> {
+    // Directory junctions do not require Developer Mode or SeCreateSymbolicLinkPrivilege. Paths
+    // travel through environment variables so the fixed cmd program never interpolates user
+    // content into shell syntax; delayed expansion is disabled for literal exclamation marks.
+    let status = std::process::Command::new(
+        std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe")),
+    )
+    .args([
+        "/d",
+        "/v:off",
+        "/s",
+        "/c",
+        "mklink /J \"%NEMO_RELAY_JUNCTION_DEST%\" \"%NEMO_RELAY_JUNCTION_SOURCE%\" >nul",
+    ])
+    .env("NEMO_RELAY_JUNCTION_SOURCE", source)
+    .env("NEMO_RELAY_JUNCTION_DEST", destination)
+    .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::Launch(format!(
+            "failed to create Hermes state junction {} -> {}: {status}",
+            destination.display(),
+            source.display()
+        )))
     }
 }
 
@@ -1008,8 +1050,18 @@ fn toml_string(value: &str) -> String {
 // Creates a uniquely named directory under the OS temp directory. UUIDv7 avoids collisions
 // between concurrent transparent runs without keeping persistent coordination state.
 fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
-    let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::now_v7()));
-    std::fs::create_dir_all(&path)?;
+    private_temp_dir(&std::env::temp_dir(), prefix)
+}
+
+fn private_temp_dir(parent: &Path, prefix: &str) -> Result<PathBuf, CliError> {
+    let path = parent.join(format!("{prefix}-{}", uuid::Uuid::now_v7()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&path)?;
     Ok(path)
 }
 

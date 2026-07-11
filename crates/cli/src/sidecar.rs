@@ -44,9 +44,11 @@ pub(crate) use process::{
     windows_sidecar_creation_flags,
 };
 pub(crate) use state::BOOTSTRAP_STATE_DIR_ENV;
+pub(crate) use state::EndpointLease;
 use state::{
-    create_private_runtime_dir, open_lock as open_sidecar_lock, read_owner_record,
-    read_ready_file as read_sidecar_ready_file, runtime_dir,
+    RecoveryEpoch, create_private_runtime_dir, open_lock as open_sidecar_lock, read_owner_record,
+    read_ready_file as read_sidecar_ready_file, read_recovery_epoch, runtime_dir,
+    write_recovery_epoch,
 };
 pub(crate) use state::{
     lock_endpoint as lock_sidecar_endpoint, lock_path as sidecar_lock_path,
@@ -76,6 +78,12 @@ pub(crate) struct GatewayEndpoint {
     pub(crate) address: SocketAddr,
     pub(crate) url: String,
     pub(crate) instance_id: String,
+}
+
+pub(crate) struct GatewayAcquisition {
+    pub(crate) endpoint: GatewayEndpoint,
+    pub(crate) lease: Option<EndpointLease>,
+    pub(crate) spec: GatewaySpec,
 }
 
 /// Complete launch and compatibility contract for one shared gateway.
@@ -126,9 +134,155 @@ impl GatewaySpec {
         ensure_gateway(self)
     }
 
+    pub(crate) fn acquire(&self) -> Result<GatewayAcquisition, String> {
+        acquire_gateway(self)
+    }
+
+    pub(crate) fn recover(&self, expected_instance: &str) -> Result<GatewayEndpoint, String> {
+        recover_gateway(self, expected_instance)
+    }
+
     pub(crate) fn healthy_instance(&self, url: &str) -> Option<String> {
         health::compatible_instance_id(url, self.bootstrap_fingerprint.as_deref())
     }
+}
+
+fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayAcquisition, String> {
+    if spec.bind.port() == 0 {
+        let endpoint = spec.ensure()?;
+        let effective_spec = GatewaySpec {
+            bind: endpoint.address,
+            ..spec.clone()
+        };
+        let state = sidecar_state_dir()?;
+        let lease = EndpointLease::acquire(&state, &endpoint.url)?;
+        record_gateway_epoch(
+            &effective_spec,
+            &state,
+            &endpoint.url,
+            lease.fresh_epoch(),
+            &endpoint,
+        )?;
+        return Ok(GatewayAcquisition {
+            endpoint,
+            lease: Some(lease),
+            spec: effective_spec,
+        });
+    }
+    let url = format!("http://{}", spec.bind);
+    let state = sidecar_state_dir()?;
+    let lease = EndpointLease::acquire(&state, &url)?;
+    let endpoint = if lease.fresh_epoch() {
+        spec.ensure()?
+    } else if let Some(epoch) = read_recovery_epoch(&state, &url)? {
+        spec.recover(&epoch.instance_id)?
+    } else {
+        spec.ensure()?
+    };
+    record_gateway_epoch(spec, &state, &url, lease.fresh_epoch(), &endpoint)?;
+    Ok(GatewayAcquisition {
+        endpoint,
+        lease: Some(lease),
+        spec: spec.clone(),
+    })
+}
+
+fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<GatewayEndpoint, String> {
+    debug_assert_ne!(spec.bind.port(), 0, "acquisition resolves automatic ports");
+    let agent = spec.agent;
+    let url = format!("http://{}", spec.bind);
+    let runtime = runtime_dir();
+    let state = sidecar_state_dir()?;
+    create_private_runtime_dir(&runtime).map_err(|error| {
+        sidecar_start_error(
+            agent,
+            &runtime,
+            &format!("failed to create {}: {error}", runtime.display()),
+        )
+    })?;
+    create_private_runtime_dir(&state).map_err(|error| {
+        sidecar_start_error(
+            agent,
+            &runtime,
+            &format!("failed to create {}: {error}", state.display()),
+        )
+    })?;
+    let lock = lock_sidecar_endpoint(&state, &url)?;
+    let (health, instance_id) =
+        probe_relay_health_after_lock(&url, spec.bootstrap_fingerprint.as_deref());
+    match health {
+        RelayHealth::Compatible => {
+            let endpoint = compatible_endpoint(spec.bind, url.clone(), instance_id)?;
+            reconcile_gateway_epoch(&state, &url, false, &endpoint.instance_id)?;
+            return Ok(endpoint);
+        }
+        RelayHealth::Incompatible => return Err(incompatible_relay_error(agent, &url)),
+        RelayHealth::Foreign => return Err(foreign_listener_error(&url)),
+        RelayHealth::Unavailable => {}
+    }
+    let mut epoch = read_recovery_epoch(&state, &url)?
+        .ok_or_else(|| "shared gateway recovery epoch is missing".to_string())?;
+    if epoch.instance_id != expected_instance {
+        return Err(format!(
+            "shared Relay gateway recovery moved from instance {expected_instance} to {}",
+            epoch.instance_id
+        ));
+    }
+    if epoch.restarts >= 1 || epoch.pending {
+        return Err(
+            "shared Relay gateway became unhealthy after its endpoint-scoped restart".into(),
+        );
+    }
+    epoch.restarts = 1;
+    epoch.pending = true;
+    write_recovery_epoch(&state, &epoch)?;
+    let endpoint = start_sidecar_bind(spec, &runtime, &state, Some(lock))
+        .map_err(|error| sidecar_start_error(agent, &runtime, &error))?;
+    record_gateway_epoch(spec, &state, &url, false, &endpoint)?;
+    Ok(endpoint)
+}
+
+fn record_gateway_epoch(
+    spec: &GatewaySpec,
+    state: &Path,
+    url: &str,
+    fresh: bool,
+    endpoint: &GatewayEndpoint,
+) -> Result<(), String> {
+    let _lock = lock_sidecar_endpoint(state, url)?;
+    let current = spec.healthy_instance(url).ok_or_else(|| {
+        "shared Relay gateway disappeared before recovery was recorded".to_string()
+    })?;
+    let instance_id = if current == endpoint.instance_id {
+        &endpoint.instance_id
+    } else {
+        &current
+    };
+    reconcile_gateway_epoch(state, url, fresh, instance_id)
+}
+
+fn reconcile_gateway_epoch(
+    state: &Path,
+    url: &str,
+    fresh: bool,
+    instance_id: &str,
+) -> Result<(), String> {
+    let mut epoch = read_recovery_epoch(state, url)?;
+    if fresh || epoch.is_none() {
+        return write_recovery_epoch(state, &RecoveryEpoch::new(url, instance_id));
+    }
+    let epoch = epoch.as_mut().expect("gateway epoch is present");
+    if epoch.instance_id == instance_id {
+        epoch.pending = false;
+        return write_recovery_epoch(state, epoch);
+    }
+    if epoch.pending || epoch.restarts == 0 {
+        epoch.instance_id = instance_id.into();
+        epoch.restarts = 1;
+        epoch.pending = false;
+        return write_recovery_epoch(state, epoch);
+    }
+    Err("shared Relay gateway was replaced again after its endpoint-scoped restart".into())
 }
 
 /// Persistent plugin gateway settings shared by MCP bootstrap and hook recovery.

@@ -135,7 +135,7 @@ fn generated_hook_dispatch_covers_all_agents() {
     );
     assert_eq!(
         transparent_hook_forward_command_for_platform(relay, CodingAgent::ClaudeCode, true),
-        r#""/opt/NeMo Relay's ^& tools/nemo-relay" hook-forward claude"#
+        r#""/opt/NeMo Relay's & tools/nemo-relay" hook-forward claude"#
     );
 }
 

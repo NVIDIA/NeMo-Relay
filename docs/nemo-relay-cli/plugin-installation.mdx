@@ -141,8 +141,11 @@ exits after 300 idle seconds by default. If the gateway exits while MCP stdio is
 open, the client performs one coordinated restart and fails if recovery does
 not succeed. A foreign process on the configured port is rejected with an
 actionable conflict instead of being accepted because it returned HTTP 200.
-Health and readiness include a per-process instance ID, so every open MCP
-client recognizes the same replacement and refuses a second replacement.
+Health and readiness include a per-process instance ID. Process-held endpoint
+leases and a private recovery epoch make the one-restart allowance global to
+all overlapping MCP clients, including a client whose heartbeat misses the
+first replacement. A new recovery epoch begins only after the last MCP client
+closes.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
@@ -189,6 +192,15 @@ plugin MCP processes. Hermes config stores `${VARIABLE_NAME}` references for
 the provider credentials, currently defined approved variables, and explicit
 credential names referenced by user observability configuration. Rerun
 `nemo-relay install hermes --force` after adding one of those variables.
+The long-lived managed sidecar substitutes a forwarded provider credential only
+when a request carries provider authorization or Relay's private per-user
+client proof. The Codex installer writes a domain-separated HMAC proof into the
+managed provider's `http_headers`; Relay validates and removes that header
+before middleware, observability, or upstream forwarding. The underlying HMAC
+key remains in Relay's owner-only bootstrap state. Claude Code and Hermes send
+their normal provider authorization. A foreign loopback caller cannot spend
+the sidecar's forwarded credentials. Foreground `nemo-relay --bind` use retains
+environment-key injection for explicit local proxy workflows.
 
 ## Diagnose
 

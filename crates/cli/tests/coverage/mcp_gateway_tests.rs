@@ -33,7 +33,7 @@ async fn production_heartbeat_recovers_after_one_thirty_second_interval() {
         "http://gateway".into(),
         Duration::from_secs(30),
         |_url| async { Ok(false) },
-        move |address| {
+        move |address, _expected_instance| {
             let sender = restarted_tx.take();
             async move {
                 if let Some(sender) = sender {
@@ -83,7 +83,7 @@ async fn concurrent_clients_consume_the_same_replacement_allowance() {
                 }
                 async move { Ok(current) }
             },
-            move |address| {
+            move |address, _expected_instance| {
                 let current = current_for_restart.clone();
                 let restart_count = restart_count.clone();
                 async move {
@@ -149,7 +149,10 @@ async fn dropping_gateway_lease_aborts_its_monitor() {
     });
     started_rx.await.unwrap();
 
-    drop(GatewayLease { monitor });
+    drop(GatewayLease {
+        monitor,
+        _endpoint_lease: None,
+    });
 
     tokio::time::timeout(Duration::from_secs(1), dropped_rx)
         .await

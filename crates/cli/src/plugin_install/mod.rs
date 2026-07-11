@@ -449,7 +449,6 @@ fn install_hermes_host(
         println!("configure Hermes MCP and hooks at {}", config.display());
         return Ok(());
     }
-    crate::hermes::retire_persistent_gateway().map_err(|error| error.to_string())?;
     crate::hermes::install_persistent(&config, &relay).map_err(|error| error.to_string())?;
     if !options.skip_doctor {
         crate::hermes::diagnose_persistent(&config)?;
@@ -467,7 +466,6 @@ fn uninstall_hermes_host(options: &PluginInstallOptions) -> Result<(), String> {
         );
         return Ok(());
     }
-    crate::hermes::retire_persistent_gateway().map_err(|error| error.to_string())?;
     crate::hermes::uninstall_persistent(&config).map_err(|error| error.to_string())?;
     println!("uninstalled Hermes integration");
     Ok(())
@@ -855,14 +853,8 @@ fn uninstall_host_locked(
         .map(|state| state.plugin_root.as_path())
         .unwrap_or(&layout.plugin_root);
     let local_install_exists = state.is_some() || layout.marketplace_root.exists();
-    let mut generation_retirement = retire_installed_generation(
-        host,
-        plugin_root,
-        local_install_exists,
-        options,
-        runner,
-        setup_runner,
-    )?;
+    let mut generation_retirement =
+        retire_installed_generation(host, plugin_root, local_install_exists, options, runner)?;
     if let Some(retirement) = generation_retirement.as_mut() {
         retirement.invalidate_for_replacement().map_err(|error| {
             format!(
@@ -870,6 +862,16 @@ fn uninstall_host_locked(
                 plugin_root.display()
             )
         })?;
+    }
+    if let Err(error) = setup_runner.refresh_gateway() {
+        if let Some(retirement) = generation_retirement.as_mut()
+            && let Err(restore_error) = retirement.restore_after_rollback()
+        {
+            return Err(format!(
+                "{error}; additionally failed to restore the installed MCP generation: {restore_error}"
+            ));
+        }
+        return Err(error);
     }
     uninstall_host_with_setup_override(host, options, runner, setup_runner, false)
 }
@@ -880,7 +882,6 @@ fn retire_installed_generation(
     local_install_exists: bool,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
-    setup_runner: &dyn PluginSetupRunner,
 ) -> Result<Option<GenerationRetirement>, String> {
     if options.dry_run || !plugin_uses_mcp(host) {
         return Ok(None);
@@ -905,7 +906,6 @@ fn retire_installed_generation(
     if retirement.is_none() && existing_install && !legacy_plugin_without_mcp(host, plugin_root)? {
         return Err(missing_generation_fence_error(host, &generation_fence));
     }
-    setup_runner.refresh_gateway()?;
     Ok(retirement)
 }
 
@@ -921,13 +921,13 @@ fn retire_replacement_before_rollback(
     let mut retirement = GenerationRetirement::acquire(&layout.generation_fence)
         .map_err(|cause| invalid_generation_fence_error(host, &layout.generation_fence, &cause))?
         .ok_or_else(|| missing_generation_fence_error(host, &layout.generation_fence))?;
-    setup_runner.refresh_gateway()?;
     retirement.invalidate_for_replacement().map_err(|error| {
         format!(
             "failed to retire replacement MCP generation {} before rollback: {error}",
             layout.generation_fence.display()
         )
     })?;
+    setup_runner.refresh_gateway()?;
     Ok(Some(retirement))
 }
 

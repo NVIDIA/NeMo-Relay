@@ -24,7 +24,7 @@ use strum::{Display, IntoStaticStr};
 
 pub(crate) use crate::coding_agent::CodingAgent;
 use crate::error::CliError;
-use crate::file_io::{LockAttempt, try_lock_exclusive};
+use crate::file_io::{LockAttempt, try_lock_exclusive, try_lock_shared};
 #[cfg(test)]
 use crate::plugins::lifecycle::active_dynamic_plugin_components;
 use crate::plugins::lifecycle::{
@@ -215,9 +215,9 @@ pub(crate) struct ConfigCommand {
     /// only that agent's block from the existing config file. Omit to operate on all agents.
     #[arg(value_enum)]
     pub(crate) agent: Option<CodingAgent>,
-    /// Delete the project config file or the scoped agent block. A Hermes-scoped reset also
-    /// removes Relay-owned MCP, hooks, and trust from the user Hermes config. The wizard does not
-    /// run after reset; invoke `nemo-relay config` again to recreate configuration.
+    /// Delete the project config file or the scoped transparent-wrapper agent block. Persistent
+    /// Hermes MCP, hooks, and trust are removed with `nemo-relay uninstall hermes`. The wizard
+    /// does not run after reset; invoke `nemo-relay config` again to recreate configuration.
     #[arg(long)]
     pub(crate) reset: bool,
 }
@@ -1175,8 +1175,12 @@ pub(crate) fn stream_bounded_regular_file(
 const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;
 const BOOTSTRAP_HMAC_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_CHALLENGE_DOMAIN: &[u8] = b"nemo-relay/bootstrap-health/v1\0";
+const BOOTSTRAP_CLIENT_TOKEN_DOMAIN: &[u8] = b"nemo-relay/bootstrap-client/v1\0";
 const PYTHON_ENVIRONMENT_ATTESTATION_DOMAIN: &[u8] =
     b"nemo-relay/python-environment-attestation/v1\0";
+
+/// Private proof installed into supported coding-agent provider configuration.
+pub(crate) const BOOTSTRAP_CLIENT_TOKEN_HEADER: &str = "x-nemo-relay-client-token";
 
 /// Per-user secret used to authenticate a managed bootstrap listener without exposing key bytes.
 #[derive(Clone)]
@@ -1190,20 +1194,20 @@ impl BootstrapChallengeKey {
         )))
     }
 
+    /// Loads an existing key without creating bootstrap state. Read-only diagnostics use this so
+    /// checking an uninstalled integration cannot mutate the user's configuration directory.
+    pub(crate) fn load_existing() -> Result<Option<Self>, CliError> {
+        load_existing_bootstrap_hmac_key()
+            .map(|key| key.map(|key| Self(hmac::Key::new(hmac::HMAC_SHA256, &key))))
+    }
+
     pub(crate) fn proof(&self, fingerprint: &str, nonce: &str) -> String {
         let mut context = hmac::Context::with_key(&self.0);
         context.update(BOOTSTRAP_CHALLENGE_DOMAIN);
         context.update(fingerprint.as_bytes());
         context.update(&[0]);
         context.update(nonce.as_bytes());
-        let tag = context.sign();
-        format!(
-            "hmac-sha256:{}",
-            tag.as_ref()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        )
+        encode_hmac_tag(context.sign())
     }
 
     pub(crate) fn verify(&self, fingerprint: &str, nonce: &str, proof: &str) -> bool {
@@ -1223,10 +1227,37 @@ impl BootstrapChallengeKey {
         hmac::verify(&self.0, &message, &tag).is_ok()
     }
 
+    /// Returns a stable, per-user proof that authorizes use of credentials forwarded to a
+    /// managed sidecar. The HMAC key remains in Relay's private bootstrap state; coding-agent
+    /// configuration stores only this domain-separated proof.
+    pub(crate) fn client_token(&self) -> String {
+        encode_hmac_tag(hmac::sign(&self.0, BOOTSTRAP_CLIENT_TOKEN_DOMAIN))
+    }
+
+    pub(crate) fn verify_client_token(&self, token: &str) -> bool {
+        let Some(encoded) = token.strip_prefix("hmac-sha256:") else {
+            return false;
+        };
+        let Some(tag) = decode_fixed_hex::<32>(encoded) else {
+            return false;
+        };
+        hmac::verify(&self.0, BOOTSTRAP_CLIENT_TOKEN_DOMAIN, &tag).is_ok()
+    }
+
     #[cfg(test)]
     pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
         Self(hmac::Key::new(hmac::HMAC_SHA256, bytes))
     }
+}
+
+fn encode_hmac_tag(tag: hmac::Tag) -> String {
+    format!(
+        "hmac-sha256:{}",
+        tag.as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 fn decode_fixed_hex<const N: usize>(encoded: &str) -> Option<[u8; N]> {
@@ -1295,15 +1326,76 @@ fn python_environment_attestation_message(
 }
 
 fn load_or_create_bootstrap_hmac_key() -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
-    let path = user_config_dir()
+    load_or_create_bootstrap_hmac_key_at(&bootstrap_hmac_key_path()?)
+}
+
+fn bootstrap_hmac_key_path() -> Result<PathBuf, CliError> {
+    user_config_dir()
         .map(|directory| directory.join("bootstrap").join("fingerprint-hmac.key"))
         .ok_or_else(|| {
             CliError::Config(
                 "cannot determine the per-user NeMo Relay bootstrap state directory; set HOME or USERPROFILE"
                     .into(),
             )
-        })?;
-    load_or_create_bootstrap_hmac_key_at(&path)
+        })
+}
+
+fn load_existing_bootstrap_hmac_key() -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_BYTES]>, CliError> {
+    let path = bootstrap_hmac_key_path()?;
+    let mut file = match OpenOptions::new().read(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CliError::Config(format!(
+                "failed to open bootstrap HMAC key {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let deadline = Instant::now() + BOOTSTRAP_HMAC_LOCK_TIMEOUT;
+    loop {
+        match try_lock_shared(&file) {
+            Ok(LockAttempt::Acquired) => break,
+            Ok(LockAttempt::Contended) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25));
+            }
+            Ok(LockAttempt::Contended) => {
+                return Err(CliError::Config(format!(
+                    "timed out waiting for bootstrap HMAC key lock {}",
+                    path.display()
+                )));
+            }
+            Err(error) => {
+                return Err(CliError::Config(format!(
+                    "failed to lock bootstrap HMAC key {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    let length = file
+        .metadata()
+        .map_err(|error| {
+            CliError::Config(format!(
+                "failed to inspect bootstrap HMAC key {}: {error}",
+                path.display()
+            ))
+        })?
+        .len();
+    if length != BOOTSTRAP_HMAC_KEY_BYTES as u64 {
+        return Err(CliError::Config(format!(
+            "bootstrap HMAC key {} has invalid length {length}; expected {BOOTSTRAP_HMAC_KEY_BYTES} bytes",
+            path.display()
+        )));
+    }
+    let mut key = [0_u8; BOOTSTRAP_HMAC_KEY_BYTES];
+    file.read_exact(&mut key).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read bootstrap HMAC key {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(key))
 }
 
 fn load_or_create_bootstrap_hmac_key_at(

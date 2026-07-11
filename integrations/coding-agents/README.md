@@ -83,14 +83,17 @@ selected agent.
 Each plugin MCP entry—and the equivalent Hermes `mcp_servers` entry—starts
 `nemo-relay mcp`, a lightweight client that starts or reuses a native
 `nemo-relay --bind 127.0.0.1:47632` sidecar. Relay detaches the sidecar when
-host policy permits. A restrictive Windows Job Object
-keeps the sidecar scoped to that host job instead of failing bootstrap. The MCP
+host policy permits. A restrictive Windows Job Object can limit the sidecar to
+the host job; bootstrap fails actionably when nested assignment cannot provide
+the required process-tree cleanup guarantee. The MCP
 process acquires the gateway immediately, before reading protocol frames, and
 returns its initialization response only after Relay identity, version, and
 bootstrap-protocol readiness are verified. Concurrent Codex, Claude Code, and
 Hermes processes share the gateway and heartbeat it while their MCP stdio
 connections remain open; the gateway exits after the final client's idle
-timeout. Codex requires MCP initialization before the captured turn. Claude
+timeout. A process-held endpoint epoch permits only one coordinated restart
+across all overlapping clients, including staggered heartbeats. Codex requires
+MCP initialization before the captured turn. Claude
 Code marks Relay MCP as `alwaysLoad`, so it also waits for the connection before
 session startup. Hermes starts MCP discovery asynchronously, so its command
 hook retains the same-gateway recovery path for an early hook. The MCP client
@@ -102,7 +105,12 @@ therefore stable across projects. Codex's generated MCP manifest forwards
 approved provider, Relay, OpenTelemetry, AWS, proxy, certificate, and
 config-referenced credential environment names without storing their values;
 Claude Code supplies its normal MCP process environment. Use transparent
-`nemo-relay run` for project-specific configuration.
+`nemo-relay run` for project-specific configuration. The managed sidecar
+injects a forwarded provider key only for a request with provider authorization
+or Relay's private per-user client proof. Codex receives that derived proof in
+its managed provider headers; Relay consumes it before middleware, telemetry,
+or upstream forwarding. Claude Code and Hermes send their normal provider
+authorization, so an unrelated loopback caller cannot spend forwarded keys.
 
 Install the persistent integrations with:
 

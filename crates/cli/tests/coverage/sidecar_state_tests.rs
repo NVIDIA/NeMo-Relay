@@ -12,6 +12,65 @@ use tempfile::tempdir;
 
 use super::*;
 
+#[test]
+fn endpoint_leases_reset_recovery_only_after_the_last_client_closes() {
+    let runtime = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let first = EndpointLease::acquire(runtime.path(), url).unwrap();
+    assert!(first.fresh_epoch());
+    let mut epoch = RecoveryEpoch::new(url, "gateway-1");
+    epoch.restarts = 1;
+    write_recovery_epoch(runtime.path(), &epoch).unwrap();
+
+    let second = EndpointLease::acquire(runtime.path(), url).unwrap();
+    assert!(!second.fresh_epoch());
+    assert!(read_recovery_epoch(runtime.path(), url).unwrap().is_some());
+    drop(first);
+
+    let third = EndpointLease::acquire(runtime.path(), url).unwrap();
+    assert!(!third.fresh_epoch());
+    drop(second);
+    drop(third);
+
+    let next_epoch = EndpointLease::acquire(runtime.path(), url).unwrap();
+    assert!(next_epoch.fresh_epoch());
+    assert!(read_recovery_epoch(runtime.path(), url).unwrap().is_none());
+}
+
+#[test]
+fn recovery_epoch_rejects_identity_and_restart_count_drift() {
+    let runtime = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let path = recovery_path(runtime.path(), url);
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "service": "foreign",
+            "bootstrap_protocol": BOOTSTRAP_PROTOCOL_VERSION,
+            "url": url,
+            "instance_id": "gateway-1",
+            "restarts": 0,
+            "pending": false,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        read_recovery_epoch(runtime.path(), url)
+            .unwrap_err()
+            .contains("incompatible")
+    );
+
+    let mut epoch = RecoveryEpoch::new(url, "gateway-1");
+    epoch.restarts = 2;
+    write_recovery_epoch(runtime.path(), &epoch).unwrap();
+    assert!(
+        read_recovery_epoch(runtime.path(), url)
+            .unwrap_err()
+            .contains("incompatible")
+    );
+}
+
 const SHUTDOWN_TOKEN_ENV: &str = "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN";
 
 struct Environment {
@@ -333,6 +392,14 @@ fn authenticated_owned_sidecar_is_shut_down_and_cleaned_up() {
         "test-nonce",
         &key.proof("fingerprint", "test-nonce")
     ));
+    let client_token = key.client_token();
+    assert!(reloaded_key.verify_client_token(&client_token));
+    assert!(!reloaded_key.verify_client_token("hmac-sha256:00"));
+    assert_ne!(
+        client_token,
+        key.proof("fingerprint", "test-nonce"),
+        "health and client proofs must remain domain-separated"
+    );
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let owner = owner_path(dir.path(), &url);

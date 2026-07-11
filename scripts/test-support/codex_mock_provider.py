@@ -244,6 +244,7 @@ class Handler(BaseHTTPRequestHandler):
                 "method": "GET",
                 "path": self.path,
                 "authorization": self.headers.get("authorization"),
+                "relay_client_token": self.headers.get("x-nemo-relay-client-token"),
             }
         )
         if not path.endswith("/models"):
@@ -278,6 +279,7 @@ class Handler(BaseHTTPRequestHandler):
                 "path": self.path,
                 "authorization": self.headers.get("authorization"),
                 "x_api_key": self.headers.get("x-api-key"),
+                "relay_client_token": self.headers.get("x-nemo-relay-client-token"),
                 "model": request.get("model"),
                 "response_id": (response_stream[-1]["response"]["id"] if response_stream else None),
             }

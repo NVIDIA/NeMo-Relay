@@ -55,15 +55,31 @@ fn platform_resolution_supports_explicit_paths_and_windows_pathext() {
     );
 }
 
+#[cfg(windows)]
 #[test]
-fn windows_command_line_quotes_program_and_arguments() {
-    assert!(is_windows_command_script(Path::new("codex.CMD")));
-    assert!(!is_windows_command_script(Path::new("codex.exe")));
-    let command = windows_command_line(
-        Path::new(r"C:\Program Files\Relay & Co\codex.cmd"),
-        &["exec".into(), "a & b".into(), "%TOKEN%".into()],
-    );
-    assert!(command.contains(r#""C:\Program Files\Relay ^& Co\codex.cmd""#));
-    assert!(command.contains(r#""a ^& b""#));
-    assert!(command.contains("%%TOKEN%%"));
+fn windows_command_shim_preserves_metacharacter_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let shim = temp.path().join("agent shim.cmd");
+    let marker = temp.path().join("completed.txt");
+    std::fs::write(
+        &shim,
+        "@echo off\r\n\
+         @if not \"%~1\"==\"space & value\" exit /b 11\r\n\
+         @if not \"%~2\"==\"caret^value\" exit /b 12\r\n\
+         @if not \"%~3\"==\"%%TOKEN%%\" exit /b 13\r\n\
+         @echo ok>\"%NEMO_RELAY_ARGV_MARKER%\"\r\n",
+    )
+    .unwrap();
+    let argv = vec![
+        shim.display().to_string(),
+        "space & value".into(),
+        "caret^value".into(),
+        "%TOKEN%".into(),
+    ];
+    let status = std_command(&argv)
+        .env("NEMO_RELAY_ARGV_MARKER", &marker)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
 }

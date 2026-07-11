@@ -24,6 +24,9 @@ fn removes_hop_by_hop_headers() {
     assert!(!should_forward_request_header(&HeaderName::from_static(
         "host"
     )));
+    assert!(!should_forward_request_header(&HeaderName::from_static(
+        crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER
+    )));
     assert!(should_forward_request_header(&HeaderName::from_static(
         "authorization"
     )));
@@ -43,6 +46,30 @@ fn removes_hop_by_hop_headers() {
     assert!(should_record_header(&HeaderName::from_static(
         "x-request-id"
     )));
+}
+
+#[tokio::test]
+async fn prepared_gateway_request_consumes_private_client_proof() {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(
+            crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+            "hmac-sha256:private-proof",
+        )
+        .body(Body::from(r#"{"model":"gpt-test"}"#))
+        .unwrap();
+
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+
+    assert!(prepared.allow_environment_provider_auth);
+    assert!(
+        !prepared
+            .headers
+            .contains_key(crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER)
+    );
 }
 
 #[test]
@@ -435,6 +462,7 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
         body_bytes: axum::body::Bytes::new(),
         request_json: request_json.clone(),
         streaming: true,
+        allow_environment_provider_auth: true,
     };
 
     let start = build_llm_gateway_start(&prepared);
@@ -547,8 +575,7 @@ fn preserves_jwt_when_no_replacement_key_available() {
 
 #[test]
 fn injects_openai_bearer_when_inbound_has_no_auth() {
-    // NMF-86 mitigation: codex now sends no credentials, so the gateway must inject
-    // `Authorization: Bearer ${OPENAI_API_KEY}` on outbound forwards to api.openai.com.
+    // Foreground gateway mode retains the convenience of supplying its own provider key.
     let http = test_http_client();
     let inbound = HeaderMap::new();
     let env = |k: &str| match k {
@@ -557,7 +584,7 @@ fn injects_openai_bearer_when_inbound_has_no_auth() {
     };
     let builder = http.get("http://upstream/v1/responses");
     let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, env)
+        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, true, env)
             .build()
             .unwrap();
     assert_eq!(
@@ -575,10 +602,15 @@ fn injects_anthropic_x_api_key_for_anthropic_routes() {
         _ => None,
     };
     let builder = http.post("http://upstream/v1/messages");
-    let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::AnthropicMessages, &inbound, env)
-            .build()
-            .unwrap();
+    let built = inject_provider_auth_with_env(
+        builder,
+        ProviderRoute::AnthropicMessages,
+        &inbound,
+        true,
+        env,
+    )
+    .build()
+    .unwrap();
     assert_eq!(built.headers().get("x-api-key").unwrap(), "sk-ant-test");
     // Anthropic uses `x-api-key`, not Authorization. The gateway must not duplicate the secret
     // into a Bearer header — that would defeat the purpose of using the provider's standard
@@ -599,7 +631,7 @@ fn skips_injection_when_inbound_already_has_authorization() {
     let env = |_: &str| Some("sk-test-from-env".into());
     let builder = http.post("http://upstream/v1/responses");
     let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, env)
+        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, true, env)
             .build()
             .unwrap();
     // The builder doesn't carry inbound headers itself (forward_upstream_request adds them in a
@@ -615,9 +647,28 @@ fn skips_injection_when_env_var_unset() {
     let env = |_: &str| None;
     let builder = http.post("http://upstream/v1/responses");
     let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, env)
+        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, true, env)
             .build()
             .unwrap();
+    assert!(built.headers().get("authorization").is_none());
+}
+
+#[test]
+fn managed_sidecar_never_injects_forwarded_provider_credentials() {
+    let http = test_http_client();
+    let inbound = HeaderMap::new();
+    let env = |_: &str| Some("forwarded-secret".into());
+    let builder = http.post("http://upstream/v1/responses");
+    let built = inject_provider_auth_with_env(
+        builder,
+        ProviderRoute::OpenAiResponses,
+        &inbound,
+        false,
+        env,
+    )
+    .build()
+    .unwrap();
+
     assert!(built.headers().get("authorization").is_none());
 }
 

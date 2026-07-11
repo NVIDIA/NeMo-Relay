@@ -12,9 +12,10 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tempfile::tempdir;
-use toml_edit::{DocumentMut, Item};
+use toml_edit::{DocumentMut, Item, Value as TomlValue};
 
 use super::*;
+use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
 
 #[derive(Default)]
 struct FakeCodexHooksClient {
@@ -1085,7 +1086,9 @@ fn codex_install_rolls_back_all_files_when_trust_activation_fails() {
 #[test]
 fn repeated_codex_install_does_not_overwrite_original_backup() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("config.toml");
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, "model_provider = \"openai\"\n").unwrap();
 
     install_codex_config(&path, DEFAULT_URL).unwrap();
@@ -1095,6 +1098,42 @@ fn repeated_codex_install_does_not_overwrite_original_backup() {
         fs::read_to_string(backup_path(&path)).unwrap(),
         "model_provider = \"openai\"\n"
     );
+    let doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    let token = codex_provider_client_token(&doc).unwrap();
+    assert!(
+        BootstrapChallengeKey::load()
+            .unwrap()
+            .verify_client_token(token)
+    );
+}
+
+#[test]
+fn codex_upgrade_adds_client_proof_without_replacing_original_backup() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let original_backup = fs::read(backup_path(&path)).unwrap();
+
+    let mut legacy = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    legacy["model_providers"]["nemo-relay-openai"]
+        .as_table_mut()
+        .unwrap()
+        .remove("http_headers");
+    fs::write(&path, legacy.to_string()).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    assert_eq!(fs::read(backup_path(&path)).unwrap(), original_backup);
+    assert!(codex_provider_installed(DEFAULT_URL));
 }
 
 #[test]
@@ -1160,6 +1199,8 @@ supports_websockets = false
 fn codex_provider_installed_requires_active_managed_provider() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
+    let xdg = dir.path().join("xdg");
+    let _xdg = EnvVarGuard::set_path("XDG_CONFIG_HOME", &xdg);
     let codex_dir = dir.path().join(".codex");
     fs::create_dir_all(&codex_dir).unwrap();
     let path = codex_dir.join("config.toml");
@@ -1178,6 +1219,26 @@ supports_websockets = false
     )
     .unwrap();
 
+    assert!(!codex_provider_installed(DEFAULT_URL));
+    assert!(
+        !xdg.join("nemo-relay/bootstrap/fingerprint-hmac.key")
+            .exists(),
+        "read-only provider diagnosis must not create bootstrap state"
+    );
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    assert!(codex_provider_installed(DEFAULT_URL));
+    let mut tampered = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    tampered["model_providers"]["nemo-relay-openai"]["http_headers"]
+        .as_inline_table_mut()
+        .unwrap()
+        .insert(
+            BOOTSTRAP_CLIENT_TOKEN_HEADER,
+            TomlValue::from("hmac-sha256:wrong"),
+        );
+    fs::write(&path, tampered.to_string()).unwrap();
     assert!(!codex_provider_installed(DEFAULT_URL));
     install_codex_config(&path, DEFAULT_URL).unwrap();
     assert!(codex_provider_installed(DEFAULT_URL));
@@ -2507,16 +2568,46 @@ fn codex_hook_command_uses_cmd_quoting_for_windows_paths() {
 
     assert_eq!(
         command,
-        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
+        r#""C:\Program Files\NeMo 100%%cd:~,%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
     );
     assert_eq!(
         codex_plugin_hook_command_for_platform(&relay, true),
-        r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
+        r#""C:\Program Files\NeMo 100%%cd:~,%%\bin\nemo-relay.exe" hook-forward codex --gateway-url http://127.0.0.1:47632"#
     );
     assert_eq!(
         shell_quote_arg_for_platform("foo&bar", true),
-        r#""foo^&bar""#
+        r#""foo&bar""#
     );
+    assert_eq!(shell_quote_arg_for_platform("", true), r#""""#);
+}
+
+#[cfg(windows)]
+#[test]
+fn generated_windows_hook_command_executes_exact_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let bin = temp.path().join("Relay & %USERPROFILE% Tools");
+    std::fs::create_dir(&bin).unwrap();
+    let relay = bin.join("nemo-relay.cmd");
+    let marker = temp.path().join("hook-ran.txt");
+    std::fs::write(
+        &relay,
+        "@echo off\r\n\
+         @if not \"%~1\"==\"hook-forward\" exit /b 11\r\n\
+         @if not \"%~2\"==\"codex\" exit /b 12\r\n\
+         @if not \"%~3\"==\"--gateway-url\" exit /b 13\r\n\
+         @if not \"%~4\"==\"http://127.0.0.1:47632\" exit /b 14\r\n\
+         @echo ok>\"%NEMO_RELAY_HOOK_MARKER%\"\r\n",
+    )
+    .unwrap();
+    let command = codex_plugin_hook_command_for_platform(&relay, true);
+    let status = std::process::Command::new("cmd.exe")
+        .args(["/d", "/v:off", "/s", "/c", &command])
+        .env("NEMO_RELAY_HOOK_MARKER", &marker)
+        .status()
+        .unwrap();
+
+    assert!(status.success(), "{command}");
+    assert_eq!(std::fs::read_to_string(marker).unwrap().trim(), "ok");
 }
 
 #[test]

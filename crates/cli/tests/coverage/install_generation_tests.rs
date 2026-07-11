@@ -36,6 +36,28 @@ fn retirement_without_invalidation_only_releases_the_lock() {
 }
 
 #[test]
+fn active_generation_guard_fences_retirement_until_startup_finishes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(GENERATION_FILE_NAME);
+    write_new_generation(&path).unwrap();
+    let generation = InstallGeneration::capture(path.clone()).unwrap();
+    let guard = generation.guard_current().unwrap();
+
+    let error = match GenerationRetirement::acquire_with_timeout(&path, Duration::from_millis(20)) {
+        Err(error) => error,
+        Ok(_) => panic!("retirement must wait for the active startup guard"),
+    };
+    assert!(error.contains("timed out waiting"), "{error}");
+
+    drop(guard);
+    assert!(
+        GenerationRetirement::acquire_with_timeout(&path, Duration::from_secs(1))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn rollback_can_restore_with_the_original_lock_still_held() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(GENERATION_FILE_NAME);

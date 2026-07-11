@@ -79,14 +79,20 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
             ));
         }
     }
-    let mut managed = approvals
-        .iter()
-        .filter_map(|entry| {
-            let candidate = entry.get("command").and_then(Value::as_str)?;
-            let event = entry.get("event").and_then(Value::as_str)?;
-            is_managed_hook_command(candidate).then_some((event, candidate))
-        })
-        .collect::<Vec<_>>();
+    let mut managed = Vec::new();
+    for entry in approvals {
+        let Some(candidate) = entry.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if !is_managed_hook_command(candidate) {
+            continue;
+        }
+        let event = entry
+            .get("event")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Hermes Relay hook approval is missing its event".to_string())?;
+        managed.push((event, candidate));
+    }
     managed.sort_unstable();
     let mut expected = HERMES_HOOK_EVENTS
         .iter()

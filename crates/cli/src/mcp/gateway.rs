@@ -45,10 +45,15 @@ impl GatewayPlan {
         })
     }
 
-    pub(super) async fn acquire(self) -> Result<GatewayLease, CliError> {
-        let endpoint = ensure_gateway(self.spec.clone(), self.generation.clone()).await?;
+    pub(super) async fn acquire(mut self) -> Result<GatewayLease, CliError> {
+        let acquisition = acquire_gateway(self.spec.clone(), self.generation.clone()).await?;
+        let endpoint = acquisition.endpoint;
+        self.spec = acquisition.spec;
         let monitor = tokio::spawn(async move { self.monitor(endpoint).await });
-        Ok(GatewayLease { monitor })
+        Ok(GatewayLease {
+            monitor,
+            _endpoint_lease: acquisition.lease,
+        })
     }
 
     async fn monitor(self, endpoint: crate::sidecar::GatewayEndpoint) -> Result<(), CliError> {
@@ -70,7 +75,13 @@ impl GatewayPlan {
                         })
                 }
             },
-            move |_bind| ensure_gateway(restart_spec.clone(), restart_generation.clone()),
+            move |_bind, expected_instance| {
+                recover_gateway(
+                    restart_spec.clone(),
+                    restart_generation.clone(),
+                    expected_instance,
+                )
+            },
             move || {
                 let generation = verify_generation.clone();
                 async move { verify_generation_async(generation).await }
@@ -104,13 +115,17 @@ impl GatewayPlan {
             instance_id,
         };
         let monitor = tokio::spawn(async move { plan.monitor(endpoint).await });
-        GatewayLease { monitor }
+        GatewayLease {
+            monitor,
+            _endpoint_lease: None,
+        }
     }
 }
 
 /// An active liveness lease. Dropping it stops heartbeats immediately.
 pub(super) struct GatewayLease {
     monitor: tokio::task::JoinHandle<Result<(), CliError>>,
+    _endpoint_lease: Option<crate::sidecar::EndpointLease>,
 }
 
 impl GatewayLease {
@@ -127,30 +142,37 @@ impl Drop for GatewayLease {
     }
 }
 
-async fn ensure_gateway(
+async fn acquire_gateway(
     spec: GatewaySpec,
     generation: Option<InstallGeneration>,
-) -> Result<GatewayEndpoint, CliError> {
+) -> Result<crate::sidecar::GatewayAcquisition, CliError> {
     tokio::task::spawn_blocking(move || {
-        if let Some(generation) = generation.as_ref() {
-            generation.verify_current()?;
-        }
-        let endpoint = spec.ensure()?;
-        if let Some(generation) = generation.as_ref() {
-            verify_bootstrap_generation(generation)?;
-        }
-        Ok(endpoint)
+        let _generation_guard = generation
+            .as_ref()
+            .map(InstallGeneration::guard_current)
+            .transpose()?;
+        spec.acquire()
     })
     .await
     .map_err(|error| CliError::Launch(format!("gateway bootstrap task failed: {error}")))?
     .map_err(CliError::Launch)
 }
 
-pub(super) fn verify_bootstrap_generation(generation: &InstallGeneration) -> Result<(), String> {
-    // A replacement MCP may already be reusing a compatible gateway started between the two
-    // generation checks. Leave a ready gateway for reuse or normal idle cleanup. Failures before
-    // readiness remain armed and are terminated by the sidecar launcher.
-    generation.verify_current()
+async fn recover_gateway(
+    spec: GatewaySpec,
+    generation: Option<InstallGeneration>,
+    expected_instance: String,
+) -> Result<GatewayEndpoint, CliError> {
+    tokio::task::spawn_blocking(move || {
+        let _generation_guard = generation
+            .as_ref()
+            .map(InstallGeneration::guard_current)
+            .transpose()?;
+        spec.recover(&expected_instance)
+    })
+    .await
+    .map_err(|error| CliError::Launch(format!("gateway recovery task failed: {error}")))?
+    .map_err(CliError::Launch)
 }
 
 async fn verify_generation_async(generation: Option<InstallGeneration>) -> Result<(), CliError> {
@@ -175,7 +197,7 @@ pub(super) async fn maintain_gateway_with<H, HFuture, R, RFuture>(
 where
     H: FnMut(String) -> HFuture,
     HFuture: std::future::Future<Output = Result<bool, CliError>>,
-    R: FnMut(SocketAddr) -> RFuture,
+    R: FnMut(SocketAddr, String) -> RFuture,
     RFuture: std::future::Future<Output = Result<GatewayEndpoint, CliError>>,
 {
     maintain_gateway_with_generation(
@@ -201,7 +223,7 @@ pub(super) async fn maintain_gateway_with_generation<H, HFuture, R, RFuture, G, 
 where
     H: FnMut(String) -> HFuture,
     HFuture: std::future::Future<Output = Result<bool, CliError>>,
-    R: FnMut(SocketAddr) -> RFuture,
+    R: FnMut(SocketAddr, String) -> RFuture,
     RFuture: std::future::Future<Output = Result<GatewayEndpoint, CliError>>,
     G: FnMut() -> GFuture,
     GFuture: std::future::Future<Output = Result<(), CliError>>,
@@ -239,7 +261,7 @@ async fn maintain_gateway_instances_with_generation<H, HFuture, R, RFuture, G, G
 where
     H: FnMut(String, String) -> HFuture,
     HFuture: std::future::Future<Output = Result<Option<String>, CliError>>,
-    R: FnMut(SocketAddr) -> RFuture,
+    R: FnMut(SocketAddr, String) -> RFuture,
     RFuture: std::future::Future<Output = Result<GatewayEndpoint, CliError>>,
     G: FnMut() -> GFuture,
     GFuture: std::future::Future<Output = Result<(), CliError>>,
@@ -269,7 +291,7 @@ where
         }
         recovery.require_restart()?;
         verify_generation().await?;
-        let recovered = restart(bind).await?;
+        let recovered = restart(bind, recovery.instance_id().into()).await?;
         recovery.observe(recovered.instance_id.clone())?;
         endpoint = recovered;
     }

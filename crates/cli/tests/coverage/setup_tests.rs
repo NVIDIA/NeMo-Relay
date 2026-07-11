@@ -81,10 +81,8 @@ impl Drop for EnvScope {
     }
 }
 
-// Stub-binary detection relies on the Unix executable bit. Windows-side agent presence checks
-// use a different mechanism (e.g. `.exe` extension matching), so this lookup test is gated to
-// Unix to keep cross-platform CI green; covering the Windows code path is left to a separate
-// test once the launcher grows real Windows support.
+// This stub-binary test specifically verifies Unix executable-bit handling. Platform-neutral
+// PATH/PATHEXT resolution and Windows command-shim execution have separate focused coverage.
 #[cfg(unix)]
 #[test]
 fn detect_installed_agents_finds_binaries_on_path() {

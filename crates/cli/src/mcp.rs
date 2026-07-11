@@ -61,9 +61,7 @@ where
 }
 
 #[cfg(test)]
-use gateway::{
-    maintain_gateway_with, maintain_gateway_with_generation, verify_bootstrap_generation,
-};
+use gateway::{maintain_gateway_with, maintain_gateway_with_generation};
 #[cfg(test)]
 use protocol::{MCP_PROTOCOL_VERSION, jsonrpc_error, response_for};
 #[cfg(test)]

@@ -179,6 +179,19 @@ fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
 }
 
 #[test]
+fn cli_config_help_keeps_hermes_persistent_state_under_uninstall() {
+    let output = Command::new(gateway_bin())
+        .args(["config", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nemo-relay uninstall hermes"));
+    assert!(!stdout.contains("Hermes-scoped reset also removes"));
+}
+
+#[test]
 fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = Command::new(gateway_bin())
@@ -993,6 +1006,51 @@ fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
     assert!(
         !status.success(),
         "MCP client unexpectedly restarted the shared gateway twice"
+    );
+}
+
+#[test]
+fn cli_mcp_staggered_clients_share_one_endpoint_restart_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut fast_client, _fast_stdin) = start_mcp_client_with_idle_timeout(
+        temp.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        "codex",
+        "1",
+    );
+    let first = wait_for_owned_sidecar(temp.path(), "codex", None);
+    let first_pid = first["pid"].as_u64().unwrap();
+    let address = first["url"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("http://")
+        .unwrap()
+        .parse()
+        .unwrap();
+    // Offset the heartbeat phases while keeping the persistent fingerprint identical.
+    thread::sleep(Duration::from_millis(150));
+    let (mut slow_client, _slow_stdin) =
+        start_mcp_client_with_idle_timeout(temp.path(), address, "claude", "1");
+
+    stop_owned_sidecar(&first);
+    let second = wait_for_owned_sidecar(temp.path(), "codex", Some(first_pid));
+    let second_pid = second["pid"].as_u64().unwrap();
+    stop_owned_sidecar(&second);
+
+    assert!(!wait_child(&mut fast_client).success());
+    assert!(!wait_child(&mut slow_client).success());
+    let unexpected = find_runtime_files_matching(temp.path(), "sidecar-", ".owner.json")
+        .into_iter()
+        .filter_map(|path| std::fs::read(path).ok())
+        .filter_map(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .any(|owner| {
+            owner["pid"]
+                .as_u64()
+                .is_some_and(|pid| pid != first_pid && pid != second_pid)
+        });
+    assert!(
+        !unexpected,
+        "a staggered MCP client restarted the endpoint a second time"
     );
 }
 

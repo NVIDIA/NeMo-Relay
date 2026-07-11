@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
 
-use crate::config::CodingAgent;
+use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, CodingAgent};
 use crate::installer::generated_hooks;
 #[cfg(test)]
 use crate::installer::merge_hooks;
@@ -658,6 +658,9 @@ pub(super) fn prepare_codex_config(path: &Path) -> Result<(), String> {
 }
 
 pub(super) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(), String> {
+    let client_token = BootstrapChallengeKey::load()
+        .map_err(|error| error.to_string())?
+        .client_token();
     let raw = read_optional_text(path)?;
     let mut doc = raw
         .parse::<DocumentMut>()
@@ -676,6 +679,9 @@ pub(super) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
     provider["wire_api"] = value("responses");
     provider["requires_openai_auth"] = value(true);
     provider["supports_websockets"] = value(false);
+    let mut headers = InlineTable::new();
+    headers.insert(BOOTSTRAP_CLIENT_TOKEN_HEADER, TomlValue::from(client_token));
+    provider["http_headers"] = Item::Value(TomlValue::InlineTable(headers));
     providers["nemo-relay-openai"] = Item::Table(provider);
 
     if let Err(error) = atomic_write(path, doc.to_string().as_bytes()) {
@@ -1101,7 +1107,22 @@ pub(super) fn codex_provider_installed(gateway_url: &str) -> bool {
     let Ok(doc) = raw.parse::<DocumentMut>() else {
         return false;
     };
+    let Ok(Some(key)) = BootstrapChallengeKey::load_existing() else {
+        return false;
+    };
     codex_config_doc_has_managed_install(&doc, gateway_url)
+        && codex_provider_client_token(&doc).is_some_and(|token| key.verify_client_token(token))
+}
+
+pub(super) fn codex_provider_client_token(doc: &DocumentMut) -> Option<&str> {
+    doc.get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("nemo-relay-openai"))
+        .and_then(Item::as_table)
+        .and_then(|provider| provider.get("http_headers"))
+        .and_then(Item::as_inline_table)
+        .and_then(|headers| headers.get(BOOTSTRAP_CLIENT_TOKEN_HEADER))
+        .and_then(TomlValue::as_str)
 }
 
 pub(super) fn codex_hooks_installed(path: &Path) -> Result<bool, String> {

@@ -100,65 +100,26 @@ fn resolve_candidate(base: &Path, extensions: &[OsString]) -> Option<PathBuf> {
     })
 }
 
-/// Creates a synchronous command, including the `cmd.exe` bridge required by Windows shims.
+/// Creates a synchronous command.
+///
+/// Rust's Windows process implementation recognizes `.cmd` and `.bat` programs and applies its
+/// hardened batch-file argument encoder. Keeping process construction here argv-based avoids
+/// reinterpreting host arguments through a second, hand-built shell command line.
 pub(crate) fn std_command(argv: &[String]) -> Command {
     debug_assert!(!argv.is_empty());
     let program = resolve_executable(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
-    #[cfg(windows)]
-    if is_windows_command_script(&program) {
-        let mut command =
-            Command::new(std::env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe")));
-        command
-            .args(["/d", "/s", "/c"])
-            .arg(windows_command_line(&program, &argv[1..]));
-        return command;
-    }
     let mut command = Command::new(program);
     command.args(&argv[1..]);
     command
 }
 
-/// Creates an asynchronous command with the same platform behavior as [`std_command`].
+/// Creates an asynchronous command with the same argv behavior as [`std_command`].
 pub(crate) fn tokio_command(argv: &[String]) -> tokio::process::Command {
     debug_assert!(!argv.is_empty());
     let program = resolve_executable(&argv[0]).unwrap_or_else(|| PathBuf::from(&argv[0]));
-    #[cfg(windows)]
-    if is_windows_command_script(&program) {
-        let mut command = tokio::process::Command::new(
-            std::env::var_os("COMSPEC").unwrap_or_else(|| OsString::from("cmd.exe")),
-        );
-        command
-            .args(["/d", "/s", "/c"])
-            .arg(windows_command_line(&program, &argv[1..]));
-        return command;
-    }
     let mut command = tokio::process::Command::new(program);
     command.args(&argv[1..]);
     command
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn is_windows_command_script(program: &Path) -> bool {
-    program
-        .extension()
-        .and_then(OsStr::to_str)
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-        })
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn windows_command_line(program: &Path, args: &[String]) -> String {
-    std::iter::once(crate::plugin_host::shell_quote_arg_for_platform(
-        &program.display().to_string(),
-        true,
-    ))
-    .chain(
-        args.iter()
-            .map(|argument| crate::plugin_host::shell_quote_arg_for_platform(argument, true)),
-    )
-    .collect::<Vec<_>>()
-    .join(" ")
 }
 
 #[cfg(test)]

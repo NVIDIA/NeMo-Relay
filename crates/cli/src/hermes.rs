@@ -28,9 +28,9 @@ use self::files::{
 use self::trust::{json_bytes, parse_json_object, trusted_hooks, verify_trust};
 use crate::error::CliError;
 use crate::file_io::atomic_write;
-use crate::install_generation::GENERATION_FILE_ENV;
 #[cfg(test)]
 use crate::install_generation::GENERATION_FILE_NAME;
+use crate::install_generation::{GENERATION_FILE_ENV, GenerationRetirement};
 use crate::installer::HERMES_HOOK_EVENTS;
 use crate::sidecar::DEFAULT_BIND;
 pub(crate) use config::{persistent_hook_command, transparent_config};
@@ -59,14 +59,16 @@ pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<Path
     let environment = env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
         .collect::<Vec<_>>();
-    install_persistent_with(
+    let mut retirement = retire_generation_before_gateway_stop(&paths)?;
+    let result = install_persistent_with(
         paths,
         &relay,
         &environment,
         plugin_config.as_ref(),
         SystemTime::now(),
         atomic_write,
-    )
+    );
+    finish_generation_mutation(result, retirement.as_mut(), "install")
 }
 
 pub(crate) fn persistent_state_exists(config: &Path) -> bool {
@@ -88,11 +90,53 @@ pub(crate) fn uninstall_persistent(config: &Path) -> Result<Vec<PathBuf>, CliErr
     if !persistent_paths_have_managed_state(&paths)? {
         return Ok(Vec::new());
     }
-    uninstall_persistent_with(paths, atomic_write)
+    let mut retirement = retire_generation_before_gateway_stop(&paths)?;
+    let result = uninstall_persistent_with(paths, atomic_write);
+    finish_generation_mutation(result, retirement.as_mut(), "uninstall")
 }
 
-pub(crate) fn retire_persistent_gateway() -> Result<(), CliError> {
-    crate::plugin_host::stop_plugin_gateway().map_err(CliError::Install)
+fn retire_generation_before_gateway_stop(
+    paths: &PersistentPaths,
+) -> Result<Option<GenerationRetirement>, CliError> {
+    let mut retirement =
+        GenerationRetirement::acquire(&paths.generation).map_err(CliError::Install)?;
+    if let Some(retirement) = retirement.as_mut() {
+        retirement
+            .invalidate_for_replacement()
+            .map_err(CliError::Install)?;
+    }
+    if let Err(error) = crate::plugin_host::stop_plugin_gateway() {
+        if let Some(retirement) = retirement.as_mut()
+            && let Err(restore_error) = retirement.restore_after_rollback()
+        {
+            return Err(CliError::Install(format!(
+                "{error}; additionally failed to restore the Hermes MCP generation: {restore_error}"
+            )));
+        }
+        return Err(CliError::Install(error));
+    }
+    Ok(retirement)
+}
+
+fn finish_generation_mutation<T>(
+    result: Result<T, CliError>,
+    retirement: Option<&mut GenerationRetirement>,
+    operation: &str,
+) -> Result<T, CliError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let Some(retirement) = retirement else {
+                return Err(error);
+            };
+            match retirement.restore_after_rollback() {
+                Ok(()) => Err(error),
+                Err(restore_error) => Err(CliError::Install(format!(
+                    "{error}; additionally failed to restore the Hermes MCP generation after {operation}: {restore_error}"
+                ))),
+            }
+        }
+    }
 }
 
 fn persistent_paths_have_managed_state(paths: &PersistentPaths) -> Result<bool, CliError> {
@@ -438,18 +482,24 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
             ));
         }
     }
-    let mut managed = config
+    let hooks = config
         .get("hooks")
         .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|hooks| hooks.iter())
-        .flat_map(|(event, groups)| {
-            groups.as_array().into_iter().flatten().filter_map(|group| {
-                let candidate = group.get("command").and_then(Value::as_str)?;
-                is_managed_hook_command(candidate).then_some((event.as_str(), candidate))
-            })
-        })
-        .collect::<Vec<_>>();
+        .ok_or_else(|| "Hermes hooks are missing".to_string())?;
+    let mut managed = Vec::new();
+    for (event, groups) in hooks {
+        let groups = groups
+            .as_array()
+            .ok_or_else(|| format!("Hermes {event} hooks must be an array"))?;
+        for group in groups {
+            let Some(candidate) = group.get("command").and_then(Value::as_str) else {
+                continue;
+            };
+            if is_managed_hook_command(candidate) {
+                managed.push((event.as_str(), candidate));
+            }
+        }
+    }
     managed.sort_unstable();
     let mut expected = HERMES_HOOK_EVENTS
         .iter()

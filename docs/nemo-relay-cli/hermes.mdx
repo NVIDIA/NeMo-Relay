@@ -89,10 +89,11 @@ the command performs one coordinated recovery and retries the original payload
 once. The payload is not reconstructed or replaced.
 
 Concurrent Hermes, Claude Code, and Codex MCP clients can share one compatible
-gateway. Every open MCP client heartbeats the gateway. If the gateway becomes
-unhealthy, a client performs one coordinated restart; a second failure exits
-that MCP process with an error. After the last client closes, the gateway exits
-after 300 idle seconds by default. Set
+gateway. Every open MCP client heartbeats the gateway. An endpoint-scoped
+recovery epoch permits one coordinated restart across all overlapping clients,
+even when one client misses the replacement between heartbeat ticks. A second
+failure exits those MCP clients with an error. After the last client closes,
+the gateway exits after 300 idle seconds by default. Set
 `NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS` before setup and launch to choose another
 positive timeout.
 
@@ -155,7 +156,9 @@ This mode starts a gateway on an OS-assigned loopback port and exports
 linking the rest of the active Hermes profile state. The user config is never
 rewritten, so concurrent transparent and bare Hermes processes cannot observe
 each other's temporary hook configuration. The overlay is removed after the
-wrapped process exits.
+wrapped process exits. On Windows, profile directories use non-privileged
+directory junctions rather than symbolic links, so Developer Mode or elevation
+is not required.
 
 Inspect the launch without changing files or starting Hermes:
 

@@ -70,6 +70,140 @@ struct ReadyRecord {
     instance_id: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(super) struct RecoveryEpoch {
+    service: String,
+    bootstrap_protocol: u64,
+    url: String,
+    pub(super) instance_id: String,
+    pub(super) restarts: u8,
+    pub(super) pending: bool,
+}
+
+impl RecoveryEpoch {
+    pub(super) fn new(url: &str, instance_id: &str) -> Self {
+        Self {
+            service: "nemo-relay".into(),
+            bootstrap_protocol: BOOTSTRAP_PROTOCOL_VERSION,
+            url: url.into(),
+            instance_id: instance_id.into(),
+            restarts: 0,
+            pending: false,
+        }
+    }
+}
+
+/// Process-lifetime registration used to delimit one shared recovery epoch.
+pub(crate) struct EndpointLease {
+    file: Option<fs::File>,
+    path: PathBuf,
+    fresh_epoch: bool,
+}
+
+impl EndpointLease {
+    pub(crate) fn acquire(runtime: &Path, url: &str) -> Result<Self, String> {
+        create_private_runtime_dir(runtime).map_err(|error| {
+            format!(
+                "failed to create bootstrap state directory {}: {error}",
+                runtime.display()
+            )
+        })?;
+        let registry_path = runtime.join(format!("{}-leases.lock", lock_name(url)));
+        let _registry = lock_file_for(&registry_path, SIDECAR_LOCK_TIMEOUT)?;
+        let prefix = format!("{}-lease-", lock_name(url));
+        let mut active = false;
+        let entries = fs::read_dir(runtime).map_err(|error| {
+            format!(
+                "failed to inspect bootstrap leases in {}: {error}",
+                runtime.display()
+            )
+        })?;
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !name.starts_with(&prefix) || !name.ends_with(".lock") {
+                continue;
+            }
+            let path = entry.path();
+            let file = match OpenOptions::new().read(true).write(true).open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!(
+                        "failed to inspect bootstrap lease {}: {error}",
+                        path.display()
+                    ));
+                }
+            };
+            match try_lock_exclusive(&file) {
+                Ok(LockAttempt::Acquired) => {
+                    drop(file);
+                    let _ = fs::remove_file(path);
+                }
+                Ok(LockAttempt::Contended) => active = true,
+                Err(error) => {
+                    return Err(format!(
+                        "failed to inspect bootstrap lease {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        let path = runtime.join(format!(
+            "{prefix}{}-{}.lock",
+            std::process::id(),
+            uuid::Uuid::now_v7()
+        ));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|error| {
+                format!(
+                    "failed to create bootstrap lease {}: {error}",
+                    path.display()
+                )
+            })?;
+        match try_lock_exclusive(&file) {
+            Ok(LockAttempt::Acquired) => {}
+            Ok(LockAttempt::Contended) => {
+                return Err(format!(
+                    "new bootstrap lease {} was unexpectedly contended",
+                    path.display()
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to lock bootstrap lease {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+        if !active {
+            let _ = fs::remove_file(recovery_path(runtime, url));
+        }
+        Ok(Self {
+            file: Some(file),
+            path,
+            fresh_epoch: !active,
+        })
+    }
+
+    pub(crate) fn fresh_epoch(&self) -> bool {
+        self.fresh_epoch
+    }
+}
+
+impl Drop for EndpointLease {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 pub(super) fn read_owner_record(path: &Path) -> Result<Option<OwnerRecord>, String> {
     let raw = match fs::read(path) {
         Ok(raw) => raw,
@@ -151,7 +285,11 @@ pub(crate) fn lock_endpoint_for(
     timeout: Duration,
 ) -> Result<fs::File, String> {
     let path = lock_path(runtime, url);
-    let lock = open_lock(&path)?;
+    lock_file_for(&path, timeout)
+}
+
+fn lock_file_for(path: &Path, timeout: Duration) -> Result<fs::File, String> {
+    let lock = open_lock(path)?;
     let deadline = Instant::now() + timeout;
     loop {
         match try_lock_exclusive(&lock) {
@@ -173,6 +311,48 @@ pub(crate) fn lock_endpoint_for(
             }
         }
     }
+}
+
+pub(super) fn recovery_path(runtime: &Path, url: &str) -> PathBuf {
+    runtime.join(format!("sidecar-{}.recovery.json", lock_name(url)))
+}
+
+pub(super) fn read_recovery_epoch(
+    runtime: &Path,
+    url: &str,
+) -> Result<Option<RecoveryEpoch>, String> {
+    let path = recovery_path(runtime, url);
+    let raw = match fs::read(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to read gateway recovery epoch {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let epoch = serde_json::from_slice::<RecoveryEpoch>(&raw)
+        .map_err(|error| format!("invalid gateway recovery epoch {}: {error}", path.display()))?;
+    if epoch.service != "nemo-relay"
+        || epoch.bootstrap_protocol != BOOTSTRAP_PROTOCOL_VERSION
+        || epoch.url != url
+        || epoch.instance_id.is_empty()
+        || epoch.restarts > 1
+    {
+        return Err(format!(
+            "incompatible gateway recovery epoch {}",
+            path.display()
+        ));
+    }
+    Ok(Some(epoch))
+}
+
+pub(super) fn write_recovery_epoch(runtime: &Path, epoch: &RecoveryEpoch) -> Result<(), String> {
+    let path = recovery_path(runtime, &epoch.url);
+    let bytes = serde_json::to_vec(epoch)
+        .map_err(|error| format!("failed to encode gateway recovery epoch: {error}"))?;
+    atomic_write(&path, &bytes)
 }
 
 pub(super) fn open_lock(path: &Path) -> Result<fs::File, String> {

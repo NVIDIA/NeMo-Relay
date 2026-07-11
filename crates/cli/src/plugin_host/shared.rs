@@ -42,7 +42,9 @@ fn posix_quote_arg(raw: &str) -> String {
 }
 
 fn cmd_quote_arg(raw: &str) -> String {
-    if raw.chars().all(|ch| {
+    if raw.is_empty() {
+        "\"\"".into()
+    } else if raw.chars().all(|ch| {
         ch.is_ascii_alphanumeric()
             || matches!(ch, '/' | '\\' | ':' | '.' | '_' | '-' | '=' | '@' | '+')
     }) {
@@ -51,14 +53,17 @@ fn cmd_quote_arg(raw: &str) -> String {
         let mut escaped = String::new();
         for ch in raw.chars() {
             match ch {
-                '%' => escaped.push_str("%%"),
-                '"' | '^' | '&' | '|' | '<' | '>' => {
-                    escaped.push('^');
-                    escaped.push(ch);
-                }
+                // cmd expands percent variables even inside quotes. Insert a zero-length
+                // substring expansion before the literal percent, matching Rust's hardened
+                // batch-file encoder, so values such as `%USERPROFILE%` remain literal.
+                '%' => escaped.push_str("%%cd:~,%%"),
+                // Double quotes are represented by a paired quote inside a quoted cmd token.
+                '"' => escaped.push_str("\"\""),
                 _ => escaped.push(ch),
             }
         }
+        // cmd metacharacters such as &, |, <, >, and ^ are literal inside this quote pair. A
+        // caret inside the quotes would become part of the argument, so do not add one.
         format!("\"{escaped}\"")
     }
 }

@@ -2696,6 +2696,32 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
 }
 
 #[test]
+fn uninstall_restores_mcp_generation_when_gateway_refresh_fails() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex");
+    let setup_runner = MockSetupRunner {
+        failing_call: Some("refresh gateway".into()),
+        ..MockSetupRunner::default()
+    };
+    let options = options(dir.path());
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+
+    let error =
+        uninstall_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("refresh gateway failed"));
+    previous.verify_current().unwrap();
+    assert!(layout.state_path.exists());
+    assert!(layout.plugin_root.exists());
+    assert_eq!(setup_runner.calls(), vec!["refresh gateway"]);
+    assert!(runner.commands().is_empty());
+}
+
+#[test]
 fn force_install_restores_previous_install_after_doctor_failure() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()

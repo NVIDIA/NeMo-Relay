@@ -532,18 +532,6 @@ fn version_probe_preserves_known_wrappers_and_validates_opaque_ones() {
     );
 }
 
-#[test]
-fn windows_agent_command_line_quotes_paths_and_metacharacters() {
-    let line = crate::agent_process::windows_command_line(
-        Path::new(r"C:\Program Files\Codex&Tools\npx.cmd"),
-        &["codex".into(), "--version".into(), "100%".into()],
-    );
-
-    assert!(line.contains(r#""C:\Program Files\Codex^&Tools\npx.cmd""#));
-    assert!(line.contains("codex --version"));
-    assert!(line.contains(r#""100%%""#));
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
@@ -636,6 +624,9 @@ fn prepares_hermes_hook_environment() {
     std::fs::write(&hooks_path, "model:\n  default: test\n").unwrap();
     let state = hooks_path.parent().unwrap().join("state.db");
     std::fs::write(&state, "state").unwrap();
+    let cache = hooks_path.parent().unwrap().join("cache");
+    std::fs::create_dir(&cache).unwrap();
+    std::fs::write(cache.join("entry"), "cached").unwrap();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs {
@@ -676,6 +667,15 @@ fn prepares_hermes_hook_environment() {
     assert!(hooks.contains("hook-forward hermes"));
     assert!(overlay.join("state.db").exists());
     assert_eq!(
+        std::fs::read_to_string(overlay.join("cache/entry")).unwrap(),
+        "cached"
+    );
+    std::fs::write(overlay.join("cache/through-overlay"), "live").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(cache.join("through-overlay")).unwrap(),
+        "live"
+    );
+    assert_eq!(
         std::fs::read_to_string(&hooks_path).unwrap(),
         "model:\n  default: test\n"
     );
@@ -684,6 +684,20 @@ fn prepares_hermes_hook_environment() {
     prepared.restore().unwrap();
     assert!(hooks_path.exists());
     assert!(!overlay.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn process_private_directories_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = tempfile::tempdir().unwrap();
+    let path = private_temp_dir(parent.path(), "relay-private").unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    std::fs::remove_dir(path).unwrap();
 }
 
 #[test]
@@ -960,12 +974,8 @@ fn exit_code_preserves_normal_and_shell_wrapped_codes() {
     assert_eq!(exit_code(status), ExitCode::from(44));
 }
 
-// This e2e test relies on argv[0] being a script literally named after a known agent (so
-// `CodingAgent::infer` recognises the basename without an explicit `--agent`). On Windows the
-// only practical way to invoke a `.cmd` / `.bat` shim is via `cmd.exe /C script.cmd`, which
-// makes argv[0] = `cmd.exe` and breaks inference. Gating Unix-only keeps cross-platform CI
-// green; real Windows agent-spawn coverage can come back with a `.exe` fake binary once the
-// launcher grows Windows support.
+// This e2e test uses Unix process exit semantics and a shell script named after the inferred host.
+// Windows `.cmd` argv delivery is covered independently by `agent_process_tests`.
 #[cfg(unix)]
 #[tokio::test]
 async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {

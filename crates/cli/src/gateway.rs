@@ -27,7 +27,7 @@ use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 
 use crate::alignment::{self, GatewayRouteKind};
-use crate::config::header_string;
+use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, header_string};
 use crate::error::CliError;
 use crate::server::AppState;
 use crate::session::{GatewayCallPrep, GatewaySessionFinish, LlmGatewayStart, SessionManager};
@@ -50,7 +50,9 @@ pub(crate) async fn passthrough(
     request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
-    let prepared = prepare_gateway_request(&state.config, request).await?;
+    let allow_environment_provider_auth = state.allows_environment_provider_auth(request.headers());
+    let prepared =
+        prepare_gateway_request(&state.config, request, allow_environment_provider_auth).await?;
     let prep = state
         .sessions
         .prepare_gateway_call(&prepared.headers, build_llm_gateway_start(&prepared))
@@ -67,6 +69,7 @@ struct PreparedGatewayRequest {
     body_bytes: Bytes,
     request_json: Value,
     streaming: bool,
+    allow_environment_provider_auth: bool,
 }
 
 // Validates the gateway route, buffers the request body exactly once, and derives the metadata used
@@ -75,8 +78,12 @@ struct PreparedGatewayRequest {
 async fn prepare_gateway_request(
     config: &crate::config::GatewayConfig,
     request: Request<Body>,
+    allow_environment_provider_auth: bool,
 ) -> Result<PreparedGatewayRequest, CliError> {
-    let (parts, body) = request.into_parts();
+    let (mut parts, body) = request.into_parts();
+    // This proof authorizes Relay's local credential injection only. It must not be observed by
+    // middleware, recorded in ATOF, or forwarded to the model provider.
+    parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let provider = ProviderRoute::from_path(parts.uri.path()).ok_or_else(|| {
         CliError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
     })?;
@@ -89,8 +96,13 @@ async fn prepare_gateway_request(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or(parts.uri.path());
-    let upstream_url = gateway_upstream_url_override(provider, &parts.headers, path_and_query)
-        .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+    let upstream_url = gateway_upstream_url_override(
+        provider,
+        &parts.headers,
+        path_and_query,
+        allow_environment_provider_auth,
+    )
+    .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
     let streaming = request_json
         .get("stream")
         .and_then(Value::as_bool)
@@ -104,6 +116,7 @@ async fn prepare_gateway_request(
         body_bytes,
         request_json,
         streaming,
+        allow_environment_provider_auth,
     })
 }
 
@@ -232,7 +245,7 @@ async fn run_unmanaged_gateway(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        prepared.provider,
+        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth),
     )
     .await?;
     let status = response.status();
@@ -354,7 +367,8 @@ fn build_buffered_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
-    let route = prepared.provider;
+    let forwarding =
+        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth);
     Arc::new(move |request| {
         let http = http.clone();
         let method = method.clone();
@@ -372,7 +386,7 @@ fn build_buffered_func(
                 &body_bytes,
                 &headers,
                 Some(&request),
-                route,
+                forwarding,
             )
             .await
             {
@@ -522,7 +536,8 @@ fn build_streaming_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
-    let route = prepared.provider;
+    let forwarding =
+        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth);
     Arc::new(move |request| {
         let http = http.clone();
         let method = method.clone();
@@ -539,7 +554,7 @@ fn build_streaming_func(
                 &body_bytes,
                 &headers,
                 Some(&request),
-                route,
+                forwarding,
             )
             .await
             {
@@ -749,17 +764,26 @@ async fn forward_upstream_request(
     body_bytes: &Bytes,
     headers: &HeaderMap,
     effective_request: Option<&LlmRequest>,
-    route: ProviderRoute,
+    forwarding: ProviderForwarding,
 ) -> Result<reqwest::Response, reqwest::Error> {
     let (body_bytes, headers) = effective_upstream_request(body_bytes, headers, effective_request);
-    let sanitized = strip_replaceable_agent_auth_headers(&headers, route);
+    let sanitized = strip_replaceable_agent_auth_headers(
+        &headers,
+        forwarding.route,
+        forwarding.allow_environment_provider_auth,
+    );
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(upstream, route, &sanitized);
+    upstream = inject_provider_auth(
+        upstream,
+        forwarding.route,
+        &sanitized,
+        forwarding.allow_environment_provider_auth,
+    );
     upstream.send().await
 }
 
@@ -814,8 +838,15 @@ fn inject_provider_auth(
     builder: reqwest::RequestBuilder,
     route: ProviderRoute,
     inbound: &HeaderMap,
+    allow_environment_provider_auth: bool,
 ) -> reqwest::RequestBuilder {
-    inject_provider_auth_with_env(builder, route, inbound, |key| std::env::var(key).ok())
+    inject_provider_auth_with_env(
+        builder,
+        route,
+        inbound,
+        allow_environment_provider_auth,
+        |key| std::env::var(key).ok(),
+    )
 }
 
 // Pure variant exposed for tests. The env lookup is injected so cases can be exercised without
@@ -824,11 +855,15 @@ fn inject_provider_auth_with_env<F>(
     builder: reqwest::RequestBuilder,
     route: ProviderRoute,
     inbound: &HeaderMap,
+    allow_environment_provider_auth: bool,
     env_lookup: F,
 ) -> reqwest::RequestBuilder
 where
     F: Fn(&str) -> Option<String>,
 {
+    if !allow_environment_provider_auth {
+        return builder;
+    }
     let already_authed = inbound.contains_key(http::header::AUTHORIZATION)
         || inbound.contains_key("x-api-key")
         || inbound.contains_key("api-key")
@@ -876,7 +911,7 @@ async fn passthrough_streaming(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        prepared.provider,
+        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth),
     )
     .await?;
     let status = response.status();
@@ -917,7 +952,7 @@ pub(crate) async fn models(
     request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
-    let (parts, _body) = request.into_parts();
+    let (mut parts, _body) = request.into_parts();
     if parts.method != Method::GET {
         return build_response(
             StatusCode::METHOD_NOT_ALLOWED,
@@ -931,16 +966,32 @@ pub(crate) async fn models(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or(parts.uri.path());
-    let upstream_url = gateway_upstream_url_override(provider, &parts.headers, path_and_query)
-        .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
-    let sanitized = strip_replaceable_agent_auth_headers(&parts.headers, provider);
+    let allow_environment_provider_auth = state.allows_environment_provider_auth(&parts.headers);
+    parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
+    let upstream_url = gateway_upstream_url_override(
+        provider,
+        &parts.headers,
+        path_and_query,
+        allow_environment_provider_auth,
+    )
+    .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
+    let sanitized = strip_replaceable_agent_auth_headers(
+        &parts.headers,
+        provider,
+        allow_environment_provider_auth,
+    );
     let mut upstream = state.http.get(upstream_url);
     for (name, value) in &sanitized {
         if should_forward_request_header(name) {
             upstream = upstream.header(name, value);
         }
     }
-    upstream = inject_provider_auth(upstream, provider, &sanitized);
+    upstream = inject_provider_auth(
+        upstream,
+        provider,
+        &sanitized,
+        allow_environment_provider_auth,
+    );
     let upstream_response = upstream.send().await?;
     let status = upstream_response.status();
     let headers = response_headers(upstream_response.headers());
@@ -955,6 +1006,21 @@ enum ProviderRoute {
     OpenAiModels,
     AnthropicMessages,
     AnthropicCountTokens,
+}
+
+#[derive(Clone, Copy)]
+struct ProviderForwarding {
+    route: ProviderRoute,
+    allow_environment_provider_auth: bool,
+}
+
+impl ProviderForwarding {
+    fn new(route: ProviderRoute, allow_environment_provider_auth: bool) -> Self {
+        Self {
+            route,
+            allow_environment_provider_auth,
+        }
+    }
 }
 
 impl ProviderRoute {
@@ -1050,12 +1116,13 @@ fn gateway_upstream_url_override(
     route: ProviderRoute,
     headers: &HeaderMap,
     path_and_query: &str,
+    allow_environment_provider_auth: bool,
 ) -> Option<String> {
     gateway_upstream_url_override_with_openai_key_state(
         route,
         headers,
         path_and_query,
-        env_var_is_nonempty("OPENAI_API_KEY"),
+        allow_environment_provider_auth && env_var_is_nonempty("OPENAI_API_KEY"),
     )
 }
 
@@ -1076,11 +1143,15 @@ fn gateway_upstream_url_override_with_openai_key_state(
 // Lets alignment adapters strip agent-native credentials only when the gateway can replace them
 // with standard provider API keys. Whitespace-only env vars are treated as missing because
 // forwarding an empty bearer value only replaces one authentication failure with another.
-fn strip_replaceable_agent_auth_headers(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
+fn strip_replaceable_agent_auth_headers(
+    headers: &HeaderMap,
+    route: ProviderRoute,
+    allow_environment_provider_auth: bool,
+) -> HeaderMap {
     strip_replaceable_agent_auth_headers_with_openai_key_state(
         headers,
         route,
-        env_var_is_nonempty("OPENAI_API_KEY"),
+        allow_environment_provider_auth && env_var_is_nonempty("OPENAI_API_KEY"),
     )
 }
 
@@ -1169,6 +1240,7 @@ fn should_forward_request_header(name: &HeaderName) -> bool {
     !is_hop_by_hop(name)
         && name != http::header::HOST
         && name != http::header::CONTENT_LENGTH
+        && name.as_str() != BOOTSTRAP_CLIENT_TOKEN_HEADER
         // Strip Accept-Encoding so upstreams return identity-encoded bodies; otherwise the
         // observability capture (`output.value` on LLM spans, ATIF trajectory bodies) records
         // gzip/br/zstd bytes that downstream consumers can't read. Bandwidth cost is paid only

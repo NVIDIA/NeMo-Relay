@@ -527,6 +527,7 @@ assert len(response_requests) == 12, (
     f"all provider requests: {requests}"
 )
 assert all(item["authorization"] == "Bearer relay-e2e-key-rotated" for item in response_requests), response_requests
+assert all(item["relay_client_token"] is None for item in requests), requests
 provider_response_ids = {item.get("response_id") for item in response_requests}
 assert None not in provider_response_ids, response_requests
 assert len(provider_response_ids) == 12, (
