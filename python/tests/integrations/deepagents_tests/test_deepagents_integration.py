@@ -366,6 +366,12 @@ def test_skill_load_mark_survives_deepagents_middleware(
         "skill_load_source": "structured_read",
         "tool_name": "read_file",
     }
+    tool_start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "read_file" and event.scope_category == "start"
+    )
+    assert marks[0].parent_uuid == tool_start.uuid
 
 
 def test_callback_handler_emits_human_in_the_loop_marks(

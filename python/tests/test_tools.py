@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 
 from nemo_relay import (
+    Event,
     MarkEvent,
     PendingMarkSpec,
     ScopeEvent,
@@ -67,20 +68,15 @@ class TestTools:
         tools.call_end(handle, {})
         scope.pop(parent)
 
-    def test_complete_skill_read_emits_minimal_eager_mark(self):
-        events = []
-        subscribers.register("py_skill_load_sub", lambda event: events.append(event))
-        try:
-            handle = tools.call("read_file", {"path": "/skills/review/SKILL.md"})
-            tools.call_end(handle, {"ok": True})
-            subscribers.flush()
-        finally:
-            subscribers.deregister("py_skill_load_sub")
+    def test_complete_skill_read_emits_minimal_eager_mark(self, subscribed_events: list[Event]):
+        handle = tools.call("read_file", {"path": "/skills/review/SKILL.md"})
+        tools.call_end(handle, {"ok": True})
+        subscribers.flush()
 
-        start = _tool_event(events, "read_file", "start")
-        mark = next(event for event in events if isinstance(event, MarkEvent) and event.name == "skill.load")
-        end = _tool_event(events, "read_file", "end")
-        assert events.index(start) < events.index(mark) < events.index(end)
+        start = _tool_event(subscribed_events, "read_file", "start")
+        mark = next(event for event in subscribed_events if isinstance(event, MarkEvent) and event.name == "skill.load")
+        end = _tool_event(subscribed_events, "read_file", "end")
+        assert subscribed_events.index(start) < subscribed_events.index(mark) < subscribed_events.index(end)
         assert mark.parent_uuid == start.uuid
         assert mark.data == {"skill_name": "review"}
         assert mark.metadata == {"skill_load_source": "structured_read", "tool_name": "read_file"}

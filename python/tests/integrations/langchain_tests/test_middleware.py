@@ -396,6 +396,7 @@ def test_awrap_tool_call_routes_through_tool_execute(
 
 
 def test_complete_skill_read_emits_mark_through_langchain_middleware(
+    subscribed_events: list[nemo_relay.Event],
     nemo_relay_middleware: NemoRelayMiddleware,
 ):
     from langchain.agents.middleware import ToolCallRequest
@@ -411,26 +412,23 @@ def test_complete_skill_read_emits_mark_through_langchain_middleware(
         state={},
         runtime=MagicMock(),
     )
-    events = []
-    nemo_relay.subscribers.register("langchain_skill_load", events.append)
-    try:
-        with nemo_relay.scope.scope("langchain-skill", nemo_relay.ScopeType.Agent):
-            response = nemo_relay_middleware.wrap_tool_call(
-                request,
-                lambda next_request: ToolMessage(
-                    content="loaded",
-                    tool_call_id=next_request.tool_call["id"],
-                ),
-            )
-        nemo_relay.subscribers.flush()
-    finally:
-        nemo_relay.subscribers.deregister("langchain_skill_load")
+    with nemo_relay.scope.scope("langchain-skill", nemo_relay.ScopeType.Agent):
+        response = nemo_relay_middleware.wrap_tool_call(
+            request,
+            lambda next_request: ToolMessage(
+                content="loaded",
+                tool_call_id=next_request.tool_call["id"],
+            ),
+        )
+    nemo_relay.subscribers.flush()
 
     assert response.content == "loaded"
-    mark = next(event for event in events if isinstance(event, nemo_relay.MarkEvent) and event.name == "skill.load")
+    mark = next(
+        event for event in subscribed_events if isinstance(event, nemo_relay.MarkEvent) and event.name == "skill.load"
+    )
     tool_start = next(
         event
-        for event in events
+        for event in subscribed_events
         if isinstance(event, nemo_relay.ScopeEvent) and event.name == "read_file" and event.scope_category == "start"
     )
     assert mark.parent_uuid == tool_start.uuid
