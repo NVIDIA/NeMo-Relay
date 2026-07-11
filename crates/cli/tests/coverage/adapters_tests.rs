@@ -49,6 +49,123 @@ fn maps_claude_canonical_tool_payload() {
 }
 
 #[test]
+fn preserves_supported_coding_agent_skill_load_tool_arguments() {
+    let cases = [
+        claude_code::adapt(
+            json!({
+                "session_id": "claude-session",
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "claude-skill",
+                "tool_name": "Skill",
+                "tool_input": {"skill": "review"}
+            }),
+            &HeaderMap::new(),
+        ),
+        codex::adapt(
+            json!({
+                "session_id": "codex-session",
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": "codex-skill",
+                "tool_name": "Bash",
+                "tool_input": {"command": "cat /workspace/skills/review/SKILL.md"}
+            }),
+            &HeaderMap::new(),
+        ),
+        hermes::adapt(
+            json!({
+                "session_id": "hermes-session",
+                "hook_event_name": "pre_tool_call",
+                "tool_name": "skill_view",
+                "tool_input": {"name": "review"},
+                "extra": {"tool_call_id": "hermes-skill"}
+            }),
+            &HeaderMap::new(),
+        ),
+    ];
+
+    let expected = [
+        ("Skill", json!({"skill": "review"})),
+        (
+            "Bash",
+            json!({"command": "cat /workspace/skills/review/SKILL.md"}),
+        ),
+        ("skill_view", json!({"name": "review"})),
+    ];
+    for (outcome, (tool_name, arguments)) in cases.into_iter().zip(expected) {
+        match &outcome.events[0] {
+            NormalizedEvent::ToolStarted(event) => {
+                assert_eq!(event.tool_name, tool_name);
+                assert_eq!(event.arguments, arguments);
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+}
+
+#[test]
+fn maps_slash_command_expansion_to_minimal_inferred_skill_mark() {
+    let outcome = claude_code::adapt(
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "UserPromptExpansion",
+            "expansion_type": "slash_command",
+            "command_name": "review",
+            "command_args": "123",
+            "command_source": "plugin",
+            "prompt": "/review 123"
+        }),
+        &HeaderMap::new(),
+    );
+
+    match &outcome.events[0] {
+        NormalizedEvent::HookMark(event) => {
+            assert_eq!(event.payload, json!({"skill_name": "review"}));
+            assert_eq!(
+                event.metadata[SKILL_LOAD_SOURCE_KEY],
+                SKILL_LOAD_SOURCE_PROMPT_EXPANSION
+            );
+            assert_eq!(event.metadata["inferred"], true);
+            assert_eq!(event.metadata["command_source"], "plugin");
+            assert!(event.metadata.get("prompt").is_none());
+        }
+        event => panic!("unexpected event: {event:?}"),
+    }
+}
+
+#[test]
+fn does_not_infer_non_slash_or_empty_prompt_expansions() {
+    for payload in [
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "UserPromptExpansion",
+            "expansion_type": "mcp_prompt",
+            "command_name": "review"
+        }),
+        json!({
+            "session_id": "claude-session",
+            "hook_event_name": "UserPromptExpansion",
+            "expansion_type": "slash_command",
+            "command_name": ""
+        }),
+    ] {
+        let outcome = claude_code::adapt(payload, &HeaderMap::new());
+        match &outcome.events[0] {
+            NormalizedEvent::HookMark(event) => {
+                assert_ne!(
+                    event
+                        .metadata
+                        .get(SKILL_LOAD_SOURCE_KEY)
+                        .and_then(Value::as_str),
+                    Some(SKILL_LOAD_SOURCE_PROMPT_EXPANSION)
+                );
+                assert_eq!(event.payload["hook_event_name"], "UserPromptExpansion");
+            }
+            event => panic!("unexpected event: {event:?}"),
+        }
+    }
+}
+
+#[test]
 fn maps_claude_post_tool_failure_with_canonical_fields() {
     let headers = HeaderMap::new();
     let outcome = claude_code::adapt(

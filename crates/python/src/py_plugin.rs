@@ -16,16 +16,20 @@ use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
     deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
+    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
+    deregister_tool_execution_intercept, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
+    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
+    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
+    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
     register_tool_execution_intercept, register_tool_request_intercept,
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
+use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,
@@ -35,11 +39,11 @@ use nemo_relay::plugin::{
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_callable::{
-    wrap_py_event_subscriber, wrap_py_llm_conditional_fn, wrap_py_llm_exec_intercept_fn,
-    wrap_py_llm_request_intercept_fn, wrap_py_llm_sanitize_request_fn,
-    wrap_py_llm_sanitize_response_fn, wrap_py_llm_stream_exec_intercept_fn,
-    wrap_py_tool_conditional_fn, wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn,
-    wrap_py_tool_request_intercept_fn,
+    wrap_py_event_sanitize_fn, wrap_py_event_subscriber, wrap_py_llm_conditional_fn,
+    wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
+    wrap_py_llm_sanitize_request_fn, wrap_py_llm_sanitize_response_fn,
+    wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn,
+    wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
 };
 
 #[cfg(test)]
@@ -206,18 +210,16 @@ impl PyPluginContext {
     fn qualify_name(&self, name: &str) -> String {
         format!("{}{}", self.namespace_prefix, name)
     }
-}
 
-#[pymethods]
-impl PyPluginContext {
-    #[pyo3(
-        signature = (name: "str", callback: "object") -> "None",
-        text_signature = "(name: str, callback: object) -> None"
-    )]
-    fn register_subscriber(&self, name: &str, callback: Py<PyAny>) -> PyResult<()> {
+    fn register_callback(
+        &self,
+        name: &str,
+        register: impl FnOnce(&str) -> FlowResult<()>,
+        deregister: fn(&str) -> FlowResult<bool>,
+        label: &'static str,
+    ) -> PyResult<()> {
         let qualified_name = self.qualify_name(name);
-        register_subscriber(&qualified_name, wrap_py_event_subscriber(callback))
-            .map_err(to_py_err)?;
+        register(&qualified_name).map_err(to_py_err)?;
 
         let name_owned = qualified_name;
         let mut guard = self.registrations.lock().map_err(|e| {
@@ -227,14 +229,93 @@ impl PyPluginContext {
             "plugin",
             name_owned.clone(),
             Box::new(move || {
-                deregister_subscriber(&name_owned).map(|_| ()).map_err(|e| {
-                    PluginError::RegistrationFailed(format!(
-                        "subscriber deregistration failed: {e}"
-                    ))
+                deregister(&name_owned).map(|_| ()).map_err(|e| {
+                    PluginError::RegistrationFailed(format!("{label} deregistration failed: {e}"))
                 })
             }),
         ));
         Ok(())
+    }
+}
+
+#[pymethods]
+impl PyPluginContext {
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_mark_sanitize_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_mark_sanitize_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_event_sanitize_fn(callback),
+                )
+            },
+            deregister_mark_sanitize_guardrail,
+            "mark sanitize guardrail",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_scope_sanitize_start_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_scope_sanitize_start_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_event_sanitize_fn(callback),
+                )
+            },
+            deregister_scope_sanitize_start_guardrail,
+            "scope start sanitize guardrail",
+        )
+    }
+
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_scope_sanitize_end_guardrail(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_scope_sanitize_end_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_event_sanitize_fn(callback),
+                )
+            },
+            deregister_scope_sanitize_end_guardrail,
+            "scope end sanitize guardrail",
+        )
+    }
+
+    #[pyo3(
+        signature = (name: "str", callback: "object") -> "None",
+        text_signature = "(name: str, callback: object) -> None"
+    )]
+    fn register_subscriber(&self, name: &str, callback: Py<PyAny>) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_subscriber(qualified_name, wrap_py_event_subscriber(callback))
+            },
+            deregister_subscriber,
+            "subscriber",
+        )
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -244,32 +325,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_sanitize_request_guardrail(
-            &qualified_name,
-            priority,
-            wrap_py_tool_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_tool_sanitize_request_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_tool_fn(callback),
+                )
+            },
+            deregister_tool_sanitize_request_guardrail,
+            "tool sanitize request guardrail",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_tool_sanitize_request_guardrail(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "tool sanitize request guardrail deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -279,32 +346,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_sanitize_response_guardrail(
-            &qualified_name,
-            priority,
-            wrap_py_tool_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_tool_sanitize_response_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_tool_fn(callback),
+                )
+            },
+            deregister_tool_sanitize_response_guardrail,
+            "tool sanitize response guardrail",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_tool_sanitize_response_guardrail(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "tool sanitize response guardrail deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -314,32 +367,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_conditional_execution_guardrail(
-            &qualified_name,
-            priority,
-            wrap_py_tool_conditional_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_tool_conditional_execution_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_tool_conditional_fn(callback),
+                )
+            },
+            deregister_tool_conditional_execution_guardrail,
+            "tool conditional execution guardrail",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_tool_conditional_execution_guardrail(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "tool conditional execution guardrail deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -349,32 +388,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_sanitize_request_guardrail(
-            &qualified_name,
-            priority,
-            wrap_py_llm_sanitize_request_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_llm_sanitize_request_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_llm_sanitize_request_fn(callback),
+                )
+            },
+            deregister_llm_sanitize_request_guardrail,
+            "llm sanitize request guardrail",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_sanitize_request_guardrail(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm sanitize request guardrail deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -384,32 +409,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_sanitize_response_guardrail(
-            &qualified_name,
-            priority,
-            wrap_py_llm_sanitize_response_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_llm_sanitize_response_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_llm_sanitize_response_fn(callback),
+                )
+            },
+            deregister_llm_sanitize_response_guardrail,
+            "llm sanitize response guardrail",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_sanitize_response_guardrail(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm sanitize response guardrail deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -419,32 +430,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_conditional_execution_guardrail(
-            &qualified_name,
-            priority,
-            wrap_py_llm_conditional_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_llm_conditional_execution_guardrail(
+                    qualified_name,
+                    priority,
+                    wrap_py_llm_conditional_fn(callback),
+                )
+            },
+            deregister_llm_conditional_execution_guardrail,
+            "llm conditional execution guardrail",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_conditional_execution_guardrail(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm conditional execution guardrail deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (
@@ -460,33 +457,19 @@ impl PyPluginContext {
         break_chain: bool,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_request_intercept(
-            &qualified_name,
-            priority,
-            break_chain,
-            wrap_py_llm_request_intercept_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_llm_request_intercept(
+                    qualified_name,
+                    priority,
+                    break_chain,
+                    wrap_py_llm_request_intercept_fn(callback),
+                )
+            },
+            deregister_llm_request_intercept,
+            "llm request intercept",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_request_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm request intercept deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -496,32 +479,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_execution_intercept(
-            &qualified_name,
-            priority,
-            wrap_py_llm_exec_intercept_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_llm_execution_intercept(
+                    qualified_name,
+                    priority,
+                    wrap_py_llm_exec_intercept_fn(callback),
+                )
+            },
+            deregister_llm_execution_intercept,
+            "llm execution intercept",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm execution intercept deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -531,32 +500,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_llm_stream_execution_intercept(
-            &qualified_name,
-            priority,
-            wrap_py_llm_stream_exec_intercept_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_llm_stream_execution_intercept(
+                    qualified_name,
+                    priority,
+                    wrap_py_llm_stream_exec_intercept_fn(callback),
+                )
+            },
+            deregister_llm_stream_execution_intercept,
+            "llm stream execution intercept",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_llm_stream_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "llm stream execution intercept deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (
@@ -572,33 +527,19 @@ impl PyPluginContext {
         break_chain: bool,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_request_intercept(
-            &qualified_name,
-            priority,
-            break_chain,
-            wrap_py_tool_request_intercept_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_tool_request_intercept(
+                    qualified_name,
+                    priority,
+                    break_chain,
+                    wrap_py_tool_request_intercept_fn(callback),
+                )
+            },
+            deregister_tool_request_intercept,
+            "tool request intercept",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_tool_request_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "tool request intercept deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
@@ -608,32 +549,18 @@ impl PyPluginContext {
         priority: i32,
         callback: Py<PyAny>,
     ) -> PyResult<()> {
-        let qualified_name = self.qualify_name(name);
-        register_tool_execution_intercept(
-            &qualified_name,
-            priority,
-            wrap_py_tool_exec_intercept_fn(callback),
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_tool_execution_intercept(
+                    qualified_name,
+                    priority,
+                    wrap_py_tool_exec_intercept_fn(callback),
+                )
+            },
+            deregister_tool_execution_intercept,
+            "tool execution intercept",
         )
-        .map_err(to_py_err)?;
-
-        let name_owned = qualified_name;
-        let mut guard = self.registrations.lock().map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("plugin context lock poisoned: {e}"))
-        })?;
-        guard.push(PluginRegistration::new(
-            "plugin",
-            name_owned.clone(),
-            Box::new(move || {
-                deregister_tool_execution_intercept(&name_owned)
-                    .map(|_| ())
-                    .map_err(|e| {
-                        PluginError::RegistrationFailed(format!(
-                            "tool execution intercept deregistration failed: {e}"
-                        ))
-                    })
-            }),
-        ));
-        Ok(())
     }
 
     fn __repr__(&self) -> String {

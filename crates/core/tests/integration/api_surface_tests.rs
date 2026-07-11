@@ -339,6 +339,237 @@ fn shared_type_reexports_keep_existing_core_paths() {
 }
 
 #[test]
+fn tool_start_eagerly_emits_deduplicated_skill_load_marks() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("skill-load-api-events");
+    let tool_handle = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("read_multiple_files")
+            .args(json!({
+                "paths": [
+                    "/skills/review/SKILL.md",
+                    "/skills/testing/SKILL.md",
+                    "/skills/review/SKILL.md"
+                ]
+            }))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&tool_handle)
+            .result(json!({"ok": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured.len(), 4);
+    assert_eq!(captured[0].name(), "read_multiple_files");
+    assert_eq!(captured[0].scope_category(), Some(ScopeCategory::Start));
+    assert_eq!(captured[1].name(), "skill.load");
+    assert_eq!(captured[1].parent_uuid(), Some(tool_handle.uuid));
+    assert_eq!(captured[1].data(), Some(&json!({"skill_name": "review"})));
+    assert_eq!(
+        captured[1].metadata(),
+        Some(&json!({
+            "skill_load_source": "structured_read",
+            "tool_name": "read_multiple_files"
+        }))
+    );
+    assert_eq!(captured[2].name(), "skill.load");
+    assert_eq!(captured[2].parent_uuid(), Some(tool_handle.uuid));
+    assert_eq!(captured[2].data(), Some(&json!({"skill_name": "testing"})));
+    assert_eq!(captured[3].scope_category(), Some(ScopeCategory::End));
+
+    deregister_subscriber("skill-load-api-events").unwrap();
+}
+
+#[test]
+fn integration_owned_skill_load_metadata_suppresses_core_detection() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("handled-skill-load-api-events");
+    let tool_handle = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("read_file")
+            .args(json!({"path": "/skills/review/SKILL.md"}))
+            .metadata(json!({"nemo_relay.skill_load_handled": true}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&tool_handle)
+            .result(json!({"ok": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured.len(), 2);
+    assert!(captured.iter().all(|event| event.name() != "skill.load"));
+
+    deregister_subscriber("handled-skill-load-api-events").unwrap();
+}
+
+#[test]
+fn integration_precomputed_skill_load_survives_stripped_tool_arguments() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("precomputed-skill-load-api-events");
+    let tool_handle = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("read_file")
+            .args(json!({"stripped": true, "argKeys": ["path"]}))
+            .metadata(json!({
+                "nemo_relay.skill_loads": [{
+                    "skill_name": "review",
+                    "source": "structured_read"
+                }]
+            }))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&tool_handle)
+            .result(json!({"ok": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured.len(), 3);
+    assert_eq!(captured[1].name(), "skill.load");
+    assert_eq!(captured[1].parent_uuid(), Some(tool_handle.uuid));
+    assert_eq!(captured[1].data(), Some(&json!({"skill_name": "review"})));
+    assert_eq!(
+        captured[1].metadata(),
+        Some(&json!({
+            "skill_load_source": "structured_read",
+            "tool_name": "read_file"
+        }))
+    );
+
+    deregister_subscriber("precomputed-skill-load-api-events").unwrap();
+}
+
+#[test]
+fn skill_load_detection_uses_original_arguments_before_observability_sanitization() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_sanitize_request_guardrail(
+        "strip-skill-path",
+        1,
+        Arc::new(|_name, _args| json!({"path": "[redacted]"})),
+    )
+    .unwrap();
+    let events = capture_events("sanitized-skill-load-api-events");
+    let tool_handle = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("read_file")
+            .args(json!({"path": "/skills/review/SKILL.md"}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&tool_handle)
+            .result(json!({"ok": true}))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured[0].data(), Some(&json!({"path": "[redacted]"})));
+    assert_eq!(captured[1].name(), "skill.load");
+    assert_eq!(captured[1].data(), Some(&json!({"skill_name": "review"})));
+
+    deregister_subscriber("sanitized-skill-load-api-events").unwrap();
+    deregister_tool_sanitize_request_guardrail("strip-skill-path").unwrap();
+}
+
+#[tokio::test]
+async fn managed_skill_load_marks_survive_failures_repeat_per_call_and_skip_blocked_calls() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("managed-skill-load-api-events");
+    let skill_args = json!({"path": "/skills/review/SKILL.md"});
+
+    let error = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("read_file")
+            .args(skill_args.clone())
+            .func(failing_tool_exec())
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, FlowError::Internal(message) if message == "tool execution failed"));
+
+    for _ in 0..2 {
+        tool_call_execute(
+            nemo_relay::api::tool::ToolCallExecuteParams::builder()
+                .name("read_file")
+                .args(skill_args.clone())
+                .func(noop_tool_exec())
+                .build(),
+        )
+        .await
+        .unwrap();
+    }
+
+    register_tool_conditional_execution_guardrail(
+        "block-skill-load",
+        1,
+        Arc::new(|_name, _args| Ok(Some("blocked before start".into()))),
+    )
+    .unwrap();
+    let blocked = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("read_file")
+            .args(skill_args)
+            .func(noop_tool_exec())
+            .build(),
+    )
+    .await;
+    assert!(matches!(blocked, Err(FlowError::GuardrailRejected(_))));
+    deregister_tool_conditional_execution_guardrail("block-skill-load").unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let skill_marks = captured
+        .iter()
+        .filter(|event| event.name() == "skill.load")
+        .collect::<Vec<_>>();
+    assert_eq!(skill_marks.len(), 3);
+    for mark in skill_marks {
+        let position = captured
+            .iter()
+            .position(|event| event.uuid() == mark.uuid())
+            .unwrap();
+        assert_eq!(
+            captured[position - 1].scope_category(),
+            Some(ScopeCategory::Start)
+        );
+        assert_eq!(mark.parent_uuid(), Some(captured[position - 1].uuid()));
+    }
+
+    deregister_subscriber("managed-skill-load-api-events").unwrap();
+}
+
+#[test]
 fn test_manual_lifecycle_timestamp_overrides() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

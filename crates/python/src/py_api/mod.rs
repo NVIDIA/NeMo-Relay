@@ -875,6 +875,44 @@ fn llm_stream_call_execute<'py>(
 // Guardrail registrations (macro-generated)
 // ---------------------------------------------------------------------------
 
+macro_rules! py_event_guardrail_api {
+    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+        #[pyfunction]
+        fn $register_name(name: &str, priority: i32, guardrail: Py<PyAny>) -> PyResult<()> {
+            $core_register(
+                name,
+                priority,
+                py_callable::wrap_py_event_sanitize_fn(guardrail),
+            )
+            .map_err(to_py_err)
+        }
+
+        #[pyfunction]
+        fn $deregister_name(name: &str) -> PyResult<bool> {
+            $core_deregister(name).map_err(to_py_err)
+        }
+    };
+}
+
+py_event_guardrail_api!(
+    register_mark_sanitize_guardrail,
+    deregister_mark_sanitize_guardrail,
+    core_registry_api::register_mark_sanitize_guardrail,
+    core_registry_api::deregister_mark_sanitize_guardrail
+);
+py_event_guardrail_api!(
+    register_scope_sanitize_start_guardrail,
+    deregister_scope_sanitize_start_guardrail,
+    core_registry_api::register_scope_sanitize_start_guardrail,
+    core_registry_api::deregister_scope_sanitize_start_guardrail
+);
+py_event_guardrail_api!(
+    register_scope_sanitize_end_guardrail,
+    deregister_scope_sanitize_end_guardrail,
+    core_registry_api::register_scope_sanitize_end_guardrail,
+    core_registry_api::deregister_scope_sanitize_end_guardrail
+);
+
 /// Macro that generates a register/deregister pair for tool guardrails
 /// whose callback signature is `(tool_name: str, json: Any) -> Any`.
 macro_rules! py_guardrail_tool_api {
@@ -1272,6 +1310,52 @@ fn parse_uuid(scope_uuid: &str) -> PyResult<Uuid> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("invalid UUID: {e}")))
 }
 
+macro_rules! py_scope_event_guardrail_api {
+    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+        #[pyfunction]
+        fn $register_name(
+            scope_uuid: &str,
+            name: &str,
+            priority: i32,
+            guardrail: Py<PyAny>,
+        ) -> PyResult<()> {
+            let uuid = parse_uuid(scope_uuid)?;
+            $core_register(
+                &uuid,
+                name,
+                priority,
+                py_callable::wrap_py_event_sanitize_fn(guardrail),
+            )
+            .map_err(to_py_err)
+        }
+
+        #[pyfunction]
+        fn $deregister_name(scope_uuid: &str, name: &str) -> PyResult<bool> {
+            let uuid = parse_uuid(scope_uuid)?;
+            $core_deregister(&uuid, name).map_err(to_py_err)
+        }
+    };
+}
+
+py_scope_event_guardrail_api!(
+    scope_register_mark_sanitize_guardrail,
+    scope_deregister_mark_sanitize_guardrail,
+    core_registry_api::scope_register_mark_sanitize_guardrail,
+    core_registry_api::scope_deregister_mark_sanitize_guardrail
+);
+py_scope_event_guardrail_api!(
+    scope_register_scope_sanitize_start_guardrail,
+    scope_deregister_scope_sanitize_start_guardrail,
+    core_registry_api::scope_register_scope_sanitize_start_guardrail,
+    core_registry_api::scope_deregister_scope_sanitize_start_guardrail
+);
+py_scope_event_guardrail_api!(
+    scope_register_scope_sanitize_end_guardrail,
+    scope_deregister_scope_sanitize_end_guardrail,
+    core_registry_api::scope_register_scope_sanitize_end_guardrail,
+    core_registry_api::scope_deregister_scope_sanitize_end_guardrail
+);
+
 /// Macro that generates a scope-local register/deregister pair for guardrails
 /// whose callback signature is `(tool_name: str, json: Any) -> Any`.
 macro_rules! py_scope_local_guardrail_tool_api {
@@ -1651,6 +1735,23 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
 
+    // Mark and scope event guardrails
+    m.add_function(wrap_pyfunction!(register_mark_sanitize_guardrail, m)?)?;
+    m.add_function(wrap_pyfunction!(deregister_mark_sanitize_guardrail, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        register_scope_sanitize_start_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        deregister_scope_sanitize_start_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(register_scope_sanitize_end_guardrail, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        deregister_scope_sanitize_end_guardrail,
+        m
+    )?)?;
+
     // Tool intercepts
     m.add_function(wrap_pyfunction!(register_tool_request_intercept, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_tool_request_intercept, m)?)?;
@@ -1725,6 +1826,27 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         scope_deregister_tool_conditional_execution_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(scope_register_mark_sanitize_guardrail, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_deregister_mark_sanitize_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_register_scope_sanitize_start_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_deregister_scope_sanitize_start_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_register_scope_sanitize_end_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_deregister_scope_sanitize_end_guardrail,
         m
     )?)?;
 

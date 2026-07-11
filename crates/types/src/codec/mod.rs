@@ -3,6 +3,8 @@
 
 //! Shared normalized LLM request and response data types.
 
+/// Plugin-neutral LLM optimization evidence and summaries.
+pub mod optimization;
 /// Normalized LLM request data types.
 pub mod request;
 /// Normalized LLM response data types.

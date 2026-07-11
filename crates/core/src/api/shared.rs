@@ -188,15 +188,39 @@ pub(crate) fn metadata_with_otel_status(
     metadata
 }
 
+pub(crate) type InterceptedLlmRequest = (
+    LlmRequest,
+    Option<Arc<AnnotatedLlmRequest>>,
+    Vec<crate::api::event::PendingMarkSpec>,
+    Vec<crate::codec::optimization::LlmOptimizationContribution>,
+);
+
+#[cfg(test)]
 pub(crate) fn run_request_intercepts_with_codec(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
-) -> Result<(
-    LlmRequest,
-    Option<Arc<AnnotatedLlmRequest>>,
-    Vec<crate::api::event::PendingMarkSpec>,
-)> {
+) -> Result<InterceptedLlmRequest> {
+    run_request_intercepts_with_codec_inner(name, request, codec, None)
+}
+
+/// Run request intercepts and record optimization contributions directly into
+/// the managed call's bounded accumulator as each intercept completes.
+pub(crate) fn run_request_intercepts_with_codec_and_recorder(
+    name: &str,
+    request: LlmRequest,
+    codec: Option<Arc<dyn LlmCodec>>,
+    recorder: &crate::api::optimization::LlmOptimizationRecorder,
+) -> Result<InterceptedLlmRequest> {
+    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder))
+}
+
+fn run_request_intercepts_with_codec_inner(
+    name: &str,
+    request: LlmRequest,
+    codec: Option<Arc<dyn LlmCodec>>,
+    recorder: Option<&crate::api::optimization::LlmOptimizationRecorder>,
+) -> Result<InterceptedLlmRequest> {
     let annotated = match &codec {
         Some(codec) => Some(codec.decode(&request)?),
         None => None,
@@ -215,25 +239,36 @@ pub(crate) fn run_request_intercepts_with_codec(
         state.llm_request_intercept_entries(&scope_locals)
     };
 
-    let outcome =
-        crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain(
+    let outcome = crate::api::runtime::NemoRelayContextState::llm_request_intercepts_snapshot_chain_with_recorder(
             name,
             request,
             annotated,
             &entries,
             codec.is_some(),
+            recorder,
         )?;
     let mut request = outcome.request;
     inject_dynamo_session_ids(&mut request);
     let pending_marks = outcome.pending_marks;
+    let optimization_contributions = outcome.optimization_contributions;
 
     match (codec, outcome.annotated_request) {
         (Some(codec), Some(annotated)) => {
             let mut encoded = codec.encode(&annotated, &request)?;
             encoded.headers.extend(request.headers);
-            Ok((encoded, Some(Arc::new(annotated)), pending_marks))
+            Ok((
+                encoded,
+                Some(Arc::new(annotated)),
+                pending_marks,
+                optimization_contributions,
+            ))
         }
-        (_, annotated) => Ok((request, annotated.map(Arc::new), pending_marks)),
+        (_, annotated) => Ok((
+            request,
+            annotated.map(Arc::new),
+            pending_marks,
+            optimization_contributions,
+        )),
     }
 }
 

@@ -18,10 +18,18 @@ appropriate executor.
 Public data types:
     Json: Any JSON-serializable Python value.
     Event: A Relay event represented as a JSON object.
+    EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
     PendingMarkSpec: A mark Relay emits under its managed lifecycle scope.
+    LlmOptimizationContribution: Plugin-neutral LLM optimization evidence.
+    LlmOptimizationDataSchema: Schema tag for custom optimization evidence.
+    LlmOptimizationEvidenceQuality: Whether token evidence was observed or estimated.
+    LlmOptimizationModel: Model identity used by optimization accounting.
+    LlmOptimizationModelTransition: Baseline and effective model identities.
+    LlmOptimizationTokens: Explicit token evidence by category.
+    LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
@@ -31,6 +39,7 @@ Public data types:
 
 Public callback aliases:
     SubscriberCallback: Event subscriber callback.
+    EventSanitizeCallback: Mark or scope event sanitizer callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
     ToolRequestCallback: Tool request intercept callback.
@@ -59,10 +68,19 @@ from ._api import (
     ConfigDiagnostic,
     DiagnosticLevel,
     Event,
+    EventSanitizeCallback,
+    EventSanitizeFields,
     Json,
     LlmConditionalCallback,
     LlmExecutionCallback,
     LlmNext,
+    LlmOptimizationContribution,
+    LlmOptimizationDataSchema,
+    LlmOptimizationEvidenceQuality,
+    LlmOptimizationModel,
+    LlmOptimizationModelTransition,
+    LlmOptimizationTokenImpact,
+    LlmOptimizationTokens,
     LlmRequest,
     LlmRequestCallback,
     LlmRequestInterceptOutcome,
@@ -91,9 +109,18 @@ __all__ = [
     "ConfigDiagnostic",
     "DiagnosticLevel",
     "Event",
+    "EventSanitizeCallback",
+    "EventSanitizeFields",
     "Json",
     "LlmConditionalCallback",
     "LlmExecutionCallback",
+    "LlmOptimizationContribution",
+    "LlmOptimizationDataSchema",
+    "LlmOptimizationEvidenceQuality",
+    "LlmOptimizationModel",
+    "LlmOptimizationModelTransition",
+    "LlmOptimizationTokenImpact",
+    "LlmOptimizationTokens",
     "LlmNext",
     "LlmRequest",
     "LlmRequestCallback",

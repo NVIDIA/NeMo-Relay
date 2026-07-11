@@ -133,6 +133,7 @@ fn test_event_to_call_record_llm_end_with_annotated_response_stays_observability
                     finish_reason: Some(FinishReason::Complete),
                     usage: None,
                     api_specific: None,
+                    optimization_summary: None,
                     extra: serde_json::Map::new(),
                 }))
                 .build(),

@@ -33,6 +33,7 @@ type PiiRedactionConfig struct {
 	Mode       string                        `json:"mode,omitempty"`
 	Input      bool                          `json:"input"`
 	Output     bool                          `json:"output"`
+	Mark       bool                          `json:"mark"`
 	ToolInput  bool                          `json:"tool_input"`
 	ToolOutput bool                          `json:"tool_output"`
 	Priority   int32                         `json:"priority,omitempty"`
@@ -56,6 +57,7 @@ func NewPiiRedactionConfig() PiiRedactionConfig {
 		Mode:       "builtin",
 		Input:      true,
 		Output:     true,
+		Mark:       true,
 		ToolInput:  true,
 		ToolOutput: true,
 		Priority:   100,

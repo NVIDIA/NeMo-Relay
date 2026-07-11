@@ -5,6 +5,9 @@ pub(crate) mod claude_code;
 pub(crate) mod codex;
 pub(crate) mod hermes;
 
+pub(crate) const SKILL_LOAD_SOURCE_KEY: &str = "skill_load_source";
+pub(crate) const SKILL_LOAD_SOURCE_PROMPT_EXPANSION: &str = "prompt_expansion";
+
 use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
@@ -781,6 +784,17 @@ fn classify(
             )),
         ];
     }
+    if normalized == "userpromptexpansion"
+        && let Some(event) = inferred_skill_load_event(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            &fallback_session_id,
+        )
+    {
+        return vec![NormalizedEvent::HookMark(event)];
+    }
     let primary = classify_primary(payload, headers, extractor, rules, &fallback_session_id);
     if normalized == "stop" && !primary.is_terminal() {
         return vec![
@@ -795,6 +809,39 @@ fn classify(
         ];
     }
     vec![primary]
+}
+
+fn inferred_skill_load_event(
+    payload: &Value,
+    headers: &HeaderMap,
+    kind: AgentKind,
+    extractor: &dyn AgentPayloadExtractor,
+    fallback_session_id: &str,
+) -> Option<SessionEvent> {
+    let expansion_type = string_at(payload, &["expansion_type"])?;
+    if normalize_name(&expansion_type) != "slashcommand" {
+        return None;
+    }
+    let skill_name = string_at(payload, &["command_name"])?;
+    let skill_name = skill_name.trim();
+    if skill_name.is_empty() {
+        return None;
+    }
+
+    let mut event =
+        common_session_event_with_fallback(payload, headers, kind, extractor, fallback_session_id);
+    event.payload = json!({"skill_name": skill_name});
+    if let Some(metadata) = event.metadata.as_object_mut() {
+        metadata.insert(
+            SKILL_LOAD_SOURCE_KEY.into(),
+            json!(SKILL_LOAD_SOURCE_PROMPT_EXPANSION),
+        );
+        metadata.insert("inferred".into(), json!(true));
+        if let Some(command_source) = string_at(payload, &["command_source"]) {
+            metadata.insert("command_source".into(), json!(command_source));
+        }
+    }
+    Some(event)
 }
 
 /// Classify a raw hook event using adapter-specific names before generic names.

@@ -79,7 +79,7 @@ from __future__ import annotations
 import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
-from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias
+from typing import AsyncIterator, Awaitable, Callable, Literal, Optional, TypeAlias, TypedDict
 
 # Native bitflag classes exported at the top level for user code.
 # Native LLM request and normalized codec view types.
@@ -138,11 +138,21 @@ Json: TypeAlias = JsonValue
 #: configuration dataclasses.
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 
+
+class EventSanitizeFields(TypedDict):
+    """Observability fields returned by mark and scope event sanitizers."""
+
+    data: Json | None
+    category_profile: JsonObject | None
+    metadata: Json | None
+
+
 #: Guardrail callback that sanitizes emitted tool request or response payloads.
 #: Arguments are the tool name and JSON payload. The return value is the JSON
 #: payload recorded on the emitted event. Exceptions propagate through the
 #: lifecycle call that invoked the guardrail.
 ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
+EventSanitizeGuardrail: TypeAlias = Callable[["Event", EventSanitizeFields], EventSanitizeFields]
 #: Guardrail callback that can block tool execution by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str]]
@@ -481,6 +491,8 @@ __all__ = [
     "JsonObject",
     "Json",
     "UnsupportedBehavior",
+    "EventSanitizeFields",
+    "EventSanitizeGuardrail",
     "ToolSanitizeGuardrail",
     "ToolConditionalExecutionGuardrail",
     "LlmSanitizeRequestGuardrail",

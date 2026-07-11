@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import contextvars
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Literal, Optional, TypeAlias
+from typing import Literal, Optional, TypeAlias, TypedDict
 
 from nemo_relay import adaptive as adaptive
 from nemo_relay import codecs as codecs
@@ -142,7 +142,15 @@ Json: TypeAlias = JsonValue
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 """Policy used by config helpers when unknown fields or values are encountered."""
 
+class EventSanitizeFields(TypedDict):
+    """Observability fields returned by mark and scope event sanitizers."""
+
+    data: Json | None
+    category_profile: JsonObject | None
+    metadata: Json | None
+
 ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json]
+EventSanitizeGuardrail: TypeAlias = Callable[[Event, EventSanitizeFields], EventSanitizeFields]
 """Guardrail callback that sanitizes emitted tool request or response payloads.
 
 Arguments:

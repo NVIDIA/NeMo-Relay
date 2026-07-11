@@ -20,6 +20,7 @@ function defaultConfig() {
     output: true,
     tool_input: true,
     tool_output: true,
+    mark: true,
     priority: 100,
   };
 }

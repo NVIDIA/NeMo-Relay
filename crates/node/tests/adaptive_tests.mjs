@@ -113,6 +113,9 @@ describe('core plugins', () => {
           hasToolRequest: typeof context.registerToolRequestIntercept === 'function',
           hasLlmExecution: typeof context.registerLlmExecutionIntercept === 'function',
           hasLlmStreamExecution: typeof context.registerLlmStreamExecutionIntercept === 'function',
+          hasMarkSanitize: typeof context.registerMarkSanitizeGuardrail === 'function',
+          hasScopeStartSanitize: typeof context.registerScopeSanitizeStartGuardrail === 'function',
+          hasScopeEndSanitize: typeof context.registerScopeSanitizeEndGuardrail === 'function',
         };
         context.registerSubscriber('subscriber', () => {});
         context.registerToolRequestIntercept('toolRequest', 17, false, (_name, args) => ({
@@ -154,6 +157,9 @@ describe('core plugins', () => {
         hasToolRequest: true,
         hasLlmExecution: true,
         hasLlmStreamExecution: true,
+        hasMarkSanitize: true,
+        hasScopeStartSanitize: true,
+        hasScopeEndSanitize: true,
       });
     } finally {
       plugin.clear();

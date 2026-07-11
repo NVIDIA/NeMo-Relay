@@ -21,6 +21,7 @@ import nemo_relay_plugin  # noqa: E402
 _TYPE_ALIASES = {
     "AnnotatedLlmRequest",
     "Event",
+    "EventSanitizeCallback",
     "Json",
     "LlmRequest",
     "SubscriberCallback",

@@ -108,6 +108,7 @@ fn annotated_response_with_usage(model: &str, usage: Usage) -> AnnotatedLlmRespo
         tool_calls: None,
         finish_reason: None,
         usage: Some(usage),
+        optimization_summary: None,
         api_specific: None,
         extra: serde_json::Map::new(),
     }
@@ -1496,6 +1497,160 @@ fn test_final_metrics_preserve_explicit_zero_cost_without_fabricating_tokens() {
 }
 
 #[test]
+fn test_optimization_summary_projects_to_step_and_final_metrics() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version": "1",
+            "calculation_version": "1",
+            "status": "complete",
+            "baseline_model": {"model": "baseline"},
+            "effective_model": {"model": "effective"},
+            "tokens_saved": {"prompt_tokens": 12, "total_tokens": 12},
+            "baseline_cost": {"total": 0.02, "currency": "USD", "source": "model_pricing", "pricing_as_of": "2026-07-08", "pricing_source": "test"},
+            "actual_cost": {"total": 0.01, "currency": "USD", "source": "model_pricing", "pricing_as_of": "2026-07-08", "pricing_source": "test"},
+            "estimated_cost_saved": 0.01,
+            "currency": "USD",
+            "contributions": []
+        }))
+        .unwrap();
+    let mut response = annotated_response_with_usage(
+        "effective",
+        Usage {
+            prompt_tokens: Some(8),
+            ..Usage::default()
+        },
+    );
+    response.optimization_summary = Some(summary);
+
+    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    assert_eq!(
+        metrics
+            .extra
+            .as_ref()
+            .unwrap()
+            .pointer("/nemo_relay/optimization/tokens_saved/prompt_tokens"),
+        Some(&json!(12))
+    );
+    let final_metrics = compute_final_metrics(&[AtifStep {
+        step_id: 1,
+        source: "agent".to_string(),
+        message: json!("done"),
+        timestamp: None,
+        model_name: Some("effective".to_string()),
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: Some(metrics),
+        llm_call_count: Some(1),
+        is_copied_context: None,
+        extra: None,
+    }])
+    .unwrap();
+    let optimization = final_metrics
+        .extra
+        .as_ref()
+        .unwrap()
+        .pointer("/nemo_relay/optimization")
+        .unwrap();
+    assert_eq!(optimization["prompt_tokens_saved"], 12);
+    assert_eq!(optimization["total_tokens_saved"], 12);
+    assert_eq!(optimization["estimated_cost_saved_usd"], 0.01);
+}
+
+#[test]
+fn test_atif_preserves_non_usd_summary_without_labeling_savings_as_usd() {
+    let summary: crate::codec::optimization::LlmOptimizationSummary =
+        serde_json::from_value(json!({
+            "schema_version": "1",
+            "calculation_version": "1",
+            "status": "complete",
+            "baseline_model": {"model": "baseline"},
+            "effective_model": {"model": "effective"},
+            "tokens_saved": {"prompt_tokens": 12, "total_tokens": 12},
+            "baseline_cost": {"total": 0.02, "currency": "EUR", "source": "model_pricing"},
+            "actual_cost": {"total": 0.01, "currency": "EUR", "source": "model_pricing"},
+            "estimated_cost_saved": 0.01,
+            "currency": "EUR",
+            "contributions": []
+        }))
+        .unwrap();
+    let mut response = annotated_response_with_usage(
+        "effective",
+        Usage {
+            prompt_tokens: Some(8),
+            ..Usage::default()
+        },
+    );
+    response.optimization_summary = Some(summary);
+
+    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    assert_eq!(
+        metrics
+            .extra
+            .as_ref()
+            .unwrap()
+            .pointer("/nemo_relay/optimization/currency"),
+        Some(&json!("EUR"))
+    );
+    let final_metrics = compute_final_metrics(&[AtifStep {
+        step_id: 1,
+        source: "agent".to_string(),
+        message: json!("done"),
+        timestamp: None,
+        model_name: Some("effective".to_string()),
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: Some(metrics),
+        llm_call_count: Some(1),
+        is_copied_context: None,
+        extra: None,
+    }])
+    .unwrap();
+    assert_eq!(
+        final_metrics
+            .extra
+            .as_ref()
+            .unwrap()
+            .pointer("/nemo_relay/optimization/estimated_cost_saved_usd"),
+        Some(&Json::Null)
+    );
+}
+
+#[test]
+fn test_atif_without_optimization_summary_does_not_add_optimization_extra() {
+    let response = annotated_response_with_usage(
+        "effective",
+        Usage {
+            prompt_tokens: Some(8),
+            ..Usage::default()
+        },
+    );
+    let metrics = extract_metrics(&json!({}), None, None, Some(&response)).unwrap();
+    assert!(metrics.extra.is_none());
+
+    let final_metrics = compute_final_metrics(&[AtifStep {
+        step_id: 1,
+        source: "agent".to_string(),
+        message: json!("done"),
+        timestamp: None,
+        model_name: Some("effective".to_string()),
+        reasoning_effort: None,
+        reasoning_content: None,
+        tool_calls: None,
+        observation: None,
+        metrics: Some(metrics),
+        llm_call_count: Some(1),
+        is_copied_context: None,
+        extra: None,
+    }])
+    .unwrap();
+    assert!(final_metrics.extra.is_none());
+}
+
+#[test]
 fn test_exporter_llm_lifecycle_plain_input() {
     // Input without LlmRequest envelope — passed through unchanged.
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
@@ -2618,6 +2773,36 @@ fn test_exporter_ignores_marks_with_hook_metadata() {
     {
         let mut state = exporter.state.lock().unwrap();
         state.events.push(agent_start);
+        state.events.push(mark);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert!(trajectory.steps.is_empty());
+}
+
+#[test]
+fn test_exporter_omits_skill_load_mark_from_atif_steps() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+
+    let tool_start = event_builder(tool_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .build();
+    let mark = event_builder(mark_uuid, EventType::Mark)
+        .name("skill.load")
+        .parent_uuid(tool_uuid)
+        .data(json!({"skill_name": "review"}))
+        .metadata(json!({
+            "skill_load_source": "structured_read",
+            "tool_name": "read_file"
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(tool_start);
         state.events.push(mark);
     }
 

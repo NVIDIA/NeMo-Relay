@@ -190,7 +190,16 @@ impl NemoRelayContextState {
     /// - `event`: Fully constructed lifecycle event to deliver.
     /// - `subscribers`: Subscribers that should observe the event.
     pub(crate) fn emit_event(event: &Event, subscribers: &[EventSubscriberFn]) {
-        subscriber_dispatcher::dispatch_event(event, subscribers);
+        let _ = subscriber_dispatcher::dispatch_event(event, subscribers);
+    }
+
+    /// Queue an event and report whether the asynchronous dispatcher accepted it.
+    ///
+    /// Subscriber callbacks still run asynchronously. This acknowledgement only
+    /// covers queue acceptance and is used by bounded observability cursors so a
+    /// transient dispatcher failure does not permanently discard evidence.
+    pub(crate) fn try_emit_event(event: &Event, subscribers: &[EventSubscriberFn]) -> bool {
+        subscriber_dispatcher::dispatch_event(event, subscribers)
     }
 
     /// Build a standalone mark event.
@@ -1134,9 +1143,30 @@ impl NemoRelayContextState {
         entries: &[Intercept<LlmRequestInterceptFn>],
         codec_active: bool,
     ) -> crate::error::Result<crate::api::llm::LlmRequestInterceptOutcome> {
+        Self::llm_request_intercepts_snapshot_chain_with_recorder(
+            name,
+            request,
+            annotated,
+            entries,
+            codec_active,
+            None,
+        )
+    }
+
+    /// Run a request-intercept snapshot while ingesting optimization evidence
+    /// directly into the managed call's bounded accumulator.
+    pub(crate) fn llm_request_intercepts_snapshot_chain_with_recorder(
+        name: &str,
+        request: LlmRequest,
+        annotated: Option<AnnotatedLlmRequest>,
+        entries: &[Intercept<LlmRequestInterceptFn>],
+        codec_active: bool,
+        optimization_recorder: Option<&crate::api::optimization::LlmOptimizationRecorder>,
+    ) -> crate::error::Result<crate::api::llm::LlmRequestInterceptOutcome> {
         let mut request_value = request;
         let mut annotated_value = annotated;
         let mut pending_marks = Vec::new();
+        let mut optimization_contributions = Vec::new();
         for entry in entries {
             let input_content = request_value.content.clone();
             let outcome = (entry.payload.callable)(name, request_value, annotated_value)?;
@@ -1155,6 +1185,11 @@ impl NemoRelayContextState {
             request_value = outcome.request;
             annotated_value = outcome.annotated_request;
             pending_marks.extend(outcome.pending_marks);
+            if let Some(recorder) = optimization_recorder {
+                recorder.record_all(outcome.optimization_contributions);
+            } else {
+                optimization_contributions.extend(outcome.optimization_contributions);
+            }
             if entry.payload.break_chain {
                 break;
             }
@@ -1163,6 +1198,7 @@ impl NemoRelayContextState {
             request: request_value,
             annotated_request: annotated_value,
             pending_marks,
+            optimization_contributions,
         })
     }
 

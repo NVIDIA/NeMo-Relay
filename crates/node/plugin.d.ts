@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { Json } from './index';
+import type { EventSanitizeFields, Json } from './index';
 
 /** Policy behavior for unsupported configuration. */
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
@@ -54,6 +54,76 @@ export interface PendingMarkSpec {
   metadata?: Json;
 }
 
+/** Schema tag attached to an opaque optimization contribution payload. */
+export interface LlmOptimizationDataSchema {
+  name: string;
+  version: string;
+}
+
+/** Model identity retained for counterfactual pricing and downstream repricing. */
+export interface LlmOptimizationModel {
+  model: string;
+  provider?: string;
+}
+
+/** Baseline and effective model identities for a routing optimization. */
+export interface LlmOptimizationModelTransition {
+  baseline?: LlmOptimizationModel;
+  effective?: LlmOptimizationModel;
+}
+
+/** Explicit token evidence, independent from a pricing catalog. */
+export interface LlmOptimizationTokens {
+  /** Token counts must be non-negative JavaScript safe integers. */
+  prompt_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  completion_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  cache_read_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  cache_write_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  total_tokens?: number;
+}
+
+/** Baseline, effective, and saved token evidence for one optimization. */
+export interface LlmOptimizationTokenImpact {
+  baseline?: LlmOptimizationTokens;
+  effective?: LlmOptimizationTokens;
+  saved?: LlmOptimizationTokens;
+  quality?: 'observed' | 'estimated';
+  estimation_method?: string;
+}
+
+/**
+ * One plugin's optimization evidence.
+ *
+ * `kind` is deliberately an open string so new optimizer categories round-trip
+ * without a Relay release. Unknown top-level fields are retained by the wire
+ * contract and represented by this interface's JSON extension surface.
+ */
+export interface LlmOptimizationContribution {
+  id?: string;
+  /** Relay ordering must remain within JavaScript's safe-integer range. */
+  sequence?: number;
+  producer: string;
+  kind: 'input_compression' | 'model_routing' | (string & {});
+  applied: boolean;
+  model_transition?: LlmOptimizationModelTransition;
+  token_impact?: LlmOptimizationTokenImpact;
+  payload_schema?: LlmOptimizationDataSchema;
+  payload?: Json;
+  [key: string]: Json | undefined;
+}
+
+/** Canonical result returned by an LLM request intercept. */
+export interface LlmRequestInterceptOutcome {
+  request: Json;
+  annotated?: Json | null;
+  pendingMarks?: PendingMarkSpec[];
+  optimizationContributions?: LlmOptimizationContribution[];
+}
+
 /**
  * Canonical result returned by a tool execution intercept.
  *
@@ -70,6 +140,24 @@ export interface ToolExecutionInterceptOutcome {
 export interface PluginContext {
   /** Register an infallible event subscriber for this component. */
   registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /** Register a mark event sanitizer for this component. */
+  registerMarkSanitizeGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a scope-start event sanitizer for this component. */
+  registerScopeSanitizeStartGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a scope-end event sanitizer for this component. */
+  registerScopeSanitizeEndGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
   /** Register a tool sanitize-request guardrail for this component. */
   registerToolSanitizeRequestGuardrail(
     name: string,
@@ -103,11 +191,7 @@ export interface PluginContext {
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (args: { name: string; request: Json; annotated: Json | null }) => {
-      request: Json;
-      annotated?: Json | null;
-      pendingMarks?: PendingMarkSpec[];
-    },
+    callback: (args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome,
   ): void;
   /** Register an LLM execution intercept for this component. */
   registerLlmExecutionIntercept(

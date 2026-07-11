@@ -7,9 +7,10 @@
 //! and attribute constants that are exposed to JavaScript/TypeScript consumers.
 //! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts`.
 
+use napi::{JsObject, JsUnknown};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 use nemo_relay::api::event::Event;
@@ -297,6 +298,57 @@ impl LlmRequest {
 
 // ---------------------------------------------------------------------------
 // Event (read-only, for subscribers)
+// ---------------------------------------------------------------------------
+
+/// Observability fields returned by mark and scope event sanitizers.
+#[napi(object)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventSanitizeFields {
+    pub data: Option<Json>,
+    pub category_profile: Option<Json>,
+    pub metadata: Option<Json>,
+}
+
+pub(crate) fn event_sanitize_fields_from_js(value: JsUnknown) -> napi::Result<EventSanitizeFields> {
+    let object = match value.get_type()? {
+        napi::ValueType::Object => JsObject::try_from(value)?,
+        _ => {
+            return Err(napi::Error::from_reason(
+                "event sanitizer must return an object",
+            ));
+        }
+    };
+    if object.is_array()? || object.has_named_property("then")? {
+        return Err(napi::Error::from_reason(
+            "event sanitizer must return a non-thenable object",
+        ));
+    }
+
+    let mut has_field = false;
+    for field in ["data", "categoryProfile", "metadata"] {
+        has_field |= object.has_own_property(field)?;
+    }
+    if !has_field {
+        return Err(napi::Error::from_reason(
+            "event sanitizer must return at least one sanitizer field",
+        ));
+    }
+
+    let field = |name| {
+        if object.has_own_property(name)? {
+            object.get(name)
+        } else {
+            Ok(None)
+        }
+    };
+    Ok(EventSanitizeFields {
+        data: field("data")?,
+        category_profile: field("categoryProfile")?,
+        metadata: field("metadata")?,
+    })
+}
+
 // ---------------------------------------------------------------------------
 
 /// A read-only ATOF lifecycle event delivered to subscribers.

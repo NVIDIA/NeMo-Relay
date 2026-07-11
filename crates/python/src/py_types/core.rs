@@ -689,19 +689,32 @@ pub struct PyLLMRequestInterceptOutcome {
 #[pymethods]
 impl PyLLMRequestInterceptOutcome {
     #[new]
-    #[pyo3(signature = (request, annotated_request=None, pending_marks=Vec::new()))]
+    #[pyo3(signature = (request, annotated_request=None, pending_marks=Vec::new(), optimization_contributions=None))]
     fn new(
         request: PyLLMRequest,
         annotated_request: Option<PyAnnotatedLLMRequest>,
         pending_marks: Vec<PyPendingMarkSpec>,
-    ) -> Self {
-        Self {
+        optimization_contributions: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let optimization_contributions = optimization_contributions
+            .map(py_to_json)
+            .transpose()?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "invalid optimization_contributions: {error}"
+                ))
+            })?
+            .unwrap_or_default();
+        Ok(Self {
             inner: LlmRequestInterceptOutcome {
                 request: request.inner,
                 annotated_request: annotated_request.map(|value| value.inner),
                 pending_marks: pending_marks.into_iter().map(|value| value.inner).collect(),
+                optimization_contributions,
             },
-        }
+        })
     }
 
     #[getter]
@@ -727,6 +740,15 @@ impl PyLLMRequestInterceptOutcome {
             .cloned()
             .map(|inner| PyPendingMarkSpec { inner })
             .collect()
+    }
+
+    #[getter]
+    fn optimization_contributions(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.inner.optimization_contributions)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?,
+        )
     }
 }
 

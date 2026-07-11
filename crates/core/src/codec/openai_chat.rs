@@ -33,6 +33,10 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
     detect_response: |obj| obj.get("choices").is_some_and(Json::is_array),
     decode_request: |request| OpenAIChatCodec.decode(request),
     decode_response: |raw| OpenAIChatCodec.decode_response(raw),
+    codec_name: "openai_chat",
+    request_codec: || std::sync::Arc::new(OpenAIChatCodec),
+    response_codec: || std::sync::Arc::new(OpenAIChatCodec),
+    streaming_codec: || Box::new(OpenAIChatStreamingCodec::new()),
 };
 
 // ---------------------------------------------------------------------------
@@ -216,6 +220,7 @@ impl LlmResponseCodec for OpenAIChatCodec {
             tool_calls,
             finish_reason,
             usage,
+            optimization_summary: None,
             api_specific,
             extra: raw.extra,
         })
