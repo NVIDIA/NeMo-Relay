@@ -16,7 +16,7 @@ pub struct ScopeStack { /* private fields */ }
 
 Mutable stack of active scopes plus their scope-local registries.
 
-The stack always contains an implicit root scope. Additional scopes are pushed as the public API opens lifecycle spans and removed when those spans close.
+The stack always contains an implicit root agent scope. It owns freshness for work that is not nested under an explicit agent; non-agent scopes inherit their nearest agent's freshness instead of creating a separate budget. Additional scopes are pushed as the public API opens lifecycle spans and removed when those spans close.
 
 ## Implementations
 
