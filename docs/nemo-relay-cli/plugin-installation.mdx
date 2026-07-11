@@ -141,6 +141,8 @@ exits after 300 idle seconds by default. If the gateway exits while MCP stdio is
 open, the client performs one coordinated restart and fails if recovery does
 not succeed. A foreign process on the configured port is rejected with an
 actionable conflict instead of being accepted because it returned HTTP 200.
+Health and readiness include a per-process instance ID, so every open MCP
+client recognizes the same replacement and refuses a second replacement.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
@@ -149,6 +151,13 @@ asynchronously, so its first lifecycle hook can still run first. The installed
 `hook-forward` command closes that race by starting or reusing the same gateway
 under the same startup lock and retrying the original canonical payload once.
 The MCP server advertises no tools in any host.
+
+Hook recovery retries only connection failures that are known to precede an
+HTTP response. Relay does not claim crash-consistent exactly-once delivery
+across a gateway failure after request acceptance: there is no durable hook
+outbox or delivery-deduplication journal. The opt-in E2E assertions below verify
+exactly-once lifecycle output for the exercised healthy and cold-start paths,
+not arbitrary process crashes between request acceptance and response delivery.
 
 On Windows, Relay requests Job Object breakaway only when the host job permits
 it. If the host applies a restrictive job but permits nested jobs, Relay keeps
@@ -162,9 +171,12 @@ The compatibility fingerprint covers resolved provider, exporter, dynamic
 plugin, and relevant environment settings without exposing their values in the
 health response. For Claude Code and Codex,
 `nemo-relay install <host> --force` generation-fences the replacement MCP
-process and uses a private ownership token to stop a sidecar owned by the
-replaced host when necessary. It does not terminate an unrelated listener.
-Hermes installation transactionally rotates its MCP generation fence.
+process and uses a private ownership token to stop the shared fixed-endpoint
+sidecar when necessary. Ownership is keyed by endpoint, not host, so an upgrade
+from any installed host can retire a gateway originally started by another.
+Custom managed endpoints are left untouched. Relay never sends its shutdown
+token to an unrelated listener. Hermes installation transactionally rotates
+its MCP generation fence.
 
 Persistent mode resolves only system and user Relay configuration and starts in
 the user configuration directory. Project `.nemo-relay` layers remain available
@@ -260,7 +272,14 @@ provider routing is restored from the Relay backup. Unrelated user hooks and
 configuration remain unchanged. Hermes uninstall removes only Relay-owned MCP,
 hook, trust, and generation state.
 
-## Migration from the Hidden Shim Command
+## Compatibility and Migration
+
+This integration now requires Codex 0.143.0, Claude Code 2.1.121, or Hermes
+Agent 0.18.2 at minimum. Prerelease and malformed version output is rejected.
+Configured opaque wrappers must identify the selected host through their
+canonical `--version` output. Interactive `nemo-relay config hermes` now owns
+only transparent-wrapper configuration; use `nemo-relay install hermes` and
+`nemo-relay uninstall hermes` for persistent Hermes state.
 
 This release removes the internal `nemo-relay plugin-shim` command. Existing
 generated installations should be refreshed with
@@ -282,13 +301,14 @@ Persistent generated hook commands include the fixed gateway URL. Transparent
 wrappers provide `NEMO_RELAY_GATEWAY_URL` for their dynamic gateway. When a
 transparent run uses a recognizable wrapper command, such as `npx codex`, Relay
 checks the host version through that wrapper. Opaque custom wrappers remain
-supported and are responsible for selecting a compatible host version; install
-and doctor still enforce the minimum version for directly managed hosts.
+supported when invoking the configured command with `--version` emits the
+selected host's canonical version output. Install and doctor enforce the same
+minimum-version policy.
 
-Hermes setup is now available through the same public install, doctor, and
-uninstall commands as Claude Code and Codex. `nemo-relay config hermes` remains
-an interactive configuration path, but automation should use
-`nemo-relay install hermes`.
+Hermes setup uses the same public install, doctor, and uninstall commands as
+Claude Code and Codex. `nemo-relay config hermes` configures Relay's transparent
+wrapper only; it no longer mutates Hermes user configuration. Use
+`nemo-relay install hermes` for the persistent host integration.
 
 ## Source Marketplace Discovery
 

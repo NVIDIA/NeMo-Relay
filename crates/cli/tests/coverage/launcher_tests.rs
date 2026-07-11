@@ -508,35 +508,33 @@ fn insert_after_agent_uses_last_matching_agent_or_first_word_fallback() {
 }
 
 #[test]
-fn version_probe_preserves_known_wrappers_and_skips_opaque_ones() {
+fn version_probe_preserves_known_wrappers_and_validates_opaque_ones() {
     assert_eq!(
-        version_probe_argv(CodingAgent::Codex, &["codex".into(), "exec".into()]),
-        Some(vec!["codex".into(), "--version".into()])
+        crate::agent_process::version_probe_argv(
+            CodingAgent::Codex,
+            &["codex".into(), "exec".into()]
+        ),
+        vec!["codex", "--version"]
     );
     assert_eq!(
-        version_probe_argv(
+        crate::agent_process::version_probe_argv(
             CodingAgent::Codex,
             &["npx".into(), "--yes".into(), "codex".into(), "exec".into(),],
         ),
-        Some(vec![
-            "npx".into(),
-            "--yes".into(),
-            "codex".into(),
-            "--version".into(),
-        ])
+        vec!["npx", "--yes", "codex", "--version"]
     );
     assert_eq!(
-        version_probe_argv(
+        crate::agent_process::version_probe_argv(
             CodingAgent::Hermes,
             &["company-agent-wrapper".into(), "chat".into()],
         ),
-        None
+        vec!["company-agent-wrapper", "chat", "--version"]
     );
 }
 
 #[test]
 fn windows_agent_command_line_quotes_paths_and_metacharacters() {
-    let line = windows_command_line(
+    let line = crate::agent_process::windows_command_line(
         Path::new(r"C:\Program Files\Codex&Tools\npx.cmd"),
         &["codex".into(), "--version".into(), "100%".into()],
     );
@@ -557,11 +555,10 @@ async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
     )
     .unwrap();
     make_executable(&wrapper);
-    let probe = version_probe_argv(
+    let probe = crate::agent_process::version_probe_argv(
         CodingAgent::Codex,
         &[wrapper.display().to_string(), "codex".into(), "exec".into()],
-    )
-    .unwrap();
+    );
 
     validate_agent_version(CodingAgent::Codex, &probe)
         .await
@@ -634,9 +631,11 @@ fn prepares_claude_dry_inserts_plugin_dir_after_last_agent_executable() {
 fn prepares_hermes_hook_environment() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
+    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
+    std::fs::write(&hooks_path, "model:\n  default: test\n").unwrap();
+    let state = hooks_path.parent().unwrap().join("state.db");
+    std::fs::write(&state, "state").unwrap();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs {
@@ -668,20 +667,100 @@ fn prepares_hermes_hook_environment() {
             .env
             .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
     );
-    assert_eq!(
-        prepared
-            .hermes_restore
-            .as_ref()
-            .map(|restore| &restore.path),
-        Some(&hooks_path)
-    );
-    let hooks = std::fs::read_to_string(&hooks_path).unwrap();
+    let overlay = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
+        .expect("Hermes overlay path");
+    let hooks = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
     assert!(hooks.contains("hook-forward hermes"));
-    assert!(prepared.notes[0].contains("temporarily merged"));
+    assert!(overlay.join("state.db").exists());
+    assert_eq!(
+        std::fs::read_to_string(&hooks_path).unwrap(),
+        "model:\n  default: test\n"
+    );
+    assert!(prepared.notes[0].contains("isolated Hermes config overlay"));
 
     prepared.restore().unwrap();
-    assert!(!hooks_path.exists());
-    std::env::set_current_dir(previous).unwrap();
+    assert!(hooks_path.exists());
+    assert!(!overlay.exists());
+}
+
+#[test]
+fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("hermes/config.yaml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let original = "model:\n  default: test\n";
+    std::fs::write(&config, original).unwrap();
+    let resolved = ResolvedConfig {
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                hooks_path: Some(config.clone()),
+                ..AgentCommandConfig::default()
+            },
+            ..AgentConfigs::default()
+        },
+        ..ResolvedConfig::default()
+    };
+
+    let first = PreparedRun::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into()],
+        "http://127.0.0.1:4001",
+        &resolved,
+        false,
+    )
+    .unwrap();
+    let second = PreparedRun::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into()],
+        "http://127.0.0.1:4002",
+        &resolved,
+        false,
+    )
+    .unwrap();
+    let overlay = |run: &PreparedRun| {
+        run.env
+            .iter()
+            .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
+            .unwrap()
+    };
+    let first_overlay = overlay(&first);
+    let second_overlay = overlay(&second);
+
+    assert_ne!(first_overlay, second_overlay);
+    assert!(
+        std::fs::read_to_string(first_overlay.join("config.yaml"))
+            .unwrap()
+            .contains("hook-forward hermes")
+    );
+    assert!(
+        std::fs::read_to_string(second_overlay.join("config.yaml"))
+            .unwrap()
+            .contains("hook-forward hermes")
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+
+    first.restore().unwrap();
+    assert!(!first_overlay.exists());
+    assert!(second_overlay.exists());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    second.restore().unwrap();
+}
+
+#[test]
+fn hermes_overlay_does_not_link_an_ancestor_entry_that_contains_it() {
+    let source_home = tempfile::tempdir().unwrap();
+    let source_config = source_home.path().join("config.yaml");
+    std::fs::write(&source_config, "model:\n  default: test\n").unwrap();
+    let overlay = source_home.path().join("overlay");
+    std::fs::create_dir(&overlay).unwrap();
+
+    populate_hermes_overlay(&overlay, source_home.path(), &source_config).unwrap();
+
+    assert!(!overlay.join("overlay").exists());
+    assert!(overlay.join("config.yaml").exists());
 }
 
 #[test]
@@ -754,11 +833,9 @@ fn hermes_hooks_path_prefers_configured_then_env_then_home() {
 }
 
 #[test]
-fn hermes_patch_restore_restores_original_file() {
+fn hermes_overlay_preserves_original_file() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(temp.path()).unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
     std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
     let original = r#"mcp_servers:
@@ -792,7 +869,12 @@ hooks:
     )
     .unwrap();
 
-    let patched = std::fs::read_to_string(&hooks_path).unwrap();
+    let overlay = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
+        .unwrap();
+    let patched = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
     assert!(patched.contains("hook-forward hermes"));
     let patched_yaml: serde_json::Value = serde_yaml::from_str(&patched).unwrap();
     assert!(patched_yaml["mcp_servers"].get("nemo-relay").is_none());
@@ -800,9 +882,9 @@ hooks:
         patched_yaml["mcp_servers"]["filesystem"]["command"],
         json!("fs-mcp")
     );
-    prepared.restore().unwrap();
     assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
-    std::env::set_current_dir(previous).unwrap();
+    prepared.restore().unwrap();
+    assert!(!overlay.exists());
 }
 
 #[test]
@@ -837,56 +919,8 @@ fn prepares_claude_temp_plugin() {
 }
 
 #[test]
-fn hermes_restore_reports_restore_and_temporary_removal_failures() {
+fn hook_write_helpers_cover_toml_escaping() {
     let temp = tempfile::tempdir().unwrap();
-    let restore_missing_backup = PreparedRun {
-        argv: vec![],
-        env: vec![],
-        temp_dirs: vec![],
-        hermes_restore: Some(HermesRestore {
-            path: temp.path().join("config.yaml"),
-            backup_path: Some(temp.path().join("missing-backup.yaml")),
-            had_original: true,
-        }),
-        notes: vec![],
-    };
-
-    let error = restore_missing_backup.restore().unwrap_err().to_string();
-    assert!(error.contains("failed to restore Hermes hooks"));
-
-    let hooks_path = temp.path().join("hooks-dir");
-    std::fs::create_dir(&hooks_path).unwrap();
-    let remove_temporary_dir = PreparedRun {
-        argv: vec![],
-        env: vec![],
-        temp_dirs: vec![],
-        hermes_restore: Some(HermesRestore {
-            path: hooks_path,
-            backup_path: None,
-            had_original: false,
-        }),
-        notes: vec![],
-    };
-
-    let error = remove_temporary_dir.restore().unwrap_err().to_string();
-    assert!(error.contains("failed to remove temporary Hermes hooks"));
-}
-
-#[test]
-fn hook_backup_and_write_helpers_cover_missing_existing_and_toml_escaping() {
-    let temp = tempfile::tempdir().unwrap();
-    let missing_hermes = temp.path().join("missing-config.yaml");
-    assert_eq!(
-        backup_existing_hermes_hooks(&missing_hermes).unwrap(),
-        (false, None)
-    );
-
-    let hermes_hooks = temp.path().join("config.yaml");
-    std::fs::write(&hermes_hooks, "hooks: {}\n").unwrap();
-    let (had_original, hermes_backup) = backup_existing_hermes_hooks(&hermes_hooks).unwrap();
-    assert!(had_original);
-    assert!(hermes_backup.as_ref().unwrap().exists());
-
     let written_hooks = temp.path().join("written/hooks.json");
     std::fs::create_dir_all(written_hooks.parent().unwrap()).unwrap();
     write_hooks(&written_hooks, json!({"hooks": []})).unwrap();
@@ -1119,7 +1153,7 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
 }
 
 #[tokio::test]
-async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
+async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
     let temp = tempfile::tempdir().unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
     std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
@@ -1144,8 +1178,13 @@ async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
         false,
     )
     .unwrap();
+    let overlay = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
+        .unwrap();
     assert!(
-        std::fs::read_to_string(&hooks_path)
+        std::fs::read_to_string(overlay.join("config.yaml"))
             .unwrap()
             .contains("hook-forward hermes")
     );
@@ -1163,6 +1202,7 @@ async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
 
     assert!(error.contains("gateway did not become ready"));
     assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
+    assert!(!overlay.exists());
 }
 
 #[cfg(unix)]

@@ -568,7 +568,7 @@ fn run_fake_bootstrap_listener_with_hook_delay(
                     }
                 };
                 let body = format!(
-                    r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":1}}"#,
+                    r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
                     env!("CARGO_PKG_VERSION")
                 );
                 stream
@@ -873,7 +873,7 @@ fn wait_for_owned_sidecar(
 ) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        for path in find_runtime_files_matching(temp, &format!("{agent}-sidecar"), ".owner.json") {
+        for path in find_runtime_files_matching(temp, "sidecar-", ".owner.json") {
             if let Ok(raw) = std::fs::read(path)
                 && let Ok(owner) = serde_json::from_slice::<serde_json::Value>(&raw)
                 && owner["pid"]
@@ -959,7 +959,13 @@ fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
         let health = relay_health(address);
         assert_eq!(health["service"], "nemo-relay");
         assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(health["bootstrap_protocol"], 1);
+        assert_eq!(health["bootstrap_protocol"], 2);
+        assert!(
+            health["instance_id"]
+                .as_str()
+                .is_some_and(|instance_id| !instance_id.is_empty()),
+            "the shared gateway should publish its process identity"
+        );
         assert!(
             find_runtime_file(temp.path(), &format!("{second_agent}-sidecar.log")).is_none(),
             "the second MCP client should adopt the first host's gateway"
@@ -2024,6 +2030,17 @@ fn cli_rejects_removed_cursor_entry_points() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid value 'cursor'"));
+}
+
+#[test]
+fn cli_rejects_removed_plugin_shim_entry_point() {
+    let output = Command::new(gateway_bin())
+        .args(["plugin-shim", "--help"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"));
 }
 
 #[test]

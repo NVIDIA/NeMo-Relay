@@ -324,16 +324,6 @@ pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
     }
 }
 
-// Returns the shell command a hook should run to forward an event to the gateway. Callers must
-// pass the executable they want hooks to invoke. Transparent-run callers should pass the absolute
-// path of the currently running gateway binary so spawned hook subprocesses do not depend on the
-// user's `PATH` (which Codex/Claude inherit but which typically does not include
-// `target/debug` or other dev locations); persistent-install callers can pass the bare name
-// `"nemo-relay"` because the user is expected to have the binary on `PATH` after install.
-pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> String {
-    format!("{executable} hook-forward {}", agent.as_arg())
-}
-
 /// Canonical persistent hook command used by every supported host.
 pub(crate) fn persistent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
     persistent_hook_forward_command_for_platform(relay, agent, cfg!(windows))
@@ -342,9 +332,17 @@ pub(crate) fn persistent_hook_forward_command(relay: &Path, agent: CodingAgent) 
 /// Canonical transparent hook command. The launched agent receives its dynamic gateway through
 /// `NEMO_RELAY_GATEWAY_URL`, so the command must not persist a fixed endpoint.
 pub(crate) fn transparent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
+    transparent_hook_forward_command_for_platform(relay, agent, cfg!(windows))
+}
+
+pub(crate) fn transparent_hook_forward_command_for_platform(
+    relay: &Path,
+    agent: CodingAgent,
+    windows: bool,
+) -> String {
     format!(
         "{} hook-forward {}",
-        crate::plugin_host::shell_quote_for_platform(relay, cfg!(windows)),
+        crate::plugin_host::shell_quote_for_platform(relay, windows),
         agent.as_arg()
     )
 }
@@ -492,20 +490,6 @@ fn merge_event_hook_groups(
         }
     }
     Ok(())
-}
-
-/// Parses Hermes YAML, merges generated hooks through the shared JSON hook merger, and serializes
-/// back to YAML. Empty input is treated as no existing configuration.
-#[cfg(test)]
-pub(crate) fn merge_hermes_config(existing: &str, generated: Value) -> Result<String, CliError> {
-    let existing = if existing.trim().is_empty() {
-        Value::Null
-    } else {
-        serde_yaml::from_str(existing)
-            .map_err(|error| CliError::Install(format!("invalid YAML in Hermes config: {error}")))?
-    };
-    let merged = merge_hooks(existing, generated)?;
-    serde_yaml::to_string(&merged).map_err(|error| CliError::Install(error.to_string()))
 }
 
 // Validates optional JSON strings before they are embedded into hook-forward headers. Catches

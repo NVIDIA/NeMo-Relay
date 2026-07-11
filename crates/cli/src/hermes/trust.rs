@@ -79,6 +79,23 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
             ));
         }
     }
+    let mut managed = approvals
+        .iter()
+        .filter_map(|entry| {
+            let candidate = entry.get("command").and_then(Value::as_str)?;
+            let event = entry.get("event").and_then(Value::as_str)?;
+            is_managed_hook_command(candidate).then_some((event, candidate))
+        })
+        .collect::<Vec<_>>();
+    managed.sort_unstable();
+    let mut expected = HERMES_HOOK_EVENTS
+        .iter()
+        .map(|event| (*event, command))
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    if managed != expected {
+        return Err("Hermes allowlist contains an unexpected Relay hook approval".into());
+    }
     Ok(())
 }
 

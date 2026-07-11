@@ -139,7 +139,8 @@ fn readiness_file_requires_exact_protocol_identity() {
             "service": "nemo-relay",
             "version": env!("CARGO_PKG_VERSION"),
             "bootstrap_protocol": BOOTSTRAP_PROTOCOL_VERSION,
-            "address": "127.0.0.1:47777"
+            "address": "127.0.0.1:47777",
+            "instance_id": "test-instance"
         }))
         .unwrap(),
     )
@@ -154,7 +155,8 @@ fn readiness_file_requires_exact_protocol_identity() {
             "service": "nemo-relay",
             "version": env!("CARGO_PKG_VERSION"),
             "bootstrap_protocol": BOOTSTRAP_PROTOCOL_VERSION + 1,
-            "address": "127.0.0.1:47777"
+            "address": "127.0.0.1:47777",
+            "instance_id": "test-instance"
         }))
         .unwrap(),
     )
@@ -194,20 +196,19 @@ fn unused_loopback_address() -> SocketAddr {
 fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
     let dir = tempfile::tempdir().unwrap();
     let compatible_body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{}}}"#,
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
         env!("CARGO_PKG_VERSION"),
         BOOTSTRAP_PROTOCOL_VERSION
     );
     let (address, server) = one_health_response(compatible_body);
-    let bootstrap = start_sidecar_bind(
+    let endpoint = start_sidecar_bind(
         &GatewaySpec::new(CodingAgent::Codex, address),
         dir.path(),
         dir.path(),
         None,
     )
     .unwrap();
-    assert!(!bootstrap.started);
-    assert_eq!(bootstrap.endpoint.address, address);
+    assert_eq!(endpoint.address, address);
     server.join().unwrap();
 
     let incompatible_body = format!(
@@ -240,9 +241,9 @@ fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
 #[test]
 fn sidecar_record_cleanup_is_scoped_to_the_exited_pid() {
     let dir = tempfile::tempdir().unwrap();
-    let invalid = sidecar_owner_path(dir.path(), CodingAgent::Codex, "http://127.0.0.1:47630");
+    let invalid = sidecar_owner_path(dir.path(), "http://127.0.0.1:47630");
     std::fs::write(&invalid, "not-json").unwrap();
-    let matching = sidecar_owner_path(dir.path(), CodingAgent::Codex, "http://127.0.0.1:47631");
+    let matching = sidecar_owner_path(dir.path(), "http://127.0.0.1:47631");
     write_sidecar_owner(
         &matching,
         42,
@@ -251,9 +252,9 @@ fn sidecar_record_cleanup_is_scoped_to_the_exited_pid() {
         Some("fingerprint"),
     )
     .unwrap();
-    let matching_pid = sidecar_pid_path(dir.path(), CodingAgent::Codex, "http://127.0.0.1:47631");
+    let matching_pid = sidecar_pid_path(dir.path(), "http://127.0.0.1:47631");
     std::fs::write(&matching_pid, "42").unwrap();
-    let other = sidecar_owner_path(dir.path(), CodingAgent::Codex, "http://127.0.0.1:47632");
+    let other = sidecar_owner_path(dir.path(), "http://127.0.0.1:47632");
     write_sidecar_owner(
         &other,
         43,
@@ -263,7 +264,7 @@ fn sidecar_record_cleanup_is_scoped_to_the_exited_pid() {
     )
     .unwrap();
 
-    cleanup_sidecar_records_for_pid(dir.path(), CodingAgent::Codex, 42);
+    cleanup_sidecar_records_for_pid(dir.path(), 42);
 
     assert!(!matching.exists());
     assert!(!matching_pid.exists());
@@ -272,7 +273,7 @@ fn sidecar_record_cleanup_is_scoped_to_the_exited_pid() {
 
     let not_a_directory = dir.path().join("runtime-file");
     std::fs::write(&not_a_directory, "file").unwrap();
-    cleanup_sidecar_records_for_pid(&not_a_directory, CodingAgent::Codex, 42);
+    cleanup_sidecar_records_for_pid(&not_a_directory, 42);
 }
 
 fn exited_command() -> Command {

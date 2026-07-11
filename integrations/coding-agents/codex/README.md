@@ -93,7 +93,7 @@ provider, Relay, OpenTelemetry, AWS, proxy, certificate, and config-referenced
 credential variable names without storing values.
 
 Plugin-owned hook commands pin `http://127.0.0.1:47632` explicitly, so an
-ambient `NEMO_RELAY_PLUGIN_GATEWAY_URL` cannot split hook traffic from the
+ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from the
 required MCP-managed gateway.
 
 If the Relay version, user configuration, or forwarded credentials change, an

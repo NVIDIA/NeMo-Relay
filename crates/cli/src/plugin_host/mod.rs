@@ -34,8 +34,8 @@ pub(crate) fn install_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Res
     install_codex(gateway_url, &plugin_root.join("hooks").join("hooks.json")).map(|_| ())
 }
 
-pub(crate) fn stop_plugin_gateway(agent: CodingAgent) -> Result<(), String> {
-    crate::sidecar::stop_owned_sidecar(agent)
+pub(crate) fn stop_plugin_gateway() -> Result<(), String> {
+    crate::sidecar::stop_owned_sidecar(crate::sidecar::DEFAULT_URL)
 }
 
 pub(crate) fn uninstall_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Result<(), String> {

@@ -13,13 +13,11 @@ use std::time::{Duration, Instant};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::config::CodingAgent;
 use crate::file_io::{LockAttempt, atomic_write, try_lock_exclusive};
 
 use super::health::{RelayHealth, probe, request_shutdown};
 use super::{BOOTSTRAP_PROTOCOL_VERSION, GatewayEndpoint, SIDECAR_LOCK_TIMEOUT};
 
-pub(crate) const BOOTSTRAP_AGENT_ENV: &str = "NEMO_RELAY_BOOTSTRAP_AGENT";
 pub(crate) const BOOTSTRAP_STATE_DIR_ENV: &str = "NEMO_RELAY_BOOTSTRAP_STATE_DIR";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -69,6 +67,7 @@ struct ReadyRecord {
     version: String,
     bootstrap_protocol: u64,
     address: String,
+    instance_id: String,
 }
 
 pub(super) fn read_owner_record(path: &Path) -> Result<Option<OwnerRecord>, String> {
@@ -103,6 +102,7 @@ pub(super) fn read_ready_file(path: &Path) -> Result<Option<GatewayEndpoint>, St
     if record.service != "nemo-relay"
         || record.version != env!("CARGO_PKG_VERSION")
         || record.bootstrap_protocol != BOOTSTRAP_PROTOCOL_VERSION
+        || record.instance_id.is_empty()
     {
         return Err(format!(
             "incompatible sidecar readiness file {}",
@@ -116,19 +116,16 @@ pub(super) fn read_ready_file(path: &Path) -> Result<Option<GatewayEndpoint>, St
     Ok(Some(GatewayEndpoint {
         address,
         url: format!("http://{address}"),
+        instance_id: record.instance_id,
     }))
 }
 
-pub(crate) fn owner_path(runtime: &Path, agent: CodingAgent, url: &str) -> PathBuf {
-    runtime.join(format!(
-        "{}-sidecar-{}.owner.json",
-        agent.as_arg(),
-        lock_name(url)
-    ))
+pub(crate) fn owner_path(runtime: &Path, url: &str) -> PathBuf {
+    runtime.join(format!("sidecar-{}.owner.json", lock_name(url)))
 }
 
-pub(crate) fn pid_path(runtime: &Path, agent: CodingAgent, url: &str) -> PathBuf {
-    runtime.join(format!("{}-sidecar-{}.pid", agent.as_arg(), lock_name(url)))
+pub(crate) fn pid_path(runtime: &Path, url: &str) -> PathBuf {
+    runtime.join(format!("sidecar-{}.pid", lock_name(url)))
 }
 
 pub(crate) fn lock_path(runtime: &Path, url: &str) -> PathBuf {
@@ -203,12 +200,11 @@ pub(crate) fn write_owner(
 
 pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<(), String> {
     let state = env::var_os(BOOTSTRAP_STATE_DIR_ENV);
-    let agent = env::var(BOOTSTRAP_AGENT_ENV).ok();
     let token = env::var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN").ok();
     let bootstrap_fingerprint = env::var(crate::config::BOOTSTRAP_FINGERPRINT_ENV)
         .ok()
         .filter(|fingerprint| !fingerprint.is_empty());
-    if state.is_none() && agent.is_none() && token.is_none() {
+    if state.is_none() && token.is_none() {
         return Ok(());
     }
     let state = state
@@ -220,17 +216,6 @@ pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<(), String> 
             state.display()
         ));
     }
-    let agent = match agent.as_deref() {
-        Some("codex") => CodingAgent::Codex,
-        Some("claude" | "claude-code") => CodingAgent::ClaudeCode,
-        Some("hermes") => CodingAgent::Hermes,
-        Some(other) => return Err(format!("unsupported bootstrap agent {other}")),
-        None => {
-            return Err(format!(
-                "{BOOTSTRAP_AGENT_ENV} is required for managed bootstrap"
-            ));
-        }
-    };
     let token = token.filter(|token| !token.is_empty()).ok_or_else(|| {
         "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN is required for managed bootstrap".to_string()
     })?;
@@ -247,8 +232,21 @@ pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<(), String> 
     })?;
     let url = format!("http://{address}");
     let pid = std::process::id();
-    let owner_path = owner_path(&state, agent, &url);
-    let pid_path = pid_path(&state, agent, &url);
+    let owner_path = owner_path(&state, &url);
+    let pid_path = pid_path(&state, &url);
+    for stale_path in owner_paths(&state)? {
+        if stale_path == owner_path {
+            continue;
+        }
+        let Ok(Some(stale)) = read_owner_record(&stale_path) else {
+            continue;
+        };
+        if stale.url == url {
+            let stale_pid = owner_pid_path(&state, &stale_path, &url);
+            let _ = fs::remove_file(stale_path);
+            let _ = fs::remove_file(stale_pid);
+        }
+    }
     atomic_write(&pid_path, pid.to_string().as_bytes())?;
     if let Err(error) = write_owner(
         &owner_path,
@@ -291,12 +289,18 @@ pub(crate) fn validate_owner(
     }
 }
 
-pub(crate) fn stop_owned(agent: CodingAgent) -> Result<(), String> {
+pub(crate) fn stop_owned(target_url: &str) -> Result<(), String> {
     let runtime = state_dir()?;
     let mut errors = Vec::new();
-    for owner_path in owner_paths(&runtime, agent)? {
-        if let Err(error) = stop_owned_record(agent, &runtime, &owner_path) {
-            errors.push(error);
+    for owner_path in owner_paths(&runtime)? {
+        match read_owner_record(&owner_path) {
+            Ok(Some(owner)) if owner.url == target_url => {
+                if let Err(error) = stop_owned_record(&runtime, &owner_path) {
+                    errors.push(error);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => errors.push(error),
         }
     }
     if errors.is_empty() {
@@ -306,7 +310,7 @@ pub(crate) fn stop_owned(agent: CodingAgent) -> Result<(), String> {
     }
 }
 
-pub(crate) fn owner_paths(runtime: &Path, agent: CodingAgent) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn owner_paths(runtime: &Path) -> Result<Vec<PathBuf>, String> {
     let entries = match fs::read_dir(runtime) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -317,27 +321,43 @@ pub(crate) fn owner_paths(runtime: &Path, agent: CodingAgent) -> Result<Vec<Path
             ));
         }
     };
-    let prefix = format!("{}-sidecar-", agent.as_arg());
-    let legacy = format!("{}-sidecar.owner.json", agent.as_arg());
     let mut paths = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name();
             let name = name.to_str()?;
-            ((name == legacy || (name.starts_with(&prefix) && name.ends_with(".owner.json")))
-                && entry.file_type().ok()?.is_file())
-            .then(|| entry.path())
+            (is_sidecar_owner_name(name) && entry.file_type().ok()?.is_file()).then(|| entry.path())
         })
         .collect::<Vec<_>>();
     paths.sort();
     Ok(paths)
 }
 
-pub(crate) fn stop_owned_record(
-    agent: CodingAgent,
-    runtime: &Path,
-    owner_path: &Path,
-) -> Result<(), String> {
+fn is_sidecar_owner_name(name: &str) -> bool {
+    name == "sidecar.owner.json"
+        || (name.starts_with("sidecar-") && name.ends_with(".owner.json"))
+        || (name.ends_with("-sidecar.owner.json"))
+        || (name.contains("-sidecar-") && name.ends_with(".owner.json"))
+}
+
+pub(crate) fn owner_pid_path(runtime: &Path, owner_path: &Path, url: &str) -> PathBuf {
+    let name = owner_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if name == "sidecar.owner.json" {
+        return runtime.join("sidecar.pid");
+    }
+    if name.ends_with("-sidecar.owner.json") {
+        return owner_path.with_file_name(name.replace(".owner.json", ".pid"));
+    }
+    if name.contains("-sidecar-") && !name.starts_with("sidecar-") {
+        return owner_path.with_file_name(name.replace(".owner.json", ".pid"));
+    }
+    pid_path(runtime, url)
+}
+
+pub(crate) fn stop_owned_record(runtime: &Path, owner_path: &Path) -> Result<(), String> {
     let Some(initial_owner) = read_owner_record(owner_path)? else {
         return Ok(());
     };
@@ -364,15 +384,7 @@ pub(crate) fn stop_owned_record(
                 owner_path.display()
             )
         })?;
-    let legacy = owner_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == format!("{}-sidecar.owner.json", agent.as_arg()));
-    let pid_path = if legacy {
-        runtime.join(format!("{}-sidecar.pid", agent.as_arg()))
-    } else {
-        pid_path(runtime, agent, url)
-    };
+    let pid_path = owner_pid_path(runtime, owner_path, url);
     match probe(url, Some(bootstrap_fingerprint)) {
         RelayHealth::Unavailable => {
             let _ = fs::remove_file(owner_path);

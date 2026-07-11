@@ -29,7 +29,6 @@ impl Environment {
             "USERPROFILE",
             "XDG_CONFIG_HOME",
             BOOTSTRAP_STATE_DIR_ENV,
-            BOOTSTRAP_AGENT_ENV,
             SHUTDOWN_TOKEN_ENV,
             crate::config::BOOTSTRAP_FINGERPRINT_ENV,
         ];
@@ -52,7 +51,6 @@ impl Environment {
 
     fn clear_managed_bootstrap(&self) {
         self.remove(BOOTSTRAP_STATE_DIR_ENV);
-        self.remove(BOOTSTRAP_AGENT_ENV);
         self.remove(SHUTDOWN_TOKEN_ENV);
         self.remove(crate::config::BOOTSTRAP_FINGERPRINT_ENV);
     }
@@ -74,7 +72,6 @@ impl Drop for Environment {
 
 fn configure_managed_bootstrap(environment: &Environment, state: &Path) {
     environment.set(BOOTSTRAP_STATE_DIR_ENV, state);
-    environment.set(BOOTSTRAP_AGENT_ENV, "codex");
     environment.set(SHUTDOWN_TOKEN_ENV, "shutdown-token");
     environment.set(crate::config::BOOTSTRAP_FINGERPRINT_ENV, "fingerprint");
 }
@@ -140,21 +137,11 @@ fn managed_owner_environment_is_validated_before_writing_state() {
     environment.clear_managed_bootstrap();
 
     environment.set(BOOTSTRAP_STATE_DIR_ENV, "relative-state");
-    environment.set(BOOTSTRAP_AGENT_ENV, "codex");
     environment.set(SHUTDOWN_TOKEN_ENV, "shutdown-token");
     let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
     assert!(error.contains("must be an absolute path"), "{error}");
 
     environment.set(BOOTSTRAP_STATE_DIR_ENV, dir.path());
-    environment.set(BOOTSTRAP_AGENT_ENV, "unsupported");
-    let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
-    assert!(error.contains("unsupported bootstrap agent"), "{error}");
-
-    environment.remove(BOOTSTRAP_AGENT_ENV);
-    let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
-    assert!(error.contains(BOOTSTRAP_AGENT_ENV), "{error}");
-
-    environment.set(BOOTSTRAP_AGENT_ENV, "codex");
     environment.set(SHUTDOWN_TOKEN_ENV, "");
     let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
     assert!(error.contains(SHUTDOWN_TOKEN_ENV), "{error}");
@@ -174,53 +161,54 @@ fn managed_owner_environment_is_validated_before_writing_state() {
 }
 
 #[test]
-fn managed_owner_supports_claude_code_identity() {
+fn managed_owner_is_endpoint_scoped_without_a_host_identity() {
     let dir = tempdir().unwrap();
     let state = dir.path().join("state");
     let environment = Environment::isolated();
     configure_managed_bootstrap(&environment, &state);
-    for (identity, port) in [("claude", 47633), ("claude-code", 47634)] {
-        environment.set(BOOTSTRAP_AGENT_ENV, identity);
-        let address = format!("127.0.0.1:{port}").parse().unwrap();
-
-        publish_owner_from_env(address).unwrap();
-
-        let url = format!("http://{address}");
-        let owner = owner_path(&state, CodingAgent::ClaudeCode, &url);
-        let pid = pid_path(&state, CodingAgent::ClaudeCode, &url);
-        validate_owner(
-            &owner,
-            &pid,
-            std::process::id(),
-            &url,
-            "shutdown-token",
-            Some("fingerprint"),
-        )
-        .unwrap();
-    }
-}
-
-#[test]
-fn managed_owner_supports_hermes_identity() {
-    let dir = tempdir().unwrap();
-    let state = dir.path().join("state");
-    let environment = Environment::isolated();
-    configure_managed_bootstrap(&environment, &state);
-    environment.set(BOOTSTRAP_AGENT_ENV, "hermes");
-    let address = "127.0.0.1:47635".parse().unwrap();
+    let address = "127.0.0.1:47633".parse().unwrap();
 
     publish_owner_from_env(address).unwrap();
 
     let url = format!("http://{address}");
     validate_owner(
-        &owner_path(&state, CodingAgent::Hermes, &url),
-        &pid_path(&state, CodingAgent::Hermes, &url),
+        &owner_path(&state, &url),
+        &pid_path(&state, &url),
         std::process::id(),
         &url,
         "shutdown-token",
         Some("fingerprint"),
     )
     .unwrap();
+}
+
+#[test]
+fn publishing_endpoint_owner_migrates_legacy_agent_scoped_records() {
+    let dir = tempdir().unwrap();
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let environment = Environment::isolated();
+    configure_managed_bootstrap(&environment, &state);
+    let address = "127.0.0.1:47636".parse().unwrap();
+    let url = format!("http://{address}");
+    let legacy_owner = state.join(format!("codex-sidecar-{}.owner.json", lock_name(&url)));
+    let legacy_pid = state.join(format!("codex-sidecar-{}.pid", lock_name(&url)));
+    write_owner(
+        &legacy_owner,
+        41,
+        &url,
+        "old-token",
+        Some("old-fingerprint"),
+    )
+    .unwrap();
+    std::fs::write(&legacy_pid, "41").unwrap();
+
+    publish_owner_from_env(address).unwrap();
+
+    assert!(!legacy_owner.exists());
+    assert!(!legacy_pid.exists());
+    assert!(owner_path(&state, &url).exists());
+    assert!(pid_path(&state, &url).exists());
 }
 
 #[test]
@@ -232,8 +220,8 @@ fn failed_owner_publish_removes_the_partial_pid_record() {
     configure_managed_bootstrap(&environment, &state);
     let address = "127.0.0.1:47632".parse().unwrap();
     let url = format!("http://{address}");
-    let owner = owner_path(&state, CodingAgent::Codex, &url);
-    let pid = pid_path(&state, CodingAgent::Codex, &url);
+    let owner = owner_path(&state, &url);
+    let pid = pid_path(&state, &url);
     std::fs::create_dir_all(&owner).unwrap();
     #[cfg(windows)]
     {
@@ -270,15 +258,11 @@ fn owner_validation_reports_a_missing_record() {
 #[test]
 fn owner_enumeration_distinguishes_missing_and_unreadable_directories() {
     let dir = tempdir().unwrap();
-    assert!(
-        owner_paths(&dir.path().join("missing"), CodingAgent::Codex)
-            .unwrap()
-            .is_empty()
-    );
+    assert!(owner_paths(&dir.path().join("missing")).unwrap().is_empty());
 
     let file = dir.path().join("not-a-directory");
     std::fs::write(&file, "file").unwrap();
-    let error = owner_paths(&file, CodingAgent::Codex).unwrap_err();
+    let error = owner_paths(&file).unwrap_err();
     assert!(error.contains("failed to enumerate"), "{error}");
 }
 
@@ -286,19 +270,19 @@ fn owner_enumeration_distinguishes_missing_and_unreadable_directories() {
 fn stale_owner_cleanup_requires_shutdown_credentials() {
     let dir = tempdir().unwrap();
     let url = "http://127.0.0.1:9";
-    let owner = owner_path(dir.path(), CodingAgent::Codex, url);
+    let owner = owner_path(dir.path(), url);
 
     assert!(
-        stop_owned_record(CodingAgent::Codex, dir.path(), &owner).is_ok(),
+        stop_owned_record(dir.path(), &owner).is_ok(),
         "an already absent owner is clean"
     );
 
     write_owner(&owner, 42, url, "", Some("fingerprint")).unwrap();
-    let error = stop_owned_record(CodingAgent::Codex, dir.path(), &owner).unwrap_err();
+    let error = stop_owned_record(dir.path(), &owner).unwrap_err();
     assert!(error.contains("has no shutdown token"), "{error}");
 
     write_owner(&owner, 42, url, "shutdown-token", None).unwrap();
-    let error = stop_owned_record(CodingAgent::Codex, dir.path(), &owner).unwrap_err();
+    let error = stop_owned_record(dir.path(), &owner).unwrap_err();
     assert!(
         error.contains("no authenticated bootstrap fingerprint"),
         "{error}"
@@ -309,12 +293,12 @@ fn stale_owner_cleanup_requires_shutdown_credentials() {
 fn unavailable_owned_sidecar_is_removed_without_sending_shutdown() {
     let dir = tempdir().unwrap();
     let url = "http://127.0.0.1:9";
-    let owner = owner_path(dir.path(), CodingAgent::Codex, url);
-    let pid = pid_path(dir.path(), CodingAgent::Codex, url);
+    let owner = owner_path(dir.path(), url);
+    let pid = pid_path(dir.path(), url);
     write_owner(&owner, 42, url, "shutdown-token", Some("fingerprint")).unwrap();
     std::fs::write(&pid, "42").unwrap();
 
-    stop_owned_record(CodingAgent::Codex, dir.path(), &owner).unwrap();
+    stop_owned_record(dir.path(), &owner).unwrap();
 
     assert!(!owner.exists());
     assert!(!pid.exists());
@@ -329,7 +313,7 @@ fn unavailable_legacy_owner_removes_the_legacy_pid_record() {
     write_owner(&owner, 42, url, "shutdown-token", Some("fingerprint")).unwrap();
     std::fs::write(&pid, "42").unwrap();
 
-    stop_owned_record(CodingAgent::Codex, dir.path(), &owner).unwrap();
+    stop_owned_record(dir.path(), &owner).unwrap();
 
     assert!(!owner.exists());
     assert!(!pid.exists());
@@ -351,8 +335,8 @@ fn authenticated_owned_sidecar_is_shut_down_and_cleaned_up() {
     ));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let owner = owner_path(dir.path(), CodingAgent::Codex, &url);
-    let pid = pid_path(dir.path(), CodingAgent::Codex, &url);
+    let owner = owner_path(dir.path(), &url);
+    let pid = pid_path(dir.path(), &url);
     write_owner(&owner, 42, &url, "shutdown-token", Some("fingerprint")).unwrap();
     std::fs::write(&pid, "42").unwrap();
     let server = thread::spawn(move || {
@@ -363,7 +347,7 @@ fn authenticated_owned_sidecar_is_shut_down_and_cleaned_up() {
             let nonce = request_header(&request, "x-nemo-relay-bootstrap-nonce");
             let proof = key.proof(&fingerprint, &nonce);
             let body = format!(
-                r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{}}}"#,
+                r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
                 env!("CARGO_PKG_VERSION"),
                 BOOTSTRAP_PROTOCOL_VERSION
             );
@@ -391,7 +375,7 @@ fn authenticated_owned_sidecar_is_shut_down_and_cleaned_up() {
     });
 
     assert_eq!(probe(&url, Some("fingerprint")), RelayHealth::Compatible);
-    stop_owned_record(CodingAgent::Codex, dir.path(), &owner).unwrap();
+    stop_owned_record(dir.path(), &owner).unwrap();
 
     server.join().unwrap();
     assert!(!owner.exists());
@@ -408,10 +392,10 @@ fn stop_owned_aggregates_record_errors() {
     let runtime = state_dir().unwrap();
     std::fs::create_dir_all(&runtime).unwrap();
     let url = "http://127.0.0.1:9";
-    let owner = owner_path(&runtime, CodingAgent::Codex, url);
+    let owner = owner_path(&runtime, url);
     write_owner(&owner, 42, url, "", Some("fingerprint")).unwrap();
 
-    let error = stop_owned(CodingAgent::Codex).unwrap_err();
+    let error = stop_owned(url).unwrap_err();
 
     assert!(error.contains("has no shutdown token"), "{error}");
 }
@@ -424,5 +408,23 @@ fn stop_owned_succeeds_when_no_records_exist() {
     environment.set("HOME", dir.path());
     environment.remove("USERPROFILE");
 
-    stop_owned(CodingAgent::Codex).unwrap();
+    stop_owned(crate::sidecar::DEFAULT_URL).unwrap();
+}
+
+#[test]
+fn stop_owned_leaves_other_managed_endpoints_untouched() {
+    let dir = tempdir().unwrap();
+    let environment = Environment::isolated();
+    environment.set("XDG_CONFIG_HOME", dir.path());
+    environment.set("HOME", dir.path());
+    environment.remove("USERPROFILE");
+    let runtime = state_dir().unwrap();
+    std::fs::create_dir_all(&runtime).unwrap();
+    let other_url = "http://127.0.0.1:47633";
+    let other_owner = owner_path(&runtime, other_url);
+    write_owner(&other_owner, 42, other_url, "", Some("fingerprint")).unwrap();
+
+    stop_owned(crate::sidecar::DEFAULT_URL).unwrap();
+
+    assert!(other_owner.exists());
 }

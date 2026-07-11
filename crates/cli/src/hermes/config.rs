@@ -4,7 +4,6 @@
 //! Pure Hermes YAML generation, migration, and ownership recognition.
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
@@ -222,7 +221,7 @@ pub(super) fn relay_is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::metadata(path)
+        std::fs::metadata(path)
             .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
     }

@@ -751,6 +751,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
+        instance_id: "test-instance".into(),
     };
     let request = Request::builder()
         .method(Method::POST)
@@ -783,6 +784,7 @@ async fn models_rejects_non_get_requests_directly() {
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
+        instance_id: "test-instance".into(),
     };
     let request = Request::builder()
         .method(Method::POST)

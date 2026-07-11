@@ -33,24 +33,44 @@ pub(crate) fn healthz_compatible(url: &str, bootstrap_fingerprint: &str) -> bool
     probe(url, Some(bootstrap_fingerprint)) == RelayHealth::Compatible
 }
 
-pub(super) fn probe_after_lock(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHealth {
-    let mut health = probe(url, bootstrap_fingerprint);
+pub(super) fn probe_after_lock(
+    url: &str,
+    bootstrap_fingerprint: Option<&str>,
+) -> (RelayHealth, Option<String>) {
+    let mut result = probe_with_instance(url, bootstrap_fingerprint);
     for _ in 1..3 {
-        if health != RelayHealth::Foreign {
+        if result.0 != RelayHealth::Foreign {
             break;
         }
         thread::sleep(Duration::from_millis(50));
-        health = probe(url, bootstrap_fingerprint);
+        result = probe_with_instance(url, bootstrap_fingerprint);
     }
-    health
+    result
 }
 
 pub(super) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHealth {
+    probe_with_instance(url, bootstrap_fingerprint).0
+}
+
+pub(super) fn compatible_instance_id(
+    url: &str,
+    bootstrap_fingerprint: Option<&str>,
+) -> Option<String> {
+    let (health, instance_id) = probe_with_instance(url, bootstrap_fingerprint);
+    (health == RelayHealth::Compatible)
+        .then_some(instance_id)
+        .flatten()
+}
+
+pub(super) fn probe_with_instance(
+    url: &str,
+    bootstrap_fingerprint: Option<&str>,
+) -> (RelayHealth, Option<String>) {
     let Ok((host, port)) = parse_loopback_url(url) else {
-        return RelayHealth::Unavailable;
+        return (RelayHealth::Unavailable, None);
     };
     let Ok(addrs) = (host.as_str(), port).to_socket_addrs() else {
-        return RelayHealth::Unavailable;
+        return (RelayHealth::Unavailable, None);
     };
     let mut stream = None;
     for addr in addrs {
@@ -63,12 +83,12 @@ pub(super) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHeal
         }
     }
     let Some(mut stream) = stream else {
-        return RelayHealth::Unavailable;
+        return (RelayHealth::Unavailable, None);
     };
     if stream.set_read_timeout(Some(HEALTHZ_TIMEOUT)).is_err()
         || stream.set_write_timeout(Some(HEALTHZ_TIMEOUT)).is_err()
     {
-        return RelayHealth::Foreign;
+        return (RelayHealth::Foreign, None);
     }
     let challenge = bootstrap_fingerprint.map(|fingerprint| {
         let key = BootstrapChallengeKey::load().map_err(|_| ())?;
@@ -82,7 +102,7 @@ pub(super) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHeal
     });
     let challenge = match challenge.transpose() {
         Ok(challenge) => challenge,
-        Err(()) => return RelayHealth::Foreign,
+        Err(()) => return (RelayHealth::Foreign, None),
     };
     let fingerprint_headers = challenge
         .as_ref()
@@ -97,44 +117,51 @@ pub(super) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHeal
         loopback_authority(&host, port)
     );
     if stream.write_all(request.as_bytes()).is_err() {
-        return RelayHealth::Foreign;
+        return (RelayHealth::Foreign, None);
     }
     let mut response = Vec::new();
     if stream.take(16 * 1024).read_to_end(&mut response).is_err() {
-        return RelayHealth::Foreign;
+        return (RelayHealth::Foreign, None);
     }
     let Some((headers, body)) = split_http_response(&response) else {
-        return RelayHealth::Foreign;
+        return (RelayHealth::Foreign, None);
     };
     let Ok(body) = serde_json::from_slice::<Value>(body) else {
-        return RelayHealth::Foreign;
+        return (RelayHealth::Foreign, None);
     };
     if body.get("service").and_then(Value::as_str) != Some("nemo-relay")
         || body.get("bootstrap_protocol").and_then(Value::as_u64)
             != Some(BOOTSTRAP_PROTOCOL_VERSION)
     {
-        return RelayHealth::Foreign;
+        return (RelayHealth::Foreign, None);
     }
     if body.get("version").and_then(Value::as_str) != Some(env!("CARGO_PKG_VERSION"))
         || headers.starts_with(b"HTTP/1.1 409")
         || headers.starts_with(b"HTTP/1.0 409")
     {
-        return RelayHealth::Incompatible;
+        return (RelayHealth::Incompatible, None);
     }
     if (headers.starts_with(b"HTTP/1.1 200") || headers.starts_with(b"HTTP/1.0 200"))
         && body.get("status").and_then(Value::as_str) == Some("ok")
     {
         if let Some((fingerprint, nonce, key)) = challenge {
             let Some(proof) = http_header(headers, "x-nemo-relay-bootstrap-proof") else {
-                return RelayHealth::Foreign;
+                return (RelayHealth::Foreign, None);
             };
             if !key.verify(fingerprint, &nonce, proof) {
-                return RelayHealth::Foreign;
+                return (RelayHealth::Foreign, None);
             }
         }
-        return RelayHealth::Compatible;
+        let Some(instance_id) = body
+            .get("instance_id")
+            .and_then(Value::as_str)
+            .filter(|instance_id| !instance_id.is_empty() && instance_id.len() <= 128)
+        else {
+            return (RelayHealth::Foreign, None);
+        };
+        return (RelayHealth::Compatible, Some(instance_id.to_owned()));
     }
-    RelayHealth::Foreign
+    (RelayHealth::Foreign, None)
 }
 
 pub(super) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {

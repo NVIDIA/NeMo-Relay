@@ -49,6 +49,7 @@ pub(crate) struct AppState {
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
+    pub(crate) instance_id: String,
 }
 
 #[derive(Clone)]
@@ -214,6 +215,7 @@ async fn serve_listener_with_dynamic_inner(
         bootstrap_challenge_key,
         bootstrap_shutdown,
     );
+    let instance_id = state.instance_id.clone();
     let sessions = state.sessions.clone();
     let last_activity = state.last_activity.clone();
     let app = router_with_state(state);
@@ -223,7 +225,7 @@ async fn serve_listener_with_dynamic_inner(
     }
     crate::sidecar::publish_sidecar_owner_from_env(local_address).map_err(CliError::Launch)?;
     if let Some(path) = ready_file {
-        write_ready_file(path, local_address)?;
+        write_ready_file(path, local_address, &instance_id)?;
     }
     let idle_shutdown = if matches!(&shutdown_mode, None | Some(ShutdownMode::ProcessSignal)) {
         plugin_idle_timeout()?
@@ -352,6 +354,7 @@ impl AppState {
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             bootstrap_shutdown,
+            instance_id: uuid::Uuid::now_v7().to_string(),
         }
     }
 
@@ -470,18 +473,20 @@ async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response 
             "status": if compatible { "ok" } else { "incompatible" },
             "service": "nemo-relay",
             "version": env!("CARGO_PKG_VERSION"),
-            "bootstrap_protocol": 1
+            "bootstrap_protocol": crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION,
+            "instance_id": state.instance_id,
         })),
     )
         .into_response()
 }
 
-fn write_ready_file(path: &Path, bind: SocketAddr) -> Result<(), CliError> {
+fn write_ready_file(path: &Path, bind: SocketAddr, instance_id: &str) -> Result<(), CliError> {
     let bytes = serde_json::to_vec(&serde_json::json!({
         "address": bind,
         "service": "nemo-relay",
         "version": env!("CARGO_PKG_VERSION"),
-        "bootstrap_protocol": 1
+        "bootstrap_protocol": crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION,
+        "instance_id": instance_id,
     }))
     .map_err(|error| CliError::Launch(format!("failed to encode readiness file: {error}")))?;
     let temporary = path.with_extension(format!(

@@ -5,7 +5,6 @@
 
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::Value;
 
@@ -450,28 +449,10 @@ pub(super) fn format_command(program: &str, args: &[String]) -> String {
         "$ {}",
         parts
             .iter()
-            .map(|part| shell_quote(part))
+            .map(|part| { crate::plugin_host::shell_quote_arg_for_platform(part, cfg!(windows)) })
             .collect::<Vec<_>>()
             .join(" ")
     )
-}
-
-fn shell_quote(raw: &str) -> String {
-    if raw.chars().all(|ch| {
-        ch.is_ascii_alphanumeric()
-            || matches!(ch, '/' | '\\' | ':' | '.' | '_' | '-' | '=' | '@' | '+')
-    }) {
-        raw.into()
-    } else {
-        let mut escaped = String::new();
-        for ch in raw.chars() {
-            if matches!(ch, '"' | '\\' | '$' | '`') {
-                escaped.push('\\');
-            }
-            escaped.push(ch);
-        }
-        format!("\"{escaped}\"")
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -508,43 +489,18 @@ impl CommandRunner for RealCommandRunner {
     }
 
     fn resolve_executable(&self, command: &str) -> Result<Option<PathBuf>, String> {
-        Ok(find_executable(command))
+        Ok(crate::agent_process::resolve_executable(command))
     }
 
     fn run(&self, program: &Path, args: &[String]) -> Result<i32, String> {
-        #[cfg(windows)]
-        if is_windows_command_script(program) {
-            let status = Command::new(env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
-                .args(["/d", "/s", "/c"])
-                .arg(windows_command_line(program, args))
-                .status()
-                .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
-            return Ok(status.code().unwrap_or(1));
-        }
-
-        let status = Command::new(program)
-            .args(args)
+        let status = crate::agent_process::std_command(&command_argv(program, args))
             .status()
             .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         Ok(status.code().unwrap_or(1))
     }
 
     fn run_quiet(&self, program: &Path, args: &[String]) -> Result<i32, String> {
-        #[cfg(windows)]
-        if is_windows_command_script(program) {
-            let status = Command::new(env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
-                .args(["/d", "/s", "/c"])
-                .arg(windows_command_line(program, args))
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
-            return Ok(status.code().unwrap_or(1));
-        }
-
-        let status = Command::new(program)
-            .args(args)
+        let status = crate::agent_process::std_command(&command_argv(program, args))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -554,22 +510,17 @@ impl CommandRunner for RealCommandRunner {
     }
 
     fn run_capture(&self, program: &Path, args: &[String]) -> Result<CommandOutput, String> {
-        #[cfg(windows)]
-        if is_windows_command_script(program) {
-            let output = Command::new(env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()))
-                .args(["/d", "/s", "/c"])
-                .arg(windows_command_line(program, args))
-                .output()
-                .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
-            return Ok(command_output(output));
-        }
-
-        let output = Command::new(program)
-            .args(args)
+        let output = crate::agent_process::std_command(&command_argv(program, args))
             .output()
             .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         Ok(command_output(output))
     }
+}
+
+fn command_argv(program: &Path, args: &[String]) -> Vec<String> {
+    std::iter::once(program.display().to_string())
+        .chain(args.iter().cloned())
+        .collect()
 }
 
 fn command_output(output: std::process::Output) -> CommandOutput {
@@ -578,54 +529,4 @@ fn command_output(output: std::process::Output) -> CommandOutput {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
-}
-
-fn find_executable(command: &str) -> Option<PathBuf> {
-    let path = env::var_os("PATH")?;
-    let candidates = env::split_paths(&path);
-    let extensions = executable_extensions(command);
-    for dir in candidates {
-        for extension in &extensions {
-            let candidate = dir.join(format!("{command}{extension}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-fn executable_extensions(command: &str) -> Vec<String> {
-    if cfg!(windows) && Path::new(command).extension().is_none() {
-        env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
-            .split(';')
-            .map(str::to_string)
-            .collect()
-    } else {
-        vec![String::new()]
-    }
-}
-
-#[cfg(windows)]
-fn is_windows_command_script(program: &Path) -> bool {
-    program
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-        })
-}
-
-#[cfg(windows)]
-fn windows_command_line(program: &Path, args: &[String]) -> String {
-    std::iter::once(windows_command_argument(&program.display().to_string()))
-        .chain(args.iter().map(|arg| windows_command_argument(arg)))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-#[cfg(windows)]
-fn windows_command_argument(argument: &str) -> String {
-    format!("\"{}\"", argument.replace('"', "\\\""))
 }

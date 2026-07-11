@@ -5,7 +5,6 @@
 
 use clap::ValueEnum;
 use semver::Version;
-use std::path::Path;
 
 /// Coding-agent hosts supported by the CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -132,35 +131,11 @@ impl CodingAgent {
         Ok(version)
     }
 
-    /// Runs the canonical version probe for a concrete host executable.
-    pub(crate) fn validate_executable(self, executable: &Path) -> Result<Version, String> {
-        let output = std::process::Command::new(executable)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(|error| {
-                format!(
-                    "failed to run `{} --version`: {error}; NeMo Relay requires {}",
-                    executable.display(),
-                    self.version_requirement()
-                )
-            })?;
-        if !output.status.success() {
-            return Err(format!(
-                "`{} --version` failed with {}; NeMo Relay requires {}",
-                executable.display(),
-                output.status,
-                self.version_requirement()
-            ));
-        }
-        self.validate_version_output(&String::from_utf8_lossy(&output.stdout))
-    }
-
     fn parse_version(self, raw: &str) -> Option<Version> {
         let descriptor = self.descriptor();
         let token = match descriptor.version_format {
             VersionFormat::Codex => raw.strip_prefix("codex-cli ")?,
-            VersionFormat::ClaudeCode => raw.split_whitespace().next()?,
+            VersionFormat::ClaudeCode => raw.strip_suffix(" (Claude Code)")?,
             VersionFormat::Hermes => raw
                 .strip_prefix("Hermes Agent v")?
                 .split_whitespace()
@@ -171,10 +146,19 @@ impl CodingAgent {
 
     /// Infers a host from an executable basename.
     pub(crate) fn infer(command: &str) -> Option<Self> {
-        let name = std::path::Path::new(command)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(command);
+        let command = command.trim_matches(['"', '\'']);
+        if command.starts_with('@') {
+            return None;
+        }
+        let name = command
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(command)
+            .to_ascii_lowercase();
+        let name = [".exe", ".cmd", ".bat", ".com"]
+            .into_iter()
+            .find_map(|suffix| name.strip_suffix(suffix))
+            .unwrap_or(&name);
         match name {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),

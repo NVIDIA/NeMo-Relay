@@ -91,6 +91,10 @@ pub(crate) fn uninstall_persistent(config: &Path) -> Result<Vec<PathBuf>, CliErr
     uninstall_persistent_with(paths, atomic_write)
 }
 
+pub(crate) fn retire_persistent_gateway() -> Result<(), CliError> {
+    crate::plugin_host::stop_plugin_gateway().map_err(CliError::Install)
+}
+
 fn persistent_paths_have_managed_state(paths: &PersistentPaths) -> Result<bool, CliError> {
     if paths.generation.exists() {
         return Ok(true);
@@ -433,6 +437,27 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
                 "Hermes hook {event} expected exactly one trusted Relay handler"
             ));
         }
+    }
+    let mut managed = config
+        .get("hooks")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|hooks| hooks.iter())
+        .flat_map(|(event, groups)| {
+            groups.as_array().into_iter().flatten().filter_map(|group| {
+                let candidate = group.get("command").and_then(Value::as_str)?;
+                is_managed_hook_command(candidate).then_some((event.as_str(), candidate))
+            })
+        })
+        .collect::<Vec<_>>();
+    managed.sort_unstable();
+    let mut expected = HERMES_HOOK_EVENTS
+        .iter()
+        .map(|event| (*event, command))
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    if managed != expected {
+        return Err("Hermes config contains an unexpected Relay hook handler".into());
     }
     Ok(())
 }

@@ -307,6 +307,29 @@ fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
 }
 
 #[test]
+fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let command = persistent_hook_command(&relay);
+    let generation = temp.path().join(GENERATION_FILE_NAME);
+    let mut config = persistent_config(None, &relay, &command, &generation, &[]).unwrap();
+    config["hooks"]["unexpected_event"] = json!([{"command": command, "timeout": 30}]);
+    let error = verify_hook_definitions(&config, &command).unwrap_err();
+    assert!(error.contains("unexpected Relay hook"));
+
+    let mut allowlist = trusted_hooks(None, &command, &relay, UNIX_EPOCH).unwrap();
+    allowlist["approvals"].as_array_mut().unwrap().push(json!({
+        "event": "unexpected_event",
+        "command": command,
+        "approved_at": "1970-01-01T00:00:00.000000Z"
+    }));
+    let path = temp.path().join("shell-hooks-allowlist.json");
+    std::fs::write(&path, serde_json::to_vec(&allowlist).unwrap()).unwrap();
+    let error = verify_trust(&path, &command).unwrap_err();
+    assert!(error.contains("unexpected Relay hook approval"));
+}
+
+#[test]
 fn install_is_verified_idempotent_and_rotates_the_generation() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());

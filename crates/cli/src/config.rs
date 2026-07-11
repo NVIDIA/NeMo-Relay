@@ -80,12 +80,11 @@ pub(crate) enum Command {
     Codex(EasyPathCommand),
     /// Run Hermes with observability (setup on first use)
     #[command(
-        long_about = "Run Hermes Agent under an ephemeral NeMo Relay gateway. Persistent setup \
-                      configures Hermes's user-level `mcp_servers` and shell hooks so bare Hermes \
-                      processes can share the native Relay gateway on 127.0.0.1:47632. This \
-                      wrapper temporarily suppresses that fixed MCP entry and uses a dynamic \
-                      gateway for project-specific Relay configuration. Run \
-                      `nemo-relay install hermes --force` to refresh the persistent integration.",
+        long_about = "Run Hermes Agent under an ephemeral NeMo Relay gateway. The wrapper uses a \
+                      process-private HERMES_HOME overlay for dynamic hooks, without rewriting \
+                      the user's Hermes configuration. Use `nemo-relay install hermes` when bare \
+                      Hermes processes should load the shared native Relay gateway on \
+                      127.0.0.1:47632 through MCP.",
         after_help = "Examples:\n  \
                       nemo-relay hermes\n  \
                       nemo-relay hermes -- chat --provider custom"
@@ -688,9 +687,19 @@ pub(crate) struct AgentConfigs {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AgentCommandConfig {
     pub(crate) command: Option<String>,
-    /// Recorded by `nemo-relay config` when it installs hermes shell hooks. Other agents leave
-    /// this empty; the launcher reads it only to print a "hooks live here" pointer for hermes.
+    /// Legacy Hermes config-path override retained for existing Relay configuration files.
+    /// New setup flows do not write it; persistent Hermes state belongs to `install hermes`.
     pub(crate) hooks_path: Option<PathBuf>,
+}
+
+impl AgentConfigs {
+    pub(crate) const fn get(&self, agent: CodingAgent) -> &AgentCommandConfig {
+        match agent {
+            CodingAgent::ClaudeCode => &self.claude,
+            CodingAgent::Codex => &self.codex,
+            CodingAgent::Hermes => &self.hermes,
+        }
+    }
 }
 
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
@@ -860,7 +869,7 @@ fn persistent_bootstrap_fingerprint(
         .map_err(CliError::Config)?
         .as_secs();
     let document = serde_json::json!({
-        "bootstrap_protocol": 1,
+        "bootstrap_protocol": crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION,
         "relay_version": env!("CARGO_PKG_VERSION"),
         "openai_base_url": gateway.openai_base_url,
         "anthropic_base_url": gateway.anthropic_base_url,

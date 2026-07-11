@@ -42,7 +42,7 @@ use state::{
     remove_path, state_path, write_state, write_state_for_host,
 };
 
-pub(super) const DEFAULT_GATEWAY_URL: &str = "http://127.0.0.1:47632";
+pub(super) use crate::sidecar::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
 pub(super) const RELAY_COMMAND: &str = "nemo-relay";
@@ -449,6 +449,7 @@ fn install_hermes_host(
         println!("configure Hermes MCP and hooks at {}", config.display());
         return Ok(());
     }
+    crate::hermes::retire_persistent_gateway().map_err(|error| error.to_string())?;
     crate::hermes::install_persistent(&config, &relay).map_err(|error| error.to_string())?;
     if !options.skip_doctor {
         crate::hermes::diagnose_persistent(&config)?;
@@ -466,6 +467,7 @@ fn uninstall_hermes_host(options: &PluginInstallOptions) -> Result<(), String> {
         );
         return Ok(());
     }
+    crate::hermes::retire_persistent_gateway().map_err(|error| error.to_string())?;
     crate::hermes::uninstall_persistent(&config).map_err(|error| error.to_string())?;
     println!("uninstalled Hermes integration");
     Ok(())
@@ -659,7 +661,7 @@ fn install_host_locked(
         let staged = stage_plugin_marketplace(host, &relay, &layout, options)?;
         match begin_force_replacement(host, &layout, preflight, options, runner, setup_runner) {
             Ok(mut snapshot) => {
-                if let Err(error) = setup_runner.refresh_gateway(host) {
+                if let Err(error) = setup_runner.refresh_gateway() {
                     staged.cleanup();
                     return restore_force_replacement_after_error(
                         host,
@@ -684,7 +686,7 @@ fn install_host_locked(
     };
     if options.force && staged.is_none() {
         if !options.dry_run && plugin_uses_mcp(host) {
-            setup_runner.refresh_gateway(host)?;
+            setup_runner.refresh_gateway()?;
         }
         force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
     }
@@ -903,7 +905,7 @@ fn retire_installed_generation(
     if retirement.is_none() && existing_install && !legacy_plugin_without_mcp(host, plugin_root)? {
         return Err(missing_generation_fence_error(host, &generation_fence));
     }
-    setup_runner.refresh_gateway(host)?;
+    setup_runner.refresh_gateway()?;
     Ok(retirement)
 }
 
@@ -919,7 +921,7 @@ fn retire_replacement_before_rollback(
     let mut retirement = GenerationRetirement::acquire(&layout.generation_fence)
         .map_err(|cause| invalid_generation_fence_error(host, &layout.generation_fence, &cause))?
         .ok_or_else(|| missing_generation_fence_error(host, &layout.generation_fence))?;
-    setup_runner.refresh_gateway(host)?;
+    setup_runner.refresh_gateway()?;
     retirement.invalidate_for_replacement().map_err(|error| {
         format!(
             "failed to retire replacement MCP generation {} before rollback: {error}",

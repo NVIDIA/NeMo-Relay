@@ -70,4 +70,5 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

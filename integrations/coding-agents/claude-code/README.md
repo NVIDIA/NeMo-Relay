@@ -29,10 +29,10 @@ The bundle forwards `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
 correlation events.
 
 The bundle requires Claude Code 2.1.121 or newer. That version provides the
-`alwaysLoad` MCP startup barrier used to make Relay ready before session hooks.
-Older versions before 2.1.116 also reject `UserPromptExpansion` in the plugin
-hook configuration. Installation fails before changing host state when the
-version is too old, and `nemo-relay doctor` reports the required upgrade.
+`alwaysLoad` MCP startup barrier used to make Relay ready before session hooks
+and accepts the complete generated hook schema. Installation fails before
+changing host state when the version is too old, and `nemo-relay doctor`
+reports the required upgrade.
 
 Claude Code observability is turn-oriented. A multi-turn session can produce one
 root `claude-code-turn` span or ATIF trajectory per user turn. That is expected

@@ -473,7 +473,7 @@ impl SessionManager {
     ///
     /// Host sessions can remain durable after their current turn ends: Codex may omit `SessionEnd`,
     /// while Hermes keeps a session open for later resumption. A dormant agent scope must therefore
-    /// not keep the hook-supervised sidecar alive forever. Active turns, subagents, tools, LLMs, and
+    /// not keep the MCP-managed sidecar alive forever. Active turns, subagents, tools, LLMs, and
     /// gateway calls still block idle shutdown; [`Self::close_all`] balances the dormant agent scope
     /// when the gateway exits.
     pub(crate) async fn has_open_sessions(&self) -> bool {

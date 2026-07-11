@@ -115,7 +115,9 @@ nemo-relay install all
 
 For Claude Code and Codex, `nemo-relay install` writes local marketplace files,
 registers the selected host plugin, and performs the required provider and hook
-setup. For Hermes, it updates only Relay-owned user configuration. Use
+setup. For Hermes, `install` is the only command that updates Relay-owned user
+MCP, hook, trust, and generation state; interactive `config hermes` manages
+only the transparent wrapper. Use
 `nemo-relay uninstall <host>` to roll back and
 `nemo-relay doctor --plugin <host>` to check an installed integration.
 
@@ -153,9 +155,9 @@ nemo-relay install hermes
 ```
 
 It writes the MCP server and trusted hooks to `$HERMES_HOME/config.yaml` or
-`~/.hermes/config.yaml`. Transparent Hermes runs temporarily suppress that
-fixed MCP entry, export the dynamic `NEMO_RELAY_GATEWAY_URL`, and restore the
-original config afterward.
+`~/.hermes/config.yaml`. Transparent Hermes runs leave that file untouched and
+export the dynamic `NEMO_RELAY_GATEWAY_URL` through a process-private
+`HERMES_HOME` overlay with no fixed MCP entry.
 
 Shared TOML config is loaded from `/etc/nemo-relay/config.toml`, then nearest
 project `.nemo-relay/config.toml`, then

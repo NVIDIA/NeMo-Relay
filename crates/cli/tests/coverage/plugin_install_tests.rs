@@ -645,8 +645,8 @@ impl PluginSetupRunner for MockSetupRunner {
         self.record("restore snapshot".into())
     }
 
-    fn refresh_gateway(&self, host: IntegrationHost) -> Result<(), String> {
-        self.record(format!("refresh {}", host.as_arg()))
+    fn refresh_gateway(&self) -> Result<(), String> {
+        self.record("refresh gateway".into())
     }
 
     fn setup(
@@ -1519,8 +1519,14 @@ fn host_command_helpers_cover_dry_run_missing_failure_and_reporting() {
         "codex",
         &["plugin".into(), "arg with space".into(), "quote\"$".into()],
     );
+    #[cfg(not(windows))]
+    assert!(quoted.contains("'arg with space'"));
+    #[cfg(not(windows))]
+    assert!(quoted.contains("'quote\"$'"));
+    #[cfg(windows)]
     assert!(quoted.contains("\"arg with space\""));
-    assert!(quoted.contains("\"quote\\\"\\$\""));
+    #[cfg(windows)]
+    assert!(quoted.contains("\"quote^\"$\""));
 
     let runner = MockRunner::default()
         .with_executable("codex", "/bin/codex")
@@ -2111,12 +2117,12 @@ fn force_install_unregisters_existing_host_before_reinstall() {
         setup_runner
             .calls()
             .iter()
-            .any(|call| call == "refresh codex")
+            .any(|call| call == "refresh gateway")
     );
     let setup_calls = setup_runner.calls();
     let refresh_index = setup_calls
         .iter()
-        .position(|call| call == "refresh codex")
+        .position(|call| call == "refresh gateway")
         .unwrap();
     let snapshot_index = setup_calls
         .iter()
@@ -2190,7 +2196,7 @@ fn claude_force_install_retires_and_replaces_its_mcp_generation() {
         setup_runner
             .calls()
             .iter()
-            .any(|call| call == "refresh claude-code")
+            .any(|call| call == "refresh gateway")
     );
 }
 
@@ -2242,7 +2248,7 @@ fn claude_force_install_rollback_restores_generation_files_and_setup_snapshot() 
     assert_eq!(
         setup_calls
             .iter()
-            .filter(|call| call.as_str() == "refresh claude-code")
+            .filter(|call| call.as_str() == "refresh gateway")
             .count(),
         2,
         "the previous and replacement gateway generations must both be retired: {setup_calls:?}"
@@ -2655,7 +2661,7 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
         .with_executable("codex", "/bin/codex")
         .with_codex_registration(true, true);
     let setup_runner = MockSetupRunner {
-        failing_call: Some("refresh codex".into()),
+        failing_call: Some("refresh gateway".into()),
         ..MockSetupRunner::default()
     };
     let options = PluginInstallOptions {
@@ -2668,7 +2674,7 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
 
     let error = install_host(IntegrationHost::Codex, &options, &runner, &setup_runner).unwrap_err();
 
-    assert!(error.contains("refresh codex failed"));
+    assert!(error.contains("refresh gateway failed"));
     assert!(layout.state_path.exists());
     assert!(layout.plugin_root.exists());
     previous.verify_current().unwrap();
@@ -2683,7 +2689,7 @@ fn force_install_keeps_existing_registration_when_gateway_refresh_fails() {
         setup_runner.calls(),
         vec![
             "snapshot codex".to_string(),
-            "refresh codex".to_string(),
+            "refresh gateway".to_string(),
             "restore snapshot".to_string(),
         ]
     );
@@ -2726,7 +2732,7 @@ fn force_install_restores_previous_install_after_doctor_failure() {
     let refreshes = setup_calls
         .iter()
         .enumerate()
-        .filter(|(_, call)| call.as_str() == "refresh codex")
+        .filter(|(_, call)| call.as_str() == "refresh gateway")
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     assert_eq!(
@@ -3038,7 +3044,11 @@ fn plugin_registration_failure_rolls_back_marketplace_without_plugin_removal() {
     )
     .unwrap_err();
 
-    assert!(error.contains("plugin add nemo-relay-plugin"));
+    assert!(error.contains("plugin add"), "{error}");
+    assert!(
+        error.contains("nemo-relay-plugin@nemo-relay-local"),
+        "{error}"
+    );
     assert!(!layout.marketplace_root.exists());
     assert!(!layout.state_path.exists());
     assert!(
@@ -3120,7 +3130,7 @@ fn retry_after_partial_registration_rollback_does_not_restore_uninstalled_setup(
 
     assert_eq!(
         setup_runner.calls(),
-        vec!["refresh codex"],
+        vec!["refresh gateway"],
         "retry cleanup may stop the gateway but must not restore provider/hooks setup that install never reached"
     );
 }
@@ -3200,7 +3210,7 @@ fn uninstall_uses_installed_state_and_removes_marketplace() {
     let setup_calls = setup_runner.calls();
     let refresh_index = setup_calls
         .iter()
-        .position(|call| call == "refresh codex")
+        .position(|call| call == "refresh gateway")
         .unwrap();
     let uninstall_index = setup_calls
         .iter()
@@ -3977,7 +3987,7 @@ fn uninstall_cleans_up_plugin_setup_before_host_removal_failure() {
     assert_eq!(
         setup_runner.calls(),
         vec![
-            "refresh codex".to_string(),
+            "refresh gateway".to_string(),
             format!("uninstall codex {DEFAULT_GATEWAY_URL}"),
         ]
     );

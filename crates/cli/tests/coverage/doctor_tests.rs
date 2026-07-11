@@ -620,8 +620,10 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
 
 #[test]
 fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
-    assert_eq!(command_executable("codex --full-auto"), "codex");
-    assert_eq!(command_executable(""), "");
+    assert_eq!(
+        crate::agent_process::command_argv("codex --full-auto"),
+        ["codex", "--full-auto"]
+    );
     assert_eq!(
         agent_command(CodingAgent::ClaudeCode, &AgentConfigs::default()),
         "claude"
@@ -645,34 +647,20 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert!(agent_configured(CodingAgent::Hermes, &agents));
     assert_eq!(configured_agent_names(&agents), vec!["hermes".to_string()]);
     assert_eq!(
-        hook_status(CodingAgent::ClaudeCode, &agents, true),
+        hook_status(CodingAgent::ClaudeCode, &agents),
         (Status::Pass, "hooks: injected during run".into())
     );
     assert_eq!(
-        hook_status(CodingAgent::Codex, &agents, true),
+        hook_status(CodingAgent::Codex, &agents),
         (Status::Pass, "hooks: injected during run".into())
     );
-    let temp = tempfile::tempdir().unwrap();
-    let hook = temp.path().join("hooks.yaml");
-    std::fs::write(&hook, "cmd: nemo-relay hook-forward hermes\n").unwrap();
-    let (status, details) = hook_file_status(Ok(hook.clone()), CodingAgent::Hermes, true, "hooks");
-    assert_eq!(status, Status::Pass);
-    assert!(details.contains(hook.to_str().unwrap()));
-
-    std::fs::write(&hook, "cmd: custom\n").unwrap();
-    let (status, details) = hook_file_status(Ok(hook.clone()), CodingAgent::Hermes, true, "hooks");
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("missing NeMo Relay hook"));
-    let (status, _) = hook_file_status(Ok(hook), CodingAgent::Hermes, false, "hooks");
-    assert_eq!(status, Status::Info);
-
-    let agents = AgentConfigs::default();
-    let (status, details) = hook_status(CodingAgent::Hermes, &agents, true);
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("not installed"));
-    let (status, details) = hook_status(CodingAgent::Hermes, &agents, false);
-    assert_eq!(status, Status::Info);
-    assert!(details.contains("not configured"));
+    assert_eq!(
+        hook_status(CodingAgent::Hermes, &AgentConfigs::default()),
+        (
+            Status::Pass,
+            "hooks: injected through an isolated HERMES_HOME during run".into()
+        )
+    );
 }
 
 #[test]
@@ -740,6 +728,27 @@ async fn collect_agents_filters_target_and_records_version() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("npx");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\nprintf 'codex-cli 0.143.0\\n'\n",
+    )
+    .unwrap();
+    make_executable(&wrapper);
+
+    let mut resolved = ResolvedConfig::default();
+    resolved.agents.codex.command = Some(format!("{} codex", wrapper.display()));
+    let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
+
+    assert_eq!(agents[0].status, Status::Pass);
+    assert_eq!(agents[0].path.as_deref(), Some(wrapper.as_path()));
+    assert_eq!(agents[0].version.as_deref(), Some("codex-cli 0.143.0"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
     let temp = tempfile::tempdir().unwrap();
     let quiet = temp.path().join("quiet-agent");
@@ -749,10 +758,20 @@ async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
     std::fs::write(&failed, "#!/bin/sh\nprintf 'codex-cli 99.0.0\\n'\nexit 7\n").unwrap();
     make_executable(&failed);
 
-    assert_eq!(probe_version(&quiet).await, None);
-    assert_eq!(probe_version(&failed).await, None);
     assert_eq!(
-        probe_version(&temp.path().join("missing-agent")).await,
+        probe_version(&[quiet.display().to_string(), "--version".into()]).await,
+        None
+    );
+    assert_eq!(
+        probe_version(&[failed.display().to_string(), "--version".into()]).await,
+        None
+    );
+    assert_eq!(
+        probe_version(&[
+            temp.path().join("missing-agent").display().to_string(),
+            "--version".into(),
+        ])
+        .await,
         None
     );
 }
@@ -799,12 +818,18 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     assert!(info.global.path.starts_with(&home));
     assert_eq!(info.configured_agents, vec!["codex".to_string()]);
 
-    assert_eq!(which_on_path("definitely-missing"), None);
-    assert_eq!(which_command("/definitely/missing"), None);
+    assert_eq!(
+        crate::agent_process::resolve_executable("definitely-missing"),
+        None
+    );
+    assert_eq!(
+        crate::agent_process::resolve_executable("/definitely/missing"),
+        None
+    );
     let binary = temp.path().join("agent-bin");
     std::fs::write(&binary, "").unwrap();
     assert_eq!(
-        which_command(binary.to_str().unwrap()).as_deref(),
+        crate::agent_process::resolve_executable(binary.to_str().unwrap()).as_deref(),
         Some(binary.as_path())
     );
 }
@@ -889,52 +914,6 @@ fn check_directory_reports_pass_warn_and_fail() {
     std::fs::write(&file, "").unwrap();
     let fail = check_directory("ATOF dir", &file);
     assert_eq!(fail.status, Status::Fail);
-}
-
-#[test]
-fn hook_file_status_covers_resolution_and_missing_paths() {
-    let resolution_error = hook_file_status(
-        Err(CliError::Config("bad path".into())),
-        CodingAgent::Hermes,
-        true,
-        "hooks",
-    );
-    assert_eq!(resolution_error.0, Status::Fail);
-    assert!(resolution_error.1.contains("could not resolve path"));
-
-    let missing = tempfile::tempdir().unwrap().path().join("missing.yaml");
-    let (status, details) =
-        hook_file_status(Ok(missing.clone()), CodingAgent::Hermes, true, "hooks");
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("missing"));
-
-    let (status, details) = hook_file_status(Ok(missing), CodingAgent::Hermes, false, "hooks");
-    assert_eq!(status, Status::Info);
-    assert!(details.contains("missing"));
-}
-
-#[test]
-fn hook_file_status_covers_plain_files_and_read_errors() {
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("config.yaml");
-    std::fs::write(&hooks_path, "hooks:\n  PreToolUse: []\n").unwrap();
-
-    let (status, details) =
-        hook_file_status(Ok(hooks_path.clone()), CodingAgent::Hermes, true, "hooks");
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("missing NeMo Relay hook"));
-
-    let (status, details) =
-        hook_file_status(Ok(hooks_path.clone()), CodingAgent::Hermes, false, "hooks");
-    assert_eq!(status, Status::Info);
-    assert!(details.contains("no NeMo Relay hook"));
-
-    let unreadable_path = temp.path().join("hooks-dir");
-    std::fs::create_dir(&unreadable_path).unwrap();
-    let (status, details) =
-        hook_file_status(Ok(unreadable_path), CodingAgent::Hermes, false, "hooks");
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("could not read"));
 }
 
 #[tokio::test]

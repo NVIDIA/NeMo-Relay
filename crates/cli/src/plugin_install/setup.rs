@@ -87,7 +87,7 @@ pub(super) trait PluginSetupRunner {
         Ok(())
     }
 
-    fn refresh_gateway(&self, _host: IntegrationHost) -> Result<(), String> {
+    fn refresh_gateway(&self) -> Result<(), String> {
         Ok(())
     }
 
@@ -150,16 +150,8 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         }
     }
 
-    fn refresh_gateway(&self, host: IntegrationHost) -> Result<(), String> {
-        match host {
-            IntegrationHost::Codex => plugin_host::stop_plugin_gateway(CodingAgent::Codex),
-            IntegrationHost::ClaudeCode => {
-                plugin_host::stop_plugin_gateway(CodingAgent::ClaudeCode)
-            }
-            IntegrationHost::Hermes | IntegrationHost::All => {
-                unreachable!("all is expanded before plugin setup")
-            }
-        }
+    fn refresh_gateway(&self) -> Result<(), String> {
+        plugin_host::stop_plugin_gateway()
     }
 
     fn setup(

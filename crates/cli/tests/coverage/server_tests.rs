@@ -375,7 +375,15 @@ async fn healthz_returns_ok() {
     assert_eq!(body["status"], json!("ok"));
     assert_eq!(body["service"], json!("nemo-relay"));
     assert_eq!(body["version"], json!(env!("CARGO_PKG_VERSION")));
-    assert_eq!(body["bootstrap_protocol"], json!(1));
+    assert_eq!(
+        body["bootstrap_protocol"],
+        json!(crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION)
+    );
+    assert!(
+        body["instance_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
 }
 
 #[tokio::test]
@@ -521,13 +529,17 @@ fn readiness_file_is_published_atomically_with_gateway_identity() {
     let path = directory.path().join("gateway.ready.json");
     let address = "127.0.0.1:43123".parse().unwrap();
 
-    write_ready_file(&path, address).unwrap();
+    write_ready_file(&path, address, "test-instance").unwrap();
 
     let ready: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(ready["address"], json!(address));
     assert_eq!(ready["service"], json!("nemo-relay"));
     assert_eq!(ready["version"], json!(env!("CARGO_PKG_VERSION")));
-    assert_eq!(ready["bootstrap_protocol"], json!(1));
+    assert_eq!(
+        ready["bootstrap_protocol"],
+        json!(crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION)
+    );
+    assert_eq!(ready["instance_id"], json!("test-instance"));
     assert!(!path.with_extension("json.tmp").exists());
 }
 

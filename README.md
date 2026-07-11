@@ -296,7 +296,7 @@ coverage.
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
-| Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; `SessionEnd` availability remains Codex-version-dependent. |
+| Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; the supported generated schema does not install `SessionEnd`. |
 | Hermes Agent | Yes | Yes | Partial | User config installs the shared native MCP gateway lifecycle plus exact trusted hooks; gateway-routed or hook-backed LLM observability is supported. |
 
 ### Public API Integrations

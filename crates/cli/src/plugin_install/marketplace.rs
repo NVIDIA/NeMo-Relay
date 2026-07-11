@@ -178,7 +178,7 @@ pub(super) fn plugin_mcp_config(
             "command": relay,
             "args": ["mcp", "--agent", "codex"],
             "env": {
-                "NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632",
+                "NEMO_RELAY_GATEWAY_BIND": crate::sidecar::DEFAULT_BIND,
                 (GENERATION_FILE_ENV): generation_fence
             },
             "env_vars": plugin_mcp_env_vars()?,
@@ -189,7 +189,7 @@ pub(super) fn plugin_mcp_config(
             "command": relay,
             "args": ["mcp", "--agent", "claude"],
             "env": {
-                "NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632",
+                "NEMO_RELAY_GATEWAY_BIND": crate::sidecar::DEFAULT_BIND,
                 (GENERATION_FILE_ENV): generation_fence
             },
             "alwaysLoad": true

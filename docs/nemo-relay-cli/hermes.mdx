@@ -150,10 +150,12 @@ nemo-relay hermes -- chat --provider custom
 ```
 
 This mode starts a gateway on an OS-assigned loopback port and exports
-`NEMO_RELAY_GATEWAY_URL` to Hermes. Relay temporarily removes its fixed MCP
-entry from the Hermes config so Hermes does not start a redundant sidecar. The
-same canonical hooks target the dynamic gateway. The original Hermes config is
-restored after the process exits, including failure paths.
+`NEMO_RELAY_GATEWAY_URL` to Hermes. Relay creates a process-private
+`HERMES_HOME` overlay containing the dynamic hooks and no fixed MCP entry, while
+linking the rest of the active Hermes profile state. The user config is never
+rewritten, so concurrent transparent and bare Hermes processes cannot observe
+each other's temporary hook configuration. The overlay is removed after the
+wrapped process exits.
 
 Inspect the launch without changing files or starting Hermes:
 
@@ -170,8 +172,9 @@ nemo-relay uninstall hermes
 ```
 
 Unrelated Hermes configuration remains unchanged. The interactive
-`nemo-relay config hermes` and `nemo-relay config --reset hermes` paths remain
-available when configuring Relay through the setup wizard.
+`nemo-relay config hermes` and `nemo-relay config --reset hermes` paths manage
+only Relay's transparent-wrapper configuration; persistent Hermes MCP, hook,
+and trust state is owned exclusively by `install` and `uninstall`.
 
 ## Validate End-to-End Capture
 

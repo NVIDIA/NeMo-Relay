@@ -66,9 +66,6 @@ pub(super) fn plugins_resume_command(scope: ConfigScope) -> &'static str {
 pub(crate) struct SetupAnswers {
     pub scope: ConfigScope,
     pub agents: Vec<CodingAgent>,
-    /// User-owned Hermes config recorded under `[agents.hermes].hooks_path`. Set by `run` so the
-    /// wizard preview and transparent launcher reference the same host configuration.
-    pub hermes_hooks_path: Option<PathBuf>,
 }
 
 /// Scans `$PATH` for the supported coding-agent binaries and returns the ones present.
@@ -85,19 +82,11 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
         return Vec::new();
     };
     // Pairs of (CodingAgent, exec name to look for on $PATH).
-    let candidates = [
-        (CodingAgent::ClaudeCode, "claude"),
-        (CodingAgent::Codex, "codex"),
-        (CodingAgent::Hermes, "hermes"),
-    ];
-    candidates
+    CodingAgent::ALL
         .into_iter()
-        .filter_map(|(agent, exec)| {
-            let found = std::env::split_paths(path_var).any(|dir| {
-                let candidate = dir.join(exec);
-                candidate.is_file()
-            });
-            found.then_some(agent)
+        .filter(|agent| {
+            crate::agent_process::resolve_executable_in_path(agent.executable(), Some(path_var))
+                .is_some()
         })
         .collect()
 }
@@ -127,11 +116,6 @@ pub(super) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
         let (key, command) = agent_key_and_command(*agent);
         let mut agent_table = Table::new();
         agent_table["command"] = value(command);
-        if matches!(agent, CodingAgent::Hermes)
-            && let Some(path) = answers.hermes_hooks_path.as_deref()
-        {
-            agent_table["hooks_path"] = value(path.display().to_string());
-        }
         agents_table.insert(key, Item::Table(agent_table));
     }
     Some(agents_table)
@@ -243,20 +227,7 @@ pub(super) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent
 /// In both cases this targets the *project* layer; global and system layers are left to direct
 /// editing because they typically aren't owned by the wizard.
 pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
-    reset_project_config(agent_hint)?;
-    if matches!(agent_hint, Some(CodingAgent::Hermes)) {
-        let home = home_dir().ok_or_else(|| {
-            CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
-        })?;
-        let removed = crate::hermes::uninstall_persistent(&crate::hermes::user_config_path(&home))?;
-        for path in removed {
-            println!(
-                "  ✓ Removed Relay-owned Hermes state from {}",
-                path.display()
-            );
-        }
-    }
-    Ok(())
+    reset_project_config(agent_hint)
 }
 
 fn reset_project_config(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
@@ -306,31 +277,6 @@ fn reset_project_config(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
         }
     }
     Ok(())
-}
-
-/// Returns Hermes's user-owned configuration path when Hermes is selected. Relay's project/global
-/// scope does not change where the Hermes host itself reads MCP servers and shell hooks.
-pub(crate) fn hermes_config_path_for_agents(
-    agents: &[CodingAgent],
-    home: &Path,
-) -> Option<PathBuf> {
-    if !agents.contains(&CodingAgent::Hermes) {
-        return None;
-    }
-    Some(crate::hermes::user_config_path(home))
-}
-
-/// Installs Hermes's lifecycle-bound MCP client and exact trusted Relay hooks transactionally.
-pub(crate) fn install_hermes_integration(home: &Path) -> Result<Vec<PathBuf>, CliError> {
-    CodingAgent::Hermes
-        .validate_executable(Path::new(CodingAgent::Hermes.executable()))
-        .map_err(CliError::Install)?;
-    let relay = std::env::current_exe().map_err(|error| {
-        CliError::Install(format!(
-            "failed to resolve the nemo-relay executable: {error}"
-        ))
-    })?;
-    crate::hermes::install_persistent(&crate::hermes::user_config_path(home), &relay)
 }
 
 /// Pre-filled wizard defaults read from an existing `config.toml`. When the file is missing or

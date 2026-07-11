@@ -51,7 +51,7 @@ fn setup_runner_defaults_are_explicit_no_ops() {
 
     assert!(runner.snapshot(IntegrationHost::Codex).unwrap().is_none());
     runner.restore_snapshot(&PluginSetupSnapshot::Mock).unwrap();
-    runner.refresh_gateway(IntegrationHost::Codex).unwrap();
+    runner.refresh_gateway().unwrap();
 }
 
 #[test]
@@ -68,7 +68,6 @@ fn setup_descriptions_reject_unexpanded_hosts_and_unknown_actions() {
     let runner = RealPluginSetupRunner;
     let root = Path::new("unused");
     assert!(std::panic::catch_unwind(|| runner.snapshot(IntegrationHost::All)).is_err());
-    assert!(std::panic::catch_unwind(|| runner.refresh_gateway(IntegrationHost::All)).is_err());
     assert!(
         std::panic::catch_unwind(|| runner.setup(IntegrationHost::All, DEFAULT_GATEWAY_URL, root))
             .is_err()

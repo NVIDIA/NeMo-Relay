@@ -225,18 +225,6 @@ pub(super) fn hook_state_key_path(key: &str) -> String {
     format!("hooks.state.{quoted}")
 }
 
-#[cfg(not(windows))]
 fn codex_app_server_command() -> Command {
-    let mut command = Command::new("codex");
-    command.arg("app-server");
-    command
-}
-
-#[cfg(windows)]
-fn codex_app_server_command() -> Command {
-    let mut command = Command::new(
-        std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe")),
-    );
-    command.args(["/d", "/s", "/c", "codex app-server"]);
-    command
+    crate::agent_process::std_command(&["codex".into(), "app-server".into()])
 }

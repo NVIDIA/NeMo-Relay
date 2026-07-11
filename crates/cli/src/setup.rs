@@ -26,9 +26,8 @@ mod model;
 pub(crate) use self::model::reset;
 use self::model::{
     ConfigScope, SetupAnswers, agent_key_and_command, build_config, detect_installed_agents,
-    hermes_config_path_for_agents, home_dir, install_hermes_integration,
-    plugins_edit_command_for_scope, plugins_resume_command, preview_paths, read_existing_defaults,
-    save_config,
+    home_dir, plugins_edit_command_for_scope, plugins_resume_command, preview_paths,
+    read_existing_defaults, save_config,
 };
 
 #[cfg(test)]
@@ -89,11 +88,7 @@ pub(crate) fn prompt_user(
         print_codex_api_key_guide();
     }
 
-    Ok(SetupAnswers {
-        scope,
-        agents,
-        hermes_hooks_path: None,
-    })
+    Ok(SetupAnswers { scope, agents })
 }
 
 /// Top-level setup entry point used by `nemo-relay config` and the easy-path fallback.
@@ -104,26 +99,20 @@ pub(crate) fn prompt_user(
 /// `nemo-relay config` asks the full set so users can configure multiple agents at once.
 pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
     let detected = detect_installed_agents();
-    let mut answers = prompt_user(&detected, agent_hint)?;
+    let answers = prompt_user(&detected, agent_hint)?;
 
     let cwd = std::env::current_dir()?;
     let home = home_dir().ok_or_else(|| {
         CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
     })?;
-    answers.hermes_hooks_path = hermes_config_path_for_agents(&answers.agents, &home);
-
     let doc = build_config(&answers);
-    let mut preview_paths = preview_paths(answers.scope, &cwd, &home);
-    preview_paths.extend(answers.hermes_hooks_path.iter().cloned());
+    let preview_paths = preview_paths(answers.scope, &cwd, &home);
 
     if !confirm_summary(&preview_paths, &doc)? {
         return Err(CliError::Config("setup cancelled — no config saved".into()));
     }
 
-    let mut written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
-    if answers.agents.contains(&CodingAgent::Hermes) {
-        written.extend(install_hermes_integration(&home)?);
-    }
+    let written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
     println!();
     println!("  ✓ Saved:");
     for path in &written {

@@ -12,9 +12,10 @@ use crate::config::CodingAgent;
 use crate::config::ServerArgs;
 use crate::error::CliError;
 use crate::install_generation::InstallGeneration;
-use crate::sidecar::{GatewayBootstrap, GatewaySpec};
+use crate::sidecar::{GatewayEndpoint, GatewaySpec};
 
-const UNHEALTHY_CHECKS_BEFORE_RESTART: u8 = 3;
+const UNHEALTHY_CONFIRMATIONS: u8 = 3;
+const UNHEALTHY_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(super) struct GatewayPlan {
     spec: GatewaySpec,
@@ -45,24 +46,24 @@ impl GatewayPlan {
     }
 
     pub(super) async fn acquire(self) -> Result<GatewayLease, CliError> {
-        let bootstrap = ensure_gateway(self.spec.clone(), self.generation.clone()).await?;
-        let monitor = tokio::spawn(async move { self.monitor(bootstrap.endpoint.url).await });
+        let endpoint = ensure_gateway(self.spec.clone(), self.generation.clone()).await?;
+        let monitor = tokio::spawn(async move { self.monitor(endpoint).await });
         Ok(GatewayLease { monitor })
     }
 
-    async fn monitor(self, gateway_url: String) -> Result<(), CliError> {
+    async fn monitor(self, endpoint: crate::sidecar::GatewayEndpoint) -> Result<(), CliError> {
         let health_spec = self.spec.clone();
         let restart_spec = self.spec.clone();
         let restart_generation = self.generation.clone();
         let verify_generation = self.generation;
-        maintain_gateway_with_generation(
+        maintain_gateway_instances_with_generation(
             self.spec.bind(),
-            gateway_url,
+            endpoint,
             self.heartbeat_interval,
-            move |url| {
+            move |url, _expected_instance| {
                 let spec = health_spec.clone();
                 async move {
-                    tokio::task::spawn_blocking(move || spec.is_healthy(&url))
+                    tokio::task::spawn_blocking(move || spec.healthy_instance(&url))
                         .await
                         .map_err(|error| {
                             CliError::Launch(format!("gateway heartbeat task failed: {error}"))
@@ -93,7 +94,16 @@ impl GatewayPlan {
             heartbeat_interval,
             generation: None,
         };
-        let monitor = tokio::spawn(async move { plan.monitor(gateway_url).await });
+        let instance_id = plan
+            .spec
+            .healthy_instance(&gateway_url)
+            .unwrap_or_else(|| "test-initial-instance".into());
+        let endpoint = crate::sidecar::GatewayEndpoint {
+            address: bind,
+            url: gateway_url,
+            instance_id,
+        };
+        let monitor = tokio::spawn(async move { plan.monitor(endpoint).await });
         GatewayLease { monitor }
     }
 }
@@ -120,16 +130,16 @@ impl Drop for GatewayLease {
 async fn ensure_gateway(
     spec: GatewaySpec,
     generation: Option<InstallGeneration>,
-) -> Result<GatewayBootstrap, CliError> {
+) -> Result<GatewayEndpoint, CliError> {
     tokio::task::spawn_blocking(move || {
         if let Some(generation) = generation.as_ref() {
             generation.verify_current()?;
         }
-        let bootstrap = spec.ensure()?;
+        let endpoint = spec.ensure()?;
         if let Some(generation) = generation.as_ref() {
             verify_bootstrap_generation(generation)?;
         }
-        Ok(bootstrap)
+        Ok(endpoint)
     })
     .await
     .map_err(|error| CliError::Launch(format!("gateway bootstrap task failed: {error}")))?
@@ -166,7 +176,7 @@ where
     H: FnMut(String) -> HFuture,
     HFuture: std::future::Future<Output = Result<bool, CliError>>,
     R: FnMut(SocketAddr) -> RFuture,
-    RFuture: std::future::Future<Output = Result<GatewayBootstrap, CliError>>,
+    RFuture: std::future::Future<Output = Result<GatewayEndpoint, CliError>>,
 {
     maintain_gateway_with_generation(
         bind,
@@ -179,71 +189,131 @@ where
     .await
 }
 
+#[cfg(test)]
 pub(super) async fn maintain_gateway_with_generation<H, HFuture, R, RFuture, G, GFuture>(
     bind: SocketAddr,
-    mut gateway_url: String,
+    gateway_url: String,
+    heartbeat_interval: Duration,
+    mut healthy: H,
+    restart: R,
+    verify_generation: G,
+) -> Result<(), CliError>
+where
+    H: FnMut(String) -> HFuture,
+    HFuture: std::future::Future<Output = Result<bool, CliError>>,
+    R: FnMut(SocketAddr) -> RFuture,
+    RFuture: std::future::Future<Output = Result<GatewayEndpoint, CliError>>,
+    G: FnMut() -> GFuture,
+    GFuture: std::future::Future<Output = Result<(), CliError>>,
+{
+    maintain_gateway_instances_with_generation(
+        bind,
+        crate::sidecar::GatewayEndpoint {
+            address: bind,
+            url: gateway_url,
+            instance_id: "test-initial-instance".into(),
+        },
+        heartbeat_interval,
+        move |url, expected_instance| {
+            let probe = healthy(url);
+            async move {
+                probe
+                    .await
+                    .map(|is_healthy| is_healthy.then_some(expected_instance))
+            }
+        },
+        restart,
+        verify_generation,
+    )
+    .await
+}
+
+async fn maintain_gateway_instances_with_generation<H, HFuture, R, RFuture, G, GFuture>(
+    bind: SocketAddr,
+    mut endpoint: crate::sidecar::GatewayEndpoint,
     heartbeat_interval: Duration,
     mut healthy: H,
     mut restart: R,
     mut verify_generation: G,
 ) -> Result<(), CliError>
 where
-    H: FnMut(String) -> HFuture,
-    HFuture: std::future::Future<Output = Result<bool, CliError>>,
+    H: FnMut(String, String) -> HFuture,
+    HFuture: std::future::Future<Output = Result<Option<String>, CliError>>,
     R: FnMut(SocketAddr) -> RFuture,
-    RFuture: std::future::Future<Output = Result<GatewayBootstrap, CliError>>,
+    RFuture: std::future::Future<Output = Result<GatewayEndpoint, CliError>>,
     G: FnMut() -> GFuture,
     GFuture: std::future::Future<Output = Result<(), CliError>>,
 {
     let mut heartbeat = tokio::time::interval(heartbeat_interval);
-    let mut recovery = RecoveryState::default();
+    let mut recovery = RecoveryState::new(endpoint.instance_id.clone());
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     heartbeat.tick().await;
     loop {
         heartbeat.tick().await;
         verify_generation().await?;
-        if healthy(gateway_url.clone()).await? {
-            recovery.record_healthy();
+        let mut observed_instance = None;
+        for confirmation in 0..UNHEALTHY_CONFIRMATIONS {
+            if confirmation > 0 {
+                tokio::time::sleep(UNHEALTHY_CONFIRMATION_INTERVAL).await;
+                verify_generation().await?;
+            }
+            observed_instance =
+                healthy(endpoint.url.clone(), recovery.instance_id().into()).await?;
+            if observed_instance.is_some() {
+                break;
+            }
+        }
+        if let Some(instance_id) = observed_instance {
+            recovery.observe(instance_id)?;
             continue;
         }
-        if !recovery.record_failure()? {
-            continue;
-        }
+        recovery.require_restart()?;
         verify_generation().await?;
-        let bootstrap = restart(bind).await?;
-        gateway_url = bootstrap.endpoint.url;
-        recovery.record_recovery(bootstrap.started);
+        let recovered = restart(bind).await?;
+        recovery.observe(recovered.instance_id.clone())?;
+        endpoint = recovered;
     }
 }
 
-#[derive(Default)]
 struct RecoveryState {
-    consecutive_failures: u8,
-    restarted: bool,
+    instance_id: String,
+    recovered: bool,
 }
 
 impl RecoveryState {
-    fn record_healthy(&mut self) {
-        self.consecutive_failures = 0;
+    fn new(instance_id: String) -> Self {
+        Self {
+            instance_id,
+            recovered: false,
+        }
     }
 
-    /// Returns true when the caller should coordinate recovery.
-    fn record_failure(&mut self) -> Result<bool, CliError> {
-        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        if self.consecutive_failures < UNHEALTHY_CHECKS_BEFORE_RESTART {
-            return Ok(false);
+    fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    fn observe(&mut self, instance_id: String) -> Result<(), CliError> {
+        if instance_id == self.instance_id {
+            return Ok(());
         }
-        if self.restarted {
+        if self.recovered {
             return Err(CliError::Launch(
-                "shared Relay gateway became unhealthy after its coordinated restart".into(),
+                "shared Relay gateway was replaced again after its coordinated restart".into(),
             ));
         }
-        Ok(true)
+        self.instance_id = instance_id;
+        self.recovered = true;
+        Ok(())
     }
 
-    fn record_recovery(&mut self, started: bool) {
-        self.consecutive_failures = 0;
-        self.restarted |= started;
+    fn require_restart(&self) -> Result<(), CliError> {
+        if self.recovered {
+            Err(CliError::Launch(
+                "shared Relay gateway became unhealthy after its coordinated restart".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -28,7 +28,7 @@ cleanup() {
         kill "$provider_pid" 2>/dev/null || true
         wait "$provider_pid" 2>/dev/null || true
     fi
-    for owner in "${XDG_CONFIG_HOME:-}/nemo-relay/bootstrap"/hermes-sidecar-*.owner.json; do
+    for owner in "${XDG_CONFIG_HOME:-}/nemo-relay/bootstrap"/sidecar-*.owner.json; do
         [[ -f "$owner" ]] || continue
         python3 - "$owner" <<'PY' || true
 import json

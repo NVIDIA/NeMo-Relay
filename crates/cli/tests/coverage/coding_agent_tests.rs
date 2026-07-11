@@ -41,6 +41,7 @@ fn centralized_minimum_versions_reject_old_prerelease_and_malformed_output() {
     let cases = [
         (CodingAgent::ClaudeCode, "2.1.120 (Claude Code)"),
         (CodingAgent::ClaudeCode, "2.1.121-beta.1 (Claude Code)"),
+        (CodingAgent::ClaudeCode, "2.1.121 (Other Agent)"),
         (CodingAgent::Codex, "codex-cli 0.142.9"),
         (CodingAgent::Codex, "codex-cli 0.143.0-alpha.1"),
         (CodingAgent::Hermes, "Hermes Agent v0.18.1"),
@@ -70,6 +71,12 @@ fn agent_inference_accepts_supported_binary_aliases() {
         Some(CodingAgent::ClaudeCode)
     );
     assert_eq!(CodingAgent::infer("codex"), Some(CodingAgent::Codex));
+    assert_eq!(CodingAgent::infer("CODEX.EXE"), Some(CodingAgent::Codex));
+    assert_eq!(
+        CodingAgent::infer(r"C:\\tools\\codex.cmd"),
+        Some(CodingAgent::Codex)
+    );
+    assert_eq!(CodingAgent::infer("@openai/codex"), None);
     assert_eq!(
         CodingAgent::infer("hermes-agent"),
         Some(CodingAgent::Hermes)

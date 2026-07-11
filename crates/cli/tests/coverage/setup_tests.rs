@@ -4,7 +4,6 @@
 use super::*;
 use crate::test_support::CwdTestScope as CwdScope;
 use std::ffi::OsString;
-use std::path::PathBuf;
 
 // Tests that exercise the global-config write path clear `$XDG_CONFIG_HOME`
 // because CI runners commonly set it to a real `/home/runner/.config` path.
@@ -118,7 +117,6 @@ fn build_config_does_not_emit_observability_exporters() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![],
-        hermes_hooks_path: None,
     };
 
     let rendered = build_config(&answers).to_string();
@@ -135,7 +133,6 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![],
-        hermes_hooks_path: None,
     };
 
     let doc = build_config(&answers);
@@ -152,7 +149,6 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode, CodingAgent::Codex],
-        hermes_hooks_path: None,
     };
 
     let doc = build_config(&answers);
@@ -170,7 +166,6 @@ fn save_config_writes_project_scope_to_workspace_dir() {
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode],
-        hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
     let temp = tempfile::tempdir().unwrap();
@@ -212,7 +207,6 @@ command = "codex --full-auto"
     let answers = SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode],
-        hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
     save_config(
@@ -255,7 +249,6 @@ fn save_config_writes_both_scopes_when_both_selected() {
     let answers = SetupAnswers {
         scope: ConfigScope::Both,
         agents: vec![],
-        hermes_hooks_path: None,
     };
     let doc = build_config(&answers);
     let cwd = tempfile::tempdir().unwrap();
@@ -289,18 +282,6 @@ fn global_config_dir_and_preview_paths_prefer_xdg_when_set() {
 }
 
 #[test]
-fn build_config_emits_hooks_path_for_hermes_when_set() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![CodingAgent::Hermes],
-        hermes_hooks_path: Some(std::path::PathBuf::from("/tmp/proj/.hermes/config.yaml")),
-    };
-    let rendered = build_config(&answers).to_string();
-    assert!(rendered.contains("[agents.hermes]"));
-    assert!(rendered.contains(r#"hooks_path = "/tmp/proj/.hermes/config.yaml""#));
-}
-
-#[test]
 fn config_scope_labels_are_user_facing_and_stable() {
     assert!(
         ConfigScope::Project
@@ -317,18 +298,6 @@ fn config_scope_labels_are_user_facing_and_stable() {
             .label()
             .contains("project overrides global")
     );
-}
-
-#[test]
-fn hermes_host_config_is_user_owned_independent_of_relay_scope() {
-    let home = PathBuf::from("/home/user");
-    let agents = [CodingAgent::Hermes];
-
-    assert_eq!(
-        hermes_config_path_for_agents(&agents, &home),
-        Some(PathBuf::from("/home/user/.hermes/config.yaml"))
-    );
-    assert_eq!(hermes_config_path_for_agents(&[], &home), None);
 }
 
 #[test]
@@ -417,7 +386,6 @@ config = { version = 1, components = [] }
     let doc = build_config(&SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::Codex],
-        hermes_hooks_path: None,
     });
 
     write_or_merge(&path, &doc, Some(CodingAgent::Codex)).unwrap();
@@ -436,7 +404,6 @@ fn write_or_merge_overwrites_without_merge_scope_and_reports_malformed_existing_
     let doc = build_config(&SetupAnswers {
         scope: ConfigScope::Project,
         agents: vec![CodingAgent::Hermes],
-        hermes_hooks_path: Some(temp.path().join(".hermes/config.yaml")),
     });
 
     write_or_merge(&path, &doc, None).unwrap();

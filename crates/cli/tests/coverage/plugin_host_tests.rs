@@ -2174,26 +2174,23 @@ fn sidecar_lock_zero_wait_fails_when_the_endpoint_is_owned() {
 }
 
 #[test]
-fn sidecar_ownership_records_are_endpoint_specific_and_enumerated() {
+fn sidecar_ownership_records_are_endpoint_scoped_and_recognize_legacy_files() {
     let dir = tempdir().unwrap();
-    let first = sidecar_owner_path(dir.path(), CodingAgent::Codex, "http://127.0.0.1:47632");
-    let second = sidecar_owner_path(dir.path(), CodingAgent::Codex, "http://127.0.0.1:47633");
+    let first = sidecar_owner_path(dir.path(), "http://127.0.0.1:47632");
+    let second = sidecar_owner_path(dir.path(), "http://127.0.0.1:47633");
     let legacy = dir.path().join("codex-sidecar.owner.json");
-    let ignored = sidecar_owner_path(
-        dir.path(),
-        CodingAgent::ClaudeCode,
-        "http://127.0.0.1:47634",
-    );
+    let ignored = sidecar_owner_path(dir.path(), "http://127.0.0.1:47634");
     for path in [&first, &second, &legacy, &ignored] {
         fs::write(path, "{}").unwrap();
     }
 
-    let paths = sidecar_owner_paths(dir.path(), CodingAgent::Codex).unwrap();
+    let paths = sidecar_owner_paths(dir.path()).unwrap();
 
-    assert_eq!(paths.len(), 3);
+    assert_eq!(paths.len(), 4);
     assert!(paths.contains(&first));
     assert!(paths.contains(&second));
     assert!(paths.contains(&legacy));
+    assert!(paths.contains(&ignored));
     assert_ne!(first, second);
 }
 
@@ -2203,7 +2200,6 @@ fn managed_sidecar_publishes_valid_ownership_before_parent_validation() {
     let _home = HomeScope::enter(dir.path());
     let state = dir.path().join("bootstrap-state");
     let _state = EnvVarGuard::set_path(BOOTSTRAP_STATE_DIR_ENV, &state);
-    let _agent = EnvVarGuard::set_value(BOOTSTRAP_AGENT_ENV, "codex");
     let _token =
         EnvVarGuard::set_value("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", "test-shutdown-token");
     let _fingerprint =
@@ -2213,8 +2209,8 @@ fn managed_sidecar_publishes_valid_ownership_before_parent_validation() {
     publish_sidecar_owner_from_env(address).unwrap();
 
     let url = format!("http://{address}");
-    let owner_path = sidecar_owner_path(&state, CodingAgent::Codex, &url);
-    let pid_path = sidecar_pid_path(&state, CodingAgent::Codex, &url);
+    let owner_path = sidecar_owner_path(&state, &url);
+    let pid_path = sidecar_pid_path(&state, &url);
     validate_sidecar_owner(
         &owner_path,
         &pid_path,
@@ -2235,7 +2231,7 @@ fn managed_shutdown_rejects_a_listener_without_authenticated_health_proof() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let url = format!("http://{address}");
-    let owner_path = sidecar_owner_path(&state, CodingAgent::Codex, &url);
+    let owner_path = sidecar_owner_path(&state, &url);
     write_sidecar_owner(
         &owner_path,
         std::process::id(),
@@ -2250,7 +2246,7 @@ fn managed_shutdown_rejects_a_listener_without_authenticated_health_proof() {
         let request = read_http_request(&mut stream);
         request_sender.send(request).unwrap();
         let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{}}}"#,
+            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
             env!("CARGO_PKG_VERSION"),
             BOOTSTRAP_PROTOCOL_VERSION
         );
@@ -2265,7 +2261,7 @@ fn managed_shutdown_rejects_a_listener_without_authenticated_health_proof() {
             .unwrap();
     });
 
-    let error = stop_owned_sidecar_record(CodingAgent::Codex, &state, &owner_path).unwrap_err();
+    let error = stop_owned_sidecar_record(&state, &owner_path).unwrap_err();
 
     assert!(error.contains("foreign listener"), "{error}");
     let request = request_receiver
@@ -2346,8 +2342,8 @@ fn windows_sidecar_job_terminates_an_assigned_process() {
 fn sidecar_reaper_removes_only_the_exited_process_records() {
     let dir = tempdir().unwrap();
     let url = "http://127.0.0.1:47632";
-    let owner_path = sidecar_owner_path(dir.path(), CodingAgent::Codex, url);
-    let pid_path = sidecar_pid_path(dir.path(), CodingAgent::Codex, url);
+    let owner_path = sidecar_owner_path(dir.path(), url);
+    let pid_path = sidecar_pid_path(dir.path(), url);
     let endpoint_lock = lock_sidecar_endpoint(dir.path(), url).unwrap();
     #[cfg(windows)]
     let mut command = {
@@ -2400,8 +2396,8 @@ fn sidecar_reaper_does_not_block_other_cleanup_on_a_contended_lock() {
     for url in [blocked_url, free_url] {
         let child = short_lived_command().spawn().unwrap();
         let pid = child.id();
-        let owner_path = sidecar_owner_path(dir.path(), CodingAgent::Codex, url);
-        let pid_path = sidecar_pid_path(dir.path(), CodingAgent::Codex, url);
+        let owner_path = sidecar_owner_path(dir.path(), url);
+        let pid_path = sidecar_pid_path(dir.path(), url);
         write_sidecar_owner(
             &owner_path,
             pid,
@@ -2659,7 +2655,7 @@ fn startup_reprobes_a_transient_foreign_health_result_after_locking() {
         let (mut ready, _) = listener.accept().unwrap();
         let _ = read_http_request(&mut ready);
         let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{}}}"#,
+            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
             env!("CARGO_PKG_VERSION"),
             BOOTSTRAP_PROTOCOL_VERSION
         );
@@ -2700,11 +2696,12 @@ fn active_startup_lock_waits_for_relay_identity_instead_of_rejecting_listener() 
             .write_all(b"HTTP/1.1 503 Starting\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .unwrap();
         drop(starting);
+        drop(owner_lock);
 
         let (mut ready, _) = listener.accept().unwrap();
         let _ = read_http_request(&mut ready);
         let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{}}}"#,
+            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
             env!("CARGO_PKG_VERSION"),
             BOOTSTRAP_PROTOCOL_VERSION
         );
@@ -2717,7 +2714,6 @@ fn active_startup_lock_waits_for_relay_identity_instead_of_rejecting_listener() 
                 .as_bytes(),
             )
             .unwrap();
-        drop(owner_lock);
     });
 
     let endpoint = ensure_sidecar_bind(CodingAgent::Codex, address).unwrap();

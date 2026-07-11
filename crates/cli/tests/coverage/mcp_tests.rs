@@ -10,7 +10,6 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use super::*;
-use crate::config::CodingAgent;
 use crate::install_generation::{
     GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration, write_new_generation,
 };
@@ -295,12 +294,10 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
             move |address| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
-                    Ok(crate::sidecar::GatewayBootstrap {
-                        endpoint: crate::sidecar::GatewayEndpoint {
-                            address,
-                            url: "http://unexpected-restart".into(),
-                        },
-                        started: false,
+                    Ok(crate::sidecar::GatewayEndpoint {
+                        address,
+                        url: "http://unexpected-restart".into(),
+                        instance_id: "unexpected".into(),
                     })
                 }
             }
@@ -356,12 +353,10 @@ async fn heartbeat_performs_one_restart_and_tracks_the_recovered_gateway() {
                 let restart_calls = restart_calls.clone();
                 async move {
                     restart_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(crate::sidecar::GatewayBootstrap {
-                        endpoint: crate::sidecar::GatewayEndpoint {
-                            address,
-                            url: "http://recovered-gateway".into(),
-                        },
-                        started: true,
+                    Ok(crate::sidecar::GatewayEndpoint {
+                        address,
+                        url: "http://recovered-gateway".into(),
+                        instance_id: "recovered".into(),
                     })
                 }
             }
@@ -412,12 +407,10 @@ async fn heartbeat_ignores_isolated_transient_health_failures() {
             move |address| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
-                    Ok(crate::sidecar::GatewayBootstrap {
-                        endpoint: crate::sidecar::GatewayEndpoint {
-                            address,
-                            url: "http://gateway".into(),
-                        },
-                        started: false,
+                    Ok(crate::sidecar::GatewayEndpoint {
+                        address,
+                        url: "http://gateway".into(),
+                        instance_id: "gateway".into(),
                     })
                 }
             }
@@ -436,7 +429,7 @@ async fn heartbeat_ignores_isolated_transient_health_failures() {
 }
 
 #[tokio::test]
-async fn heartbeat_rediscovery_does_not_consume_the_actual_restart_allowance() {
+async fn heartbeat_rediscovery_consumes_the_shared_restart_allowance() {
     let restart_calls = Arc::new(AtomicUsize::new(0));
     let error = maintain_gateway_with(
         "127.0.0.1:47632".parse().unwrap(),
@@ -449,12 +442,10 @@ async fn heartbeat_rediscovery_does_not_consume_the_actual_restart_allowance() {
                 let restart_calls = restart_calls.clone();
                 async move {
                     let attempt = restart_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(crate::sidecar::GatewayBootstrap {
-                        endpoint: crate::sidecar::GatewayEndpoint {
-                            address,
-                            url: "http://gateway".into(),
-                        },
-                        started: attempt > 0,
+                    Ok(crate::sidecar::GatewayEndpoint {
+                        address,
+                        url: "http://gateway".into(),
+                        instance_id: format!("gateway-{attempt}"),
                     })
                 }
             }
@@ -463,7 +454,7 @@ async fn heartbeat_rediscovery_does_not_consume_the_actual_restart_allowance() {
     .await
     .unwrap_err();
 
-    assert_eq!(restart_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(restart_calls.load(Ordering::SeqCst), 1);
     assert!(error.to_string().contains("after its coordinated restart"));
 }
 
@@ -496,12 +487,10 @@ async fn heartbeat_attempts_at_most_one_successful_restart() {
                 let restart_calls = restart_calls.clone();
                 async move {
                     restart_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(crate::sidecar::GatewayBootstrap {
-                        endpoint: crate::sidecar::GatewayEndpoint {
-                            address,
-                            url: "http://still-unhealthy".into(),
-                        },
-                        started: true,
+                    Ok(crate::sidecar::GatewayEndpoint {
+                        address,
+                        url: "http://still-unhealthy".into(),
+                        instance_id: "still-unhealthy".into(),
                     })
                 }
             }
@@ -546,12 +535,10 @@ async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
             move |address| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
-                    Ok(crate::sidecar::GatewayBootstrap {
-                        endpoint: crate::sidecar::GatewayEndpoint {
-                            address,
-                            url: "http://unexpected-restart".into(),
-                        },
-                        started: true,
+                    Ok(crate::sidecar::GatewayEndpoint {
+                        address,
+                        url: "http://unexpected-restart".into(),
+                        instance_id: "unexpected".into(),
                     })
                 }
             }
@@ -645,8 +632,8 @@ fn assert_retired_mcp_postcheck_preserves_gateway(gateway_pid: u32, gateway_toke
     let url = format!("http://{address}");
     let state = dir.path().join("bootstrap-state");
     std::fs::create_dir(&state).unwrap();
-    let owner_path = crate::sidecar::sidecar_owner_path(&state, CodingAgent::Codex, &url);
-    let pid_path = crate::sidecar::sidecar_pid_path(&state, CodingAgent::Codex, &url);
+    let owner_path = crate::sidecar::sidecar_owner_path(&state, &url);
+    let pid_path = crate::sidecar::sidecar_pid_path(&state, &url);
     crate::sidecar::write_sidecar_owner(
         &owner_path,
         gateway_pid,

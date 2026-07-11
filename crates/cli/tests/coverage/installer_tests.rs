@@ -39,42 +39,6 @@ fn hook_payload_reader_rejects_oversized_invalid_and_unreadable_input() {
 }
 
 #[test]
-fn hermes_config_merge_preserves_existing_yaml() {
-    let existing = r#"
-model:
-  provider: auto
-hooks:
-  pre_tool_call:
-    - command: ~/.hermes/agent-hooks/audit.sh
-"#;
-    let merged =
-        merge_hermes_config(existing, hermes_hooks("nemo-relay hook-forward hermes")).unwrap();
-    let yaml: Value = serde_yaml::from_str(&merged).unwrap();
-
-    assert_eq!(yaml["model"]["provider"], json!("auto"));
-    assert_eq!(yaml["hooks"]["pre_tool_call"].as_array().unwrap().len(), 2);
-    assert_eq!(
-        yaml["hooks"]["on_session_finalize"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
-#[test]
-fn hermes_config_merge_rejects_invalid_yaml() {
-    let error = merge_hermes_config(
-        "hooks: [not valid",
-        hermes_hooks("nemo-relay hook-forward hermes"),
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("invalid YAML in Hermes config"));
-}
-
-#[test]
 fn explicit_persistent_destinations_ignore_ambient_urls() {
     let destination = resolve_hook_destination(
         Some("http://installed".into()),
@@ -157,12 +121,21 @@ fn generated_hook_dispatch_covers_all_agents() {
         assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
     }
     assert_eq!(
-        hook_forward_command("nemo-relay", CodingAgent::Hermes),
+        transparent_hook_forward_command(Path::new("nemo-relay"), CodingAgent::Hermes),
         "nemo-relay hook-forward hermes"
     );
     assert_eq!(
-        hook_forward_command("/abs/path/to/nemo-relay", CodingAgent::Codex),
+        transparent_hook_forward_command(Path::new("/abs/path/to/nemo-relay"), CodingAgent::Codex),
         "/abs/path/to/nemo-relay hook-forward codex"
+    );
+    let relay = Path::new("/opt/NeMo Relay's & tools/nemo-relay");
+    assert_eq!(
+        transparent_hook_forward_command_for_platform(relay, CodingAgent::Codex, false),
+        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex"#
+    );
+    assert_eq!(
+        transparent_hook_forward_command_for_platform(relay, CodingAgent::ClaudeCode, true),
+        r#""/opt/NeMo Relay's ^& tools/nemo-relay" hook-forward claude"#
     );
 }
 
@@ -253,6 +226,16 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
         ))
     );
     assert_eq!(
+        claude["hooks"],
+        generated_hooks(
+            CodingAgent::ClaudeCode,
+            &format!(
+                "nemo-relay hook-forward claude --gateway-url {}",
+                crate::sidecar::DEFAULT_URL
+            ),
+        )["hooks"]
+    );
+    assert_eq!(
         codex["hooks"],
         generated_hooks(
             CodingAgent::Codex,
@@ -318,9 +301,10 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
     );
     assert_eq!(server["required"], json!(true));
     assert_eq!(server["startup_timeout_sec"], json!(20));
-    let env_vars = server["env_vars"].as_array().unwrap();
-    assert!(env_vars.contains(&json!("OPENAI_API_KEY")));
-    assert!(env_vars.contains(&json!("XDG_CONFIG_HOME")));
+    assert_eq!(
+        server["env_vars"],
+        json!(crate::mcp_environment::forwarded_names(Vec::new(), None))
+    );
 
     let claude_mcp_path = root.join("claude-code/.mcp.json");
     let claude_mcp =
@@ -332,6 +316,7 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
         claude_server["env"],
         json!({"NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"})
     );
+    assert_eq!(claude_server["alwaysLoad"], json!(true));
 
     let codex_marketplace_path = root.join("../../.agents/plugins/marketplace.json");
     let codex_marketplace =

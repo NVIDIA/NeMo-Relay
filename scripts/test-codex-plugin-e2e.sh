@@ -59,7 +59,7 @@ cleanup() {
         kill "$provider_pid" 2>/dev/null || true
         wait "$provider_pid" 2>/dev/null || true
     fi
-    pid_file="$(find_sidecar_file 'codex-sidecar*.pid')"
+    pid_file="$(find_sidecar_file 'sidecar-*.pid')"
     if [[ -n "$pid_file" && -f "$pid_file" ]]; then
         sidecar_pid="$(cat "$pid_file" 2>/dev/null || true)"
         if [[ "$sidecar_pid" =~ ^[0-9]+$ ]]; then
@@ -393,7 +393,7 @@ if ! wait_for_mcp_initialize "$holder_stdout" "$holder_pid"; then
     cat "$holder_stderr" >&2
     exit 1
 fi
-old_sidecar_pid_file="$(find_sidecar_file 'codex-sidecar*.pid')"
+old_sidecar_pid_file="$(find_sidecar_file 'sidecar-*.pid')"
 [[ -s "$old_sidecar_pid_file" ]]
 old_sidecar_pid="$(cat "$old_sidecar_pid_file")"
 kill -0 "$old_sidecar_pid"
@@ -430,8 +430,8 @@ replacement_stdout="$work/mcp-replacement.stdout"
 replacement_stderr="$work/mcp-replacement.stderr"
 run_mcp_once "$replacement_stdout" "$replacement_stderr" 3
 grep -q '"serverInfo"' "$replacement_stdout"
-replacement_pid_file="$(find_sidecar_file 'codex-sidecar*.pid')"
-replacement_owner_file="$(find_sidecar_file 'codex-sidecar*.owner.json')"
+replacement_pid_file="$(find_sidecar_file 'sidecar-*.pid')"
+replacement_owner_file="$(find_sidecar_file 'sidecar-*.owner.json')"
 [[ -s "$replacement_pid_file" && -s "$replacement_owner_file" ]]
 replacement_pid="$(cat "$replacement_pid_file")"
 [[ "$replacement_pid" != "$old_sidecar_pid" ]]
@@ -478,7 +478,7 @@ while time.monotonic() < deadline:
 raise SystemExit("concurrent Codex requests did not reach the provider within 25 seconds")
 PY
 [[ "$(cat "$provider_barrier/arrivals")" -eq 2 ]]
-sidecar_pid_file="$(find_sidecar_file 'codex-sidecar*.pid')"
+sidecar_pid_file="$(find_sidecar_file 'sidecar-*.pid')"
 [[ -s "$sidecar_pid_file" ]]
 shared_sidecar_pid="$(cat "$sidecar_pid_file")"
 [[ "$shared_sidecar_pid" =~ ^[0-9]+$ ]]
@@ -497,7 +497,7 @@ with socket.socket() as sock:
     assert sock.connect_ex(("127.0.0.1", 47632)) == 0, "shared Relay gateway stopped early"
 PY
 
-owner_file="$(find_sidecar_file 'codex-sidecar*.owner.json')"
+owner_file="$(find_sidecar_file 'sidecar-*.owner.json')"
 stop_owned_sidecar "$owner_file"
 if ! wait_for_process_exit "$shared_sidecar_pid"; then
     echo "shared Relay gateway did not exit after the shutdown handshake" >&2

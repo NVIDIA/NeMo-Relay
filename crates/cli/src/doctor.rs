@@ -10,7 +10,6 @@
 //! - `format_human(&report)` / `format_json(&report)` render the report.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
 use futures_util::SinkExt;
@@ -401,15 +400,18 @@ async fn collect_agents(
         let configured = agent_configured(agent, &resolved.agents);
         let target_requested = target_agent == Some(agent);
         let command = agent_command(agent, &resolved.agents);
-        let exec = command_executable(&command);
-        let path = which_command(exec);
+        let argv = crate::agent_process::command_argv(&command);
+        let exec = argv.first().map(String::as_str).unwrap_or_default();
+        let path = crate::agent_process::resolve_executable(exec);
         let version = match &path {
-            Some(p) => probe_version(p).await,
+            Some(_) => {
+                let probe = crate::agent_process::version_probe_argv(agent, &argv);
+                probe_version(&probe).await
+            }
             None => None,
         };
         let mut status = agent_command_status(path.as_deref(), configured, target_requested);
-        let (hook_status, hook_details) =
-            hook_status(agent, &resolved.agents, configured || target_requested);
+        let (hook_status, hook_details) = hook_status(agent, &resolved.agents);
         status = combine_status(status, hook_status, configured || target_requested);
         let mut details = Vec::new();
         details.push(if configured {
@@ -471,25 +473,6 @@ async fn collect_agents(
     out
 }
 
-fn which_on_path(exec: &str) -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_var)
-        .map(|dir| dir.join(exec))
-        .find(|candidate| candidate.is_file())
-}
-
-fn which_command(exec: &str) -> Option<PathBuf> {
-    let candidate = Path::new(exec);
-    if candidate.components().count() > 1 || candidate.is_absolute() {
-        return candidate.is_file().then(|| candidate.to_path_buf());
-    }
-    which_on_path(exec)
-}
-
-fn command_executable(command: &str) -> &str {
-    command.split_whitespace().next().unwrap_or(command)
-}
-
 fn agent_command(agent: CodingAgent, agents: &AgentConfigs) -> String {
     configured_agent_command(agent, agents)
         .cloned()
@@ -497,11 +480,7 @@ fn agent_command(agent: CodingAgent, agents: &AgentConfigs) -> String {
 }
 
 fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<&String> {
-    match agent {
-        CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
-        CodingAgent::Codex => agents.codex.command.as_ref(),
-        CodingAgent::Hermes => agents.hermes.command.as_ref(),
-    }
+    agents.get(agent).command.as_ref()
 }
 
 fn agent_configured(agent: CodingAgent, agents: &AgentConfigs) -> bool {
@@ -535,11 +514,7 @@ fn combine_status(base: Status, hook: Status, readiness_required: bool) -> Statu
     base
 }
 
-fn hook_status(
-    agent: CodingAgent,
-    agents: &AgentConfigs,
-    readiness_required: bool,
-) -> (Status, String) {
+fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
     match agent {
         CodingAgent::ClaudeCode | CodingAgent::Codex => {
             (Status::Pass, "hooks: injected during run".into())
@@ -554,70 +529,21 @@ fn hook_status(
                     ),
                 ),
             },
-            None if readiness_required => (
-                Status::Fail,
-                "hooks: not installed; run `nemo-relay install hermes`".into(),
+            None => (
+                Status::Pass,
+                "hooks: injected through an isolated HERMES_HOME during run".into(),
             ),
-            None => (Status::Info, "hooks: not configured".into()),
         },
     }
 }
 
-#[cfg(test)]
-fn hook_file_status(
-    path: Result<PathBuf, CliError>,
-    agent: CodingAgent,
-    readiness_required: bool,
-    label: &str,
-) -> (Status, String) {
-    let path = match path {
-        Ok(path) => path,
-        Err(err) => {
-            return (
-                Status::Fail,
-                format!("{label}: could not resolve path: {err}"),
-            );
-        }
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(raw)
-            if raw.contains(&format!("hook-forward {}", agent.as_arg()))
-                || raw.contains(&format!("plugin-shim hook {}", agent.as_arg())) =>
-        {
-            (
-                Status::Pass,
-                format!("{label}: installed at {}", path.display()),
-            )
-        }
-        Ok(_) if readiness_required => (
-            Status::Fail,
-            format!("{label}: missing NeMo Relay hook in {}", path.display()),
-        ),
-        Ok(_) => (
-            Status::Info,
-            format!("{label}: no NeMo Relay hook in {}", path.display()),
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && readiness_required => {
-            (Status::Fail, format!("{label}: missing {}", path.display()))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            (Status::Info, format!("{label}: missing {}", path.display()))
-        }
-        Err(error) => (
-            Status::Fail,
-            format!("{label}: could not read {}: {error}", path.display()),
-        ),
-    }
-}
-
-async fn probe_version(binary: &Path) -> Option<String> {
-    // Spawn `<binary> --version` and read the first line of stdout. Bounded by the network
+async fn probe_version(argv: &[String]) -> Option<String> {
+    // Run the shared wrapper-preserving probe and read the first line of stdout. Bounded by the network
     // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
-    let mut cmd = tokio::process::Command::new(binary);
-    cmd.arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
+    let mut cmd = crate::agent_process::tokio_command(argv);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
         // Ensure the child gets killed if our future is dropped on timeout. Without this a
         // misbehaving agent binary that exceeds NETWORK_TIMEOUT would leak as an orphan
         // process for the lifetime of the doctor invocation (and beyond).

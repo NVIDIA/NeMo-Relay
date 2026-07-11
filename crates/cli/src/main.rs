@@ -4,6 +4,7 @@
 //! NeMo Relay coding-agent gateway CLI.
 
 mod adapters;
+mod agent_process;
 mod alignment;
 mod banner;
 mod coding_agent;

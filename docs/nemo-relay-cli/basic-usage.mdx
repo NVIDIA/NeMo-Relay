@@ -82,10 +82,11 @@ command = "my-codex-wrapper"
 nemo-relay run --agent codex
 ```
 
-For Hermes, setup installs the persistent user-level MCP and trusted shell-hook
-configuration. Transparent `run --agent hermes` temporarily suppresses that
-fixed MCP entry, exports the dynamic `NEMO_RELAY_GATEWAY_URL`, and restores the
-original Hermes config after the run.
+For Hermes, interactive setup configures only Relay's transparent wrapper.
+Persistent MCP and trusted shell-hook state is owned by
+`nemo-relay install hermes`. Transparent `run --agent hermes` exports the
+dynamic `NEMO_RELAY_GATEWAY_URL` through a process-private `HERMES_HOME`
+overlay; it never rewrites the user's Hermes config.
 
 Use `--dry-run --print` to inspect the generated hook config, gateway
 environment, gateway URL, and final command without launching the agent.
@@ -317,7 +318,7 @@ Generated hook bundles subscribe to the events needed for that mapping:
 
 | Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
 | --- | --- | --- |
-| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
+| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
 | Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 

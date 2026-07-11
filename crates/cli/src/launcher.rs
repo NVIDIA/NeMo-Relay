@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
@@ -12,7 +12,6 @@ use nemo_relay::plugin::PluginConfig;
 use reqwest::Client;
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
-use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -21,14 +20,14 @@ use crate::config::{
     ServerArgs, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
-use crate::installer::{generated_hooks, hook_forward_command};
+use crate::installer::{generated_hooks, transparent_hook_forward_command};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
 /// The gateway binds to an OS-assigned loopback port, prepares agent-specific hook/gateway wiring,
-/// waits for health before spawning the child, and restores temporary files after the child and
+/// waits for health before spawning the child, and removes temporary state after the child and
 /// server shut down. The child's exit status is preserved when it fits in `ExitCode`; otherwise the
 /// launcher reports generic failure.
 pub(crate) async fn run(
@@ -112,7 +111,8 @@ impl TransparentRun {
             crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
         };
         let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
-        if !dry_run && let Some(probe) = version_probe_argv(agent, &argv) {
+        if !dry_run {
+            let probe = crate::agent_process::version_probe_argv(agent, &argv);
             validate_agent_version(agent, &probe).await?;
         }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -235,19 +235,9 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
 }
 
 /// Builds a version probe that preserves wrappers such as `npx codex` or `mise exec -- codex`.
-/// Opaque wrappers remain supported: when the configured argv never names the selected host,
-/// installation and doctor retain version enforcement while transparent launch skips this probe.
-fn version_probe_argv(agent: CodingAgent, argv: &[String]) -> Option<Vec<String>> {
-    let agent_index = argv
-        .iter()
-        .position(|argument| CodingAgent::infer(argument) == Some(agent))?;
-    let mut probe = argv[..=agent_index].to_vec();
-    probe.push("--version".into());
-    Some(probe)
-}
-
+/// Opaque wrappers remain supported when their `--version` output identifies the selected host.
 async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<(), CliError> {
-    let mut command = command_from_argv(probe);
+    let mut command = crate::agent_process::tokio_command(probe);
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -283,92 +273,6 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
         .map_err(CliError::Launch)
 }
 
-/// Creates an async child command from the resolved argv. Windows command scripts require an
-/// explicit `cmd.exe` invocation; using the same builder for probes and the real launch keeps npm
-/// shims such as `codex.cmd` and `claude.cmd` consistent.
-fn command_from_argv(argv: &[String]) -> Command {
-    debug_assert!(!argv.is_empty());
-    #[cfg(windows)]
-    {
-        let program = resolve_windows_program(&argv[0]);
-        if is_windows_command_script(&program) {
-            let mut command = Command::new(
-                std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe")),
-            );
-            command
-                .args(["/d", "/s", "/c"])
-                .arg(windows_command_line(&program, &argv[1..]));
-            return command;
-        }
-        let mut command = Command::new(program);
-        command.args(&argv[1..]);
-        return command;
-    }
-    #[cfg(not(windows))]
-    {
-        let mut command = Command::new(&argv[0]);
-        command.args(&argv[1..]);
-        command
-    }
-}
-
-#[cfg(windows)]
-fn resolve_windows_program(program: &str) -> PathBuf {
-    let path = Path::new(program);
-    let directories = if path.components().count() > 1 || path.is_absolute() {
-        vec![PathBuf::new()]
-    } else {
-        std::env::var_os("PATH")
-            .as_deref()
-            .map(std::env::split_paths)
-            .into_iter()
-            .flatten()
-            .collect()
-    };
-    let extensions = if path.extension().is_none() {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
-            .split(';')
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-    } else {
-        vec![String::new()]
-    };
-    for directory in directories {
-        for extension in &extensions {
-            let candidate = directory.join(format!("{program}{extension}"));
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-    }
-    path.to_path_buf()
-}
-
-#[cfg(windows)]
-fn is_windows_command_script(program: &Path) -> bool {
-    program
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-        })
-}
-
-#[cfg(any(windows, test))]
-fn windows_command_line(program: &Path, args: &[String]) -> String {
-    std::iter::once(crate::plugin_host::shell_quote_arg_for_platform(
-        &program.display().to_string(),
-        true,
-    ))
-    .chain(
-        args.iter()
-            .map(|argument| crate::plugin_host::shell_quote_arg_for_platform(argument, true)),
-    )
-    .collect::<Vec<_>>()
-    .join(" ")
-}
-
 // Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
 // intentionally late so configured commands and direct CLI commands share the same validation path.
 fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, CliError> {
@@ -387,12 +291,8 @@ fn resolved_agent(command: &RunCommand, argv: &[String]) -> Result<CodingAgent, 
 // whitespace splitting because config command values are a convenience fallback; complex shell
 // commands should be passed after `--` by the caller.
 fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<String>> {
-    let command = match agent {
-        CodingAgent::ClaudeCode => agents.claude.command.as_ref(),
-        CodingAgent::Codex => agents.codex.command.as_ref(),
-        CodingAgent::Hermes => agents.hermes.command.as_ref(),
-    }?;
-    let argv: Vec<_> = command.split_whitespace().map(ToOwned::to_owned).collect();
+    let command = agents.get(agent).command.as_ref()?;
+    let argv = crate::agent_process::command_argv(command);
     (!argv.is_empty()).then_some(argv)
 }
 
@@ -400,14 +300,7 @@ struct PreparedRun {
     argv: Vec<String>,
     env: Vec<(String, String)>,
     temp_dirs: Vec<PathBuf>,
-    hermes_restore: Option<HermesRestore>,
     notes: Vec<String>,
-}
-
-struct HermesRestore {
-    path: PathBuf,
-    backup_path: Option<PathBuf>,
-    had_original: bool,
 }
 
 struct RunningGateway {
@@ -461,7 +354,6 @@ impl PreparedRun {
             argv,
             env: vec![("NEMO_RELAY_GATEWAY_URL".into(), gateway_url.into())],
             temp_dirs: Vec::new(),
-            hermes_restore: None,
             notes: Vec::new(),
         };
         if let Some(path) = path_with_transparent_hook_dir() {
@@ -523,7 +415,10 @@ impl PreparedRun {
             &root.join("hooks/hooks.json"),
             generated_hooks(
                 CodingAgent::ClaudeCode,
-                &hook_forward_command(&transparent_hook_executable(), CodingAgent::ClaudeCode),
+                &transparent_hook_forward_command(
+                    &transparent_hook_executable(),
+                    CodingAgent::ClaudeCode,
+                ),
             ),
         )?;
         insert_after_agent(
@@ -569,7 +464,8 @@ impl PreparedRun {
                  or pass `--openai-base-url` to an upstream that needs no key."
             );
         }
-        let hook_command = hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
+        let hook_command =
+            transparent_hook_forward_command(&transparent_hook_executable(), CodingAgent::Codex);
         let mut args = vec![
             "--config".to_string(),
             "features.hooks=true".to_string(),
@@ -589,23 +485,25 @@ impl PreparedRun {
         insert_after_agent(&mut self.argv, CodingAgent::Codex, args);
     }
 
-    // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. For
-    // transparent runs, temporarily merge gateway hook-forward entries into the configured Hermes
-    // hook file, then restore it after the child exits.
+    // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. A
+    // process-private HERMES_HOME exposes dynamic hooks without rewriting user configuration.
     fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
-        let path = hermes_hooks_path(hooks_path)?;
-        let (had_original, backup_path) = backup_existing_hermes_hooks(&path)?;
-        write_merged_hermes_hooks(&path)?;
+        let source_config = hermes_hooks_path(hooks_path)?;
+        let source_home = source_config.parent().ok_or_else(|| {
+            CliError::Launch(format!(
+                "Hermes config path {} has no parent directory",
+                source_config.display()
+            ))
+        })?;
+        let overlay_home = create_hermes_overlay(source_home, &source_config)?;
         self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
+        self.env
+            .push(("HERMES_HOME".into(), overlay_home.display().to_string()));
         self.notes.push(format!(
-            "temporarily merged NeMo Relay hooks into {}",
-            path.display()
+            "using an isolated Hermes config overlay for {}",
+            source_config.display()
         ));
-        self.hermes_restore = Some(HermesRestore {
-            path,
-            backup_path,
-            had_original,
-        });
+        self.temp_dirs.push(overlay_home);
         Ok(())
     }
 
@@ -615,7 +513,7 @@ impl PreparedRun {
         let path = hermes_hooks_path(hooks_path)?;
         self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
         self.notes.push(format!(
-            "would temporarily merge NeMo Relay hooks into {}",
+            "would create an isolated Hermes config overlay for {}",
             path.display()
         ));
         Ok(())
@@ -624,7 +522,7 @@ impl PreparedRun {
     // Spawns the prepared child process with injected environment and waits for its exit status.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
     async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, CliError> {
-        let mut command = command_from_argv(&self.argv);
+        let mut command = crate::agent_process::tokio_command(&self.argv);
         for (name, value) in &self.env {
             command.env(name, value);
         }
@@ -632,21 +530,16 @@ impl PreparedRun {
         child.wait().await.map_err(CliError::from)
     }
 
-    // Removes temporary directories and restores patched hook files after the child exits. Restore
-    // errors are surfaced after the child status is collected so cleanup problems are not hidden.
+    // Removes process-private plugin and configuration directories after the child exits.
     fn restore(&self) -> Result<(), CliError> {
         for dir in &self.temp_dirs {
-            let _ = std::fs::remove_dir_all(dir);
+            match std::fs::remove_dir_all(dir) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(CliError::Io(error)),
+            }
         }
 
-        if let Some(hermes) = &self.hermes_restore {
-            restore_hook_file(
-                &hermes.path,
-                hermes.backup_path.as_deref(),
-                hermes.had_original,
-                "Hermes",
-            )?;
-        }
         Ok(())
     }
 
@@ -937,22 +830,11 @@ fn push_status_border(
 // `PATH`, which would cause hooks to exit with status 127 (command not found). Falls back
 // to the bare name when `current_exe` is unavailable so behavior degrades to the previous
 // install-style assumption rather than failing to launch.
-fn transparent_hook_executable() -> String {
+fn transparent_hook_executable() -> PathBuf {
     std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.to_str().map(|s| {
-                #[cfg(windows)]
-                {
-                    s.replace('\\', "/")
-                }
-                #[cfg(not(windows))]
-                {
-                    s.to_owned()
-                }
-            })
-        })
-        .unwrap_or_else(|| "nemo-relay".to_string())
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(crate::plugin_host::portable_executable_path)
+        .unwrap_or_else(|_| PathBuf::from("nemo-relay"))
 }
 
 // Appends the running gateway binary's directory to the child agent PATH. Transparent hooks use
@@ -1004,24 +886,46 @@ fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
     Ok(())
 }
 
-// Backs up an existing Hermes hook config before run-mode patching.
-fn backup_existing_hermes_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), CliError> {
-    let had_original = path.exists();
-    if !had_original {
-        return Ok((false, None));
+// Creates a per-process Hermes home whose user state points at the original profile while the
+// config and hook approval files remain private to this transparent run. Hermes has no standalone
+// config-file override, so `HERMES_HOME` is its supported process-scoped configuration boundary.
+fn create_hermes_overlay(source_home: &Path, source_config: &Path) -> Result<PathBuf, CliError> {
+    let overlay = temp_dir("nemo-relay-hermes-home")?;
+    if let Err(error) = populate_hermes_overlay(&overlay, source_home, source_config) {
+        let _ = std::fs::remove_dir_all(&overlay);
+        return Err(error);
     }
-    let backup = path.with_extension(format!("yaml.nemo-relay-run.bak.{}", timestamp()?));
-    std::fs::copy(path, &backup)?;
-    Ok((true, Some(backup)))
+    Ok(overlay)
 }
 
-// Creates the Hermes config parent directory when needed, merges generated gateway hooks with any
-// existing YAML config, and writes the patched YAML used for this transparent run.
-fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+fn populate_hermes_overlay(
+    overlay: &Path,
+    source_home: &Path,
+    source_config: &Path,
+) -> Result<(), CliError> {
+    let absolute_overlay = overlay
+        .canonicalize()
+        .unwrap_or_else(|_| overlay.to_path_buf());
+    match std::fs::read_dir(source_home) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                let name = entry.file_name();
+                if name == "config.yaml" || name == "shell-hooks-allowlist.json" {
+                    continue;
+                }
+                let source = entry.path();
+                let absolute_source = source.canonicalize().unwrap_or_else(|_| source.clone());
+                if absolute_overlay.starts_with(absolute_source) {
+                    continue;
+                }
+                link_hermes_state(&source, &overlay.join(name), entry.file_type()?.is_dir())?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(CliError::Io(error)),
     }
-    let existing = match std::fs::read_to_string(path) {
+    let existing = match std::fs::read_to_string(source_config) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(CliError::Io(error)),
@@ -1031,12 +935,36 @@ fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
         .map(crate::plugin_host::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"));
     let contents = crate::hermes::transparent_config(&existing, &relay)?;
-    std::fs::write(path, contents)?;
+    std::fs::write(overlay.join("config.yaml"), contents)?;
     Ok(())
 }
 
-// Chooses the Hermes hook file that transparent run should patch. If setup recorded a specific
-// path, reuse it; otherwise fall back to the Hermes home config file that Hermes itself reads.
+fn link_hermes_state(source: &Path, destination: &Path, directory: bool) -> Result<(), CliError> {
+    #[cfg(unix)]
+    {
+        let _ = directory;
+        std::os::unix::fs::symlink(source, destination)?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        if directory {
+            std::os::windows::fs::symlink_dir(source, destination)?;
+        } else {
+            std::fs::hard_link(source, destination)?;
+        }
+        Ok(())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = directory;
+        std::fs::copy(source, destination)?;
+        Ok(())
+    }
+}
+
+// Chooses the Hermes config used as the source for a transparent-run overlay. If setup recorded a
+// specific path, reuse it; otherwise fall back to the active Hermes home.
 fn hermes_hooks_path(configured: Option<&Path>) -> Result<PathBuf, CliError> {
     if let Some(path) = configured {
         return Ok(path.to_path_buf());
@@ -1050,35 +978,6 @@ fn hermes_hooks_path(configured: Option<&Path>) -> Result<PathBuf, CliError> {
             CliError::Launch("could not resolve home directory for Hermes hooks".into())
         })?;
     Ok(PathBuf::from(home).join(".hermes").join("config.yaml"))
-}
-
-fn restore_hook_file(
-    path: &Path,
-    backup_path: Option<&Path>,
-    had_original: bool,
-    label: &str,
-) -> Result<(), CliError> {
-    match (backup_path, had_original) {
-        (Some(backup), true) => {
-            std::fs::copy(backup, path).map_err(|error| {
-                CliError::Launch(format!(
-                    "failed to restore {label} hooks from {}: {error}",
-                    backup.display()
-                ))
-            })?;
-            let _ = std::fs::remove_file(backup);
-        }
-        (_, false) if path.exists() => {
-            std::fs::remove_file(path).map_err(|error| {
-                CliError::Launch(format!(
-                    "failed to remove temporary {label} hooks {}: {error}",
-                    path.display()
-                ))
-            })?;
-        }
-        _ => {}
-    }
-    Ok(())
 }
 
 // Converts JSON hook groups into inline TOML arrays for Codex `--config` flags. The function
@@ -1106,21 +1005,12 @@ fn toml_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-// Creates a timestamped directory under the OS temp directory. The timestamp suffix avoids
-// collisions between concurrent transparent runs without keeping persistent state.
+// Creates a uniquely named directory under the OS temp directory. UUIDv7 avoids collisions
+// between concurrent transparent runs without keeping persistent coordination state.
 fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
-    let path = std::env::temp_dir().join(format!("{prefix}-{}", timestamp()?));
+    let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir_all(&path)?;
     Ok(path)
-}
-
-// Returns a monotonic-enough wall-clock nanosecond stamp for temp and backup names. System time
-// errors become launcher errors because paths cannot be safely generated without a timestamp.
-fn timestamp() -> Result<u128, CliError> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| CliError::Launch(error.to_string()))?
-        .as_nanos())
 }
 
 #[cfg(test)]
