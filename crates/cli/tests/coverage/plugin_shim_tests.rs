@@ -3944,6 +3944,36 @@ fn claude_provider_enable_status_and_restore_cover_managed_backup_paths() {
 }
 
 #[test]
+fn claude_setup_snapshot_restores_settings_and_backup_exactly() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings = claude_settings_path().unwrap();
+    let backup = backup_path(&settings);
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let original_settings = br#"{"env":{"ANTHROPIC_BASE_URL":"https://original"}}"#;
+    let original_backup = br#"{"env":{"ANTHROPIC_BASE_URL":"https://backup"}}"#;
+    fs::write(&settings, original_settings).unwrap();
+    fs::write(&backup, original_backup).unwrap();
+    let snapshot = snapshot_claude_setup().unwrap();
+
+    fs::write(&settings, b"replacement-settings").unwrap();
+    fs::remove_file(&backup).unwrap();
+    restore_claude_setup(&snapshot).unwrap();
+
+    assert_eq!(fs::read(settings).unwrap(), original_settings);
+    assert_eq!(fs::read(backup).unwrap(), original_backup);
+
+    fs::remove_file(claude_settings_path().unwrap()).unwrap();
+    fs::remove_file(backup_path(&claude_settings_path().unwrap())).unwrap();
+    let absent = snapshot_claude_setup().unwrap();
+    fs::write(claude_settings_path().unwrap(), b"created").unwrap();
+    fs::write(backup_path(&claude_settings_path().unwrap()), b"created").unwrap();
+    restore_claude_setup(&absent).unwrap();
+    assert!(!claude_settings_path().unwrap().exists());
+    assert!(!backup_path(&claude_settings_path().unwrap()).exists());
+}
+
+#[test]
 fn claude_provider_restore_noops_without_matching_backup_or_managed_value() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());

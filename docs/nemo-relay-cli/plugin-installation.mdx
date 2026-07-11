@@ -81,7 +81,8 @@ For Claude Code, install registers the local Claude marketplace, installs
 `nemo-relay-plugin@nemo-relay-local` at user scope, and enables provider routing
 through the local NeMo Relay sidecar. During installation, NeMo Relay preserves
 existing Claude authentication and model settings and backs them up only when
-it adds the Relay provider route.
+it adds the Relay provider route. The plugin also declares the native
+`nemo-relay mcp` lifecycle client.
 
 For Codex, install registers the local Codex marketplace, installs
 `nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
@@ -102,16 +103,22 @@ Upgrade removes legacy Relay groups from
 Start a new Codex CLI process after installation. Restart the Codex desktop app
 if it was already running so it reloads the provider and hook configuration.
 
-Codex plugin mode uses a required `nemo-relay mcp` lifecycle client. The client
-starts or reuses a detached native sidecar on `127.0.0.1:47632`, verifies Relay
-identity, version, protocol readiness, and effective user-level configuration,
-and heartbeats it every 30 seconds. Concurrent
-Codex processes share the gateway. After the final MCP client closes, the
-sidecar exits after 300 idle seconds by default. If the gateway exits while MCP
-stdio is open, the client performs one coordinated restart and fails if
-recovery does not succeed. A foreign process on the configured port is rejected
-with an actionable conflict instead of being accepted because it returned HTTP
-200.
+Claude Code and Codex plugin modes use the same `nemo-relay mcp` lifecycle
+client. It starts or reuses a detached native sidecar on `127.0.0.1:47632`,
+verifies Relay identity, version, protocol readiness, and effective user-level
+configuration, and heartbeats it every 30 seconds. Concurrent processes from
+either host share the gateway. After the final MCP client closes, the sidecar
+exits after 300 idle seconds by default. If the gateway exits while MCP stdio is
+open, the client performs one coordinated restart and fails if recovery does
+not succeed. A foreign process on the configured port is rejected with an
+actionable conflict instead of being accepted because it returned HTTP 200.
+
+Codex marks the MCP server as required, so the captured turn waits for verified
+gateway readiness. Claude Code starts plugin MCP servers asynchronously; its
+`SessionStart` hook can run first. The Claude hook shim closes that race by
+starting or reusing the same gateway under the same startup lock and retrying
+the original canonical payload once. The MCP server advertises no tools in
+either host.
 
 On Windows, Relay requests Job Object breakaway only when the host job permits
 it. If the host applies a restrictive job but permits nested jobs, Relay keeps
@@ -123,17 +130,19 @@ guarantees.
 
 The compatibility fingerprint covers resolved provider, exporter, dynamic
 plugin, and relevant environment settings without exposing their values in the
-health response. `nemo-relay install codex --force` uses a private ownership
-token to stop an existing installer-owned sidecar before refreshing the plugin;
-it does not terminate an unrelated listener.
+health response. `nemo-relay install <host> --force` generation-fences the
+replacement MCP process and uses a private ownership token to stop a sidecar
+owned by the replaced host when necessary; it does not terminate an unrelated
+listener.
 
 Persistent mode resolves only system and user Relay configuration and starts in
 the user configuration directory. Project `.nemo-relay` layers remain available
-through transparent `nemo-relay run` invocations. The generated MCP manifest
-forwards environment variable names for provider credentials, Relay runtime,
-OpenTelemetry, AWS, proxies, certificates, approved prefixes, and credential
-variables referenced by user observability configuration. It never stores
-their values.
+through transparent `nemo-relay run` invocations. Codex requires an explicit
+forwarding allowlist, so its generated MCP manifest stores variable names—not
+values—for provider credentials, Relay runtime, OpenTelemetry, AWS, proxies,
+certificates, approved prefixes, and credential variables referenced by user
+observability configuration. Claude Code supplies its normal environment to
+plugin MCP processes.
 
 ## Diagnose
 
@@ -162,6 +171,10 @@ missing, or duplicated required hooks. A stopped Codex sidecar is informational;
 the required plugin MCP starts it before the captured turn. Doctor also reports
 newly required forwarded environment names and recommends
 `nemo-relay install codex --force`.
+
+For Claude Code, doctor also validates the generated MCP server and generation
+marker. A stopped sidecar remains informational because the next MCP initialize
+or hook retry starts it.
 
 Use the focused plugin doctor when diagnosing one host or an installation that
 uses a custom directory:

@@ -28,7 +28,7 @@ use host::{
     run_host_plugin_removal, validate_relay_mcp, validate_relay_plugin_shim,
 };
 use marketplace::{
-    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config,
+    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config, plugin_uses_mcp,
     write_plugin_marketplace, write_plugin_marketplace_for_generation,
 };
 use operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
@@ -424,7 +424,7 @@ fn install_host_locked(
 ) -> Result<(), String> {
     let relay = require_relay(options, runner)?;
     validate_relay_plugin_shim(&relay, options, runner)?;
-    if matches!(host, PluginHost::Codex) {
+    if plugin_uses_mcp(host) {
         validate_relay_mcp(&relay, options, runner)?;
     }
     require_host_cli(host, options, runner)?;
@@ -432,21 +432,21 @@ fn install_host_locked(
         host::validate_codex_version(options, runner)?;
     }
     let layout = PluginLayout::new(host, &options.install_dir);
-    let codex_preflight = if !options.dry_run && matches!(host, PluginHost::Codex) {
-        Some(prepare_codex_install(&layout, options, runner)?)
+    let plugin_preflight = if !options.dry_run && plugin_uses_mcp(host) {
+        Some(prepare_plugin_install(host, &layout, options, runner)?)
     } else {
         None
     };
     if !options.force
-        && codex_preflight
+        && plugin_preflight
             .as_ref()
             .is_some_and(|preflight| preflight.previous_install_exists)
     {
-        return Err(existing_codex_install_requires_force_error());
+        return Err(existing_plugin_install_requires_force_error(host));
     }
     let mut force_snapshot = None;
-    let staged = if options.force && !options.dry_run && matches!(host, PluginHost::Codex) {
-        let preflight = codex_preflight.expect("Codex force install has preflight state");
+    let staged = if options.force && !options.dry_run && plugin_uses_mcp(host) {
+        let preflight = plugin_preflight.expect("MCP plugin force install has preflight state");
         let staged = stage_plugin_marketplace(host, &relay, &layout, options)?;
         match begin_force_replacement(host, &layout, preflight, options, runner, setup_runner) {
             Ok(mut snapshot) => {
@@ -474,7 +474,7 @@ fn install_host_locked(
         None
     };
     if options.force && staged.is_none() {
-        if !options.dry_run && matches!(host, PluginHost::Codex) {
+        if !options.dry_run && plugin_uses_mcp(host) {
             setup_runner.refresh_gateway(host)?;
         }
         force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
@@ -671,7 +671,7 @@ fn retire_installed_generation(
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<Option<GenerationRetirement>, String> {
-    if options.dry_run || !matches!(host, PluginHost::Codex) {
+    if options.dry_run || !plugin_uses_mcp(host) {
         return Ok(None);
     }
     let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
@@ -680,19 +680,19 @@ fn retire_installed_generation(
         let registration = host_registration_report(host, options, runner)?;
         existing_install |=
             registration.host_plugin_registered || registration.host_marketplace_registered;
-        if existing_install {
-            return Err(missing_generation_fence_error(&generation_fence));
+        if existing_install && !legacy_plugin_without_mcp(host, plugin_root)? {
+            return Err(missing_generation_fence_error(host, &generation_fence));
         }
     }
     let retirement = GenerationRetirement::acquire(&generation_fence)
-        .map_err(|cause| invalid_generation_fence_error(&generation_fence, &cause))?;
+        .map_err(|cause| invalid_generation_fence_error(host, &generation_fence, &cause))?;
     if retirement.is_none() && !existing_install {
         let registration = host_registration_report(host, options, runner)?;
         existing_install =
             registration.host_plugin_registered || registration.host_marketplace_registered;
     }
-    if retirement.is_none() && existing_install {
-        return Err(missing_generation_fence_error(&generation_fence));
+    if retirement.is_none() && existing_install && !legacy_plugin_without_mcp(host, plugin_root)? {
+        return Err(missing_generation_fence_error(host, &generation_fence));
     }
     setup_runner.refresh_gateway(host)?;
     Ok(retirement)
@@ -704,12 +704,12 @@ fn retire_replacement_before_rollback(
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<Option<GenerationRetirement>, String> {
-    if options.dry_run || !matches!(host, PluginHost::Codex) {
+    if options.dry_run || !plugin_uses_mcp(host) {
         return Ok(None);
     }
     let mut retirement = GenerationRetirement::acquire(&layout.generation_fence)
-        .map_err(|cause| invalid_generation_fence_error(&layout.generation_fence, &cause))?
-        .ok_or_else(|| missing_generation_fence_error(&layout.generation_fence))?;
+        .map_err(|cause| invalid_generation_fence_error(host, &layout.generation_fence, &cause))?
+        .ok_or_else(|| missing_generation_fence_error(host, &layout.generation_fence))?;
     setup_runner.refresh_gateway(host)?;
     retirement.invalidate_for_replacement().map_err(|error| {
         format!(
@@ -720,26 +720,69 @@ fn retire_replacement_before_rollback(
     Ok(Some(retirement))
 }
 
-fn existing_codex_install_requires_force_error() -> String {
-    "an existing fenced Codex plugin install was found; rerun `nemo-relay install codex --force` to replace it safely"
-        .into()
-}
-
-fn missing_generation_fence_error(generation_fence: &Path) -> String {
-    unsafe_generation_fence_error(&format!("is missing at {}", generation_fence.display()))
-}
-
-fn invalid_generation_fence_error(generation_fence: &Path, cause: &str) -> String {
-    unsafe_generation_fence_error(&format!(
-        "at {} is invalid or unreadable: {cause}",
-        generation_fence.display()
-    ))
-}
-
-fn unsafe_generation_fence_error(problem: &str) -> String {
+fn existing_plugin_install_requires_force_error(host: PluginHost) -> String {
     format!(
-        "cannot safely replace or uninstall an existing Codex plugin because its MCP generation marker {problem}; close all Codex clients and standalone `nemo-relay mcp` processes, run `codex plugin remove nemo-relay-plugin@nemo-relay-local` and `codex plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install codex --force` to create a fenced install (and `nemo-relay uninstall codex` afterward if removal was intended)"
+        "an existing fenced {} plugin install was found; rerun `nemo-relay install {} --force` to replace it safely",
+        host_label(host),
+        host_arg(host)
     )
+}
+
+fn missing_generation_fence_error(host: PluginHost, generation_fence: &Path) -> String {
+    unsafe_generation_fence_error(
+        host,
+        &format!("is missing at {}", generation_fence.display()),
+    )
+}
+
+fn invalid_generation_fence_error(
+    host: PluginHost,
+    generation_fence: &Path,
+    cause: &str,
+) -> String {
+    unsafe_generation_fence_error(
+        host,
+        &format!(
+            "at {} is invalid or unreadable: {cause}",
+            generation_fence.display()
+        ),
+    )
+}
+
+fn unsafe_generation_fence_error(host: PluginHost, problem: &str) -> String {
+    match host {
+        PluginHost::Codex => format!(
+            "cannot safely replace or uninstall an existing Codex plugin because its MCP generation marker {problem}; close all Codex clients and standalone `nemo-relay mcp` processes, run `codex plugin remove nemo-relay-plugin@nemo-relay-local` and `codex plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install codex --force` to create a fenced install (and `nemo-relay uninstall codex` afterward if removal was intended)"
+        ),
+        PluginHost::ClaudeCode => format!(
+            "cannot safely replace or uninstall an existing Claude Code plugin because its MCP generation marker {problem}; close all Claude Code clients and standalone `nemo-relay mcp` processes, run `claude plugin uninstall nemo-relay-plugin` and `claude plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install claude-code --force` to create a fenced install (and `nemo-relay uninstall claude-code` afterward if removal was intended)"
+        ),
+        PluginHost::All => unreachable!("all is expanded before generation validation"),
+    }
+}
+
+fn legacy_plugin_without_mcp(host: PluginHost, plugin_root: &Path) -> Result<bool, String> {
+    if !matches!(host, PluginHost::ClaudeCode) || plugin_root.join(".mcp.json").exists() {
+        return Ok(false);
+    }
+    let manifest_path = plugin_manifest_path(host, plugin_root);
+    let raw = match fs::read_to_string(&manifest_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect legacy plugin manifest {}: {error}",
+                manifest_path.display()
+            ));
+        }
+    };
+    let manifest = serde_json::from_str::<Value>(&raw).map_err(|error| {
+        format!(
+            "failed to inspect legacy plugin manifest {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    Ok(manifest.get("mcpServers").is_none())
 }
 
 fn uninstall_host_with_setup_override(
@@ -917,7 +960,7 @@ fn collect_host_plugin_readiness(
                 ),
             );
         }
-        if matches!(host, PluginHost::Codex) {
+        if plugin_uses_mcp(host) {
             readiness.push(
                 "Relay MCP support",
                 validate_relay_mcp(&relay, options, runner)
@@ -932,10 +975,7 @@ fn collect_host_plugin_readiness(
                         .map(|_| format!("valid generation at {}", generation_fence.display())),
                 );
                 let check = plugin_mcp_config(host, &relay, &generation_fence)
-                    .and_then(|expected| {
-                        expected.ok_or_else(|| "Codex MCP configuration was not generated".into())
-                    })
-                    .and_then(|expected| generated_mcp_config_check(&mcp_config, &expected));
+                    .and_then(|expected| generated_mcp_config_check(host, &mcp_config, &expected));
                 readiness.push("Generated MCP server", check);
             }
         }
@@ -1050,7 +1090,11 @@ fn generated_manifest_check(path: &Path, expected: &Value, label: &str) -> Resul
     }
 }
 
-fn generated_mcp_config_check(path: &Path, expected: &Value) -> Result<String, String> {
+fn generated_mcp_config_check(
+    host: PluginHost,
+    path: &Path,
+    expected: &Value,
+) -> Result<String, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         format!(
             "missing or unreadable MCP server manifest {}: {error}",
@@ -1062,13 +1106,23 @@ fn generated_mcp_config_check(path: &Path, expected: &Value) -> Result<String, S
     if actual == *expected {
         return Ok(format!("valid at {}", path.display()));
     }
-    let expected_vars = expected["nemo-relay"]["env_vars"]
+    let expected_server = match host {
+        PluginHost::Codex => &expected["nemo-relay"],
+        PluginHost::ClaudeCode => &expected["mcpServers"]["nemo-relay"],
+        PluginHost::All => unreachable!("all is expanded before MCP validation"),
+    };
+    let actual_server = match host {
+        PluginHost::Codex => &actual["nemo-relay"],
+        PluginHost::ClaudeCode => &actual["mcpServers"]["nemo-relay"],
+        PluginHost::All => unreachable!("all is expanded before MCP validation"),
+    };
+    let expected_vars = expected_server["env_vars"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
         .collect::<std::collections::BTreeSet<_>>();
-    let actual_vars = actual["nemo-relay"]["env_vars"]
+    let actual_vars = actual_server["env_vars"]
         .as_array()
         .into_iter()
         .flatten()
@@ -1080,9 +1134,10 @@ fn generated_mcp_config_check(path: &Path, expected: &Value) -> Result<String, S
         .collect::<Vec<_>>();
     if !missing.is_empty() {
         return Err(format!(
-            "MCP server at {} is missing forwarded environment variables: {}; run `nemo-relay install codex --force`",
+            "MCP server at {} is missing forwarded environment variables: {}; run `nemo-relay install {} --force`",
             path.display(),
-            missing.join(", ")
+            missing.join(", "),
+            host_arg(host)
         ));
     }
     Err(format!(
@@ -1135,7 +1190,7 @@ impl StagedPluginMarketplace {
     }
 }
 
-struct CodexInstallPreflight {
+struct PluginInstallPreflight {
     persisted: Option<PluginState>,
     state_bytes: Option<Vec<u8>>,
     previous_marketplace_root: PathBuf,
@@ -1148,13 +1203,14 @@ struct CodexInstallPreflight {
     generation_retirement: Option<GenerationRetirement>,
 }
 
-fn prepare_codex_install(
+fn prepare_plugin_install(
+    host: PluginHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
-) -> Result<CodexInstallPreflight, String> {
-    let persisted = read_state(PluginHost::Codex, &options.install_dir);
-    let registration = host_registration_report(PluginHost::Codex, options, runner)?;
+) -> Result<PluginInstallPreflight, String> {
+    let persisted = read_state(host, &options.install_dir);
+    let registration = host_registration_report(host, options, runner)?;
     let plugin_registered = registration.host_plugin_registered;
     let marketplace_registered = registration.host_marketplace_registered;
     let state_bytes = match fs::read(&layout.state_path) {
@@ -1180,25 +1236,44 @@ fn prepare_codex_install(
         .map(|state| state.plugin_root.clone())
         .unwrap_or_else(|| layout.plugin_root.clone());
     let previous_generation_fence = previous_plugin_root.join(GENERATION_FILE_NAME);
+    let local_install_exists = match host {
+        PluginHost::Codex => layout.marketplace_root.exists(),
+        PluginHost::ClaudeCode => {
+            plugin_manifest_path(host, &previous_plugin_root).exists()
+                || previous_plugin_root.join(".mcp.json").exists()
+                || previous_generation_fence.exists()
+        }
+        PluginHost::All => unreachable!("all is expanded before install preflight"),
+    };
     let previous_install_exists = state_bytes.is_some()
-        || layout.marketplace_root.exists()
+        || local_install_exists
         || plugin_registered
         || marketplace_registered;
     let generation_retirement = if previous_install_exists {
         if !previous_generation_fence.exists() {
-            return Err(missing_generation_fence_error(&previous_generation_fence));
+            if legacy_plugin_without_mcp(host, &previous_plugin_root)? {
+                None
+            } else {
+                return Err(missing_generation_fence_error(
+                    host,
+                    &previous_generation_fence,
+                ));
+            }
+        } else {
+            Some(
+                GenerationRetirement::acquire(&previous_generation_fence)
+                    .map_err(|cause| {
+                        invalid_generation_fence_error(host, &previous_generation_fence, &cause)
+                    })?
+                    .ok_or_else(|| {
+                        missing_generation_fence_error(host, &previous_generation_fence)
+                    })?,
+            )
         }
-        Some(
-            GenerationRetirement::acquire(&previous_generation_fence)
-                .map_err(|cause| {
-                    invalid_generation_fence_error(&previous_generation_fence, &cause)
-                })?
-                .ok_or_else(|| missing_generation_fence_error(&previous_generation_fence))?,
-        )
     } else {
         None
     };
-    Ok(CodexInstallPreflight {
+    Ok(PluginInstallPreflight {
         persisted,
         state_bytes,
         previous_marketplace_root,
@@ -1288,12 +1363,12 @@ fn stage_plugin_marketplace(
 fn begin_force_replacement(
     host: PluginHost,
     layout: &PluginLayout,
-    preflight: CodexInstallPreflight,
+    preflight: PluginInstallPreflight,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<ForceInstallSnapshot, String> {
-    let CodexInstallPreflight {
+    let PluginInstallPreflight {
         persisted,
         state_bytes,
         previous_marketplace_root,

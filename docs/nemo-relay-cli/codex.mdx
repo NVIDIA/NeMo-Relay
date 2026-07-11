@@ -100,9 +100,10 @@ managed Python environment, is limited to 100,000 filesystem entries and 512
 MiB in total, with a maximum directory traversal depth of 128. When startup
 reports an activation snapshot budget error, remove unrelated files from the
 manifest or load-target directory, flatten deeply nested directories, or reduce
-the managed Python environment before retrying. Concurrent Codex processes
-share the sidecar. Each MCP client sends a heartbeat while its stdio connection
-is open, and the sidecar exits after 300 seconds without activity by default. No
+the managed Python environment before retrying. Concurrent Codex and Claude
+Code plugin processes can share the sidecar. Each MCP client sends a heartbeat
+while its stdio connection is open, and the sidecar exits after 300 seconds
+without activity by default. No
 wrapper, launch agent, system user service, scheduled task, login item, or
 persistent supervisor is installed.
 

@@ -55,15 +55,6 @@ fn setup_runner_defaults_are_explicit_no_ops() {
 }
 
 #[test]
-fn real_runner_has_no_claude_snapshot_or_gateway_to_restore() {
-    let runner = RealPluginSetupRunner;
-
-    assert!(runner.snapshot(PluginHost::ClaudeCode).unwrap().is_none());
-    runner.restore_snapshot(&PluginSetupSnapshot::Mock).unwrap();
-    runner.refresh_gateway(PluginHost::ClaudeCode).unwrap();
-}
-
-#[test]
 fn setup_descriptions_reject_unexpanded_hosts_and_unknown_actions() {
     assert!(
         std::panic::catch_unwind(|| setup_action_description(PluginHost::All, "configure"))

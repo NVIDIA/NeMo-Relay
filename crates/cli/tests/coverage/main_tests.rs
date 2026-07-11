@@ -6,7 +6,7 @@ use std::ffi::OsString;
 
 use super::*;
 use crate::config::{
-    CompletionsCommand, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
+    CompletionsCommand, McpAgent, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
     PluginsListCommand, PluginsSubcommand, PluginsValidateCommand, PricingSubcommand,
     PricingValidateCommand, ServerArgs,
 };
@@ -86,12 +86,23 @@ fn completions_helper_reports_missing_shell_and_generates_requested_shell() {
 #[test]
 fn cli_parses_native_mcp_subcommand_and_bind_override() {
     let cli = Cli::try_parse_from(["nemo-relay", "mcp"]).unwrap();
-    assert!(matches!(cli.command, Some(Command::Mcp)));
+    assert!(matches!(
+        cli.command,
+        Some(Command::Mcp(command)) if command.agent == McpAgent::Codex
+    ));
     assert!(cli.server.bind.is_none());
 
     let cli = Cli::try_parse_from(["nemo-relay", "--bind", "127.0.0.1:4041", "mcp"]).unwrap();
-    assert!(matches!(cli.command, Some(Command::Mcp)));
+    assert!(matches!(cli.command, Some(Command::Mcp(_))));
     assert_eq!(cli.server.bind.unwrap().to_string(), "127.0.0.1:4041");
+
+    let cli = Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "claude"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Mcp(command)) if command.agent == McpAgent::ClaudeCode
+    ));
+
+    assert!(Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "hermes"]).is_err());
 }
 
 #[test]

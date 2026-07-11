@@ -101,7 +101,7 @@ pub(crate) enum Command {
                       nemo-relay mcp\n  \
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
-    Mcp,
+    Mcp(McpCommand),
     /// Run the interactive setup (writes `.nemo-relay/config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
@@ -126,6 +126,32 @@ pub(crate) enum Command {
     /// Internal: plugin-local hook and sidecar supervisor. Not typed by humans.
     #[command(hide = true)]
     PluginShim(PluginShimCommand),
+}
+
+/// Host identity for the lifecycle-bound MCP client.
+#[derive(Debug, Clone, Args)]
+pub(crate) struct McpCommand {
+    /// Coding-agent host that launched this MCP client.
+    #[arg(long, value_enum, default_value = "codex")]
+    pub(crate) agent: McpAgent,
+}
+
+/// Hosts whose plugin format can own the lifecycle-bound MCP client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(crate) enum McpAgent {
+    #[value(name = "claude", alias = "claude-code")]
+    ClaudeCode,
+    Codex,
+}
+
+impl From<McpAgent> for CodingAgent {
+    fn from(agent: McpAgent) -> Self {
+        match agent {
+            McpAgent::ClaudeCode => Self::ClaudeCode,
+            McpAgent::Codex => Self::Codex,
+        }
+    }
 }
 
 /// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
@@ -728,7 +754,7 @@ pub(crate) fn resolve_server_config(args: &ServerArgs) -> Result<ResolvedConfig,
     Ok(resolved)
 }
 
-/// Resolves the shared Codex MCP gateway from system and user layers only.
+/// Resolves the shared plugin MCP gateway from system and user layers only.
 pub(crate) fn resolve_persistent_server_config(
     args: &ServerArgs,
 ) -> Result<ResolvedConfig, CliError> {

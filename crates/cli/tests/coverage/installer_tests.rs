@@ -183,6 +183,8 @@ fn packaged_hook_configs_are_valid_json() {
         root.join("../../.claude-plugin/marketplace.json"),
         root.join("claude-code/hooks/hooks.json"),
         root.join("codex/hooks/hooks.json"),
+        root.join("claude-code/.mcp.json"),
+        root.join("codex/.mcp.json"),
         root.join("claude-code/.claude-plugin/plugin.json"),
         root.join("codex/.codex-plugin/plugin.json"),
     ] {
@@ -260,6 +262,7 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
     assert_eq!(claude["name"], json!("nemo-relay-plugin"));
     assert_eq!(claude["version"], json!(env!("CARGO_PKG_VERSION")));
     assert!(claude.get("hooks").is_none());
+    assert_eq!(claude["mcpServers"], json!("./.mcp.json"));
 
     let codex_path = root.join("codex/.codex-plugin/plugin.json");
     let codex =
@@ -274,7 +277,7 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
         serde_json::from_str::<Value>(&std::fs::read_to_string(&codex_mcp_path).unwrap()).unwrap();
     let server = &codex_mcp["nemo-relay"];
     assert_eq!(server["command"], json!("nemo-relay"));
-    assert_eq!(server["args"], json!(["mcp"]));
+    assert_eq!(server["args"], json!(["mcp", "--agent", "codex"]));
     assert_eq!(
         server["env"],
         json!({"NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"})
@@ -284,6 +287,17 @@ fn packaged_plugin_manifests_use_stable_plugin_name_and_version() {
     let env_vars = server["env_vars"].as_array().unwrap();
     assert!(env_vars.contains(&json!("OPENAI_API_KEY")));
     assert!(env_vars.contains(&json!("XDG_CONFIG_HOME")));
+
+    let claude_mcp_path = root.join("claude-code/.mcp.json");
+    let claude_mcp =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&claude_mcp_path).unwrap()).unwrap();
+    let claude_server = &claude_mcp["mcpServers"]["nemo-relay"];
+    assert_eq!(claude_server["command"], json!("nemo-relay"));
+    assert_eq!(claude_server["args"], json!(["mcp", "--agent", "claude"]));
+    assert_eq!(
+        claude_server["env"],
+        json!({"NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632"})
+    );
 
     let codex_marketplace_path = root.join("../../.agents/plugins/marketplace.json");
     let codex_marketplace =
@@ -321,6 +335,7 @@ fn packaged_plugin_helpers_are_present() {
     for path in [
         root.join("claude-code/hooks/hooks.json"),
         root.join("codex/hooks/hooks.json"),
+        root.join("claude-code/.mcp.json"),
         root.join("codex/.mcp.json"),
     ] {
         let metadata = std::fs::metadata(&path)

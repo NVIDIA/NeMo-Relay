@@ -93,6 +93,7 @@ pub(crate) struct GatewaySpec {
     bind: SocketAddr,
     sidecar_args: Vec<OsString>,
     bootstrap_fingerprint: Option<String>,
+    user_config_scope: bool,
 }
 
 impl GatewaySpec {
@@ -102,6 +103,7 @@ impl GatewaySpec {
             bind,
             sidecar_args: Vec::new(),
             bootstrap_fingerprint: None,
+            user_config_scope: false,
         }
     }
 
@@ -112,6 +114,11 @@ impl GatewaySpec {
 
     pub(crate) fn with_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
         self.bootstrap_fingerprint = Some(fingerprint.into());
+        self
+    }
+
+    pub(crate) fn with_user_config_scope(mut self) -> Self {
+        self.user_config_scope = true;
         self
     }
 
@@ -128,16 +135,17 @@ impl GatewaySpec {
     }
 }
 
-/// Persistent Codex gateway settings shared by MCP bootstrap and hook recovery.
-pub(crate) struct CodexGatewaySpec {
+/// Persistent plugin gateway settings shared by MCP bootstrap and hook recovery.
+pub(crate) struct PluginGatewaySpec {
     pub(crate) gateway: GatewaySpec,
     pub(crate) max_hook_payload_bytes: usize,
 }
 
-pub(crate) fn resolve_codex_gateway(
+pub(crate) fn resolve_plugin_gateway(
+    agent: CodingAgent,
     server_args: &ServerArgs,
     bind: SocketAddr,
-) -> Result<CodexGatewaySpec, CliError> {
+) -> Result<PluginGatewaySpec, CliError> {
     let mut persistent_args = server_args.clone();
     persistent_args.bind = Some(bind);
     let resolved = resolve_persistent_server_config(&persistent_args)?;
@@ -160,10 +168,11 @@ pub(crate) fn resolve_codex_gateway(
     .into_iter()
     .flat_map(|(flag, value)| [OsString::from(flag), OsString::from(value)])
     .collect();
-    Ok(CodexGatewaySpec {
-        gateway: GatewaySpec::new(CodingAgent::Codex, bind)
+    Ok(PluginGatewaySpec {
+        gateway: GatewaySpec::new(agent, bind)
             .with_launch_args(sidecar_args)
-            .with_fingerprint(bootstrap_fingerprint),
+            .with_fingerprint(bootstrap_fingerprint)
+            .with_user_config_scope(),
         max_hook_payload_bytes,
     })
 }
@@ -181,7 +190,6 @@ pub(crate) fn ensure_sidecar_bind(
 fn ensure_gateway(spec: &GatewaySpec) -> Result<GatewayBootstrap, String> {
     let agent = spec.agent;
     let bind = spec.bind;
-    let sidecar_args = &spec.sidecar_args;
     let bootstrap_fingerprint = spec.bootstrap_fingerprint.as_deref();
     if !bind.ip().is_loopback() {
         return Err(format!(
@@ -208,16 +216,8 @@ fn ensure_gateway(spec: &GatewaySpec) -> Result<GatewayBootstrap, String> {
         )
     })?;
     if bind.port() == 0 {
-        return start_sidecar_bind(
-            agent,
-            bind,
-            &runtime,
-            &state,
-            sidecar_args,
-            bootstrap_fingerprint,
-            None,
-        )
-        .map_err(|error| sidecar_start_error(agent, &url, &runtime, &error));
+        return start_sidecar_bind(spec, &runtime, &state, None)
+            .map_err(|error| sidecar_start_error(agent, &url, &runtime, &error));
     }
     let lock_path = sidecar_lock_path(&state, &url);
     let initial_health = probe_relay_health(&url, bootstrap_fingerprint);
@@ -285,19 +285,11 @@ fn ensure_gateway(spec: &GatewaySpec) -> Result<GatewayBootstrap, String> {
                 started: false,
             });
         }
-        RelayHealth::Incompatible => return Err(incompatible_relay_error(&url)),
+        RelayHealth::Incompatible => return Err(incompatible_relay_error(agent, &url)),
         RelayHealth::Foreign => return Err(foreign_listener_error(&url)),
         RelayHealth::Unavailable => {}
     }
-    let result = start_sidecar_bind(
-        agent,
-        bind,
-        &runtime,
-        &state,
-        sidecar_args,
-        bootstrap_fingerprint,
-        Some(lock),
-    );
+    let result = start_sidecar_bind(spec, &runtime, &state, Some(lock));
     result.map_err(|error| sidecar_start_error(agent, &url, &runtime, &error))
 }
 
@@ -307,9 +299,14 @@ fn foreign_listener_error(url: &str) -> String {
     )
 }
 
-fn incompatible_relay_error(url: &str) -> String {
+fn incompatible_relay_error(agent: CodingAgent, url: &str) -> String {
+    let remediation = match agent {
+        CodingAgent::Codex => "run `nemo-relay install codex --force`",
+        CodingAgent::ClaudeCode => "run `nemo-relay install claude-code --force`",
+        CodingAgent::Hermes => "restart the configured Relay gateway",
+    };
     format!(
-        "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for its idle shutdown, or run `nemo-relay install codex --force` before retrying"
+        "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for its idle shutdown, or {remediation} before retrying"
     )
 }
 
@@ -326,16 +323,8 @@ fn sidecar_start_error(agent: CodingAgent, url: &str, runtime: &Path, error: &st
 
 #[cfg(all(test, unix))]
 pub(super) fn start_sidecar(agent: CodingAgent, url: &str, runtime: &Path) -> Result<(), String> {
-    start_sidecar_bind(
-        agent,
-        loopback_bind(url)?,
-        runtime,
-        runtime,
-        &[],
-        None,
-        None,
-    )
-    .map(|_| ())
+    let spec = GatewaySpec::new(agent, loopback_bind(url)?);
+    start_sidecar_bind(&spec, runtime, runtime, None).map(|_| ())
 }
 
 struct ArmedSidecarChild {
@@ -415,14 +404,15 @@ fn cleanup_sidecar_records_for_pid(runtime: &Path, agent: CodingAgent, pid: u32)
 }
 
 fn start_sidecar_bind(
-    agent: CodingAgent,
-    bind: SocketAddr,
+    spec: &GatewaySpec,
     runtime: &Path,
     state: &Path,
-    sidecar_args: &[OsString],
-    bootstrap_fingerprint: Option<&str>,
     mut startup_lock: Option<fs::File>,
 ) -> Result<GatewayBootstrap, String> {
+    let agent = spec.agent;
+    let bind = spec.bind;
+    let sidecar_args = &spec.sidecar_args;
+    let bootstrap_fingerprint = spec.bootstrap_fingerprint.as_deref();
     let requested_url = format!("http://{bind}");
     if bind.port() != 0 {
         match probe_relay_health(&requested_url, bootstrap_fingerprint) {
@@ -436,7 +426,7 @@ fn start_sidecar_bind(
                 });
             }
             RelayHealth::Incompatible => {
-                return Err(incompatible_relay_error(&requested_url));
+                return Err(incompatible_relay_error(agent, &requested_url));
             }
             RelayHealth::Foreign => return Err(foreign_listener_error(&requested_url)),
             RelayHealth::Unavailable => {}
@@ -486,12 +476,12 @@ fn start_sidecar_bind(
         .stderr(Stdio::from(err_log));
     #[cfg(windows)]
     sidecar_job.configure_child(&mut command);
-    if matches!(agent, CodingAgent::Codex) {
+    if spec.user_config_scope {
         command.env("NEMO_RELAY_CONFIG_SCOPE", "user");
         if let Some(config_dir) = crate::config::user_config_dir() {
             fs::create_dir_all(&config_dir).map_err(|error| {
                 format!(
-                    "failed to create Codex sidecar working directory {}: {error}",
+                    "failed to create plugin sidecar working directory {}: {error}",
                     config_dir.display()
                 )
             })?;

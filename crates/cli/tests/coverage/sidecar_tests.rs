@@ -200,12 +200,9 @@ fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
     );
     let (address, server) = one_health_response(compatible_body);
     let bootstrap = start_sidecar_bind(
-        CodingAgent::Codex,
-        address,
+        &GatewaySpec::new(CodingAgent::Codex, address),
         dir.path(),
         dir.path(),
-        &[],
-        None,
         None,
     )
     .unwrap();
@@ -219,12 +216,9 @@ fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
     );
     let (address, server) = one_health_response(incompatible_body);
     let error = start_sidecar_bind(
-        CodingAgent::Codex,
-        address,
+        &GatewaySpec::new(CodingAgent::Codex, address),
         dir.path(),
         dir.path(),
-        &[],
-        None,
         None,
     )
     .unwrap_err();
@@ -233,12 +227,9 @@ fn direct_sidecar_start_classifies_existing_listeners_before_spawning() {
 
     let (address, server) = one_health_response("{}".into());
     let error = start_sidecar_bind(
-        CodingAgent::Codex,
-        address,
+        &GatewaySpec::new(CodingAgent::Codex, address),
         dir.path(),
         dir.path(),
-        &[],
-        None,
         None,
     )
     .unwrap_err();

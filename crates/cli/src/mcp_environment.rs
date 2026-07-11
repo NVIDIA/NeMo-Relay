@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Environment names shared by Codex MCP generation and gateway compatibility checks.
+//! Environment names shared by MCP generation and gateway compatibility checks.
 
 use std::collections::BTreeSet;
 

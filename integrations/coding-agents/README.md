@@ -23,15 +23,17 @@ environment variables, or shared TOML config.
 ## Packages
 
 - `claude-code/` is a Claude Code plugin package. The
-  `nemo-relay install claude-code` command installs hook entries targeting
-  `POST /hooks/claude-code` through `nemo-relay` on `PATH`.
+  `nemo-relay install claude-code` command installs a native MCP lifecycle
+  client and hook entries targeting `POST /hooks/claude-code` through
+  `nemo-relay` on `PATH`.
 - `codex/` is a Codex plugin package. `nemo-relay install codex` creates the
   marketplace, installs the plugin, enables `features.hooks = true`, and
   configures a local `nemo-relay-openai` provider alias. Codex plugin delivery
-  uses required native `nemo-relay mcp` lifecycle clients that share one
-  Rust gateway, subject to the Windows Job Object lifetime caveat below, with no
-  wrapper, login item, launchd agent, systemd user service, scheduled task, or
-  persistent supervisor.
+  uses required native `nemo-relay mcp` lifecycle clients. Claude Code starts
+  the same lifecycle client automatically from its plugin. Clients from either
+  host share one Rust gateway, subject to the Windows Job Object lifetime
+  caveat below, with no wrapper, login item, launchd agent, systemd user
+  service, scheduled task, or persistent supervisor.
 - Hermes does not require a static bundle in this directory. The setup wizard
   (`nemo-relay config`) merges hook commands into `.hermes/config.yaml` when
   hermes is selected.
@@ -74,25 +76,24 @@ CLI must already be installed and discoverable on `$PATH` or `%PATH%`; no
 separate npm installer, release bundle download, or plugin-local Relay binary is
 required.
 
-Claude Code can start the sidecar from plugin hooks or helper commands and route
-model traffic by setting `ANTHROPIC_BASE_URL` to the sidecar URL.
-
-Codex's required plugin MCP entry starts `nemo-relay mcp`, a lightweight client
-that starts or reuses a native `nemo-relay --bind 127.0.0.1:47632` sidecar. Relay
+Each plugin MCP entry starts `nemo-relay mcp`, a lightweight client that starts
+or reuses a native `nemo-relay --bind 127.0.0.1:47632` sidecar. Relay
 detaches the sidecar when host policy permits. A restrictive Windows Job Object
 keeps the sidecar scoped to that host job instead of failing bootstrap.
 MCP initialization waits for Relay identity, version, and bootstrap-protocol
-readiness. Concurrent Codex processes share the gateway and heartbeat it while
-their MCP stdio connections remain open; the gateway exits after the final
-client's idle timeout. Plugin-owned hooks call the canonically resolved
-`nemo-relay plugin-shim hook codex` command, and model traffic uses the same
-stable provider alias.
+readiness. Concurrent Codex and Claude Code processes share the gateway and
+heartbeat it while their MCP stdio connections remain open; the gateway exits
+after the final client's idle timeout. Codex requires MCP initialization before
+the captured turn. Claude Code starts plugin MCP servers asynchronously, so its
+command hook also starts or reuses the same gateway and retries the original
+payload when it wins the startup race. The MCP client advertises no tools.
 
-Persistent Codex mode loads system and user Relay configuration only and starts
+Persistent plugin mode loads system and user Relay configuration only and starts
 the sidecar from the user configuration directory. Relative exporter paths are
-therefore stable across projects. The generated MCP manifest forwards approved
-provider, Relay, OpenTelemetry, AWS, proxy, certificate, and config-referenced
-credential environment names without storing their values. Use transparent
+therefore stable across projects. Codex's generated MCP manifest forwards
+approved provider, Relay, OpenTelemetry, AWS, proxy, certificate, and
+config-referenced credential environment names without storing their values;
+Claude Code supplies its normal MCP process environment. Use transparent
 `nemo-relay run` for project-specific configuration.
 
 Install the local host marketplaces with:
@@ -145,8 +146,8 @@ project `.nemo-relay/config.toml`, then
 `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
 `~/.config/nemo-relay/config.toml`.
 
-That layering applies to transparent runs. Persistent Codex plugin mode skips
-the project layer and merges only system and user configuration.
+That layering applies to transparent runs. Persistent plugin mode skips the
+project layer and merges only system and user configuration.
 
 ```toml
 [agents.codex]
@@ -244,3 +245,16 @@ ls .nemo-relay/atif
 
 The gateway writes `<session-id>.atif.json` when it receives a session-end hook
 for a session with ATIF configured.
+
+Run the opt-in host E2E targets when the corresponding CLI is installed. These
+targets are intentionally outside `test-rust` and mandatory CI:
+
+```bash
+just test-claude-plugin-e2e
+just test-codex-plugin-e2e
+```
+
+Each target uses an isolated home directory and local mock provider. The Claude
+target runs 10 cold sessions plus two concurrent sessions and verifies MCP
+connection, hook delivery, provider routing, session isolation, balanced ATOF
+output, and final port release.

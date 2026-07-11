@@ -222,7 +222,7 @@ pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<(), String> 
     }
     let agent = match agent.as_deref() {
         Some("codex") => CodingAgent::Codex,
-        Some("claude-code") => CodingAgent::ClaudeCode,
+        Some("claude" | "claude-code") => CodingAgent::ClaudeCode,
         Some(other) => return Err(format!("unsupported bootstrap agent {other}")),
         None => {
             return Err(format!(

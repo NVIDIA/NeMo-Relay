@@ -71,8 +71,9 @@ files and a copied managed Python environment, is limited to 100,000 filesystem
 entries and 512 MiB in total, with a maximum directory traversal depth of 128.
 If startup reports an activation snapshot budget error, remove unrelated files
 from the manifest or load-target directory, flatten deeply nested directories,
-or reduce the managed Python environment before retrying. Concurrent Codex
-processes share the gateway and heartbeat it every 30 seconds. The sidecar
+or reduce the managed Python environment before retrying. Concurrent Codex and
+Claude Code plugin processes can share the gateway and heartbeat it every 30
+seconds. The sidecar
 remains available for 300 idle seconds after the final client closes. If it dies
 while MCP remains open, one coordinated restart is attempted. The MCP server
 advertises no tools.

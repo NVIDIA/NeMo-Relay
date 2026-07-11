@@ -35,7 +35,7 @@ pub(super) fn write_plugin_marketplace_for_generation(
     if options.dry_run {
         println!("write {}", layout.marketplace_manifest.display());
         println!("write {}", layout.plugin_manifest.display());
-        if matches!(host, PluginHost::Codex) {
+        if plugin_uses_mcp(host) {
             println!("write {}", layout.mcp_config.display());
             println!("write {}", layout.generation_fence.display());
         }
@@ -59,12 +59,13 @@ pub(super) fn write_plugin_marketplace_for_generation(
     }
     write_json(&layout.marketplace_manifest, &marketplace_manifest(host))?;
     write_json(&layout.plugin_manifest, &plugin_manifest(host))?;
-    if matches!(host, PluginHost::Codex) {
+    if plugin_uses_mcp(host) {
         write_new_generation(&layout.generation_fence)?;
     }
-    if let Some(mcp_config) = plugin_mcp_config(host, relay, active_generation_fence)? {
-        write_json(&layout.mcp_config, &mcp_config)?;
-    }
+    write_json(
+        &layout.mcp_config,
+        &plugin_mcp_config(host, relay, active_generation_fence)?,
+    )?;
     if plugin_has_hooks_template(host) {
         write_json(&layout.hooks_path, &plugin_hooks(host, relay))?;
     }
@@ -102,7 +103,7 @@ pub(super) fn marketplace_manifest(host: PluginHost) -> Value {
             },
             "plugins": [{
                 "name": PLUGIN_NAME,
-                "description": "Forward Claude Code lifecycle hooks to a local NeMo Relay sidecar.",
+                "description": "Run the shared native Relay gateway and capture Claude Code lifecycle events.",
                 "source": "./plugins/nemo-relay-plugin",
                 "category": "development"
             }]
@@ -117,7 +118,7 @@ pub(super) fn plugin_manifest(host: PluginHost) -> Value {
             "Native Relay gateway lifecycle and Codex hooks for complete local observability."
         }
         PluginHost::ClaudeCode => {
-            "Claude Code hooks that forward canonical lifecycle payloads to nemo-relay."
+            "Native Relay gateway lifecycle and Claude Code hooks for complete local observability."
         }
         PluginHost::All => unreachable!("all is expanded before manifest generation"),
     };
@@ -139,8 +140,10 @@ pub(super) fn plugin_manifest(host: PluginHost) -> Value {
         "license": "Apache-2.0",
         "keywords": keywords
     });
-    if matches!(host, PluginHost::Codex) {
+    if plugin_uses_mcp(host) {
         manifest["mcpServers"] = json!("./.mcp.json");
+    }
+    if matches!(host, PluginHost::Codex) {
         manifest["interface"] = json!({
             "displayName": "NeMo Relay Plugin",
             "shortDescription": "Run the native Relay gateway and capture Codex lifecycle events.",
@@ -160,15 +163,12 @@ pub(super) fn plugin_mcp_config(
     host: PluginHost,
     relay: &Path,
     generation_fence: &Path,
-) -> Result<Option<Value>, String> {
-    if !matches!(host, PluginHost::Codex) {
-        return Ok(None);
-    }
+) -> Result<Value, String> {
     let generation_fence = absolute_or_self(generation_fence);
-    Ok(Some(json!({
-        "nemo-relay": {
+    let server = match host {
+        PluginHost::Codex => json!({
             "command": relay,
-            "args": ["mcp"],
+            "args": ["mcp", "--agent", "codex"],
             "env": {
                 "NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632",
                 (GENERATION_FILE_ENV): generation_fence
@@ -176,8 +176,22 @@ pub(super) fn plugin_mcp_config(
             "env_vars": plugin_mcp_env_vars()?,
             "required": true,
             "startup_timeout_sec": 20
-        }
-    })))
+        }),
+        PluginHost::ClaudeCode => json!({
+            "command": relay,
+            "args": ["mcp", "--agent", "claude"],
+            "env": {
+                "NEMO_RELAY_GATEWAY_BIND": "127.0.0.1:47632",
+                (GENERATION_FILE_ENV): generation_fence
+            }
+        }),
+        PluginHost::All => unreachable!("all is expanded before MCP generation"),
+    };
+    Ok(match host {
+        PluginHost::Codex => json!({ "nemo-relay": server }),
+        PluginHost::ClaudeCode => json!({ "mcpServers": { "nemo-relay": server } }),
+        PluginHost::All => unreachable!("all is expanded before MCP generation"),
+    })
 }
 
 fn absolute_or_self(path: &Path) -> std::path::PathBuf {
@@ -220,5 +234,12 @@ pub(super) fn plugin_has_hooks_template(host: PluginHost) -> bool {
     match host {
         PluginHost::Codex | PluginHost::ClaudeCode => true,
         PluginHost::All => unreachable!("all is expanded before hook generation"),
+    }
+}
+
+pub(super) fn plugin_uses_mcp(host: PluginHost) -> bool {
+    match host {
+        PluginHost::Codex | PluginHost::ClaudeCode => true,
+        PluginHost::All => unreachable!("all is expanded before MCP generation"),
     }
 }

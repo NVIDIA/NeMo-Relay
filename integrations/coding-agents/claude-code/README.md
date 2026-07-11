@@ -5,8 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Plugin
 
-This package contains Claude Code hook entries that forward canonical Claude
-Code hook JSON to `nemo-relay` at `/hooks/claude-code`.
+This package contains a native MCP lifecycle client and Claude Code hook entries
+that forward canonical Claude Code hook JSON to `nemo-relay` at
+`/hooks/claude-code`.
 
 Claude Code is the supported Claude integration target. Claude application,
 Claude web, and Claude desktop sessions are unsupported unless they expose the
@@ -15,6 +16,7 @@ same local hook and gateway controls as Claude Code.
 ## Files
 
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
+- `.mcp.json` starts the native `nemo-relay mcp` lifecycle client.
 - `hooks/hooks.json` contains hook entries that run
   `nemo-relay plugin-shim hook claude`.
 
@@ -168,7 +170,15 @@ nemo-relay install claude-code
 
 `nemo-relay install claude-code` writes a local Claude Code marketplace,
 installs `nemo-relay-plugin` at user scope, and enables Claude Code provider
-routing through NeMo Relay.
+routing through NeMo Relay. Its plugin MCP process starts or reuses the shared
+native gateway on `127.0.0.1:47632` and heartbeats it while MCP stdio remains
+open. Codex and Claude Code MCP clients can share that gateway.
+
+Claude Code starts plugin MCP servers asynchronously. The `SessionStart` hook
+can therefore run first. The command hook handles that race by starting or
+reusing the same gateway under the same startup lock and retrying the original
+canonical payload once. The MCP server advertises no tools and does not add
+tool definitions to Claude's context.
 
 No separate provider-routing command is required when installing through
 `nemo-relay install`.
@@ -181,10 +191,13 @@ Package or unpack the plugin so the plugin root contains:
 ```text
 nemo-relay-plugin/
   .claude-plugin/plugin.json
+  .mcp.json
   hooks/hooks.json
 ```
 
-The hook shim starts the sidecar lazily if no gateway is already reachable.
+Persistent mode uses system and user Relay configuration only and starts the
+gateway in the user configuration directory. Use `nemo-relay run --agent
+claude` when project-specific Relay configuration is required.
 
 Repo marketplace discovery is also supported:
 
@@ -196,8 +209,9 @@ claude plugin install nemo-relay-plugin@nemo-relay --scope user
 
 That path reads `.claude-plugin/marketplace.json` from the repository and
 installs this Claude Code plugin from `integrations/coding-agents/claude-code`.
-Source hooks invoke `nemo-relay plugin-shim hook claude` directly. Use
-`nemo-relay install claude-code` for the complete provider-routing setup.
+The source plugin starts `nemo-relay mcp` and its hooks invoke
+`nemo-relay plugin-shim hook claude` directly. Use `nemo-relay install
+claude-code` for complete provider routing and generation-fenced upgrades.
 
 Create a local Claude Code marketplace and copy the plugin under that
 marketplace root:
@@ -224,7 +238,7 @@ Create `$MARKETPLACE_ROOT/.claude-plugin/marketplace.json`:
   "plugins": [
     {
       "name": "nemo-relay-plugin",
-      "description": "Forward Claude Code lifecycle hooks to a local NeMo Relay sidecar.",
+      "description": "Run the shared native Relay gateway and capture Claude Code lifecycle events.",
       "source": "./plugins/nemo-relay-plugin",
       "category": "development"
     }
@@ -271,8 +285,9 @@ Start a normal Claude Code session:
 claude
 ```
 
-The installed hooks start the Relay sidecar lazily, and provider traffic is
-routed through `ANTHROPIC_BASE_URL=http://127.0.0.1:47632`.
+The installed MCP client normally starts the Relay sidecar. The hook shim is the
+startup-race fallback, and provider traffic is routed through
+`ANTHROPIC_BASE_URL=http://127.0.0.1:47632`.
 
 To upgrade manually, replace the plugin directory contents with the new package,
 keep the same `MARKETPLACE_ROOT`, update the marketplace, and rerun the
@@ -281,7 +296,7 @@ top-level installer:
 ```bash
 claude plugin marketplace update nemo-relay-local
 claude plugin update nemo-relay-plugin
-nemo-relay install claude-code
+nemo-relay install claude-code --force
 ```
 
 To uninstall, restore Claude Code provider settings, uninstall the plugin, remove

@@ -401,6 +401,28 @@ impl MockRunner {
         self
     }
 
+    fn with_claude_registration(mut self, plugin: bool, marketplace: bool) -> Self {
+        let plugins = if plugin {
+            json!([{ "id": "nemo-relay-plugin@nemo-relay-local" }])
+        } else {
+            json!([])
+        };
+        let marketplaces = if marketplace {
+            json!([{ "name": "nemo-relay-local" }])
+        } else {
+            json!([])
+        };
+        self.capture_outputs.insert(
+            "/bin/claude plugin list --json".into(),
+            CommandOutput::success(plugins.to_string()),
+        );
+        self.capture_outputs.insert(
+            "/bin/claude plugin marketplace list --json".into(),
+            CommandOutput::success(marketplaces.to_string()),
+        );
+        self
+    }
+
     fn with_codex_registration_sequence(mut self, states: &[(bool, bool)]) -> Self {
         let plugin_outputs = states
             .iter()
@@ -527,6 +549,10 @@ impl CommandRunner for MockRunner {
             .unwrap_or_else(|| {
                 if rendered.ends_with("codex --version") {
                     CommandOutput::success("codex-cli 0.143.0\n".into())
+                } else if rendered.ends_with("claude plugin list --json")
+                    || rendered.ends_with("claude plugin marketplace list --json")
+                {
+                    CommandOutput::success("[]\n".into())
                 } else {
                     CommandOutput::success(String::new())
                 }
@@ -1015,11 +1041,10 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
         Path::new("/bin/nemo-relay"),
         &generation_fence,
     )
-    .unwrap()
     .unwrap();
     let server = &mcp["nemo-relay"];
     assert_eq!(server["command"], json!("/bin/nemo-relay"));
-    assert_eq!(server["args"], json!(["mcp"]));
+    assert_eq!(server["args"], json!(["mcp", "--agent", "codex"]));
     assert_eq!(
         server["env"],
         json!({
@@ -1035,14 +1060,17 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
             .unwrap()
             .contains(&json!("OPENAI_API_KEY"))
     );
-    assert!(
-        plugin_mcp_config(
-            PluginHost::ClaudeCode,
-            Path::new("/bin/nemo-relay"),
-            &generation_fence,
-        )
-        .unwrap()
-        .is_none()
+    let claude_mcp = plugin_mcp_config(
+        PluginHost::ClaudeCode,
+        Path::new("/bin/nemo-relay"),
+        &generation_fence,
+    );
+    let claude_server = &claude_mcp.unwrap()["mcpServers"]["nemo-relay"];
+    assert_eq!(claude_server["command"], json!("/bin/nemo-relay"));
+    assert_eq!(claude_server["args"], json!(["mcp", "--agent", "claude"]));
+    assert_eq!(
+        claude_server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"],
+        json!(generation_fence)
     );
     assert_eq!(
         plugin_hooks(PluginHost::Codex, Path::new("/bin/nemo-relay"))["hooks"]["SessionStart"][0]["hooks"]
@@ -1078,7 +1106,6 @@ fn relay_identity_uses_running_executable_when_path_points_elsewhere() {
             &relay,
             Path::new("/plugins/nemo-relay-plugin/.nemo-relay-generation"),
         )
-        .unwrap()
         .unwrap()["nemo-relay"]["command"],
         json!(relay)
     );
@@ -1723,7 +1750,6 @@ fn install_codex_generates_marketplace_and_runs_setup() {
             &layout.generation_fence,
         )
         .unwrap()
-        .unwrap()
     );
     assert_eq!(
         setup_runner.calls(),
@@ -1958,6 +1984,157 @@ fn force_install_retires_previous_mcp_generation() {
         mcp["nemo-relay"]["env"]["NEMO_RELAY_MCP_GENERATION_FILE"],
         json!(layout.generation_fence)
     );
+}
+
+#[test]
+fn claude_force_install_retires_and_replaces_its_mcp_generation() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_claude_registration(true, true);
+    let setup_runner = MockSetupRunner::default();
+    let options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+
+    install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+
+    assert!(previous.verify_current().unwrap_err().contains("retired"));
+    InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+    let mcp = serde_json::from_str::<Value>(&std::fs::read_to_string(&layout.mcp_config).unwrap())
+        .unwrap();
+    assert_eq!(
+        mcp["mcpServers"]["nemo-relay"]["env"]["NEMO_RELAY_MCP_GENERATION_FILE"],
+        json!(layout.generation_fence)
+    );
+    assert!(
+        setup_runner
+            .calls()
+            .iter()
+            .any(|call| call == "refresh claude-code")
+    );
+}
+
+#[test]
+fn claude_force_install_rollback_restores_generation_files_and_setup_snapshot() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_claude_registration(true, true);
+    let setup_runner = MockSetupRunner {
+        failing_call: Some(format!("doctor claude-code {DEFAULT_GATEWAY_URL}")),
+        ..MockSetupRunner::default()
+    };
+    let options = PluginInstallOptions {
+        force: true,
+        skip_doctor: false,
+        ..options(dir.path())
+    };
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let sentinel = layout.plugin_root.join("previous-install");
+    std::fs::write(&sentinel, "restore-exactly").unwrap();
+    let original_state = std::fs::read(&layout.state_path).unwrap();
+    let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+
+    let error = install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap_err();
+
+    assert!(error.contains("doctor claude-code"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "restore-exactly"
+    );
+    assert_eq!(std::fs::read(&layout.state_path).unwrap(), original_state);
+    previous.verify_current().unwrap();
+    let setup_calls = setup_runner.calls();
+    assert!(
+        setup_calls
+            .iter()
+            .any(|call| call == "snapshot claude-code")
+    );
+    assert!(setup_calls.iter().any(|call| call == "restore snapshot"));
+    assert_eq!(
+        setup_calls
+            .iter()
+            .filter(|call| call.as_str() == "refresh claude-code")
+            .count(),
+        2,
+        "the previous and replacement gateway generations must both be retired: {setup_calls:?}"
+    );
+    assert_no_force_replacement_residue(dir.path());
+}
+
+#[test]
+fn claude_force_install_migrates_a_legacy_hook_only_plugin() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_claude_registration(true, true);
+    let setup_runner = MockSetupRunner::default();
+    let options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    std::fs::create_dir_all(layout.plugin_manifest.parent().unwrap()).unwrap();
+    write_json(
+        &layout.marketplace_manifest,
+        &marketplace_manifest(PluginHost::ClaudeCode),
+    )
+    .unwrap();
+    let mut legacy_manifest = plugin_manifest(PluginHost::ClaudeCode);
+    legacy_manifest
+        .as_object_mut()
+        .unwrap()
+        .remove("mcpServers");
+    write_json(&layout.plugin_manifest, &legacy_manifest).unwrap();
+    write_state(&layout, &options).unwrap();
+    mark_plugin_setup_installed(PluginHost::ClaudeCode, &layout, &options).unwrap();
+
+    install_host(PluginHost::ClaudeCode, &options, &runner, &setup_runner).unwrap();
+
+    InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+    assert!(layout.mcp_config.is_file());
+    let installed =
+        serde_json::from_str::<Value>(&std::fs::read_to_string(&layout.plugin_manifest).unwrap())
+            .unwrap();
+    assert_eq!(installed["mcpServers"], json!("./.mcp.json"));
+}
+
+#[test]
+fn ordinary_claude_reinstall_requires_force_for_a_fenced_plugin() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_claude_registration(true, true);
+    let setup_runner = MockSetupRunner::default();
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    let original_generation = std::fs::read(&layout.generation_fence).unwrap();
+
+    let error = install_host(
+        PluginHost::ClaudeCode,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("nemo-relay install claude-code --force"));
+    assert_eq!(
+        std::fs::read(&layout.generation_fence).unwrap(),
+        original_generation
+    );
+    assert!(runner.commands().is_empty());
+    assert!(setup_runner.calls().is_empty());
 }
 
 #[test]
@@ -2438,7 +2615,10 @@ fn install_claude_enables_provider_routing() {
             "/bin/claude plugin install nemo-relay-plugin@nemo-relay-local --scope user".into(),
         ]
     );
-    assert_eq!(runner.quiet_commands(), vec![relay_validation_command()]);
+    assert_eq!(
+        runner.quiet_commands(),
+        vec![relay_validation_command(), relay_mcp_validation_command()]
+    );
     assert_eq!(
         setup_runner.calls(),
         vec![format!("setup claude-code {DEFAULT_GATEWAY_URL}")]
@@ -3114,6 +3294,35 @@ fn readiness_report_rejects_missing_mcp_generation_fence() {
 }
 
 #[test]
+fn claude_readiness_requires_its_mcp_server_and_generation_fence() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("claude", "/bin/claude")
+        .with_claude_registration(true, true);
+    let setup_runner = MockSetupRunner::default();
+    let options = options(dir.path());
+    write_installed_state(PluginHost::ClaudeCode, dir.path());
+    let layout = PluginLayout::new(PluginHost::ClaudeCode, dir.path());
+    std::fs::remove_file(layout.mcp_config).unwrap();
+    std::fs::remove_file(layout.generation_fence).unwrap();
+
+    let report =
+        collect_host_plugin_readiness(PluginHost::ClaudeCode, &options, &runner, &setup_runner);
+
+    assert!(!report.ok());
+    for name in ["Generated MCP server", "MCP generation fence"] {
+        assert!(
+            report
+                .checks
+                .iter()
+                .any(|check| check.name == name && !check.ok),
+            "missing failed readiness check for {name}"
+        );
+    }
+}
+
+#[test]
 fn readiness_report_rejects_mcp_server_for_different_binary() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()
@@ -3130,7 +3339,6 @@ fn readiness_report_rejects_mcp_server_for_different_binary() {
             Path::new("/tmp/other-relay"),
             &layout.generation_fence,
         )
-        .unwrap()
         .unwrap(),
     )
     .unwrap();

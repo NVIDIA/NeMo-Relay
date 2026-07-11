@@ -112,6 +112,7 @@ pub(super) struct RealPluginSetupRunner;
 
 pub(super) enum PluginSetupSnapshot {
     Codex(plugin_shim::CodexSetupSnapshot),
+    Claude(plugin_shim::ClaudeSetupSnapshot),
     #[cfg(test)]
     Mock,
 }
@@ -122,7 +123,9 @@ impl PluginSetupRunner for RealPluginSetupRunner {
             PluginHost::Codex => plugin_shim::snapshot_codex_setup()
                 .map(PluginSetupSnapshot::Codex)
                 .map(Some),
-            PluginHost::ClaudeCode => Ok(None),
+            PluginHost::ClaudeCode => plugin_shim::snapshot_claude_setup()
+                .map(PluginSetupSnapshot::Claude)
+                .map(Some),
             PluginHost::All => unreachable!("all is expanded before plugin setup"),
         }
     }
@@ -130,6 +133,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
     fn restore_snapshot(&self, snapshot: &PluginSetupSnapshot) -> Result<(), String> {
         match snapshot {
             PluginSetupSnapshot::Codex(snapshot) => plugin_shim::restore_codex_setup(snapshot),
+            PluginSetupSnapshot::Claude(snapshot) => plugin_shim::restore_claude_setup(snapshot),
             #[cfg(test)]
             PluginSetupSnapshot::Mock => Ok(()),
         }
@@ -137,8 +141,8 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn refresh_gateway(&self, host: PluginHost) -> Result<(), String> {
         match host {
-            PluginHost::Codex => plugin_shim::stop_codex_gateway(),
-            PluginHost::ClaudeCode => Ok(()),
+            PluginHost::Codex => plugin_shim::stop_plugin_gateway(CodingAgent::Codex),
+            PluginHost::ClaudeCode => plugin_shim::stop_plugin_gateway(CodingAgent::ClaudeCode),
             PluginHost::All => unreachable!("all is expanded before plugin setup"),
         }
     }

@@ -331,7 +331,7 @@ pub(super) fn validate_relay_mcp(
         Ok(())
     } else {
         Err(format!(
-            "{} failed with exit code {status}; the Codex plugin requires native `nemo-relay mcp` support",
+            "{} failed with exit code {status}; coding-agent plugins require native `nemo-relay mcp` support",
             format_command(&relay.display().to_string(), &args)
         ))
     }

@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Acquisition and liveness lease for the shared Codex gateway.
+//! Acquisition and liveness lease for a shared coding-agent gateway.
 
 #[cfg(test)]
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-#[cfg(test)]
 use crate::config::CodingAgent;
 use crate::config::ServerArgs;
 use crate::error::CliError;
@@ -25,7 +24,10 @@ pub(super) struct GatewayPlan {
 }
 
 impl GatewayPlan {
-    pub(super) async fn resolve(server_args: &ServerArgs) -> Result<Self, CliError> {
+    pub(super) async fn resolve(
+        agent: CodingAgent,
+        server_args: &ServerArgs,
+    ) -> Result<Self, CliError> {
         let generation = tokio::task::spawn_blocking(InstallGeneration::capture_from_env)
             .await
             .map_err(|error| {
@@ -33,7 +35,7 @@ impl GatewayPlan {
             })?
             .map_err(CliError::Launch)?;
         let bind = server_args.bind.unwrap_or_else(super::default_mcp_bind);
-        let launch = crate::sidecar::resolve_codex_gateway(server_args, bind)?;
+        let launch = crate::sidecar::resolve_plugin_gateway(agent, server_args, bind)?;
         let heartbeat_interval =
             crate::sidecar::plugin_heartbeat_interval().map_err(CliError::Launch)?;
         Ok(Self {

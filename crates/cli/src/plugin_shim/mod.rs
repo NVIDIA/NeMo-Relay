@@ -9,6 +9,7 @@ mod codex_app_server;
 mod command;
 mod shared;
 
+pub(crate) use claude::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::portable_executable_path;
 #[cfg(test)]
@@ -71,15 +72,16 @@ fn serve(args: Vec<String>) -> Result<ExitCode, String> {
 
 fn hook(agent: CodingAgent, explicit_gateway_url: Option<&str>) -> Result<ExitCode, String> {
     let url = gateway_url(agent, explicit_gateway_url);
-    let codex_launch = if matches!(agent, CodingAgent::Codex) {
-        Some(crate::sidecar::loopback_bind(&url).and_then(|bind| {
-            crate::sidecar::resolve_codex_gateway(&ServerArgs::default(), bind)
-                .map_err(|error| error.to_string())
-        }))
-    } else {
-        None
+    let plugin_launch = match agent {
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            Some(crate::sidecar::loopback_bind(&url).and_then(|bind| {
+                crate::sidecar::resolve_plugin_gateway(agent, &ServerArgs::default(), bind)
+                    .map_err(|error| error.to_string())
+            }))
+        }
+        CodingAgent::Hermes => None,
     };
-    let max_hook_payload_bytes = codex_launch
+    let max_hook_payload_bytes = plugin_launch
         .as_ref()
         .and_then(|launch| launch.as_ref().ok())
         .map_or(DEFAULT_HOOK_STDIN_BYTES, |launch| {
@@ -96,7 +98,7 @@ fn hook(agent: CodingAgent, explicit_gateway_url: Option<&str>) -> Result<ExitCo
         },
         &mut input,
         &mut output,
-        |agent, url| match codex_launch.as_ref() {
+        |agent, url| match plugin_launch.as_ref() {
             Some(Ok(launch)) => launch.gateway.ensure().map(|_| ()),
             Some(Err(error)) => Err(error.clone()),
             None => crate::sidecar::loopback_bind(url)
@@ -243,8 +245,8 @@ pub(crate) fn install_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Res
     install_codex(gateway_url, &plugin_root.join("hooks").join("hooks.json")).map(|_| ())
 }
 
-pub(crate) fn stop_codex_gateway() -> Result<(), String> {
-    crate::sidecar::stop_owned_sidecar(CodingAgent::Codex)
+pub(crate) fn stop_plugin_gateway(agent: CodingAgent) -> Result<(), String> {
+    crate::sidecar::stop_owned_sidecar(agent)
 }
 
 pub(crate) fn codex_plugin_hook_command(relay: &std::path::Path) -> String {
@@ -365,7 +367,7 @@ fn doctor_ok(
     } else {
         print_info(
             "sidecar health",
-            "not running; hooks start it lazily on first use",
+            "not running; the plugin MCP or first hook starts it lazily",
         );
     }
     match agent {

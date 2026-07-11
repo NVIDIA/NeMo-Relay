@@ -93,7 +93,7 @@ fn initialize_reports_native_server_and_supported_protocol() {
         response["result"]["protocolVersion"],
         json!(MCP_PROTOCOL_VERSION)
     );
-    assert_eq!(response["result"]["capabilities"], json!({ "tools": {} }));
+    assert_eq!(response["result"]["capabilities"], json!({}));
     assert_eq!(
         response["result"]["serverInfo"]["name"],
         json!("nemo-relay")

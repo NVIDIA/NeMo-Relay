@@ -15,7 +15,7 @@ documentation set.
   required plugin MCP servers. That cold-start request can fail and be retried;
   the captured turn and `/responses` traffic wait for verified Relay gateway
   readiness.
-- On Windows, a restrictive host Job Object can prevent the Codex plugin's
+- On Windows, a restrictive host Job Object can prevent a coding-agent plugin's
   Relay sidecar from breaking away. When nested job assignment is supported,
   the sidecar remains scoped to the host job and the shared gateway might not
   remain available for the full 300-second idle reuse window. If Relay cannot

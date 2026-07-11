@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local OpenAI Responses API fixture for the opt-in Codex plugin E2E test."""
+"""Local OpenAI and Anthropic fixture for coding-agent plugin E2E tests."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 def response_events(request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -125,6 +126,55 @@ def response_events(request: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def anthropic_events(request: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    message_id = f"msg_{uuid.uuid4().hex}"
+    model = request.get("model", "claude-sonnet-4-5")
+    return [
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "pong"},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 1},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+
+
 class Provider(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], log_path: Path, barrier_dir: Path) -> None:
         super().__init__(address, Handler)
@@ -161,6 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         del format, args
 
     def do_GET(self) -> None:  # noqa: N802
+        path = urlparse(self.path).path
         self.server.log_request_record(
             {
                 "method": "GET",
@@ -168,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
                 "authorization": self.headers.get("authorization"),
             }
         )
-        if not self.path.endswith("/models"):
+        if not path.endswith("/models"):
             self.send_error(404)
             return
         body = json.dumps(
@@ -187,28 +238,62 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length", "0"))
         raw = self.rfile.read(length)
         request = json.loads(raw or b"{}")
-        events = response_events(request) if self.path.endswith("/responses") else None
+        path = urlparse(self.path).path
+        response_stream = response_events(request) if path.endswith("/responses") else None
+        anthropic_stream = anthropic_events(request) if path.endswith("/messages") else None
         self.server.log_request_record(
             {
                 "method": "POST",
                 "path": self.path,
                 "authorization": self.headers.get("authorization"),
+                "x_api_key": self.headers.get("x-api-key"),
                 "model": request.get("model"),
-                "response_id": events[-1]["response"]["id"] if events else None,
+                "response_id": (response_stream[-1]["response"]["id"] if response_stream else None),
             }
         )
-        if events is None:
+        if path.endswith("/messages/count_tokens"):
+            body = json.dumps({"input_tokens": 1}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if response_stream is None and anthropic_stream is None:
             self.send_error(404)
             return
         self.server.wait_at_barrier_if_enabled()
+        if anthropic_stream is not None and not request.get("stream", False):
+            body = json.dumps(
+                {
+                    "id": f"msg_{uuid.uuid4().hex}",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "pong"}],
+                    "model": request.get("model", "claude-sonnet-4-5"),
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
         self.end_headers()
-        for event in events:
-            self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
-        self.wfile.write(b"data: [DONE]\n\n")
+        if response_stream is not None:
+            for event in response_stream:
+                self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+        else:
+            for event_name, event in anthropic_stream or []:
+                self.wfile.write(f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode())
         self.wfile.flush()
 
 

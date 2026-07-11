@@ -89,7 +89,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Hermes(command) => {
             launcher::easy_path(CodingAgent::Hermes, command, Some(server)).await
         }
-        Command::Mcp => mcp::run(server).await,
+        Command::Mcp(command) => mcp::run(command.agent.into(), server).await,
         Command::Config(command) => run_config(command).await,
         Command::Plugins(command) => run_plugins(command, server),
         Command::ModelPricing(command) => run_pricing(command),

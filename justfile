@@ -1060,6 +1060,10 @@ clean:
 test-codex-plugin-e2e:
     ./scripts/test-codex-plugin-e2e.sh
 
+# Opt-in: requires Claude Code 2.1.116+ and is intentionally outside test-rust/CI.
+test-claude-plugin-e2e:
+    ./scripts/test-claude-plugin-e2e.sh
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash

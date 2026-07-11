@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Private install-generation fencing for lifecycle-bound Codex MCP supervisors.
+//! Private install-generation fencing for lifecycle-bound plugin MCP clients.
 
 use std::env;
 use std::fs::{self, File, OpenOptions};
@@ -293,7 +293,7 @@ fn read_generation_marker(file: &File, path: &Path) -> Result<GenerationMarker, 
 
 fn retired_generation_error(path: &Path) -> String {
     format!(
-        "Codex plugin MCP install generation at {} has been retired",
+        "plugin MCP install generation at {} has been retired",
         path.display()
     )
 }

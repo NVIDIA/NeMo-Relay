@@ -250,16 +250,25 @@ fn cli_mcp_does_not_launch_gateway_when_stdio_closes_before_request() {
 }
 
 fn start_mcp_client(temp: &std::path::Path, bind: SocketAddr) -> (Child, ChildStdin) {
-    start_mcp_client_with_idle_timeout(temp, bind, "1")
+    start_mcp_client_for_agent(temp, bind, "codex")
+}
+
+fn start_mcp_client_for_agent(
+    temp: &std::path::Path,
+    bind: SocketAddr,
+    agent: &str,
+) -> (Child, ChildStdin) {
+    start_mcp_client_with_idle_timeout(temp, bind, agent, "1")
 }
 
 fn start_mcp_client_with_idle_timeout(
     temp: &std::path::Path,
     bind: SocketAddr,
+    agent: &str,
     idle_timeout_secs: &str,
 ) -> (Child, ChildStdin) {
     let mut child = Command::new(gateway_bin())
-        .args(["--bind", &bind.to_string(), "mcp"])
+        .args(["--bind", &bind.to_string(), "mcp", "--agent", agent])
         .env("HOME", temp)
         .env("XDG_CONFIG_HOME", temp.join("xdg"))
         .env("XDG_RUNTIME_DIR", temp.join("runtime"))
@@ -299,50 +308,47 @@ fn start_mcp_client_with_idle_timeout(
 }
 
 #[test]
-fn cli_codex_hook_cold_recovery_uses_the_mcp_persistent_identity() {
-    let temp = tempfile::tempdir().unwrap();
-    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = probe.local_addr().unwrap();
-    drop(probe);
-    let gateway_url = format!("http://{address}");
-    let mut hook = Command::new(gateway_bin())
-        .args([
-            "plugin-shim",
-            "hook",
-            "codex",
-            "--gateway-url",
-            &gateway_url,
-        ])
-        .env("HOME", temp.path())
-        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
-        .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
-        .env("TMPDIR", temp.path())
-        .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "10")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    hook.stdin
-        .take()
-        .unwrap()
-        .write_all(b"{\"session_id\":\"cold-hook\",\"hook_event_name\":\"SessionStart\"}")
-        .unwrap();
-    let hook_output = wait_child_with_output(hook);
-    assert!(
-        hook_output.status.success(),
-        "cold hook recovery failed: {}",
-        String::from_utf8_lossy(&hook_output.stderr)
-    );
+fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
+    for agent in ["codex", "claude"] {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = probe.local_addr().unwrap();
+        drop(probe);
+        let gateway_url = format!("http://{address}");
+        let mut hook = Command::new(gateway_bin())
+            .args(["plugin-shim", "hook", agent, "--gateway-url", &gateway_url])
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+            .env("TMPDIR", temp.path())
+            .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "10")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        hook.stdin
+            .take()
+            .unwrap()
+            .write_all(b"{\"session_id\":\"cold-hook\",\"hook_event_name\":\"SessionStart\"}")
+            .unwrap();
+        let hook_output = wait_child_with_output(hook);
+        assert!(
+            hook_output.status.success(),
+            "{agent} cold hook recovery failed: {}",
+            String::from_utf8_lossy(&hook_output.stderr)
+        );
 
-    let (mut mcp, mcp_stdin) = start_mcp_client_with_idle_timeout(temp.path(), address, "10");
-    drop(mcp_stdin);
-    assert!(wait_child(&mut mcp).success());
+        let (mut mcp, mcp_stdin) =
+            start_mcp_client_with_idle_timeout(temp.path(), address, agent, "10");
+        drop(mcp_stdin);
+        assert!(wait_child(&mut mcp).success());
 
-    let owner = wait_for_owned_sidecar(temp.path(), None);
-    assert_eq!(owner["url"], gateway_url);
-    stop_owned_sidecar(&owner);
-    wait_for_port_closed(address);
+        let owner = wait_for_owned_sidecar(temp.path(), agent, None);
+        assert_eq!(owner["url"], gateway_url);
+        stop_owned_sidecar(&owner);
+        wait_for_port_closed(address);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -578,10 +584,10 @@ fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
     }
 }
 
-fn sidecar_address(temp: &std::path::Path) -> SocketAddr {
+fn sidecar_address(temp: &std::path::Path, agent: &str) -> SocketAddr {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let log_path = find_runtime_file(temp, "codex-sidecar.log");
+        let log_path = find_runtime_file(temp, &format!("{agent}-sidecar.log"));
         if let Some(log_path) = log_path.as_ref()
             && let Ok(log) = std::fs::read_to_string(log_path)
             && let Some(address) = log.lines().find_map(|line| {
@@ -700,10 +706,14 @@ fn wait_for_port_closed(address: SocketAddr) {
     }
 }
 
-fn wait_for_owned_sidecar(temp: &std::path::Path, previous_pid: Option<u64>) -> serde_json::Value {
+fn wait_for_owned_sidecar(
+    temp: &std::path::Path,
+    agent: &str,
+    previous_pid: Option<u64>,
+) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        for path in find_runtime_files_matching(temp, "codex-sidecar", ".owner.json") {
+        for path in find_runtime_files_matching(temp, &format!("{agent}-sidecar"), ".owner.json") {
             if let Ok(raw) = std::fs::read(path)
                 && let Ok(owner) = serde_json::from_slice::<serde_json::Value>(&raw)
                 && owner["pid"]
@@ -715,7 +725,7 @@ fn wait_for_owned_sidecar(temp: &std::path::Path, previous_pid: Option<u64>) -> 
         }
         assert!(
             Instant::now() < deadline,
-            "owned Codex sidecar was not published under {}",
+            "owned {agent} sidecar was not published under {}",
             temp.display()
         );
         thread::sleep(Duration::from_millis(20));
@@ -769,32 +779,40 @@ fn relay_health(address: SocketAddr) -> serde_json::Value {
 
 #[test]
 fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
-    let temp = tempfile::tempdir().unwrap();
-    let (mut first, first_stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
-    let address = sidecar_address(temp.path());
-    let (mut second, second_stdin) = start_mcp_client(temp.path(), address);
+    for (first_agent, second_agent) in [("codex", "claude"), ("claude", "codex")] {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut first, first_stdin) =
+            start_mcp_client_for_agent(temp.path(), "127.0.0.1:0".parse().unwrap(), first_agent);
+        let address = sidecar_address(temp.path(), first_agent);
+        let (mut second, second_stdin) =
+            start_mcp_client_for_agent(temp.path(), address, second_agent);
 
-    drop(first_stdin);
-    assert!(wait_child(&mut first).success());
-    let health = relay_health(address);
-    assert_eq!(health["service"], "nemo-relay");
-    assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(health["bootstrap_protocol"], 1);
+        drop(first_stdin);
+        assert!(wait_child(&mut first).success());
+        let health = relay_health(address);
+        assert_eq!(health["service"], "nemo-relay");
+        assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(health["bootstrap_protocol"], 1);
+        assert!(
+            find_runtime_file(temp.path(), &format!("{second_agent}-sidecar.log")).is_none(),
+            "the second MCP client should adopt the first host's gateway"
+        );
 
-    drop(second_stdin);
-    assert!(wait_child(&mut second).success());
-    wait_for_port_closed(address);
+        drop(second_stdin);
+        assert!(wait_child(&mut second).success());
+        wait_for_port_closed(address);
+    }
 }
 
 #[test]
 fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
     let temp = tempfile::tempdir().unwrap();
     let (mut client, _stdin) = start_mcp_client(temp.path(), "127.0.0.1:0".parse().unwrap());
-    let first = wait_for_owned_sidecar(temp.path(), None);
+    let first = wait_for_owned_sidecar(temp.path(), "codex", None);
     let first_pid = first["pid"].as_u64().unwrap();
 
     stop_owned_sidecar(&first);
-    let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
+    let second = wait_for_owned_sidecar(temp.path(), "codex", Some(first_pid));
     assert_ne!(second["pid"], first["pid"]);
 
     stop_owned_sidecar(&second);

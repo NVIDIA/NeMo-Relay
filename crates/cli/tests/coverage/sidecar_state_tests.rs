@@ -179,23 +179,25 @@ fn managed_owner_supports_claude_code_identity() {
     let state = dir.path().join("state");
     let environment = Environment::isolated();
     configure_managed_bootstrap(&environment, &state);
-    environment.set(BOOTSTRAP_AGENT_ENV, "claude-code");
-    let address = "127.0.0.1:47633".parse().unwrap();
+    for (identity, port) in [("claude", 47633), ("claude-code", 47634)] {
+        environment.set(BOOTSTRAP_AGENT_ENV, identity);
+        let address = format!("127.0.0.1:{port}").parse().unwrap();
 
-    publish_owner_from_env(address).unwrap();
+        publish_owner_from_env(address).unwrap();
 
-    let url = format!("http://{address}");
-    let owner = owner_path(&state, CodingAgent::ClaudeCode, &url);
-    let pid = pid_path(&state, CodingAgent::ClaudeCode, &url);
-    validate_owner(
-        &owner,
-        &pid,
-        std::process::id(),
-        &url,
-        "shutdown-token",
-        Some("fingerprint"),
-    )
-    .unwrap();
+        let url = format!("http://{address}");
+        let owner = owner_path(&state, CodingAgent::ClaudeCode, &url);
+        let pid = pid_path(&state, CodingAgent::ClaudeCode, &url);
+        validate_owner(
+            &owner,
+            &pid,
+            std::process::id(),
+            &url,
+            "shutdown-token",
+            Some("fingerprint"),
+        )
+        .unwrap();
+    }
 }
 
 #[test]

@@ -71,7 +71,7 @@ pub(super) fn response_for(message: &Value) -> Option<Value> {
                 "id": id,
                 "result": {
                     "protocolVersion": protocol_version,
-                    "capabilities": { "tools": {} },
+                    "capabilities": {},
                     "serverInfo": {
                         "name": "nemo-relay",
                         "version": env!("CARGO_PKG_VERSION")

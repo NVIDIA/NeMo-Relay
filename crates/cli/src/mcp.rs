@@ -11,13 +11,16 @@ mod transport;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 
-use crate::config::ServerArgs;
+use crate::config::{CodingAgent, ServerArgs};
 use crate::error::CliError;
 
-pub(crate) async fn run(server_args: &ServerArgs) -> Result<ExitCode, CliError> {
+pub(crate) async fn run(
+    agent: CodingAgent,
+    server_args: &ServerArgs,
+) -> Result<ExitCode, CliError> {
     // Configuration is resolved before reading stdin, but the gateway process is not acquired
     // until the session receives a valid MCP initialize request.
-    let gateway = gateway::GatewayPlan::resolve(server_args).await?;
+    let gateway = gateway::GatewayPlan::resolve(agent, server_args).await?;
     let frames = transport::spawn_stdin_reader()?;
     session::run(gateway, frames, tokio::io::stdout()).await?;
     Ok(ExitCode::SUCCESS)

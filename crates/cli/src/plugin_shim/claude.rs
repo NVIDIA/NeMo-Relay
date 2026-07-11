@@ -11,9 +11,35 @@ use serde_json::{Value, json};
 
 use super::command::PluginShimProviderAction;
 use super::shared::{
-    backup, backup_path, home_dir, read_json_object, remove_backup, restore_file_snapshot,
-    snapshot_optional_file, write_json,
+    FileSnapshot, backup, backup_path, home_dir, read_json_object, remove_backup,
+    restore_file_snapshot, snapshot_optional_file, write_json,
 };
+
+pub(crate) struct ClaudeSetupSnapshot {
+    files: Vec<FileSnapshot>,
+}
+
+pub(crate) fn snapshot_claude_setup() -> Result<ClaudeSetupSnapshot, String> {
+    let settings = claude_settings_path()?;
+    let files = [settings.clone(), backup_path(&settings)]
+        .iter()
+        .map(|path| snapshot_optional_file(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ClaudeSetupSnapshot { files })
+}
+
+pub(crate) fn restore_claude_setup(snapshot: &ClaudeSetupSnapshot) -> Result<(), String> {
+    let errors = snapshot
+        .files
+        .iter()
+        .filter_map(|file| restore_file_snapshot(file).err())
+        .collect::<Vec<_>>();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
 
 pub(super) fn claude_provider(
     action: PluginShimProviderAction,
