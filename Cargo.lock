@@ -1520,6 +1520,7 @@ dependencies = [
  "serde_json",
  "serde_json_canonicalizer",
  "sha2",
+ "strum",
  "tdigest",
  "thiserror 2.0.18",
  "tokio",
