@@ -201,6 +201,29 @@ fn managed_owner_supports_claude_code_identity() {
 }
 
 #[test]
+fn managed_owner_supports_hermes_identity() {
+    let dir = tempdir().unwrap();
+    let state = dir.path().join("state");
+    let environment = Environment::isolated();
+    configure_managed_bootstrap(&environment, &state);
+    environment.set(BOOTSTRAP_AGENT_ENV, "hermes");
+    let address = "127.0.0.1:47635".parse().unwrap();
+
+    publish_owner_from_env(address).unwrap();
+
+    let url = format!("http://{address}");
+    validate_owner(
+        &owner_path(&state, CodingAgent::Hermes, &url),
+        &pid_path(&state, CodingAgent::Hermes, &url),
+        std::process::id(),
+        &url,
+        "shutdown-token",
+        Some("fingerprint"),
+    )
+    .unwrap();
+}
+
+#[test]
 fn failed_owner_publish_removes_the_partial_pid_record() {
     let dir = tempdir().unwrap();
     let state = dir.path().join("state");

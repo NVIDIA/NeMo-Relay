@@ -615,7 +615,7 @@ fn prepares_hermes_hook_environment() {
         Some(&hooks_path)
     );
     let hooks = std::fs::read_to_string(&hooks_path).unwrap();
-    assert!(hooks.contains("hook-forward hermes"));
+    assert!(hooks.contains("plugin-shim hook hermes"));
     assert!(prepared.notes[0].contains("temporarily merged"));
 
     prepared.restore().unwrap();
@@ -700,7 +700,15 @@ fn hermes_patch_restore_restores_original_file() {
     std::env::set_current_dir(temp.path()).unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
     std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
-    let original = "hooks:\n  PreToolUse: []\n";
+    let original = r#"mcp_servers:
+  nemo-relay:
+    command: nemo-relay
+    args: [mcp, --agent, hermes]
+  filesystem:
+    command: fs-mcp
+hooks:
+  PreToolUse: []
+"#;
     std::fs::write(&hooks_path, original).unwrap();
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
@@ -723,10 +731,13 @@ fn hermes_patch_restore_restores_original_file() {
     )
     .unwrap();
 
-    assert!(
-        std::fs::read_to_string(&hooks_path)
-            .unwrap()
-            .contains("hook-forward hermes")
+    let patched = std::fs::read_to_string(&hooks_path).unwrap();
+    assert!(patched.contains("plugin-shim hook hermes"));
+    let patched_yaml: serde_json::Value = serde_yaml::from_str(&patched).unwrap();
+    assert!(patched_yaml["mcp_servers"].get("nemo-relay").is_none());
+    assert_eq!(
+        patched_yaml["mcp_servers"]["filesystem"]["command"],
+        json!("fs-mcp")
     );
     prepared.restore().unwrap();
     assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
@@ -1075,7 +1086,7 @@ async fn execute_live_run_restores_hermes_hooks_when_health_check_fails() {
     assert!(
         std::fs::read_to_string(&hooks_path)
             .unwrap()
-            .contains("hook-forward hermes")
+            .contains("plugin-shim hook hermes")
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

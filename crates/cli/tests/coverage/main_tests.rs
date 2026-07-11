@@ -102,7 +102,11 @@ fn cli_parses_native_mcp_subcommand_and_bind_override() {
         Some(Command::Mcp(command)) if command.agent == McpAgent::ClaudeCode
     ));
 
-    assert!(Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "hermes"]).is_err());
+    let cli = Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "hermes"]).unwrap();
+    assert!(matches!(
+        cli.command,
+        Some(Command::Mcp(command)) if command.agent == McpAgent::Hermes
+    ));
 }
 
 #[test]
@@ -231,19 +235,19 @@ fn safe_dispatch_plugin_json_errors_return_exit_codes() {
 
 #[tokio::test]
 async fn run_command_dispatches_safe_plugin_and_install_paths() {
-    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "install", "hermes"]).unwrap();
+    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "install", "claude"]).unwrap();
     let error = run_command(cli.command.unwrap(), &cli.server)
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("plugin install supports codex"));
+    assert!(error.contains("plugin install supports codex and hermes"));
 
-    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "hermes"]).unwrap();
+    let cli = Cli::try_parse_from(["nemo-relay", "plugin-shim", "uninstall", "claude"]).unwrap();
     let error = run_command(cli.command.unwrap(), &cli.server)
         .await
         .unwrap_err()
         .to_string();
-    assert!(error.contains("plugin uninstall supports codex"));
+    assert!(error.contains("plugin uninstall supports codex and hermes"));
 
     let dir = tempfile::tempdir().unwrap();
     let install_dir = dir.path().join("plugin-install");

@@ -49,7 +49,7 @@ const CODEX_HOOK_EVENTS: &[&str] = &[
 
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 
-const HERMES_HOOK_EVENTS: &[&str] = &[
+pub(crate) const HERMES_HOOK_EVENTS: &[&str] = &[
     "on_session_start",
     "on_session_end",
     "on_session_finalize",
@@ -364,6 +364,7 @@ fn merge_event_hook_groups(
 
 /// Parses Hermes YAML, merges generated hooks through the shared JSON hook merger, and serializes
 /// back to YAML. Empty input is treated as no existing configuration.
+#[cfg(test)]
 pub(crate) fn merge_hermes_config(existing: &str, generated: Value) -> Result<String, CliError> {
     let existing = if existing.trim().is_empty() {
         Value::Null

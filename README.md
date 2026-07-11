@@ -42,7 +42,7 @@ trajectory file, you have concrete data to inspect, debug, and build on.
 ### Local Agent Trajectory
 
 This walkthrough shows an end-to-end quick success setup. Install the
-`nemo-relay-cli`, turn on local exporters, run either Codex or Claude Code
+`nemo-relay-cli`, turn on local exporters, run Codex, Claude Code, or Hermes
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
@@ -101,7 +101,7 @@ then configure these sections:
 > Run `nemo-relay plugins edit` without `--project` only when you want
 > user-level exporter settings that apply across projects.
 
-#### 3. Run Codex or Claude Code Through Relay
+#### 3. Run a Coding Agent Through Relay
 
 Run the Relay wrapper for the host CLI installed on your machine. For example:
 
@@ -111,6 +111,10 @@ nemo-relay codex -- exec "Summarize this repository."
 
 ```bash
 nemo-relay claude -- "Summarize this repository."
+```
+
+```bash
+nemo-relay hermes -- -z "Summarize this repository."
 ```
 
 Refer to the full [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for more options.
@@ -293,7 +297,7 @@ coverage.
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
 | Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; `SessionEnd` availability remains Codex-version-dependent. |
-| Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
+| Hermes Agent | Yes | Yes | Partial | User config installs the shared native MCP gateway lifecycle plus exact trusted hooks; gateway-routed or hook-backed LLM observability is supported. |
 
 ### Public API Integrations
 

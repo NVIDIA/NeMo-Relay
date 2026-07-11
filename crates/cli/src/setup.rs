@@ -26,7 +26,7 @@ mod model;
 pub(crate) use self::model::reset;
 use self::model::{
     ConfigScope, SetupAnswers, agent_key_and_command, build_config, detect_installed_agents,
-    hermes_hook_targets, hermes_hooks_path_for_scope, home_dir, install_hermes_hooks,
+    hermes_config_path_for_agents, home_dir, install_hermes_integration,
     plugins_edit_command_for_scope, plugins_resume_command, preview_paths, read_existing_defaults,
     save_config,
 };
@@ -110,16 +110,11 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
     let home = home_dir().ok_or_else(|| {
         CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
     })?;
-    answers.hermes_hooks_path =
-        hermes_hooks_path_for_scope(&answers.agents, answers.scope, &cwd, &home);
+    answers.hermes_hooks_path = hermes_config_path_for_agents(&answers.agents, &home);
 
     let doc = build_config(&answers);
     let mut preview_paths = preview_paths(answers.scope, &cwd, &home);
-    preview_paths.extend(
-        hermes_hook_targets(answers.scope, &cwd, &home)
-            .into_iter()
-            .filter(|_| answers.agents.contains(&CodingAgent::Hermes)),
-    );
+    preview_paths.extend(answers.hermes_hooks_path.iter().cloned());
 
     if !confirm_summary(&preview_paths, &doc)? {
         return Err(CliError::Config("setup cancelled — no config saved".into()));
@@ -127,7 +122,7 @@ pub(crate) async fn run(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
 
     let mut written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
     if answers.agents.contains(&CodingAgent::Hermes) {
-        written.extend(install_hermes_hooks(answers.scope, &cwd, &home)?);
+        written.extend(install_hermes_integration(&home)?);
     }
     println!();
     println!("  ✓ Saved:");

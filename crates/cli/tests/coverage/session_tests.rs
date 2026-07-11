@@ -3952,7 +3952,7 @@ async fn claude_startup_probe_does_not_open_null_input_turn() {
         json!("claude_startup_probe")
     );
     manager
-        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .finish_gateway_call(&prep.session_id, prep.session_finish)
         .await;
 
     manager
@@ -4001,11 +4001,11 @@ async fn claude_startup_probe_only_session_is_pruned_after_finish() {
         .unwrap();
 
     assert!(prep.bypass_managed_pipeline);
-    assert!(prep.prune_empty_session_on_finish);
+    assert_eq!(prep.session_finish, GatewaySessionFinish::PruneIfEmpty);
     assert!(manager.inner.lock().await.contains_key("probe-only"));
 
     manager
-        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .finish_gateway_call(&prep.session_id, prep.session_finish)
         .await;
     assert!(!manager.inner.lock().await.contains_key("probe-only"));
 
@@ -4093,7 +4093,7 @@ async fn claude_direct_gateway_request_seeds_turn_input_before_prompt_hook() {
         .unwrap();
     assert!(!prep.bypass_managed_pipeline);
     manager
-        .finish_gateway_call(&prep.session_id, prep.prune_empty_session_on_finish)
+        .finish_gateway_call(&prep.session_id, prep.session_finish)
         .await;
 
     manager
@@ -4369,6 +4369,76 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
     let sessions = manager.inner.lock().await;
     assert!(sessions.contains_key("hook-session"));
     assert!(!sessions.contains_key("gateway-gateway"));
+}
+
+#[tokio::test]
+async fn unidentified_concurrent_gateway_calls_use_isolated_ephemeral_sessions() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            ["hermes-a", "hermes-b"]
+                .into_iter()
+                .map(|session_id| {
+                    NormalizedEvent::AgentStarted(SessionEvent {
+                        session_id: session_id.into(),
+                        agent_kind: AgentKind::Hermes,
+                        event_name: "on_session_start".into(),
+                        payload: json!({}),
+                        metadata: json!({}),
+                    })
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+
+    let first = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+    let second = manager
+        .prepare_gateway_call(
+            &HeaderMap::new(),
+            LlmGatewayStart {
+                session_id: None,
+                ..llm_start()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first.session_finish, GatewaySessionFinish::Close);
+    assert_eq!(second.session_finish, GatewaySessionFinish::Close);
+    assert_ne!(first.session_id, second.session_id);
+    assert!(first.session_id.starts_with("gateway-isolated-"));
+    assert!(second.session_id.starts_with("gateway-isolated-"));
+
+    manager
+        .finish_gateway_call(&first.session_id, first.session_finish)
+        .await;
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(!sessions.contains_key(&first.session_id));
+        assert!(sessions.contains_key(&second.session_id));
+        assert!(sessions.contains_key("hermes-a"));
+        assert!(sessions.contains_key("hermes-b"));
+    }
+
+    manager
+        .finish_gateway_call(&second.session_id, second.session_finish)
+        .await;
+    assert!(!manager.has_open_sessions().await);
+    let sessions = manager.inner.lock().await;
+    assert!(!sessions.contains_key(&second.session_id));
+    assert!(sessions.contains_key("hermes-a"));
+    assert!(sessions.contains_key("hermes-b"));
 }
 
 #[tokio::test]
@@ -5815,7 +5885,9 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
             .contains_key("active-gateway-call")
     );
 
-    manager.finish_gateway_call(&prep.session_id, false).await;
+    manager
+        .finish_gateway_call(&prep.session_id, GatewaySessionFinish::Retain)
+        .await;
     let closed = manager
         .close_idle_sessions_at(
             Instant::now() + AGENT_IDLE_TIMEOUT + Duration::from_secs(1),

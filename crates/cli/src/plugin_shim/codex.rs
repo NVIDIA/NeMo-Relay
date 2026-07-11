@@ -20,8 +20,8 @@ use crate::installer::merge_hooks;
 use super::codex_app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
 use super::shared::{
     FileSnapshot, atomic_write, backup, backup_path, current_exe, ensure_table, home_dir,
-    portable_executable_path, read_json_object, remove_backup, restore_file_snapshot,
-    snapshot_optional_file, write_json,
+    portable_executable_path, read_json_object, remove_backup, restore_file_snapshot, shell_quote,
+    shell_quote_arg_for_platform, shell_quote_for_platform, snapshot_optional_file, write_json,
 };
 
 pub(super) const CODEX_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
@@ -1112,56 +1112,6 @@ pub(super) fn codex_home_dir() -> Result<PathBuf, String> {
         return Ok(PathBuf::from(path));
     }
     Ok(home_dir()?.join(".codex"))
-}
-
-pub(super) fn shell_quote(path: &Path) -> String {
-    shell_quote_for_platform(path, cfg!(windows))
-}
-
-pub(super) fn shell_quote_for_platform(path: &Path, windows: bool) -> String {
-    shell_quote_arg_for_platform(&path.display().to_string(), windows)
-}
-
-pub(super) fn shell_quote_arg_for_platform(raw: &str, windows: bool) -> String {
-    if windows {
-        return cmd_quote_arg(raw);
-    }
-    posix_quote_arg(raw)
-}
-
-pub(super) fn posix_quote_arg(raw: &str) -> String {
-    if raw.is_empty() {
-        "''".into()
-    } else if raw
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | ':' | '.' | '_' | '-'))
-    {
-        raw.to_string()
-    } else {
-        format!("'{}'", raw.replace('\'', "'\\''"))
-    }
-}
-
-pub(super) fn cmd_quote_arg(raw: &str) -> String {
-    if raw.chars().all(|ch| {
-        ch.is_ascii_alphanumeric()
-            || matches!(ch, '/' | '\\' | ':' | '.' | '_' | '-' | '=' | '@' | '+')
-    }) {
-        raw.to_string()
-    } else {
-        let mut escaped = String::new();
-        for ch in raw.chars() {
-            match ch {
-                '%' => escaped.push_str("%%"),
-                '"' | '^' | '&' | '|' | '<' | '>' => {
-                    escaped.push('^');
-                    escaped.push(ch);
-                }
-                _ => escaped.push(ch),
-            }
-        }
-        format!("\"{escaped}\"")
-    }
 }
 
 pub(super) fn codex_hook_command(gateway_url: &str) -> String {

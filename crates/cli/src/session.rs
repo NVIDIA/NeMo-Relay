@@ -94,7 +94,18 @@ pub(crate) struct GatewayCallPrep {
     pub(crate) model_name: Option<String>,
     pub(crate) owner_subagent_id: Option<String>,
     pub(crate) bypass_managed_pipeline: bool,
-    pub(crate) prune_empty_session_on_finish: bool,
+    pub(crate) session_finish: GatewaySessionFinish,
+}
+
+/// Cleanup policy for the session selected by one gateway request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatewaySessionFinish {
+    /// Keep an explicit, correlated, or sole active session for later lifecycle events.
+    Retain,
+    /// Remove a startup-probe session when it never opened observable scopes.
+    PruneIfEmpty,
+    /// Close an isolated synthetic session as soon as its only gateway call completes.
+    Close,
 }
 
 struct Session {
@@ -389,11 +400,7 @@ impl SessionManager {
         let config = self.default_config.session_config_from_headers(headers);
         self.resolve_start_alias(&mut start, config.clone()).await?;
         let mut sessions = self.inner.lock().await;
-        let session_id = start
-            .session_id
-            .clone()
-            .or_else(|| single_active_session_id(&sessions))
-            .unwrap_or_else(|| format!("{}-gateway", AgentKind::Gateway.as_str()));
+        let (session_id, session_finish) = gateway_session_for_call(&start, &sessions);
         // Match `start_llm`: when this path creates a brand-new session (real agent's gateway
         // request beats its SessionStart hook), label the session by the provider so ATIF and
         // Phoenix scopes carry the agent identity instead of freezing on "gateway".
@@ -405,10 +412,15 @@ impl SessionManager {
         let result = session.prepare_gateway_call(start).await;
         match result {
             Ok(mut prep) => {
-                prep.prune_empty_session_on_finish = prep.bypass_managed_pipeline
+                prep.session_finish = if prep.bypass_managed_pipeline
                     && sessions
                         .get(&session_id)
-                        .is_some_and(|session| session.is_empty());
+                        .is_some_and(|session| session.is_empty())
+                {
+                    GatewaySessionFinish::PruneIfEmpty
+                } else {
+                    session_finish
+                };
                 Ok(prep)
             }
             Err(error) => {
@@ -429,25 +441,41 @@ impl SessionManager {
     /// Runtime-managed LLM spans are emitted outside the session lock, so the session keeps a small
     /// in-flight counter to prevent the idle sweeper from closing a turn while an upstream
     /// provider request or streaming response is still active.
-    pub(crate) async fn finish_gateway_call(&self, session_id: &str, prune_empty_session: bool) {
+    pub(crate) async fn finish_gateway_call(&self, session_id: &str, finish: GatewaySessionFinish) {
         let mut sessions = self.inner.lock().await;
         if let Some(session) = sessions.get_mut(session_id) {
             session.finish_gateway_call();
         }
-        if prune_empty_session
-            && sessions
-                .get(session_id)
-                .is_some_and(|session| session.is_empty() && session.active_gateway_calls == 0)
+        let completed = sessions.get(session_id).is_some_and(|session| {
+            session.active_gateway_calls == 0
+                && match finish {
+                    GatewaySessionFinish::Retain => false,
+                    GatewaySessionFinish::PruneIfEmpty => session.is_empty(),
+                    GatewaySessionFinish::Close => true,
+                }
+        });
+        let mut closing = completed.then(|| sessions.remove(session_id)).flatten();
+        drop(sessions);
+
+        if finish == GatewaySessionFinish::Close
+            && let Some(session) = closing.as_mut()
+            && let Err(error) = session
+                .close_for_shutdown("uncorrelated_gateway_call_complete")
+                .await
         {
-            sessions.remove(session_id);
+            eprintln!(
+                "nemo-relay CLI gateway: failed to close isolated session {session_id}: {error}"
+            );
         }
     }
 
     /// Returns true while any session still owns active observable work.
     ///
-    /// Codex plugin sessions can emit `SessionStart` without a matching `SessionEnd`, so metadata-only
-    /// sessions must not keep the hook-supervised sidecar alive forever. Open scopes and in-flight
-    /// tool, LLM, or gateway work still block plugin idle shutdown.
+    /// Host sessions can remain durable after their current turn ends: Codex may omit `SessionEnd`,
+    /// while Hermes keeps a session open for later resumption. A dormant agent scope must therefore
+    /// not keep the hook-supervised sidecar alive forever. Active turns, subagents, tools, LLMs, and
+    /// gateway calls still block idle shutdown; [`Self::close_all`] balances the dormant agent scope
+    /// when the gateway exits.
     pub(crate) async fn has_open_sessions(&self) -> bool {
         self.inner
             .lock()
@@ -898,8 +926,7 @@ impl Session {
     }
 
     fn blocks_plugin_idle_shutdown(&self) -> bool {
-        self.agent_scope.is_some()
-            || self.turn_scope.is_some()
+        self.turn_scope.is_some()
             || !self.subagents.is_empty()
             || !self.subagent_stacks.is_empty()
             || !self.subagent_stack.is_empty()
@@ -1074,7 +1101,7 @@ impl Session {
                     model_name: start.model_name,
                     owner_subagent_id: owner.subagent_id,
                     bypass_managed_pipeline: policy.bypasses_managed_pipeline(),
-                    prune_empty_session_on_finish: false,
+                    session_finish: GatewaySessionFinish::Retain,
                 })
             })
             .await;
@@ -2547,6 +2574,32 @@ fn single_active_session_id(sessions: &HashMap<String, Session>) -> Option<Strin
     (sessions.len() == 1)
         .then(|| sessions.keys().next().cloned())
         .flatten()
+}
+
+// Selects a gateway session without guessing between concurrent agents. An explicit session id or
+// the sole active session is safe to retain. With no sessions, the stable synthetic root preserves
+// pure-proxy continuity. When multiple sessions are active and the request carries no join key,
+// isolate that request in a unique short-lived root instead of cross-correlating unrelated agents.
+fn gateway_session_for_call(
+    start: &LlmGatewayStart,
+    sessions: &HashMap<String, Session>,
+) -> (String, GatewaySessionFinish) {
+    if let Some(session_id) = start.session_id.clone() {
+        return (session_id, GatewaySessionFinish::Retain);
+    }
+    if let Some(session_id) = single_active_session_id(sessions) {
+        return (session_id, GatewaySessionFinish::Retain);
+    }
+    if sessions.is_empty() {
+        return (
+            format!("{}-gateway", AgentKind::Gateway.as_str()),
+            GatewaySessionFinish::Retain,
+        );
+    }
+    (
+        format!("gateway-isolated-{}", uuid::Uuid::now_v7()),
+        GatewaySessionFinish::Close,
+    )
 }
 
 #[cfg(test)]

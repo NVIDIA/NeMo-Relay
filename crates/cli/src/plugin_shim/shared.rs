@@ -21,6 +21,56 @@ pub(super) use crate::sidecar::{current_exe, healthz, plugin_idle_timeout, relay
 
 pub(super) const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
+pub(crate) fn shell_quote(path: &Path) -> String {
+    shell_quote_for_platform(path, cfg!(windows))
+}
+
+pub(crate) fn shell_quote_for_platform(path: &Path, windows: bool) -> String {
+    shell_quote_arg_for_platform(&path.display().to_string(), windows)
+}
+
+pub(crate) fn shell_quote_arg_for_platform(raw: &str, windows: bool) -> String {
+    if windows {
+        return cmd_quote_arg(raw);
+    }
+    posix_quote_arg(raw)
+}
+
+fn posix_quote_arg(raw: &str) -> String {
+    if raw.is_empty() {
+        "''".into()
+    } else if raw
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | ':' | '.' | '_' | '-'))
+    {
+        raw.to_string()
+    } else {
+        format!("'{}'", raw.replace('\'', "'\\''"))
+    }
+}
+
+fn cmd_quote_arg(raw: &str) -> String {
+    if raw.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || matches!(ch, '/' | '\\' | ':' | '.' | '_' | '-' | '=' | '@' | '+')
+    }) {
+        raw.to_string()
+    } else {
+        let mut escaped = String::new();
+        for ch in raw.chars() {
+            match ch {
+                '%' => escaped.push_str("%%"),
+                '"' | '^' | '&' | '|' | '<' | '>' => {
+                    escaped.push('^');
+                    escaped.push(ch);
+                }
+                _ => escaped.push(ch),
+            }
+        }
+        format!("\"{escaped}\"")
+    }
+}
+
 pub(super) fn ensure_table<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut Table {
     if !doc.as_table().contains_key(name) || !doc[name].is_table() {
         doc[name] = Item::Table(Table::new());
@@ -178,12 +228,7 @@ pub(super) fn post_hook(
     let hook_path = match agent {
         CodingAgent::ClaudeCode => "/hooks/claude-code",
         CodingAgent::Codex => "/hooks/codex",
-        _ => {
-            return Err(HookForwardError::not_retryable(format!(
-                "plugin shim hook forwarding supports claude and codex, got {}",
-                agent.as_arg()
-            )));
-        }
+        CodingAgent::Hermes => "/hooks/hermes",
     };
     let (host, port) = parse_loopback_url(url).map_err(HookForwardError::not_retryable)?;
     let addrs = (host.as_str(), port)
@@ -273,7 +318,7 @@ pub(super) fn gateway_url(agent: CodingAgent, explicit: Option<&str>) -> String 
     if let Some(url) = explicit {
         return url.to_string();
     }
-    if matches!(agent, CodingAgent::ClaudeCode)
+    if matches!(agent, CodingAgent::ClaudeCode | CodingAgent::Hermes)
         && let Ok(url) = env::var("NEMO_RELAY_GATEWAY_URL")
     {
         return url;

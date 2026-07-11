@@ -172,7 +172,8 @@ nemo-relay install claude-code
 installs `nemo-relay-plugin` at user scope, and enables Claude Code provider
 routing through NeMo Relay. Its plugin MCP process starts or reuses the shared
 native gateway on `127.0.0.1:47632` and heartbeats it while MCP stdio remains
-open. Codex and Claude Code MCP clients can share that gateway.
+open. Codex, Claude Code, and configured Hermes MCP clients can share that
+gateway.
 
 Claude Code starts plugin MCP servers asynchronously. The `SessionStart` hook
 can therefore run first. The command hook handles that race by starting or

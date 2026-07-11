@@ -21,7 +21,7 @@ use crate::config::{
     ServerArgs, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
-use crate::installer::{generated_hooks, hook_forward_command, merge_hermes_config};
+use crate::installer::{generated_hooks, hook_forward_command};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 
@@ -893,13 +893,11 @@ fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(CliError::Io(error)),
     };
-    let contents = merge_hermes_config(
-        &existing,
-        generated_hooks(
-            CodingAgent::Hermes,
-            &hook_forward_command(&transparent_hook_executable(), CodingAgent::Hermes),
-        ),
-    )?;
+    let relay = std::env::current_exe()
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .map(crate::plugin_shim::portable_executable_path)
+        .unwrap_or_else(|_| PathBuf::from("nemo-relay"));
+    let contents = crate::hermes::transparent_config(&existing, &relay)?;
     std::fs::write(path, contents)?;
     Ok(())
 }

@@ -2979,6 +2979,32 @@ fn hook_forward_posts_to_local_sidecar_and_healthz_verifies_relay_identity() {
 }
 
 #[test]
+fn hermes_hook_forward_posts_the_canonical_payload_to_the_hermes_endpoint() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let request = read_http_request(&mut stream);
+        let raw = String::from_utf8_lossy(&request);
+        assert!(raw.starts_with("POST /hooks/hermes HTTP/1.1"));
+        assert!(raw.ends_with(r#"{"hook_event_name":"on_session_start"}"#));
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+            .unwrap();
+    });
+
+    let body = post_hook(
+        CodingAgent::Hermes,
+        &format!("http://127.0.0.1:{port}"),
+        br#"{"hook_event_name":"on_session_start"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(body, b"{}");
+    server.join().unwrap();
+}
+
+#[test]
 fn hook_forward_rejects_an_oversized_http_response() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -3767,6 +3793,10 @@ fn shared_url_env_and_response_helpers_cover_error_branches() {
         "http://127.0.0.1:47641"
     );
     assert_eq!(
+        gateway_url(CodingAgent::Hermes, None),
+        "http://127.0.0.1:47641"
+    );
+    assert_eq!(
         gateway_url(CodingAgent::Codex, Some("http://127.0.0.1:9")),
         "http://127.0.0.1:9"
     );
@@ -3863,6 +3893,7 @@ fn shared_defaults_cover_runtime_username_and_empty_segments() {
     let _fail_closed = EnvVarGuard::remove("NEMO_RELAY_FAIL_CLOSED");
 
     assert_eq!(gateway_url(CodingAgent::Codex, None), DEFAULT_URL);
+    assert_eq!(gateway_url(CodingAgent::Hermes, None), DEFAULT_URL);
     assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(300));
     assert_eq!(
         plugin_heartbeat_interval().unwrap(),
@@ -4142,12 +4173,6 @@ fn plugin_shim_entrypoints_reject_unsupported_agents_and_report_json() {
         })
         .unwrap_err()
         .contains("supports claude")
-    );
-    assert!(
-        post_hook(CodingAgent::Hermes, DEFAULT_URL, b"{}")
-            .unwrap_err()
-            .to_string()
-            .contains("supports claude and codex")
     );
 }
 

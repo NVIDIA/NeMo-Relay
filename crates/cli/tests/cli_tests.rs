@@ -249,6 +249,125 @@ fn cli_mcp_does_not_launch_gateway_when_stdio_closes_before_request() {
     assert!(find_runtime_file(temp.path(), "codex-sidecar.log").is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let hermes_home = temp.path().join("hermes");
+    let xdg = temp.path().join("xdg");
+    let runtime = temp.path().join("runtime");
+    let bin = temp.path().join("bin");
+    for directory in [&home, &hermes_home, &xdg, &runtime, &bin] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let hermes = bin.join("hermes");
+    std::fs::write(&hermes, "#!/bin/sh\necho 'Hermes 1.0.0'\n").unwrap();
+    std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+
+    let install = Command::new(gateway_bin())
+        .args(["plugin-shim", "install", "hermes"])
+        .env("HOME", &home)
+        .env("HERMES_HOME", &hermes_home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("PATH", &path)
+        .env("OPENAI_API_KEY", "not-written-to-config")
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let config_path = hermes_home.join("config.yaml");
+    let config: serde_json::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    let server = &config["mcp_servers"]["nemo-relay"];
+    assert_eq!(server["command"], gateway_bin());
+    assert_eq!(
+        server["args"],
+        serde_json::json!(["mcp", "--agent", "hermes"])
+    );
+    assert_eq!(server["env"]["NEMO_RELAY_GATEWAY_BIND"], "127.0.0.1:47632");
+    assert_eq!(server["env"]["OPENAI_API_KEY"], "${OPENAI_API_KEY}");
+    assert!(
+        !std::fs::read_to_string(&config_path)
+            .unwrap()
+            .contains("not-written-to-config")
+    );
+    let command = config["hooks"]["on_session_start"][0]["command"]
+        .as_str()
+        .unwrap();
+    assert!(command.contains("plugin-shim hook hermes"));
+    let approvals: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(hermes_home.join("shell-hooks-allowlist.json")).unwrap(),
+    )
+    .unwrap();
+    let approvals = approvals["approvals"].as_array().unwrap();
+    assert_eq!(approvals.len(), 13);
+    assert!(approvals.iter().all(|entry| entry["command"] == command));
+
+    let relay_config_dir = xdg.join("nemo-relay");
+    std::fs::create_dir_all(&relay_config_dir).unwrap();
+    std::fs::write(
+        relay_config_dir.join("config.toml"),
+        format!(
+            "[agents.hermes]\ncommand = {:?}\nhooks_path = {:?}\n",
+            hermes.display().to_string(),
+            config_path.display().to_string()
+        ),
+    )
+    .unwrap();
+    let doctor = Command::new(gateway_bin())
+        .args(["doctor", "hermes", "--json"])
+        .env("HOME", &home)
+        .env("HERMES_HOME", &hermes_home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("PATH", &path)
+        .env("OPENAI_API_KEY", "runtime-only")
+        .output()
+        .unwrap();
+    assert!(
+        doctor.status.success(),
+        "{}",
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(report["agents"][0]["name"], "hermes");
+    assert_eq!(report["agents"][0]["status"], "pass");
+    assert!(
+        report["agents"][0]["annotation"]
+            .as_str()
+            .unwrap()
+            .contains("MCP lifecycle")
+    );
+
+    let uninstall = Command::new(gateway_bin())
+        .args(["plugin-shim", "uninstall", "hermes"])
+        .env("HOME", &home)
+        .env("HERMES_HOME", &hermes_home)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .output()
+        .unwrap();
+    assert!(
+        uninstall.status.success(),
+        "{}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+    assert!(!config_path.exists());
+    assert!(!hermes_home.join("shell-hooks-allowlist.json").exists());
+    assert!(!hermes_home.join(".nemo-relay-generation").exists());
+}
+
 fn start_mcp_client(temp: &std::path::Path, bind: SocketAddr) -> (Child, ChildStdin) {
     start_mcp_client_for_agent(temp, bind, "codex")
 }
@@ -309,7 +428,7 @@ fn start_mcp_client_with_idle_timeout(
 
 #[test]
 fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
-    for agent in ["codex", "claude"] {
+    for agent in ["codex", "claude", "hermes"] {
         let temp = tempfile::tempdir().unwrap();
         let probe = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = probe.local_addr().unwrap();
@@ -779,7 +898,14 @@ fn relay_health(address: SocketAddr) -> serde_json::Value {
 
 #[test]
 fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
-    for (first_agent, second_agent) in [("codex", "claude"), ("claude", "codex")] {
+    for (first_agent, second_agent) in [
+        ("codex", "claude"),
+        ("claude", "codex"),
+        ("codex", "hermes"),
+        ("hermes", "codex"),
+        ("claude", "hermes"),
+        ("hermes", "claude"),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let (mut first, first_stdin) =
             start_mcp_client_for_agent(temp.path(), "127.0.0.1:0".parse().unwrap(), first_agent);

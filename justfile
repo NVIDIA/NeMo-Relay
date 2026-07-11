@@ -1064,6 +1064,10 @@ test-codex-plugin-e2e:
 test-claude-plugin-e2e:
     ./scripts/test-claude-plugin-e2e.sh
 
+# Opt-in: requires Hermes Agent with shell hooks and stdio MCP support; outside test-rust/CI.
+test-hermes-mcp-e2e:
+    ./scripts/test-hermes-mcp-e2e.sh
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash

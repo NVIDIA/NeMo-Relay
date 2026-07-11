@@ -12,6 +12,7 @@ mod doctor;
 mod error;
 mod file_io;
 mod gateway;
+mod hermes;
 mod install_generation;
 mod installer;
 mod json_path;

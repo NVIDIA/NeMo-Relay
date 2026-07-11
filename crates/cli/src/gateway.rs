@@ -30,7 +30,7 @@ use crate::alignment::{self, GatewayRouteKind};
 use crate::config::header_string;
 use crate::error::CliError;
 use crate::server::AppState;
-use crate::session::{GatewayCallPrep, LlmGatewayStart, SessionManager};
+use crate::session::{GatewayCallPrep, GatewaySessionFinish, LlmGatewayStart, SessionManager};
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
@@ -198,7 +198,7 @@ async fn run_managed_gateway(
 ) -> Result<Response<Body>, CliError> {
     if prep.bypass_managed_pipeline {
         let session_id = prep.session_id.clone();
-        let prune_empty_session = prep.prune_empty_session_on_finish;
+        let session_finish = prep.session_finish;
         let model = prep.model_name.as_deref().unwrap_or("<unknown>");
         eprintln!(
             "nemo-relay CLI gateway: bypassing managed LLM observability for Claude Code startup probe session={session_id} provider={} model={model}",
@@ -206,7 +206,7 @@ async fn run_managed_gateway(
         );
         state
             .sessions
-            .finish_gateway_call(&session_id, prune_empty_session)
+            .finish_gateway_call(&session_id, session_finish)
             .await;
         return run_unmanaged_gateway(state, prepared).await;
     }
@@ -291,7 +291,7 @@ async fn run_managed_buffered(
         model_name,
         owner_subagent_id,
         bypass_managed_pipeline: _,
-        prune_empty_session_on_finish: _,
+        session_finish,
     } = prep;
     let provider_for_event = provider_name.clone();
     let params = LlmCallExecuteParams::builder()
@@ -313,7 +313,10 @@ async fn run_managed_buffered(
                 .sessions
                 .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
                 .await;
-            state.sessions.finish_gateway_call(&session_id, false).await;
+            state
+                .sessions
+                .finish_gateway_call(&session_id, session_finish)
+                .await;
             let (status, headers) = upstream_info
                 .lock()
                 .expect("upstream info lock poisoned")
@@ -327,7 +330,10 @@ async fn run_managed_buffered(
             build_response(status, headers, Body::from(bytes))
         }
         Err(error) => {
-            state.sessions.finish_gateway_call(&session_id, false).await;
+            state
+                .sessions
+                .finish_gateway_call(&session_id, session_finish)
+                .await;
             Err(translate_runtime_error(error, &upstream_error))
         }
     }
@@ -421,9 +427,10 @@ async fn run_managed_streaming(
     // collector and finalizer for managed streaming, so without a codec we cannot use the managed
     // pipeline. This keeps non-LLM streaming paths working while typed codecs remain optional.
     let Some(streaming_codec) = codecs.streaming else {
+        let session_finish = prep.session_finish;
         state
             .sessions
-            .finish_gateway_call(&prep.session_id, false)
+            .finish_gateway_call(&prep.session_id, session_finish)
             .await;
         return passthrough_streaming(state, prepared).await;
     };
@@ -450,7 +457,7 @@ async fn run_managed_streaming(
         model_name,
         owner_subagent_id,
         bypass_managed_pipeline: _,
-        prune_empty_session_on_finish: _,
+        session_finish,
     } = prep;
     let params = LlmStreamCallExecuteParams::builder()
         .name(provider_name)
@@ -473,7 +480,10 @@ async fn run_managed_streaming(
     let json_stream = match json_stream_result {
         Ok(json_stream) => json_stream,
         Err(error) => {
-            state.sessions.finish_gateway_call(&session_id, false).await;
+            state
+                .sessions
+                .finish_gateway_call(&session_id, session_finish)
+                .await;
             return Err(translate_runtime_error(error, &upstream_error));
         }
     };
@@ -489,6 +499,7 @@ async fn run_managed_streaming(
         session_id.clone(),
         owner_subagent_id,
         final_response,
+        session_finish,
     );
 
     // Streamed responses are finalized inside the runtime stream wrapper. The small finalizer tap
@@ -599,9 +610,16 @@ fn client_sse_body(
     session_id: String,
     owner_subagent_id: Option<String>,
     final_response: Arc<Mutex<Option<Value>>>,
+    session_finish: GatewaySessionFinish,
 ) -> Body {
     let mut json_stream = json_stream;
-    let mut guard = GatewayCallGuard::new(sessions, session_id, owner_subagent_id, final_response);
+    let mut guard = GatewayCallGuard::new(
+        sessions,
+        session_id,
+        owner_subagent_id,
+        final_response,
+        session_finish,
+    );
     let stream = stream! {
         while let Some(item) = json_stream.next().await {
             match item {
@@ -632,6 +650,7 @@ struct GatewayCallGuard {
     session_id: String,
     owner_subagent_id: Option<String>,
     final_response: Arc<Mutex<Option<Value>>>,
+    session_finish: GatewaySessionFinish,
 }
 
 impl GatewayCallGuard {
@@ -640,12 +659,14 @@ impl GatewayCallGuard {
         session_id: String,
         owner_subagent_id: Option<String>,
         final_response: Arc<Mutex<Option<Value>>>,
+        session_finish: GatewaySessionFinish,
     ) -> Self {
         Self {
             sessions: Some(sessions),
             session_id,
             owner_subagent_id,
             final_response,
+            session_finish,
         }
     }
 
@@ -665,7 +686,9 @@ impl GatewayCallGuard {
                     )
                     .await;
             }
-            sessions.finish_gateway_call(&self.session_id, false).await;
+            sessions
+                .finish_gateway_call(&self.session_id, self.session_finish)
+                .await;
         }
     }
 }
@@ -677,6 +700,7 @@ impl Drop for GatewayCallGuard {
         };
         let session_id = self.session_id.clone();
         let owner_subagent_id = self.owner_subagent_id.clone();
+        let session_finish = self.session_finish;
         let response = self
             .final_response
             .lock()
@@ -689,7 +713,9 @@ impl Drop for GatewayCallGuard {
                         .record_gateway_response_hints(&session_id, owner_subagent_id, response)
                         .await;
                 }
-                sessions.finish_gateway_call(&session_id, false).await;
+                sessions
+                    .finish_gateway_call(&session_id, session_finish)
+                    .await;
             });
         }
     }

@@ -12,6 +12,7 @@ mod shared;
 pub(crate) use claude::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::portable_executable_path;
+pub(crate) use shared::shell_quote_for_platform;
 #[cfg(test)]
 pub(crate) use shared::strip_windows_verbatim_prefix;
 
@@ -34,7 +35,7 @@ use command::{
 #[cfg(test)]
 use shared::MAX_HOOK_RESPONSE_BYTES;
 use shared::{
-    ExecOrStatus, HookForwardError, current_exe, fail_closed, gateway_url, healthz,
+    ExecOrStatus, HookForwardError, current_exe, fail_closed, gateway_url, healthz, home_dir,
     plugin_idle_timeout, post_hook, print_check, print_info, relay_binary,
 };
 
@@ -72,18 +73,12 @@ fn serve(args: Vec<String>) -> Result<ExitCode, String> {
 
 fn hook(agent: CodingAgent, explicit_gateway_url: Option<&str>) -> Result<ExitCode, String> {
     let url = gateway_url(agent, explicit_gateway_url);
-    let plugin_launch = match agent {
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            Some(crate::sidecar::loopback_bind(&url).and_then(|bind| {
-                crate::sidecar::resolve_plugin_gateway(agent, &ServerArgs::default(), bind)
-                    .map_err(|error| error.to_string())
-            }))
-        }
-        CodingAgent::Hermes => None,
-    };
+    let plugin_launch = crate::sidecar::loopback_bind(&url).and_then(|bind| {
+        crate::sidecar::resolve_plugin_gateway(agent, &ServerArgs::default(), bind)
+            .map_err(|error| error.to_string())
+    });
     let max_hook_payload_bytes = plugin_launch
         .as_ref()
-        .and_then(|launch| launch.as_ref().ok())
         .map_or(DEFAULT_HOOK_STDIN_BYTES, |launch| {
             launch.max_hook_payload_bytes
         });
@@ -98,12 +93,9 @@ fn hook(agent: CodingAgent, explicit_gateway_url: Option<&str>) -> Result<ExitCo
         },
         &mut input,
         &mut output,
-        |agent, url| match plugin_launch.as_ref() {
-            Some(Ok(launch)) => launch.gateway.ensure().map(|_| ()),
-            Some(Err(error)) => Err(error.clone()),
-            None => crate::sidecar::loopback_bind(url)
-                .and_then(|bind| crate::sidecar::GatewaySpec::new(agent, bind).ensure())
-                .map(|_| ()),
+        |_agent, _url| match plugin_launch.as_ref() {
+            Ok(launch) => launch.gateway.ensure().map(|_| ()),
+            Err(error) => Err(error.clone()),
         },
         post_hook,
         fail_closed,
@@ -201,8 +193,15 @@ fn read_hook_payload<R: Read>(
 fn install(command: PluginShimInstallCommand) -> Result<ExitCode, String> {
     match command.agent {
         CodingAgent::Codex => install_codex(&command.gateway_url, &plugin_hooks_path_from_env()?),
+        CodingAgent::Hermes => {
+            let home = home_dir()?;
+            let relay = relay_binary()?;
+            crate::hermes::install_persistent(&crate::hermes::user_config_path(&home), &relay)
+                .map_err(|error| error.to_string())?;
+            Ok(ExitCode::SUCCESS)
+        }
         other => Err(format!(
-            "plugin install supports codex, got {}",
+            "plugin install supports codex and hermes, got {}",
             other.as_arg()
         )),
     }
@@ -211,8 +210,14 @@ fn install(command: PluginShimInstallCommand) -> Result<ExitCode, String> {
 fn uninstall(command: PluginShimUninstallCommand) -> Result<ExitCode, String> {
     match command.agent {
         CodingAgent::Codex => uninstall_codex(&command.gateway_url, &plugin_hooks_path_from_env()?),
+        CodingAgent::Hermes => {
+            let home = home_dir()?;
+            crate::hermes::uninstall_persistent(&crate::hermes::user_config_path(&home))
+                .map_err(|error| error.to_string())?;
+            Ok(ExitCode::SUCCESS)
+        }
         other => Err(format!(
-            "plugin uninstall supports codex, got {}",
+            "plugin uninstall supports codex and hermes, got {}",
             other.as_arg()
         )),
     }

@@ -852,6 +852,7 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
         prep.session_id,
         prep.owner_subagent_id,
         Arc::new(Mutex::new(None)),
+        prep.session_finish,
     );
 
     drop(body);
@@ -928,6 +929,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
         session_id,
         owner_subagent_id,
         Arc::new(Mutex::new(Some(final_response.clone()))),
+        prep.session_finish,
     );
     let _ = body.collect().await.unwrap();
 

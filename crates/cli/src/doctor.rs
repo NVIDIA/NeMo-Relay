@@ -527,12 +527,13 @@ fn hook_status(
             (Status::Pass, "hooks: injected during run".into())
         }
         CodingAgent::Hermes => match agents.hermes.hooks_path.as_deref() {
-            Some(path) => hook_file_status(
-                Ok(path.to_path_buf()),
-                CodingAgent::Hermes,
-                readiness_required,
-                "hooks",
-            ),
+            Some(path) => match crate::hermes::diagnose_persistent(path) {
+                Ok(details) => (Status::Pass, details),
+                Err(error) => (
+                    Status::Fail,
+                    format!("persistent MCP/hooks: {error}; rerun `nemo-relay config hermes`"),
+                ),
+            },
             None if readiness_required => (
                 Status::Fail,
                 "hooks: not installed; run `nemo-relay config hermes`".into(),
@@ -542,6 +543,7 @@ fn hook_status(
     }
 }
 
+#[cfg(test)]
 fn hook_file_status(
     path: Result<PathBuf, CliError>,
     agent: CodingAgent,
@@ -558,10 +560,15 @@ fn hook_file_status(
         }
     };
     match std::fs::read_to_string(&path) {
-        Ok(raw) if raw.contains(&format!("hook-forward {}", agent.as_arg())) => (
-            Status::Pass,
-            format!("{label}: installed at {}", path.display()),
-        ),
+        Ok(raw)
+            if raw.contains(&format!("hook-forward {}", agent.as_arg()))
+                || raw.contains(&format!("plugin-shim hook {}", agent.as_arg())) =>
+        {
+            (
+                Status::Pass,
+                format!("{label}: installed at {}", path.display()),
+            )
+        }
         Ok(_) if readiness_required => (
             Status::Fail,
             format!("{label}: missing NeMo Relay hook in {}", path.display()),

@@ -80,10 +80,12 @@ pub(crate) enum Command {
     Codex(EasyPathCommand),
     /// Run Hermes with observability (setup on first use)
     #[command(
-        long_about = "Run NVIDIA's Hermes agent under a NeMo Relay gateway. Hermes reads hooks \
-                      from `.hermes/config.yaml`; first-run setup writes that file alongside \
-                      `.nemo-relay/config.toml` so every subsequent invocation traces \
-                      automatically. Re-run `nemo-relay config hermes` to refresh the hooks.",
+        long_about = "Run Hermes Agent under an ephemeral NeMo Relay gateway. Persistent setup \
+                      configures Hermes's user-level `mcp_servers` and shell hooks so bare Hermes \
+                      processes can share the native Relay gateway on 127.0.0.1:47632. This \
+                      wrapper temporarily suppresses that fixed MCP entry and uses a dynamic \
+                      gateway for project-specific Relay configuration. Re-run \
+                      `nemo-relay config hermes` to refresh the persistent integration.",
         after_help = "Examples:\n  \
                       nemo-relay hermes\n  \
                       nemo-relay hermes -- chat --provider custom"
@@ -99,6 +101,7 @@ pub(crate) enum Command {
                       advertises no MCP tools.",
         after_help = "Examples:\n  \
                       nemo-relay mcp\n  \
+                      nemo-relay mcp --agent hermes\n  \
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
     Mcp(McpCommand),
@@ -136,13 +139,14 @@ pub(crate) struct McpCommand {
     pub(crate) agent: McpAgent,
 }
 
-/// Hosts whose plugin format can own the lifecycle-bound MCP client.
+/// Hosts that can own the lifecycle-bound MCP client through plugin or user configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub(crate) enum McpAgent {
     #[value(name = "claude", alias = "claude-code")]
     ClaudeCode,
     Codex,
+    Hermes,
 }
 
 impl From<McpAgent> for CodingAgent {
@@ -150,6 +154,7 @@ impl From<McpAgent> for CodingAgent {
         match agent {
             McpAgent::ClaudeCode => Self::ClaudeCode,
             McpAgent::Codex => Self::Codex,
+            McpAgent::Hermes => Self::Hermes,
         }
     }
 }
@@ -233,9 +238,9 @@ pub(crate) struct ConfigCommand {
     /// only that agent's block from the existing config file. Omit to operate on all agents.
     #[arg(value_enum)]
     pub(crate) agent: Option<CodingAgent>,
-    /// Delete the project config file (or remove just the scoped agent's block when an agent
-    /// is named). The wizard does NOT run after a reset — invoke `nemo-relay config` again to
-    /// re-create the file from scratch.
+    /// Delete the project config file or the scoped agent block. A Hermes-scoped reset also
+    /// removes Relay-owned MCP, hooks, and trust from the user Hermes config. The wizard does not
+    /// run after reset; invoke `nemo-relay config` again to recreate configuration.
     #[arg(long)]
     pub(crate) reset: bool,
 }

@@ -34,9 +34,9 @@ environment variables, or shared TOML config.
   host share one Rust gateway, subject to the Windows Job Object lifetime
   caveat below, with no wrapper, login item, launchd agent, systemd user
   service, scheduled task, or persistent supervisor.
-- Hermes does not require a static bundle in this directory. The setup wizard
-  (`nemo-relay config`) merges hook commands into `.hermes/config.yaml` when
-  hermes is selected.
+- Hermes does not require a static marketplace bundle. `nemo-relay config
+  hermes` transactionally merges a native MCP lifecycle client, canonical
+  hooks, and exact per-event trust into the user-owned Hermes config.
 
 ## Transparent Setup
 
@@ -76,17 +76,19 @@ CLI must already be installed and discoverable on `$PATH` or `%PATH%`; no
 separate npm installer, release bundle download, or plugin-local Relay binary is
 required.
 
-Each plugin MCP entry starts `nemo-relay mcp`, a lightweight client that starts
-or reuses a native `nemo-relay --bind 127.0.0.1:47632` sidecar. Relay
+Each plugin MCP entry—and the equivalent Hermes `mcp_servers` entry—starts
+`nemo-relay mcp`, a lightweight client that starts or reuses a native
+`nemo-relay --bind 127.0.0.1:47632` sidecar. Relay
 detaches the sidecar when host policy permits. A restrictive Windows Job Object
 keeps the sidecar scoped to that host job instead of failing bootstrap.
 MCP initialization waits for Relay identity, version, and bootstrap-protocol
-readiness. Concurrent Codex and Claude Code processes share the gateway and
-heartbeat it while their MCP stdio connections remain open; the gateway exits
-after the final client's idle timeout. Codex requires MCP initialization before
-the captured turn. Claude Code starts plugin MCP servers asynchronously, so its
-command hook also starts or reuses the same gateway and retries the original
-payload when it wins the startup race. The MCP client advertises no tools.
+readiness. Concurrent Codex, Claude Code, and Hermes processes share the
+gateway and heartbeat it while their MCP stdio connections remain open; the
+gateway exits after the final client's idle timeout. Codex requires MCP
+initialization before the captured turn. Claude Code and Hermes start MCP
+servers asynchronously, so their command hooks also start or reuse the same
+gateway and retry the original payload when they win the startup race. The MCP
+client advertises no tools.
 
 Persistent plugin mode loads system and user Relay configuration only and starts
 the sidecar from the user configuration directory. Relative exporter paths are
@@ -136,10 +138,16 @@ That path reads `.claude-plugin/marketplace.json` from the repository. Source
 plugin hooks invoke `nemo-relay plugin-shim hook claude` directly. Use
 `nemo-relay install claude-code` for the complete provider-routing setup.
 
-Hermes transparent runs export the dynamic `NEMO_RELAY_GATEWAY_URL`, but Hermes
-hooks must already be present in `.hermes/config.yaml` before they can call the
-gateway. The setup wizard (`nemo-relay config`) writes that file for you when
-you select hermes.
+Hermes persistent setup is user-level:
+
+```bash
+nemo-relay config hermes
+```
+
+It writes the MCP server and trusted hooks to `$HERMES_HOME/config.yaml` or
+`~/.hermes/config.yaml`. Transparent Hermes runs temporarily suppress that
+fixed MCP entry, export the dynamic `NEMO_RELAY_GATEWAY_URL`, and restore the
+original config afterward.
 
 Shared TOML config is loaded from `/etc/nemo-relay/config.toml`, then nearest
 project `.nemo-relay/config.toml`, then
@@ -187,12 +195,15 @@ destination records, logs, or reports the failure.
 
 ## Hook Forwarding
 
-The transparent wrapper hooks call `nemo-relay hook-forward <agent>` with the
-canonical hook payload on stdin. The wrapper injects `NEMO_RELAY_GATEWAY_URL` so
-the same hook command reaches the ephemeral per-run gateway; hermes hooks fall
-back to an embedded `--gateway-url` when running outside the wrapper.
+Transparent Claude Code and Codex hooks call
+`nemo-relay hook-forward <agent>` with the canonical hook payload on standard
+input. The wrapper injects `NEMO_RELAY_GATEWAY_URL` so the command reaches the
+ephemeral per-run gateway.
 
-Claude Code and Codex plugin hooks call `nemo-relay plugin-shim hook <agent>`.
+Persistent Claude Code and Codex hooks, and Hermes hooks in both modes, call
+`nemo-relay plugin-shim hook <agent>`. During a transparent Hermes run, the
+same canonical command prefers the wrapper's dynamic gateway URL. Otherwise,
+it starts or reuses the fixed shared gateway.
 For Codex, the installed plugin file is the sole persistent Relay hook source;
 installation does not add Relay groups to `~/.codex/hooks.json`. The shim
 forwards each canonical payload to the verified shared sidecar.
@@ -252,9 +263,10 @@ targets are intentionally outside `test-rust` and mandatory CI:
 ```bash
 just test-claude-plugin-e2e
 just test-codex-plugin-e2e
+just test-hermes-mcp-e2e
 ```
 
 Each target uses an isolated home directory and local mock provider. The Claude
-target runs 10 cold sessions plus two concurrent sessions and verifies MCP
-connection, hook delivery, provider routing, session isolation, balanced ATOF
-output, and final port release.
+and Hermes targets each run 10 cold sessions plus two concurrent sessions and
+verify MCP connection, hook delivery, provider routing, session isolation,
+balanced ATOF output, and final port release.

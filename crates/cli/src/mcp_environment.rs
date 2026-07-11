@@ -110,6 +110,21 @@ pub(crate) fn forwarded_names_for_platform(
     names.into_iter().collect()
 }
 
+pub(crate) fn config_referenced_names(config: Option<&Value>) -> Vec<String> {
+    config_referenced_names_for_platform(config, cfg!(windows))
+}
+
+pub(crate) fn config_referenced_names_for_platform(
+    config: Option<&Value>,
+    windows: bool,
+) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    if let Some(config) = config {
+        collect_config_names(config, &mut names, windows);
+    }
+    names.into_iter().collect()
+}
+
 fn prefix_allowed(name: &str, windows: bool) -> bool {
     ["NEMO_RELAY_", "OTEL_", "AWS_"].iter().any(|prefix| {
         if windows {

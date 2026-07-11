@@ -757,6 +757,37 @@ async fn serve_listener_exits_after_codex_stop_without_session_end() {
 }
 
 #[tokio::test]
+async fn serve_listener_exits_after_hermes_turn_without_session_finalize() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
+    let client = test_http_client();
+
+    for hook_event_name in ["on_session_start", "on_session_end"] {
+        let response = client
+            .post(format!("{url}/hooks/hermes"))
+            .json(&json!({
+                "session_id": "plugin-idle-hermes-session",
+                "hook_event_name": hook_event_name
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+    }
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
+        .await
+        .expect("plugin idle timeout should stop after the Hermes turn ends")
+        .unwrap();
+    result.unwrap();
+}
+
+#[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();

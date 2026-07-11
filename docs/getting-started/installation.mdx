@@ -230,17 +230,17 @@ configuration and verification steps.
 
 ### Hermes Agent
 
-Install the latest NeMo Relay Python package in the environment that runs
-Hermes, then enable the bundled Hermes plugin:
+After installing the NeMo Relay CLI, configure the Hermes user integration:
 
 ```bash
-pip install nemo-relay
-hermes plugins enable observability/nemo_relay
+nemo-relay config hermes
+nemo-relay doctor hermes
 ```
 
-The plugin ID is `observability/nemo_relay`. See the
-[Hermes NeMo Relay plugin guide](https://github.com/NousResearch/hermes-agent/tree/main/plugins/observability/nemo_relay)
-for configuration and verification steps.
+Relay adds a native stdio MCP entry and the exact trusted lifecycle hooks that
+share one deferred user-level gateway. Refer to the
+[Hermes Agent guide](/nemo-relay-cli/hermes) for provider routing, lifecycle,
+and removal steps.
 
 ### Python Framework Integrations
 

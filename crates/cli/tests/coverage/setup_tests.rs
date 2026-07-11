@@ -320,34 +320,15 @@ fn config_scope_labels_are_user_facing_and_stable() {
 }
 
 #[test]
-fn hermes_hook_paths_follow_selected_scope() {
-    let cwd = PathBuf::from("/workspace");
+fn hermes_host_config_is_user_owned_independent_of_relay_scope() {
     let home = PathBuf::from("/home/user");
     let agents = [CodingAgent::Hermes];
 
     assert_eq!(
-        hermes_hooks_path_for_scope(&agents, ConfigScope::Project, &cwd, &home),
-        Some(PathBuf::from("/workspace/.hermes/config.yaml"))
-    );
-    assert_eq!(
-        hermes_hooks_path_for_scope(&agents, ConfigScope::Both, &cwd, &home),
-        Some(PathBuf::from("/workspace/.hermes/config.yaml"))
-    );
-    assert_eq!(
-        hermes_hooks_path_for_scope(&agents, ConfigScope::Global, &cwd, &home),
+        hermes_config_path_for_agents(&agents, &home),
         Some(PathBuf::from("/home/user/.hermes/config.yaml"))
     );
-    assert_eq!(
-        hermes_hooks_path_for_scope(&[], ConfigScope::Project, &cwd, &home),
-        None
-    );
-    assert_eq!(
-        hermes_hook_targets(ConfigScope::Both, &cwd, &home),
-        vec![
-            PathBuf::from("/workspace/.hermes/config.yaml"),
-            PathBuf::from("/home/user/.hermes/config.yaml")
-        ]
-    );
+    assert_eq!(hermes_config_path_for_agents(&[], &home), None);
 }
 
 #[test]
@@ -416,33 +397,6 @@ fn read_existing_defaults_prefers_workspace_and_reports_scope_variants() {
     let defaults = read_existing_defaults().unwrap();
     assert_eq!(defaults.scope, Some(ConfigScope::Project));
     assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
-}
-
-#[test]
-fn install_hermes_hooks_writes_yaml_and_merges_existing() {
-    let cwd = tempfile::tempdir().unwrap();
-    let home = tempfile::tempdir().unwrap();
-    // Seed an existing hermes config so we can verify the merge preserves user state.
-    let project_hermes = cwd.path().join(".hermes");
-    std::fs::create_dir_all(&project_hermes).unwrap();
-    std::fs::write(
-        project_hermes.join("config.yaml"),
-        "model:\n  provider: auto\n",
-    )
-    .unwrap();
-
-    let written = install_hermes_hooks(ConfigScope::Both, cwd.path(), home.path()).unwrap();
-
-    assert_eq!(written.len(), 2);
-    let project_yaml = std::fs::read_to_string(cwd.path().join(".hermes/config.yaml")).unwrap();
-    assert!(project_yaml.contains("nemo-relay hook-forward hermes"));
-    assert!(project_yaml.contains("api_request_error"));
-    assert!(
-        project_yaml.contains("provider: auto"),
-        "existing model block must survive merge"
-    );
-    let home_yaml = std::fs::read_to_string(home.path().join(".hermes/config.yaml")).unwrap();
-    assert!(home_yaml.contains("nemo-relay hook-forward hermes"));
 }
 
 #[test]
@@ -556,6 +510,12 @@ fn reset_noops_when_project_config_is_missing() {
 fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(temp.path());
+    let hermes_home = temp.path().join("hermes-home");
+    let _env = EnvScope::set(&[
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+        ("HERMES_HOME", Some(hermes_home.as_os_str())),
+    ]);
     let config_dir = temp.path().join(".nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");

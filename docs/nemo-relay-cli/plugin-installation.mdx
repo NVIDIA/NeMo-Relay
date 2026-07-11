@@ -11,6 +11,11 @@ Install a host plugin when you want Claude Code or Codex to load NeMo Relay
 through its normal plugin system instead of through a `nemo-relay` wrapper
 command.
 
+Hermes uses the same native MCP lifecycle without a marketplace plugin. Run
+`nemo-relay config hermes` to merge the Relay MCP server, canonical hooks, and
+exact hook trust into Hermes's user configuration. Refer to the
+[Hermes Agent guide](/nemo-relay-cli/hermes).
+
 The installed plugin emits agent, subagent, tool, prompt, compaction, and stop
 lifecycle signals. Model-provider routing sends LLM traffic through the local
 NeMo Relay gateway. Hooks alone cannot capture complete LLM request and
@@ -103,22 +108,23 @@ Upgrade removes legacy Relay groups from
 Start a new Codex CLI process after installation. Restart the Codex desktop app
 if it was already running so it reloads the provider and hook configuration.
 
-Claude Code and Codex plugin modes use the same `nemo-relay mcp` lifecycle
-client. It starts or reuses a detached native sidecar on `127.0.0.1:47632`,
+Claude Code, Codex, and configured Hermes processes use the same
+`nemo-relay mcp` lifecycle client. It starts or reuses a detached native
+sidecar on `127.0.0.1:47632`,
 verifies Relay identity, version, protocol readiness, and effective user-level
 configuration, and heartbeats it every 30 seconds. Concurrent processes from
-either host share the gateway. After the final MCP client closes, the sidecar
+any host share the gateway. After the final MCP client closes, the sidecar
 exits after 300 idle seconds by default. If the gateway exits while MCP stdio is
 open, the client performs one coordinated restart and fails if recovery does
 not succeed. A foreign process on the configured port is rejected with an
 actionable conflict instead of being accepted because it returned HTTP 200.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
-gateway readiness. Claude Code starts plugin MCP servers asynchronously; its
-`SessionStart` hook can run first. The Claude hook shim closes that race by
+gateway readiness. Claude Code and Hermes start MCP servers asynchronously, so
+their first lifecycle hook can run first. The hook shim closes that race by
 starting or reusing the same gateway under the same startup lock and retrying
-the original canonical payload once. The MCP server advertises no tools in
-either host.
+the original canonical payload once. The MCP server advertises no tools in any
+host.
 
 On Windows, Relay requests Job Object breakaway only when the host job permits
 it. If the host applies a restrictive job but permits nested jobs, Relay keeps
@@ -142,7 +148,10 @@ forwarding allowlist, so its generated MCP manifest stores variable names—not
 values—for provider credentials, Relay runtime, OpenTelemetry, AWS, proxies,
 certificates, approved prefixes, and credential variables referenced by user
 observability configuration. Claude Code supplies its normal environment to
-plugin MCP processes.
+plugin MCP processes. Hermes config stores `${VARIABLE_NAME}` references for
+the provider credentials, currently defined approved variables, and explicit
+credential names referenced by user observability configuration. Rerun
+`nemo-relay config hermes` after adding one of those variables.
 
 ## Diagnose
 

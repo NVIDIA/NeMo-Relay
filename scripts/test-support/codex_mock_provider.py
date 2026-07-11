@@ -175,6 +175,33 @@ def anthropic_events(request: dict[str, Any]) -> list[tuple[str, dict[str, Any]]
     ]
 
 
+def chat_completion_chunks(request: dict[str, Any]) -> list[dict[str, Any]]:
+    completion_id = f"chatcmpl_{uuid.uuid4().hex}"
+    model = request.get("model", "gpt-4o-mini")
+    created = int(time.time())
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+    }
+    return [
+        {
+            **base,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}],
+        },
+        {
+            **base,
+            "choices": [{"index": 0, "delta": {"content": "pong"}, "finish_reason": None}],
+        },
+        {
+            **base,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+    ]
+
+
 class Provider(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], log_path: Path, barrier_dir: Path) -> None:
         super().__init__(address, Handler)
@@ -225,7 +252,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(
             {
                 "object": "list",
-                "data": [{"id": "gpt-5-codex", "object": "model", "owned_by": "openai"}],
+                "data": [
+                    {"id": "gpt-5-codex", "object": "model", "owned_by": "openai"},
+                    {"id": "gpt-4o-mini", "object": "model", "owned_by": "openai"},
+                ],
             }
         ).encode()
         self.send_response(200)
@@ -241,6 +271,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         response_stream = response_events(request) if path.endswith("/responses") else None
         anthropic_stream = anthropic_events(request) if path.endswith("/messages") else None
+        chat_stream = chat_completion_chunks(request) if path.endswith("/chat/completions") else None
         self.server.log_request_record(
             {
                 "method": "POST",
@@ -259,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if response_stream is None and anthropic_stream is None:
+        if response_stream is None and anthropic_stream is None and chat_stream is None:
             self.send_error(404)
             return
         self.server.wait_at_barrier_if_enabled()
@@ -282,6 +313,29 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if chat_stream is not None and not request.get("stream", False):
+            body = json.dumps(
+                {
+                    "id": f"chatcmpl_{uuid.uuid4().hex}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": request.get("model", "gpt-4o-mini"),
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "pong"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -289,6 +343,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if response_stream is not None:
             for event in response_stream:
+                self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+        elif chat_stream is not None:
+            for event in chat_stream:
                 self.wfile.write(f"data: {json.dumps(event)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
         else:

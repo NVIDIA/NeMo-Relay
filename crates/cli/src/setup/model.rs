@@ -10,7 +10,6 @@ use toml_edit::{DocumentMut, Item, Table, value};
 use crate::config::CodingAgent;
 use crate::config::{PluginsEditCommand, PluginsScopeArgs};
 use crate::error::CliError;
-use crate::installer::{hermes_hooks, hook_forward_command, merge_hermes_config};
 
 /// Where the setup saves its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,9 +66,8 @@ pub(super) fn plugins_resume_command(scope: ConfigScope) -> &'static str {
 pub(crate) struct SetupAnswers {
     pub scope: ConfigScope,
     pub agents: Vec<CodingAgent>,
-    /// Path recorded under `[agents.hermes].hooks_path` when hermes is selected. Set by `run`
-    /// from `hermes_hooks_path_for_scope` so the wizard preview shows the file the launcher
-    /// will reference. `None` when hermes wasn't selected.
+    /// User-owned Hermes config recorded under `[agents.hermes].hooks_path`. Set by `run` so the
+    /// wizard preview and transparent launcher reference the same host configuration.
     pub hermes_hooks_path: Option<PathBuf>,
 }
 
@@ -245,6 +243,23 @@ pub(super) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent
 /// In both cases this targets the *project* layer; global and system layers are left to direct
 /// editing because they typically aren't owned by the wizard.
 pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
+    reset_project_config(agent_hint)?;
+    if matches!(agent_hint, Some(CodingAgent::Hermes)) {
+        let home = home_dir().ok_or_else(|| {
+            CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
+        })?;
+        let removed = crate::hermes::uninstall_persistent(&crate::hermes::user_config_path(&home))?;
+        for path in removed {
+            println!(
+                "  ✓ Removed Relay-owned Hermes state from {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn reset_project_config(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
     let cwd = std::env::current_dir()?;
     let path = cwd.join(".nemo-relay").join("config.toml");
     if !path.exists() {
@@ -293,59 +308,26 @@ pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Returns the Hermes hooks file path that should be recorded for the selected setup scope.
-pub(crate) fn hermes_hooks_path_for_scope(
+/// Returns Hermes's user-owned configuration path when Hermes is selected. Relay's project/global
+/// scope does not change where the Hermes host itself reads MCP servers and shell hooks.
+pub(crate) fn hermes_config_path_for_agents(
     agents: &[CodingAgent],
-    scope: ConfigScope,
-    cwd: &Path,
     home: &Path,
 ) -> Option<PathBuf> {
     if !agents.contains(&CodingAgent::Hermes) {
         return None;
     }
-    match scope {
-        ConfigScope::Project | ConfigScope::Both => Some(cwd.join(".hermes").join("config.yaml")),
-        ConfigScope::Global => Some(home.join(".hermes").join("config.yaml")),
-    }
+    Some(crate::hermes::user_config_path(home))
 }
 
-/// Writes/merges `.hermes/config.yaml` hook config for every scope-applicable location so hermes
-/// fires `nemo-relay hook-forward hermes` on every hook event after setup. Idempotent: existing
-/// hook entries are preserved and our generated groups are appended only when missing.
-///
-/// Returns the list of paths actually written so callers can surface them to the user.
-pub(crate) fn install_hermes_hooks(
-    scope: ConfigScope,
-    cwd: &Path,
-    home: &Path,
-) -> Result<Vec<PathBuf>, CliError> {
-    let generated = hermes_hooks(&hook_forward_command("nemo-relay", CodingAgent::Hermes));
-    let mut written = Vec::new();
-    for path in hermes_hook_targets(scope, cwd, home) {
-        let existing = match std::fs::read_to_string(&path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(CliError::Io(error)),
-        };
-        let merged = merge_hermes_config(&existing, generated.clone())?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, merged)?;
-        written.push(path);
-    }
-    Ok(written)
-}
-
-pub(super) fn hermes_hook_targets(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
-    let mut targets = Vec::new();
-    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
-        targets.push(cwd.join(".hermes").join("config.yaml"));
-    }
-    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
-        targets.push(home.join(".hermes").join("config.yaml"));
-    }
-    targets
+/// Installs Hermes's lifecycle-bound MCP client and exact trusted Relay hooks transactionally.
+pub(crate) fn install_hermes_integration(home: &Path) -> Result<Vec<PathBuf>, CliError> {
+    let relay = std::env::current_exe().map_err(|error| {
+        CliError::Install(format!(
+            "failed to resolve the nemo-relay executable: {error}"
+        ))
+    })?;
+    crate::hermes::install_persistent(&crate::hermes::user_config_path(home), &relay)
 }
 
 /// Pre-filled wizard defaults read from an existing `config.toml`. When the file is missing or

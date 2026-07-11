@@ -303,7 +303,7 @@ fn incompatible_relay_error(agent: CodingAgent, url: &str) -> String {
     let remediation = match agent {
         CodingAgent::Codex => "run `nemo-relay install codex --force`",
         CodingAgent::ClaudeCode => "run `nemo-relay install claude-code --force`",
-        CodingAgent::Hermes => "restart the configured Relay gateway",
+        CodingAgent::Hermes => "rerun `nemo-relay config hermes`",
     };
     format!(
         "{url} is occupied by NeMo Relay with a different version or persistent configuration; stop it, wait for its idle shutdown, or {remediation} before retrying"
