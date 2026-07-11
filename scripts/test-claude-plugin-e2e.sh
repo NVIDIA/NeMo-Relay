@@ -49,6 +49,7 @@ export PATH="$repo_root/target/debug:$PATH"
 export ANTHROPIC_API_KEY="relay-claude-e2e-key"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 export DISABLE_AUTOUPDATER=1
+export NEMO_RELAY_GATEWAY_URL="http://127.0.0.1:1"
 export NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS=1
 
 mkdir -p \

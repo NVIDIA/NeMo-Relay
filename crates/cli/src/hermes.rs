@@ -71,19 +71,69 @@ pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<Path
 
 pub(crate) fn persistent_state_exists(config: &Path) -> bool {
     PersistentPaths::for_config(config.to_path_buf())
-        .is_ok_and(|paths| paths.all().iter().any(|path| path.exists()))
+        .ok()
+        .and_then(|paths| persistent_paths_have_managed_state(&paths).ok())
+        .unwrap_or(false)
 }
 
 pub(crate) fn uninstall_persistent(config: &Path) -> Result<Vec<PathBuf>, CliError> {
     let paths = PersistentPaths::for_config(config.to_path_buf())?;
-    if paths.all().iter().all(|path| !path.exists()) {
+    if !persistent_paths_have_managed_state(&paths)? {
         return Ok(Vec::new());
     }
     let _lock =
         acquire_install_lock(&paths.config, INSTALL_LOCK_TIMEOUT).map_err(CliError::Install)?;
     let _allowlist_lock = acquire_allowlist_lock(&paths.allowlist, INSTALL_LOCK_TIMEOUT)
         .map_err(CliError::Install)?;
+    if !persistent_paths_have_managed_state(&paths)? {
+        return Ok(Vec::new());
+    }
     uninstall_persistent_with(paths, atomic_write)
+}
+
+fn persistent_paths_have_managed_state(paths: &PersistentPaths) -> Result<bool, CliError> {
+    if paths.generation.exists() {
+        return Ok(true);
+    }
+    if let Some(raw) = read_optional_utf8(&paths.config)? {
+        let config = parse_yaml_object(Some(&raw), "Hermes config")?;
+        if config_has_managed_state(&config) {
+            return Ok(true);
+        }
+    }
+    if let Some(raw) = read_optional_utf8(&paths.allowlist)? {
+        let allowlist = parse_json_object(Some(&raw), "Hermes shell-hook allowlist")?;
+        if allowlist_has_managed_state(&allowlist) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn config_has_managed_state(config: &Value) -> bool {
+    config
+        .get("mcp_servers")
+        .and_then(|servers| servers.get(MCP_SERVER_NAME))
+        .is_some_and(is_managed_mcp_server)
+        || config
+            .get("hooks")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flat_map(Map::values)
+            .filter_map(Value::as_array)
+            .flatten()
+            .filter_map(|entry| entry.get("command").and_then(Value::as_str))
+            .any(is_managed_hook_command)
+}
+
+fn allowlist_has_managed_state(allowlist: &Value) -> bool {
+    allowlist
+        .get("approvals")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("command").and_then(Value::as_str))
+        .any(is_managed_hook_command)
 }
 
 pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> {
@@ -92,18 +142,7 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
     let raw = fs::read_to_string(&paths.config)
         .map_err(|error| format!("failed to read {}: {error}", paths.config.display()))?;
     let config = parse_yaml_object(Some(&raw), "Hermes config").map_err(|e| e.to_string())?;
-    let server = config
-        .pointer("/mcp_servers/nemo-relay")
-        .ok_or_else(|| "Hermes MCP server `nemo-relay` is missing".to_string())?;
-    if !is_managed_mcp_server(server) {
-        return Err("Hermes MCP server `nemo-relay` is not a managed Relay MCP client".into());
-    }
-    let relay = PathBuf::from(
-        server
-            .get("command")
-            .and_then(Value::as_str)
-            .expect("managed MCP server has a string command"),
-    );
+    let relay = relay_executable_from_config(&config)?;
     if !relay_is_executable(&relay) {
         return Err(format!(
             "configured nemo-relay executable is missing or not executable at {}",
@@ -114,7 +153,7 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
     verify_hook_definitions(&config, &command)?;
     verify_trust(&paths.allowlist, &command)?;
 
-    let mcp_env = server
+    let mcp_env = config["mcp_servers"][MCP_SERVER_NAME]
         .get("env")
         .and_then(Value::as_object)
         .ok_or_else(|| "Hermes Relay MCP environment is missing".to_string())?;
@@ -154,6 +193,39 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
         "MCP lifecycle and {} hooks trusted at {}",
         HERMES_HOOK_EVENTS.len(),
         paths.config.display()
+    ))
+}
+
+/// Returns the exact Relay binary configured for Hermes's managed MCP client.
+///
+/// Doctor uses this path instead of the currently running binary so it verifies the executable
+/// that Hermes will actually launch.
+pub(crate) fn configured_relay_executable(config_path: &Path) -> Result<PathBuf, String> {
+    let raw = fs::read_to_string(config_path)
+        .map_err(|error| format!("failed to read {}: {error}", config_path.display()))?;
+    let config = parse_yaml_object(Some(&raw), "Hermes config").map_err(|e| e.to_string())?;
+    let relay = relay_executable_from_config(&config)?;
+    if !relay_is_executable(&relay) {
+        return Err(format!(
+            "configured nemo-relay executable is missing or not executable at {}",
+            relay.display()
+        ));
+    }
+    Ok(relay)
+}
+
+fn relay_executable_from_config(config: &Value) -> Result<PathBuf, String> {
+    let server = config
+        .pointer("/mcp_servers/nemo-relay")
+        .ok_or_else(|| "Hermes MCP server `nemo-relay` is missing".to_string())?;
+    if !is_managed_mcp_server(server) {
+        return Err("Hermes MCP server `nemo-relay` is not a managed Relay MCP client".into());
+    }
+    Ok(PathBuf::from(
+        server
+            .get("command")
+            .and_then(Value::as_str)
+            .expect("managed MCP server has a string command"),
     ))
 }
 
@@ -371,37 +443,14 @@ fn verify_uninstall(paths: &PersistentPaths) -> Result<(), String> {
     }
     if let Some(raw) = read_optional_utf8(&paths.config).map_err(|error| error.to_string())? {
         let config = parse_yaml_object(Some(&raw), "Hermes config").map_err(|e| e.to_string())?;
-        if config
-            .get("mcp_servers")
-            .and_then(|servers| servers.get(MCP_SERVER_NAME))
-            .is_some_and(is_managed_mcp_server)
-        {
-            return Err("managed Hermes Relay MCP server still exists".into());
-        }
-        if config
-            .get("hooks")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(Map::values)
-            .filter_map(Value::as_array)
-            .flatten()
-            .filter_map(|entry| entry.get("command").and_then(Value::as_str))
-            .any(is_managed_hook_command)
-        {
-            return Err("managed Hermes Relay hook still exists".into());
+        if config_has_managed_state(&config) {
+            return Err("managed Hermes Relay config still exists".into());
         }
     }
     if let Some(raw) = read_optional_utf8(&paths.allowlist).map_err(|error| error.to_string())? {
         let allowlist = parse_json_object(Some(&raw), "Hermes shell-hook allowlist")
             .map_err(|e| e.to_string())?;
-        if allowlist
-            .get("approvals")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.get("command").and_then(Value::as_str))
-            .any(is_managed_hook_command)
-        {
+        if allowlist_has_managed_state(&allowlist) {
             return Err("managed Hermes Relay trust approval still exists".into());
         }
     }

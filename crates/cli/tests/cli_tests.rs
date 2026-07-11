@@ -511,6 +511,13 @@ fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
 }
 
 fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
+    run_fake_bootstrap_listener_with_hook_delay(proof, None)
+}
+
+fn run_fake_bootstrap_listener_with_hook_delay(
+    proof: FakeBootstrapProof,
+    hook_delay: Option<Duration>,
+) -> (Output, Vec<String>) {
     let temp = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -574,16 +581,17 @@ fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String
                     )
                     .unwrap();
             } else {
+                if let Some(delay) = hook_delay {
+                    thread::sleep(delay);
+                }
                 let body = r#"{"continue":true}"#;
-                stream
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                        .as_bytes(),
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
                     )
-                    .unwrap();
+                    .as_bytes(),
+                );
             }
         }
     });
@@ -644,6 +652,30 @@ fn cli_codex_hook_reuses_a_listener_with_a_valid_bootstrap_proof() {
         requests
             .iter()
             .any(|request| request.starts_with("POST /hooks/codex "))
+    );
+}
+
+#[test]
+fn cli_codex_hook_does_not_retry_an_ambiguous_response_timeout() {
+    let (output, requests) = run_fake_bootstrap_listener_with_hook_delay(
+        FakeBootstrapProof::Valid,
+        Some(Duration::from_millis(2_500)),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("hook forward failed"), "{stderr}");
+    assert!(!stderr.contains("sidecar recovery"), "{stderr}");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.starts_with("POST /hooks/codex "))
+            .count(),
+        1
+    );
+    assert!(
+        requests
+            .last()
+            .is_some_and(|request| request.starts_with("POST "))
     );
 }
 
@@ -2448,6 +2480,33 @@ fn cli_hook_forward_posts_payload_headers_and_prints_response() {
     assert!(request.contains("x-nemo-relay-config-profile: coverage"));
     assert!(request.contains("x-nemo-relay-gateway-mode: passthrough"));
     assert!(request.contains(r#"{"hook_event_name":"sessionStart"}"#));
+}
+
+#[test]
+fn cli_hook_forward_bypasses_ambient_proxies_for_loopback_delivery() {
+    let (server_url, received) = spawn_single_request_server(200, r#"{"continue":true}"#);
+    let mut child = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--fail-closed"])
+        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("HTTPS_PROXY", "http://127.0.0.1:1")
+        .env("ALL_PROXY", "http://127.0.0.1:1")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"{}").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(received.recv_timeout(Duration::from_secs(2)).is_ok());
 }
 
 #[test]

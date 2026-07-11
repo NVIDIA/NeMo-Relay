@@ -38,6 +38,10 @@ of the user configuration. Hermes reads this configuration from
 unset. This location is user-owned even when you choose project-scoped Relay
 configuration.
 
+The MCP server name `nemo-relay` is reserved for the Relay-managed entry. If
+that name already belongs to another command, installation stops without
+rewriting the config. Rename or remove the conflicting entry, then retry.
+
 Installation performs the following changes as one verified transaction:
 
 - Adds `mcp_servers.nemo-relay` with the canonical absolute `nemo-relay`

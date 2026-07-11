@@ -88,7 +88,7 @@ fi
 
 # Keep a conflicting hook target set so the persistent plugin must preserve its
 # explicitly installed hook endpoint instead of inheriting an ambient target.
-export NEMO_RELAY_PLUGIN_GATEWAY_URL="http://127.0.0.1:1"
+export NEMO_RELAY_GATEWAY_URL="http://127.0.0.1:1"
 
 export HOME="$work/home"
 export CODEX_HOME="$work/codex-home"

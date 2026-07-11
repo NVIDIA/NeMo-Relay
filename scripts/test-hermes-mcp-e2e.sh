@@ -72,6 +72,7 @@ export TMPDIR="$work/tmp"
 export PATH="$repo_root/target/debug:$PATH"
 export OPENAI_API_KEY="relay-hermes-e2e-key"
 export OPENAI_BASE_URL="http://127.0.0.1:47632/v1"
+export NEMO_RELAY_GATEWAY_URL="http://127.0.0.1:1"
 # Hermes drains some shell hooks after the foreground CLI has exited. Keep a short grace period so
 # one lifecycle cannot be split across two gateway generations; production retains the gateway for
 # 300 seconds.

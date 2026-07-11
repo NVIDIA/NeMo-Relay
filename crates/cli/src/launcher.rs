@@ -112,8 +112,8 @@ impl TransparentRun {
             crate::plugins::lifecycle::active_dynamic_plugin_components(explicit_config, &resolved)?
         };
         let (agent, argv) = resolve_agent_and_argv(&command, &resolved.agents)?;
-        if !dry_run {
-            validate_agent_version(agent, &argv[0]).await?;
+        if !dry_run && let Some(probe) = version_probe_argv(agent, &argv) {
+            validate_agent_version(agent, &probe).await?;
         }
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -234,10 +234,21 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
     agent.executable()
 }
 
-async fn validate_agent_version(agent: CodingAgent, executable: &str) -> Result<(), CliError> {
-    let mut command = Command::new(executable);
+/// Builds a version probe that preserves wrappers such as `npx codex` or `mise exec -- codex`.
+/// Opaque wrappers remain supported: when the configured argv never names the selected host,
+/// installation and doctor retain version enforcement while transparent launch skips this probe.
+fn version_probe_argv(agent: CodingAgent, argv: &[String]) -> Option<Vec<String>> {
+    let agent_index = argv
+        .iter()
+        .position(|argument| CodingAgent::infer(argument) == Some(agent))?;
+    let mut probe = argv[..=agent_index].to_vec();
+    probe.push("--version".into());
+    Some(probe)
+}
+
+async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<(), CliError> {
+    let mut command = command_from_argv(probe);
     command
-        .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -246,7 +257,8 @@ async fn validate_agent_version(agent: CodingAgent, executable: &str) -> Result<
         .await
         .map_err(|_| {
             CliError::Launch(format!(
-                "timed out while checking {}; NeMo Relay requires {}",
+                "timed out while running version probe {:?} for {}; NeMo Relay requires {}",
+                probe,
                 agent.label(),
                 agent.version_requirement()
             ))
@@ -254,7 +266,8 @@ async fn validate_agent_version(agent: CodingAgent, executable: &str) -> Result<
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(CliError::Launch(format!(
-            "`{executable} --version` failed with {}{}",
+            "version probe {:?} failed with {}{}",
+            probe,
             output.status,
             if stderr.trim().is_empty() {
                 String::new()
@@ -268,6 +281,92 @@ async fn validate_agent_version(agent: CodingAgent, executable: &str) -> Result<
         .validate_version_output(&stdout)
         .map(|_| ())
         .map_err(CliError::Launch)
+}
+
+/// Creates an async child command from the resolved argv. Windows command scripts require an
+/// explicit `cmd.exe` invocation; using the same builder for probes and the real launch keeps npm
+/// shims such as `codex.cmd` and `claude.cmd` consistent.
+fn command_from_argv(argv: &[String]) -> Command {
+    debug_assert!(!argv.is_empty());
+    #[cfg(windows)]
+    {
+        let program = resolve_windows_program(&argv[0]);
+        if is_windows_command_script(&program) {
+            let mut command = Command::new(
+                std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe")),
+            );
+            command
+                .args(["/d", "/s", "/c"])
+                .arg(windows_command_line(&program, &argv[1..]));
+            return command;
+        }
+        let mut command = Command::new(program);
+        command.args(&argv[1..]);
+        return command;
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new(&argv[0]);
+        command.args(&argv[1..]);
+        command
+    }
+}
+
+#[cfg(windows)]
+fn resolve_windows_program(program: &str) -> PathBuf {
+    let path = Path::new(program);
+    let directories = if path.components().count() > 1 || path.is_absolute() {
+        vec![PathBuf::new()]
+    } else {
+        std::env::var_os("PATH")
+            .as_deref()
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten()
+            .collect()
+    };
+    let extensions = if path.extension().is_none() {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".into())
+            .split(';')
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        vec![String::new()]
+    };
+    for directory in directories {
+        for extension in &extensions {
+            let candidate = directory.join(format!("{program}{extension}"));
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
+fn is_windows_command_script(program: &Path) -> bool {
+    program
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
+}
+
+#[cfg(any(windows, test))]
+fn windows_command_line(program: &Path, args: &[String]) -> String {
+    std::iter::once(crate::plugin_host::shell_quote_arg_for_platform(
+        &program.display().to_string(),
+        true,
+    ))
+    .chain(
+        args.iter()
+            .map(|argument| crate::plugin_host::shell_quote_arg_for_platform(argument, true)),
+    )
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 // Uses an explicit `--agent` when present and otherwise infers the agent from argv[0]. Inference is
@@ -525,8 +624,7 @@ impl PreparedRun {
     // Spawns the prepared child process with injected environment and waits for its exit status.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
     async fn spawn_and_wait(&self) -> Result<std::process::ExitStatus, CliError> {
-        let mut command = Command::new(&self.argv[0]);
-        command.args(&self.argv[1..]);
+        let mut command = command_from_argv(&self.argv);
         for (name, value) in &self.env {
             command.env(name, value);
         }

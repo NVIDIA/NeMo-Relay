@@ -8,6 +8,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use super::*;
+use crate::config::CodingAgent;
 
 fn relay_binary(root: &Path) -> PathBuf {
     let path = root.join("NeMo Relay's bin").join("nemo-relay");
@@ -84,6 +85,10 @@ fn hook_command_round_trips_paths_and_recognizes_owned_legacy_spellings() {
             true,
         ),
         r#""C:\Program Files\NeMo 100%%\bin\nemo-relay.exe" hook-forward hermes --gateway-url http://127.0.0.1:47632"#
+    );
+    assert_eq!(
+        crate::installer::transparent_hook_forward_command(relay, CodingAgent::Hermes),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes"
     );
     for command in [
         "nemo-relay hook-forward hermes",
@@ -211,6 +216,50 @@ hooks:
             "event {event}"
         );
     }
+}
+
+#[test]
+fn persistent_config_rejects_a_foreign_server_with_the_reserved_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let generation = temp.path().join(GENERATION_FILE_NAME);
+    let command = persistent_hook_command(&relay);
+    let existing = r#"
+model: keep-me
+mcp_servers:
+  nemo-relay:
+    command: foreign-mcp
+    args: [serve]
+"#;
+
+    let error = persistent_config(Some(existing), &relay, &command, &generation, &[])
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("not managed by Relay"), "{error}");
+    assert!(error.contains("rename or remove"), "{error}");
+}
+
+#[test]
+fn foreign_reserved_server_aborts_install_before_any_file_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+    let config =
+        b"# preserve\nmcp_servers:\n  nemo-relay:\n    command: foreign-mcp\n    args: [serve]\n";
+    let allowlist = b"{\"approvals\":[{\"event\":\"custom\",\"command\":\"custom-hook\"}]}\n";
+    std::fs::write(&paths.config, config).unwrap();
+    std::fs::write(&paths.allowlist, allowlist).unwrap();
+
+    let error = install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("not managed by Relay"), "{error}");
+    assert_eq!(std::fs::read(&paths.config).unwrap(), config);
+    assert_eq!(std::fs::read(&paths.allowlist).unwrap(), allowlist);
+    assert!(!paths.generation.exists());
 }
 
 #[test]
@@ -480,10 +529,77 @@ fn uninstall_noops_without_creating_a_hermes_home() {
 }
 
 #[test]
+fn unrelated_hermes_files_are_not_owned_or_rewritten_by_uninstall() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = paths(&temp.path().join("hermes"));
+    std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+    let config = b"# preserve this exact formatting\nmodel: custom\nmcp_servers:\n  nemo-relay:\n    command: foreign-mcp\n    args: [serve]\n";
+    let allowlist = b"{ \"approvals\": [{\"event\":\"custom\",\"command\":\"custom-hook\"}] }\n";
+    std::fs::write(&paths.config, config).unwrap();
+    std::fs::write(&paths.allowlist, allowlist).unwrap();
+
+    assert!(!persistent_state_exists(&paths.config));
+    assert!(uninstall_persistent(&paths.config).unwrap().is_empty());
+    assert_eq!(std::fs::read(&paths.config).unwrap(), config);
+    assert_eq!(std::fs::read(&paths.allowlist).unwrap(), allowlist);
+    assert!(!paths.generation.exists());
+}
+
+#[test]
+fn persistent_state_detection_recognizes_each_relay_owned_surface() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let roots = ["generation", "mcp", "hook", "approval"].map(|name| {
+        let paths = paths(&temp.path().join(name));
+        std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
+        paths
+    });
+
+    std::fs::write(&roots[0].generation, "active\n").unwrap();
+    std::fs::write(
+        &roots[1].config,
+        serde_yaml::to_string(&json!({
+            "mcp_servers": {MCP_SERVER_NAME: expected_mcp_server(&relay, &roots[1].generation, &[])}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        &roots[2].config,
+        serde_yaml::to_string(&json!({
+            "hooks": {
+                "on_session_start": [{"command": persistent_hook_command(&relay)}]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        &roots[3].allowlist,
+        serde_json::to_vec(&json!({
+            "approvals": [{
+                "event": "on_session_start",
+                "command": persistent_hook_command(&relay)
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    for paths in roots {
+        assert!(
+            persistent_state_exists(&paths.config),
+            "managed state at {} was not detected",
+            paths.config.display()
+        );
+    }
+}
+
+#[test]
 fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
-    let command = persistent_hook_command(&relay);
+    let command = crate::installer::transparent_hook_forward_command(&relay, CodingAgent::Hermes);
     let existing = format!(
         r#"
 mcp_servers:

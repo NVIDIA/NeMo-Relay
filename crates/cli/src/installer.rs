@@ -108,11 +108,7 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliE
         return handle_hook_error(error, fail_closed);
     }
     let mut response = send_hook_forward_request(&command, &url, input.clone()).await?;
-    if response
-        .as_ref()
-        .is_err_and(|error| error.is_connect() || error.is_timeout())
-        && destination.recover
-    {
+    if response.as_ref().is_err_and(reqwest::Error::is_connect) && destination.recover {
         let launch = recovery
             .as_ref()
             .expect("recoverable destinations have a recovery plan");
@@ -175,25 +171,15 @@ struct HookDestination {
 // replace it with a persistent sidecar.
 fn hook_destination(command: &HookForwardCommand) -> HookDestination {
     resolve_hook_destination(
-        command.agent,
         command.gateway_url.clone(),
         std::env::var("NEMO_RELAY_GATEWAY_URL").ok(),
     )
 }
 
 fn resolve_hook_destination(
-    agent: CodingAgent,
     command_url: Option<String>,
     environment_url: Option<String>,
 ) -> HookDestination {
-    if agent == CodingAgent::Hermes
-        && let Some(gateway_url) = environment_url
-    {
-        return HookDestination {
-            gateway_url,
-            recover: false,
-        };
-    }
     if let Some(gateway_url) = command_url {
         return HookDestination {
             gateway_url,
@@ -236,6 +222,8 @@ async fn send_hook_forward_request(
     input: String,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {
     Ok(reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(HOOK_FORWARD_TIMEOUT)
         .build()?
         .post(url)
@@ -349,6 +337,16 @@ pub(crate) fn hook_forward_command(executable: &str, agent: CodingAgent) -> Stri
 /// Canonical persistent hook command used by every supported host.
 pub(crate) fn persistent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
     persistent_hook_forward_command_for_platform(relay, agent, cfg!(windows))
+}
+
+/// Canonical transparent hook command. The launched agent receives its dynamic gateway through
+/// `NEMO_RELAY_GATEWAY_URL`, so the command must not persist a fixed endpoint.
+pub(crate) fn transparent_hook_forward_command(relay: &Path, agent: CodingAgent) -> String {
+    format!(
+        "{} hook-forward {}",
+        crate::plugin_host::shell_quote_for_platform(relay, cfg!(windows)),
+        agent.as_arg()
+    )
 }
 
 pub(crate) fn persistent_hook_forward_command_for_platform(

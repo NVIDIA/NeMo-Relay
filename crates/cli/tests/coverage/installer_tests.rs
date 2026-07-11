@@ -75,27 +75,17 @@ fn hermes_config_merge_rejects_invalid_yaml() {
 }
 
 #[test]
-fn hermes_hook_forward_prefers_dynamic_env_url() {
+fn explicit_persistent_destinations_ignore_ambient_urls() {
     let destination = resolve_hook_destination(
-        CodingAgent::Hermes,
         Some("http://installed".into()),
         Some("http://dynamic".into()),
     );
+    assert_eq!(destination.gateway_url, "http://installed");
+    assert!(destination.recover);
+
+    let destination = resolve_hook_destination(None, Some("http://dynamic".into()));
     assert_eq!(destination.gateway_url, "http://dynamic");
     assert!(!destination.recover);
-
-    let destination =
-        resolve_hook_destination(CodingAgent::Hermes, Some("http://installed".into()), None);
-    assert_eq!(destination.gateway_url, "http://installed");
-    assert!(destination.recover);
-
-    let destination = resolve_hook_destination(
-        CodingAgent::Codex,
-        Some("http://installed".into()),
-        Some("http://dynamic".into()),
-    );
-    assert_eq!(destination.gateway_url, "http://installed");
-    assert!(destination.recover);
 }
 
 #[test]

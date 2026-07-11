@@ -72,7 +72,7 @@ pub(crate) struct HostPluginReadinessCheck {
     pub(crate) details: String,
 }
 
-/// Readiness state for one persisted host-plugin installation.
+/// Readiness state for one persistent coding-agent integration.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct HostPluginReadiness {
     pub(crate) host: String,
@@ -118,16 +118,22 @@ struct PendingHostPluginReadiness {
     receiver: Receiver<HostPluginReadiness>,
 }
 
-/// Collects default-location host-plugin readiness without printing or mutating state.
+/// Collects default-location persistent-integration readiness without printing or mutating state.
 ///
 /// Only hosts with a persisted install-state record are included. This keeps ordinary
 /// transparent-run users from failing the top-level doctor merely because they have not opted
-/// into the persistent host-plugin workflow.
+/// into a persistent coding-agent integration.
 pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness> {
     let install_dir = default_install_dir().canonicalize_or_self();
-    let pending = [IntegrationHost::Codex, IntegrationHost::ClaudeCode]
+    let mut hosts = [IntegrationHost::Codex, IntegrationHost::ClaudeCode]
         .into_iter()
         .filter(|host| state_path(*host, &install_dir).exists())
+        .collect::<Vec<_>>();
+    if hermes_config_path().is_ok_and(|path| crate::hermes::persistent_state_exists(&path)) {
+        hosts.push(IntegrationHost::Hermes);
+    }
+    let pending = hosts
+        .into_iter()
         .map(|host| spawn_default_host_plugin_readiness(host, install_dir.clone()))
         .collect::<Vec<_>>();
     let deadline = Instant::now() + DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT;
@@ -146,7 +152,12 @@ fn spawn_default_host_plugin_readiness(
     host: IntegrationHost,
     install_dir: PathBuf,
 ) -> PendingHostPluginReadiness {
-    let state_path = state_path(host, &install_dir);
+    let state_path = match host {
+        IntegrationHost::Hermes => hermes_config_path()
+            .unwrap_or_else(|_| state_path(IntegrationHost::Hermes, &install_dir)),
+        _ => state_path(host, &install_dir),
+    };
+    let worker_state_path = state_path.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let options = PluginInstallOptions {
@@ -158,7 +169,12 @@ fn spawn_default_host_plugin_readiness(
         };
         let runner = RealCommandRunner;
         let setup_runner = RealPluginSetupRunner;
-        let readiness = collect_host_plugin_readiness(host, &options, &runner, &setup_runner);
+        let readiness = match host {
+            IntegrationHost::Hermes => {
+                collect_hermes_host_readiness(&worker_state_path, &options, &runner)
+            }
+            _ => collect_host_plugin_readiness(host, &options, &runner, &setup_runner),
+        };
         let _ = sender.send(readiness);
     });
     PendingHostPluginReadiness {
@@ -177,12 +193,12 @@ fn receive_host_plugin_readiness(
         Err(mpsc::RecvTimeoutError::Timeout) => failed_host_plugin_readiness(
             pending.host,
             pending.state_path,
-            "timed out while collecting host-plugin readiness",
+            "timed out while collecting persistent-integration readiness",
         ),
         Err(mpsc::RecvTimeoutError::Disconnected) => failed_host_plugin_readiness(
             pending.host,
             pending.state_path,
-            "host-plugin readiness collector stopped unexpectedly",
+            "persistent-integration readiness collector stopped unexpectedly",
         ),
     }
 }
@@ -192,13 +208,20 @@ fn failed_host_plugin_readiness(
     state_path: PathBuf,
     details: impl Into<String>,
 ) -> HostPluginReadiness {
-    let layout = PluginLayout::new(host, state_path.parent().unwrap_or_else(|| Path::new(".")));
+    let (marketplace, plugin) = match host {
+        IntegrationHost::Hermes => (None, None),
+        _ => {
+            let layout =
+                PluginLayout::new(host, state_path.parent().unwrap_or_else(|| Path::new(".")));
+            (Some(layout.marketplace_root), Some(layout.plugin_root))
+        }
+    };
     let mut readiness = HostPluginReadiness {
         host: host.as_arg().to_string(),
         remediation: format!("nemo-relay install {} --force", host.as_arg()),
         state_path,
-        marketplace: Some(layout.marketplace_root),
-        plugin: Some(layout.plugin_root),
+        marketplace,
+        plugin,
         checks: Vec::new(),
         relay: None,
         host_plugin_registered: None,
@@ -481,29 +504,92 @@ fn doctor_hermes_json_value(
     runner: &dyn CommandRunner,
 ) -> Result<Value, String> {
     let config = hermes_config_path()?;
-    let version = host::validate_host_version(IntegrationHost::Hermes, options, runner);
-    let integration = crate::hermes::diagnose_persistent(&config);
-    let ok = version.is_ok() && integration.is_ok();
+    let readiness = collect_hermes_host_readiness(&config, options, runner);
     Ok(json!({
-        "ok": ok,
-        "host": IntegrationHost::Hermes.as_arg(),
-        "remediation": format!("nemo-relay install {} --force", IntegrationHost::Hermes.as_arg()),
+        "ok": readiness.ok(),
+        "host": readiness.host,
+        "remediation": readiness.remediation,
         "config": config,
-        "readiness_checks": [
-            {
-                "name": "Hermes Agent version",
-                "ok": version.is_ok(),
-                "details": version
-                    .map(|_| format!("{} is installed", CodingAgent::Hermes.version_requirement()))
-                    .unwrap_or_else(|error| error),
-            },
-            {
-                "name": "Hermes MCP and hooks",
-                "ok": integration.is_ok(),
-                "details": integration.unwrap_or_else(|error| error),
-            }
-        ]
+        "readiness_checks": readiness.checks
     }))
+}
+
+fn collect_hermes_host_readiness(
+    config: &Path,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> HostPluginReadiness {
+    let mut readiness = HostPluginReadiness {
+        host: IntegrationHost::Hermes.as_arg().into(),
+        remediation: format!(
+            "nemo-relay install {} --force",
+            IntegrationHost::Hermes.as_arg()
+        ),
+        state_path: config.to_path_buf(),
+        marketplace: None,
+        plugin: None,
+        checks: Vec::new(),
+        relay: None,
+        host_plugin_registered: None,
+        host_marketplace_registered: None,
+        plugin_setup: None,
+    };
+
+    let host_cli = require_host_cli(IntegrationHost::Hermes, options, runner);
+    readiness.push(
+        "Host CLI",
+        host_cli
+            .as_ref()
+            .map(|_| "hermes is available".into())
+            .map_err(Clone::clone),
+    );
+    let version = host::validate_host_version(IntegrationHost::Hermes, options, runner);
+    if version.is_err() {
+        readiness.remediation = format!(
+            "upgrade to {}, then run `nemo-relay install {} --force`",
+            CodingAgent::Hermes.version_requirement(),
+            IntegrationHost::Hermes.as_arg()
+        );
+    }
+    readiness.push(
+        "Hermes Agent version",
+        version.map(|_| format!("{} is installed", CodingAgent::Hermes.version_requirement())),
+    );
+
+    let relay = crate::hermes::configured_relay_executable(config);
+    readiness.push(
+        "Configured Relay binary",
+        relay
+            .as_ref()
+            .map(|path| format!("found at {}", path.display()))
+            .map_err(Clone::clone),
+    );
+    match relay {
+        Ok(relay) => {
+            readiness.relay = Some(relay.clone());
+            readiness.push(
+                "Relay hook support",
+                validate_relay_hook_forward(&relay, options, runner)
+                    .map(|_| "hook-forward is supported".into()),
+            );
+            readiness.push(
+                "Relay MCP support",
+                validate_relay_mcp(&relay, options, runner)
+                    .map(|_| "native mcp subcommand is supported".into()),
+            );
+        }
+        Err(error) => {
+            let unavailable = || format!("cannot verify configured Relay capabilities: {error}");
+            readiness.push("Relay hook support", Err(unavailable()));
+            readiness.push("Relay MCP support", Err(unavailable()));
+        }
+    }
+
+    readiness.push(
+        "Hermes MCP, hooks, and trust",
+        crate::hermes::diagnose_persistent(config),
+    );
+    readiness
 }
 
 fn install_host(

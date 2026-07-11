@@ -627,6 +627,9 @@ async fn probe_version(binary: &Path) -> Option<String> {
         .await
         .ok()?
         .ok()?;
+    if !output.status.success() {
+        return None;
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first_line = stdout.lines().next()?.trim();
     if first_line.is_empty() {
@@ -1499,9 +1502,9 @@ fn format_human_agents(out: &mut String, report: &DoctorReport) {
 }
 
 fn format_human_host_plugins(out: &mut String, report: &DoctorReport) {
-    out.push_str("  Host plugins\n");
+    out.push_str("  Persistent integrations\n");
     if report.host_plugins.is_empty() {
-        out.push_str("    ·  none installed; run `nemo-relay install <host>` to enable persistent host plugins\n");
+        out.push_str("    ·  none installed; run `nemo-relay install <host>` to enable one\n");
     } else {
         for plugin in &report.host_plugins {
             out.push_str(&format!(

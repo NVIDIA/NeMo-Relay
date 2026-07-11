@@ -34,7 +34,11 @@ pub(crate) fn transparent_config(existing: &str, relay: &Path) -> Result<String,
     let mut root = parse_yaml_object(Some(existing), "Hermes config")?;
     strip_managed_hooks(&mut root)?;
     remove_managed_mcp(&mut root)?;
-    let root = merge_hooks(root, hermes_hooks(&persistent_hook_command(relay)))?;
+    let command = crate::installer::transparent_hook_forward_command(
+        relay,
+        crate::config::CodingAgent::Hermes,
+    );
+    let root = merge_hooks(root, hermes_hooks(&command))?;
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }
 
@@ -58,6 +62,13 @@ pub(super) fn persistent_config(
     environment: &[String],
 ) -> Result<Value, CliError> {
     let mut root = parse_yaml_object(existing, "Hermes config")?;
+    if let Some(server) = root.pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}"))
+        && !is_managed_mcp_server(server)
+    {
+        return Err(CliError::Install(format!(
+            "Hermes MCP server `{MCP_SERVER_NAME}` already exists and is not managed by Relay; rename or remove it before installing the Relay integration"
+        )));
+    }
     strip_managed_hooks(&mut root)?;
     root = merge_hooks(root, hermes_hooks(command))?;
     let servers = object_field_mut(&mut root, "mcp_servers", "mcp_servers")?;

@@ -222,7 +222,7 @@ fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
 
     assert_eq!(exit_code(&report), 1);
     let rendered = format_human(&report);
-    assert!(rendered.contains("Host plugins"));
+    assert!(rendered.contains("Persistent integrations"));
     assert!(rendered.contains("repair: nemo-relay install codex --force"));
     let json: serde_json::Value = serde_json::from_str(&format_json(&report).unwrap()).unwrap();
     assert_eq!(json["schema_version"], 1);
@@ -745,8 +745,12 @@ async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
     let quiet = temp.path().join("quiet-agent");
     std::fs::write(&quiet, "#!/bin/sh\nexit 0\n").unwrap();
     make_executable(&quiet);
+    let failed = temp.path().join("failed-agent");
+    std::fs::write(&failed, "#!/bin/sh\nprintf 'codex-cli 99.0.0\\n'\nexit 7\n").unwrap();
+    make_executable(&failed);
 
     assert_eq!(probe_version(&quiet).await, None);
+    assert_eq!(probe_version(&failed).await, None);
     assert_eq!(
         probe_version(&temp.path().join("missing-agent")).await,
         None

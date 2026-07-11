@@ -508,6 +508,67 @@ fn insert_after_agent_uses_last_matching_agent_or_first_word_fallback() {
 }
 
 #[test]
+fn version_probe_preserves_known_wrappers_and_skips_opaque_ones() {
+    assert_eq!(
+        version_probe_argv(CodingAgent::Codex, &["codex".into(), "exec".into()]),
+        Some(vec!["codex".into(), "--version".into()])
+    );
+    assert_eq!(
+        version_probe_argv(
+            CodingAgent::Codex,
+            &["npx".into(), "--yes".into(), "codex".into(), "exec".into(),],
+        ),
+        Some(vec![
+            "npx".into(),
+            "--yes".into(),
+            "codex".into(),
+            "--version".into(),
+        ])
+    );
+    assert_eq!(
+        version_probe_argv(
+            CodingAgent::Hermes,
+            &["company-agent-wrapper".into(), "chat".into()],
+        ),
+        None
+    );
+}
+
+#[test]
+fn windows_agent_command_line_quotes_paths_and_metacharacters() {
+    let line = windows_command_line(
+        Path::new(r"C:\Program Files\Codex&Tools\npx.cmd"),
+        &["codex".into(), "--version".into(), "100%".into()],
+    );
+
+    assert!(line.contains(r#""C:\Program Files\Codex^&Tools\npx.cmd""#));
+    assert!(line.contains("codex --version"));
+    assert!(line.contains(r#""100%%""#));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
+    let temp = tempfile::tempdir().unwrap();
+    let wrapper = temp.path().join("npx");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\n[ \"$1\" = codex ] && [ \"$2\" = --version ] || exit 9\necho 'codex-cli 0.143.0'\n",
+    )
+    .unwrap();
+    make_executable(&wrapper);
+    let probe = version_probe_argv(
+        CodingAgent::Codex,
+        &[wrapper.display().to_string(), "codex".into(), "exec".into()],
+    )
+    .unwrap();
+
+    validate_agent_version(CodingAgent::Codex, &probe)
+        .await
+        .unwrap();
+}
+
+#[test]
 fn prepares_claude_dry_run_without_writing_plugin() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),

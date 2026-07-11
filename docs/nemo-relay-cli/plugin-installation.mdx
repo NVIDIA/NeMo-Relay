@@ -214,9 +214,12 @@ For Claude Code, doctor also validates version 2.1.121 or newer, the generated
 `alwaysLoad` MCP server, and its generation marker. A stopped sidecar remains
 informational because the next MCP process start or hook retry starts it.
 
-For Hermes, doctor validates Hermes Agent 0.18.2 or newer plus the generated MCP
-entry, every hook and trust pair, its generation marker, and environment
-references.
+For Hermes, doctor validates Hermes Agent 0.18.2 or newer. It reads the Relay
+executable from the managed Hermes MCP entry, verifies that exact executable
+supports both `mcp` and `hook-forward`, and then checks every hook and trust
+pair, the generation marker, and environment references. Top-level
+`nemo-relay doctor` discovers this managed state directly from the Hermes user
+configuration; an `[agents.hermes]` Relay configuration block is not required.
 
 Use the focused plugin doctor when diagnosing one host or an installation that
 uses a custom directory:
@@ -261,11 +264,26 @@ hook, trust, and generation state.
 
 This release removes the internal `nemo-relay plugin-shim` command. Existing
 generated installations should be refreshed with
-`nemo-relay install <host> --force`. Custom integrations must invoke
-`nemo-relay hook-forward <agent>` and pass the canonical lifecycle payload on
-standard input. Persistent generated commands include the fixed gateway URL;
-transparent wrappers provide `NEMO_RELAY_GATEWAY_URL` for their dynamic
-gateway.
+`nemo-relay install <host> --force`. Use the following public replacements for
+custom automation:
+
+| Removed internal command | Public replacement |
+| --- | --- |
+| `plugin-shim hook <agent>` | `hook-forward <agent>` with the canonical lifecycle payload on standard input |
+| `plugin-shim serve` | `mcp --agent <agent>` for host-managed lifecycle, or `--bind <address>` to run a gateway directly |
+| `plugin-shim install <agent>` | `install <host>` |
+| `plugin-shim uninstall <agent>` | `uninstall <host>` |
+| `plugin-shim provider claude enable` | `install claude-code` |
+| `plugin-shim provider claude restore` | `uninstall claude-code` |
+| `plugin-shim provider claude status` | `doctor --plugin claude-code` |
+| `plugin-shim doctor <agent>` | `doctor --plugin <host>` |
+
+Persistent generated hook commands include the fixed gateway URL. Transparent
+wrappers provide `NEMO_RELAY_GATEWAY_URL` for their dynamic gateway. When a
+transparent run uses a recognizable wrapper command, such as `npx codex`, Relay
+checks the host version through that wrapper. Opaque custom wrappers remain
+supported and are responsible for selecting a compatible host version; install
+and doctor still enforce the minimum version for directly managed hosts.
 
 Hermes setup is now available through the same public install, doctor, and
 uninstall commands as Claude Code and Codex. `nemo-relay config hermes` remains

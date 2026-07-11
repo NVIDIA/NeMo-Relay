@@ -271,6 +271,7 @@ struct HomeScope<'a> {
     prev_home: Option<std::ffi::OsString>,
     prev_userprofile: Option<std::ffi::OsString>,
     prev_codex_home: Option<std::ffi::OsString>,
+    prev_hermes_home: Option<std::ffi::OsString>,
 }
 
 impl<'a> HomeScope<'a> {
@@ -281,17 +282,20 @@ impl<'a> HomeScope<'a> {
         let prev_home = std::env::var_os("HOME");
         let prev_userprofile = std::env::var_os("USERPROFILE");
         let prev_codex_home = std::env::var_os("CODEX_HOME");
+        let prev_hermes_home = std::env::var_os("HERMES_HOME");
         // SAFETY: This test holds a process-wide mutex for the lifetime of the env override.
         unsafe {
             std::env::set_var("HOME", path);
             std::env::remove_var("USERPROFILE");
             std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("HERMES_HOME");
         }
         Self {
             _guard: guard,
             prev_home,
             prev_userprofile,
             prev_codex_home,
+            prev_hermes_home,
         }
     }
 }
@@ -312,6 +316,10 @@ impl Drop for HomeScope<'_> {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
                 None => std::env::remove_var("CODEX_HOME"),
             }
+            match self.prev_hermes_home.take() {
+                Some(value) => std::env::set_var("HERMES_HOME", value),
+                None => std::env::remove_var("HERMES_HOME"),
+            }
         }
     }
 }
@@ -321,6 +329,7 @@ struct PathScope<'a> {
     previous: Option<OsString>,
     previous_home: Option<OsString>,
     previous_codex_home: Option<OsString>,
+    previous_hermes_home: Option<OsString>,
 }
 
 impl<'a> PathScope<'a> {
@@ -331,17 +340,20 @@ impl<'a> PathScope<'a> {
         let previous = std::env::var_os("PATH");
         let previous_home = std::env::var_os("HOME");
         let previous_codex_home = std::env::var_os("CODEX_HOME");
+        let previous_hermes_home = std::env::var_os("HERMES_HOME");
         // SAFETY: This test holds the process-wide environment mutex for the override lifetime.
         unsafe {
             std::env::set_var("PATH", path);
             std::env::set_var("HOME", home);
             std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("HERMES_HOME");
         }
         Self {
             _guard: guard,
             previous,
             previous_home,
             previous_codex_home,
+            previous_hermes_home,
         }
     }
 }
@@ -361,6 +373,10 @@ impl Drop for PathScope<'_> {
             match self.previous_codex_home.take() {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
                 None => std::env::remove_var("CODEX_HOME"),
+            }
+            match self.previous_hermes_home.take() {
+                Some(value) => std::env::set_var("HERMES_HOME", value),
+                None => std::env::remove_var("HERMES_HOME"),
             }
         }
     }
@@ -1748,6 +1764,9 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
 #[test]
 fn select_all_uses_operation_specific_inputs() {
     let dir = tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".hermes")).unwrap();
+    let _home = HomeScope::enter(&home);
     let runner = MockRunner::default().with_executable("codex", "/bin/codex");
     let selected = select_hosts(
         IntegrationHost::All,
@@ -1780,6 +1799,77 @@ fn select_all_uses_operation_specific_inputs() {
     )
     .unwrap();
     assert_eq!(selected, vec![IntegrationHost::ClaudeCode]);
+
+    let unrelated_hermes_config = b"# user-owned formatting\nmodel: custom\n";
+    let hermes_config = home.join(".hermes/config.yaml");
+    std::fs::write(&hermes_config, unrelated_hermes_config).unwrap();
+    let selected = select_hosts(
+        IntegrationHost::All,
+        HostSelectionMode::InstalledState,
+        &options(dir.path()),
+        &runner,
+    )
+    .unwrap();
+    assert_eq!(selected, vec![IntegrationHost::ClaudeCode]);
+    assert_eq!(
+        std::fs::read(&hermes_config).unwrap(),
+        unrelated_hermes_config
+    );
+}
+
+#[test]
+fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it() {
+    let dir = tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _home = HomeScope::enter(&home);
+    let config = hermes_config_path().unwrap();
+    let relay = home
+        .join("bin")
+        .join(format!("nemo-relay{}", std::env::consts::EXE_SUFFIX));
+    std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), &relay).unwrap();
+    crate::hermes::install_persistent(&config, &relay).unwrap();
+    let configured_relay = crate::hermes::configured_relay_executable(&config).unwrap();
+    let runner = MockRunner::default()
+        .with_executable("hermes", "/bin/hermes")
+        .with_capture_output("/bin/hermes --version", "Hermes Agent v0.18.2 (test)\n");
+
+    let report = doctor_hermes_json_value(&options(dir.path()), &runner).unwrap();
+
+    assert_eq!(report["ok"], json!(true));
+    assert_eq!(
+        runner.quiet_commands(),
+        vec![
+            format!("{} hook-forward --help", configured_relay.display()),
+            format!("{} mcp --help", configured_relay.display()),
+        ]
+    );
+    let checks = report["readiness_checks"].as_array().unwrap();
+    for expected in [
+        "Host CLI",
+        "Hermes Agent version",
+        "Configured Relay binary",
+        "Relay hook support",
+        "Relay MCP support",
+        "Hermes MCP, hooks, and trust",
+    ] {
+        assert!(
+            checks
+                .iter()
+                .any(|check| check["name"] == expected && check["ok"] == json!(true)),
+            "missing successful {expected} check: {checks:?}"
+        );
+    }
+
+    let readiness = collect_default_host_plugin_readiness();
+    let hermes = readiness
+        .iter()
+        .find(|readiness| readiness.host == "hermes")
+        .expect("top-level doctor should discover install-only Hermes state");
+    assert_eq!(hermes.state_path, config);
+    assert!(hermes.marketplace.is_none());
+    assert!(hermes.plugin.is_none());
 }
 
 #[test]
