@@ -122,10 +122,11 @@ process.
 
 Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
 `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`,
-`PostToolUseFailure`, `Notification`, and `PreCompact` for scope, tool, and
-mark events. `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and
-`Stop` are retained as private LLM correlation hints and are not emitted as
-standalone NeMo Relay events.
+`PostToolUseFailure`, `Notification`, `PreCompact`, and `PostCompact` for scope,
+tool, and mark events. Both compaction hooks emit canonical `compaction` marks.
+`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
+retained as private LLM correlation hints and are not emitted as standalone
+NeMo Relay events.
 
 Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use

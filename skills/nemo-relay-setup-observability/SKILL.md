@@ -38,6 +38,11 @@ activity but has not yet decided which output they need.
   OpenTelemetry, or OpenInference output.
 - Event payloads reflect sanitized post-guardrail input and output when calls use
   managed helpers or manual lifecycle params provide those fields.
+- Annotated LLM start histories retain complete sanitized context while their
+  agent session is fresh (initially and after compaction). When stale,
+  annotations retain system instructions, the latest user message, and every
+  following assistant or tool message. Codec-backed event inputs use the same
+  projection; provider execution remains unchanged.
 - Event fields include semantic input/output through the ATOF `data` field,
   typed profile data such as `model_name` and `tool_call_id`, and codec-provided
   annotated LLM request/response data for in-process subscribers and exporters.

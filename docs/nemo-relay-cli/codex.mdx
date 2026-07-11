@@ -181,7 +181,8 @@ traffic to pass through the gateway.
 
 Generated Codex hooks include `SessionStart`, `SessionEnd`, `SubagentStart`,
 `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-`Notification`, and `PreCompact` for scope, tool, and mark events.
+`Notification`, `PreCompact`, and `PostCompact` for scope, tool, and mark
+events. Both compaction hooks emit canonical `compaction` marks.
 `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
 retained as private LLM correlation hints and are not emitted as standalone
 NeMo Relay events.
