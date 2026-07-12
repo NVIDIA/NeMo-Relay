@@ -46,25 +46,16 @@ impl GatewayPlan {
     }
 
     pub(super) async fn acquire(mut self) -> Result<GatewayLease, CliError> {
-        let acquisition = acquire_gateway(self.spec.clone(), self.generation_guard.take()).await?;
-        let endpoint = acquisition.endpoint;
-        self.spec = acquisition.spec;
-        let monitor = tokio::spawn(async move { self.monitor(endpoint, acquisition.lease).await });
+        let endpoint = acquire_gateway(self.spec.clone(), self.generation_guard.take()).await?;
+        let monitor = tokio::spawn(async move { self.monitor(endpoint).await });
         Ok(GatewayLease { monitor })
     }
 
-    async fn monitor(
-        self,
-        endpoint: crate::sidecar::GatewayEndpoint,
-        endpoint_lease: crate::sidecar::EndpointLease,
-    ) -> Result<(), CliError> {
+    async fn monitor(self, endpoint: crate::sidecar::GatewayEndpoint) -> Result<(), CliError> {
         let health_spec = self.spec.clone();
         let restart_spec = self.spec.clone();
         let restart_generation = self.generation.clone();
         let verify_generation = self.generation;
-        let recovery_cohort = endpoint_lease.cohort_id().to_string();
-        let verify_cohort = recovery_cohort.clone();
-        let verify_url = endpoint.url.clone();
         maintain_gateway_instances_with_generation(
             self.spec.bind(),
             endpoint,
@@ -84,14 +75,11 @@ impl GatewayPlan {
                     restart_spec.clone(),
                     restart_generation.clone(),
                     expected_instance,
-                    recovery_cohort.clone(),
                 )
             },
             move || {
                 let generation = verify_generation.clone();
-                let cohort = verify_cohort.clone();
-                let url = verify_url.clone();
-                async move { verify_lifecycle_async(generation, cohort, url).await }
+                async move { verify_lifecycle_async(generation).await }
             },
         )
         .await
@@ -193,7 +181,7 @@ impl Drop for GatewayLease {
 async fn acquire_gateway(
     spec: GatewaySpec,
     generation_guard: Option<ActiveGenerationGuard>,
-) -> Result<crate::sidecar::GatewayAcquisition, CliError> {
+) -> Result<GatewayEndpoint, CliError> {
     tokio::task::spawn_blocking(move || {
         let _generation_guard = generation_guard;
         spec.acquire()
@@ -207,37 +195,25 @@ async fn recover_gateway(
     spec: GatewaySpec,
     generation: Option<InstallGeneration>,
     expected_instance: String,
-    recovery_cohort: String,
 ) -> Result<GatewayEndpoint, CliError> {
     tokio::task::spawn_blocking(move || {
         let _generation_guard = generation
             .as_ref()
             .map(InstallGeneration::guard_current)
             .transpose()?;
-        spec.recover(&expected_instance, &recovery_cohort)
+        spec.recover(&expected_instance)
     })
     .await
     .map_err(|error| CliError::Launch(format!("gateway recovery task failed: {error}")))?
     .map_err(CliError::Launch)
 }
 
-async fn verify_lifecycle_async(
-    generation: Option<InstallGeneration>,
-    recovery_cohort: String,
-    gateway_url: String,
-) -> Result<(), CliError> {
+async fn verify_lifecycle_async(generation: Option<InstallGeneration>) -> Result<(), CliError> {
     loop {
         let generation = generation.clone();
-        let recovery_cohort = recovery_cohort.clone();
-        let gateway_url = gateway_url.clone();
         let current = tokio::task::spawn_blocking(move || {
             if let Some(generation) = generation.as_ref()
                 && !generation.try_verify_current()?
-            {
-                return Ok(false);
-            }
-            if crate::sidecar::check_gateway_cohort(&gateway_url, &recovery_cohort)?
-                == crate::sidecar::GatewayCohortStatus::UpdateInProgress
             {
                 return Ok(false);
             }

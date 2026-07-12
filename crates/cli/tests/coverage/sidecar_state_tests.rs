@@ -1,342 +1,66 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use super::*;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::Path;
-use std::thread;
-use std::time::Duration;
+use std::net::TcpListener;
 
-use tempfile::tempdir;
-
-use super::*;
-
-#[test]
-fn endpoint_leases_reset_recovery_only_after_the_last_client_closes() {
-    let runtime = tempfile::tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let first = EndpointLease::acquire(runtime.path(), url).unwrap();
-    let cohort = first.cohort_id().to_string();
-    assert!(first.fresh_epoch());
-    let mut epoch = RecoveryEpoch::new(url, &cohort, "gateway-1");
-    epoch.restarts = 1;
-    write_recovery_epoch(runtime.path(), &epoch).unwrap();
-
-    let second = EndpointLease::acquire(runtime.path(), url).unwrap();
-    assert!(!second.fresh_epoch());
-    assert!(
-        read_recovery_epoch(runtime.path(), url, &cohort)
-            .unwrap()
-            .is_some()
-    );
-    drop(first);
-
-    let third = EndpointLease::acquire(runtime.path(), url).unwrap();
-    assert!(!third.fresh_epoch());
-    drop(second);
-    drop(third);
-
-    let next_epoch = EndpointLease::acquire(runtime.path(), url).unwrap();
-    assert!(next_epoch.fresh_epoch());
-    assert!(
-        read_recovery_epoch(runtime.path(), url, next_epoch.cohort_id())
-            .unwrap()
-            .is_none()
-    );
+struct EnvScope {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Vec<(&'static str, Option<OsString>)>,
 }
 
-#[test]
-fn endpoint_lease_release_is_serialized_with_registry_handoffs() {
-    let runtime = tempfile::tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let lease = EndpointLease::acquire(runtime.path(), url).unwrap();
-    let lease_path = lease.path.clone();
-    let registry = lock_file_for(
-        &lease_registry_path(runtime.path(), url),
-        Duration::from_secs(1),
-    )
-    .unwrap();
-    let (dropping, started) = std::sync::mpsc::channel();
-    let release = std::thread::spawn(move || {
-        dropping.send(()).unwrap();
-        drop(lease);
-    });
-    started.recv().unwrap();
-    std::thread::sleep(Duration::from_millis(50));
-
-    let still_locked = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&lease_path)
-        .unwrap();
-    assert_eq!(
-        try_lock_exclusive(&still_locked).unwrap(),
-        LockAttempt::Contended
-    );
-
-    drop(registry);
-    release.join().unwrap();
-    assert!(!lease_path.exists());
-}
-
-#[test]
-fn intentional_plugin_stop_starts_a_fresh_cohort_despite_old_live_leases() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path());
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
-    let runtime = state_dir().unwrap();
-    let url = crate::sidecar::DEFAULT_URL;
-    let old = EndpointLease::acquire(&runtime, url).unwrap();
-    let old_cohort = old.cohort_id().to_string();
-    let mut exhausted = RecoveryEpoch::new(url, &old_cohort, "gateway-old");
-    exhausted.restarts = 1;
-    write_recovery_epoch(&runtime, &exhausted).unwrap();
-
-    stop_owned_and_reset(url).unwrap();
-
-    let new = EndpointLease::acquire(&runtime, url).unwrap();
-    assert!(new.fresh_epoch());
-    assert_ne!(new.cohort_id(), old_cohort);
-    assert!(
-        read_recovery_epoch(&runtime, url, new.cohort_id())
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[test]
-fn failed_plugin_stop_restores_the_previous_cohort_and_recovery_budget() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path());
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
-    let runtime = state_dir().unwrap();
-    let url = "http://127.0.0.1:9";
-    let old = EndpointLease::acquire(&runtime, url).unwrap();
-    let old_cohort = old.cohort_id().to_string();
-    let mut exhausted = RecoveryEpoch::new(url, &old_cohort, "gateway-old");
-    exhausted.restarts = 1;
-    write_recovery_epoch(&runtime, &exhausted).unwrap();
-    write_owner(&owner_path(&runtime, url), 42, url, "", Some("fingerprint")).unwrap();
-
-    let error = stop_owned_and_reset(url).unwrap_err();
-    assert!(error.contains("has no shutdown token"), "{error}");
-
-    let overlapping = EndpointLease::acquire(&runtime, url).unwrap();
-    assert!(!overlapping.fresh_epoch());
-    assert_eq!(overlapping.cohort_id(), old_cohort);
-    assert_eq!(
-        read_recovery_epoch(&runtime, url, &old_cohort)
-            .unwrap()
-            .unwrap()
-            .restarts,
-        1
-    );
-}
-
-#[test]
-fn failed_plugin_stop_hides_transient_retirement_from_heartbeat_validation() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path());
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
-    let runtime = state_dir().unwrap();
-    let url = "http://127.0.0.1:9";
-    let old = EndpointLease::acquire(&runtime, url).unwrap();
-    let old_cohort = old.cohort_id().to_string();
-    write_owner(&owner_path(&runtime, url), 42, url, "", Some("fingerprint")).unwrap();
-    let (rotated_tx, rotated_rx) = std::sync::mpsc::channel();
-    let (continue_tx, continue_rx) = std::sync::mpsc::channel();
-
-    let stop = std::thread::spawn(move || {
-        stop_owned_and_reset_after_rotation(url, || {
-            rotated_tx.send(()).unwrap();
-            continue_rx.recv().unwrap();
-        })
-    });
-    rotated_rx.recv().unwrap();
-    let (validated_tx, validated_rx) = std::sync::mpsc::channel();
-    let validate_cohort = old_cohort.clone();
-    let validation = std::thread::spawn(move || {
-        validated_tx
-            .send(crate::sidecar::validate_gateway_cohort(
-                url,
-                &validate_cohort,
-            ))
-            .unwrap();
-    });
-
-    assert!(
-        validated_rx
-            .recv_timeout(std::time::Duration::from_millis(100))
-            .is_err(),
-        "heartbeat validation observed the uncommitted cohort rotation"
-    );
-    continue_tx.send(()).unwrap();
-    let error = stop.join().unwrap().unwrap_err();
-    assert!(error.contains("has no shutdown token"), "{error}");
-    validated_rx.recv().unwrap().unwrap();
-    validation.join().unwrap();
-}
-
-#[test]
-fn endpoint_cohort_lock_pins_hook_delivery_across_cross_host_replacement() {
-    let runtime = tempfile::tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let lease = EndpointLease::acquire(runtime.path(), url).unwrap();
-    let cohort = lease.cohort_id().to_string();
-    let delivery_guard = lock_endpoint_shared(runtime.path(), url).unwrap();
-    let concurrent_delivery_guard = lock_endpoint_shared(runtime.path(), url).unwrap();
-    validate_recovery_cohort(runtime.path(), url, &cohort).unwrap();
-
-    let runtime_path = runtime.path().to_path_buf();
-    let (replaced_tx, replaced_rx) = std::sync::mpsc::channel();
-    let replacement = std::thread::spawn(move || {
-        let _lock = lock_endpoint(&runtime_path, url).unwrap();
-        write_recovery_cohort(&runtime_path, &RecoveryCohort::new(url)).unwrap();
-        replaced_tx.send(()).unwrap();
-    });
-    assert!(
-        replaced_rx
-            .recv_timeout(Duration::from_millis(100))
-            .is_err(),
-        "a different host replaced the gateway while hook delivery was pinned"
-    );
-
-    drop(delivery_guard);
-    assert!(
-        replaced_rx
-            .recv_timeout(Duration::from_millis(100))
-            .is_err(),
-        "replacement ignored a second concurrent hook delivery"
-    );
-    drop(concurrent_delivery_guard);
-    replaced_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    replacement.join().unwrap();
-    assert!(validate_recovery_cohort(runtime.path(), url, &cohort).is_err());
-}
-
-#[test]
-fn recovery_epoch_rejects_identity_and_restart_count_drift() {
-    let runtime = tempfile::tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let path = recovery_path(runtime.path(), url);
-    std::fs::write(
-        &path,
-        serde_json::to_vec(&serde_json::json!({
-            "service": "foreign",
-            "bootstrap_protocol": BOOTSTRAP_PROTOCOL_VERSION,
-            "url": url,
-            "cohort_id": "cohort-1",
-            "instance_id": "gateway-1",
-            "restarts": 0,
-            "pending": false,
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    assert!(
-        read_recovery_epoch(runtime.path(), url, "cohort-1")
-            .unwrap_err()
-            .contains("incompatible")
-    );
-
-    let mut epoch = RecoveryEpoch::new(url, "cohort-1", "gateway-1");
-    epoch.restarts = 2;
-    write_recovery_epoch(runtime.path(), &epoch).unwrap();
-    assert!(
-        read_recovery_epoch(runtime.path(), url, "cohort-1")
-            .unwrap_err()
-            .contains("incompatible")
-    );
-}
-
-const SHUTDOWN_TOKEN_ENV: &str = "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN";
-
-struct Environment {
-    _lock: std::sync::MutexGuard<'static, ()>,
-    saved: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl Environment {
-    fn isolated() -> Self {
-        let lock = crate::test_support::ENV_TEST_LOCK
+impl EnvScope {
+    fn set(values: &[(&'static str, Option<&OsStr>)]) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let keys = [
-            "HOME",
-            "USERPROFILE",
-            "XDG_CONFIG_HOME",
-            BOOTSTRAP_STATE_DIR_ENV,
-            SHUTDOWN_TOKEN_ENV,
-            crate::config::BOOTSTRAP_FINGERPRINT_ENV,
-        ];
-        let saved = keys
-            .into_iter()
-            .map(|key| (key, std::env::var_os(key)))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = values
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
             .collect();
-        Self { _lock: lock, saved }
-    }
-
-    fn set(&self, key: &'static str, value: impl AsRef<OsStr>) {
-        // SAFETY: This scope holds the process-wide environment test lock.
-        unsafe { std::env::set_var(key, value) };
-    }
-
-    fn remove(&self, key: &'static str) {
-        // SAFETY: This scope holds the process-wide environment test lock.
-        unsafe { std::env::remove_var(key) };
-    }
-
-    fn clear_managed_bootstrap(&self) {
-        self.remove(BOOTSTRAP_STATE_DIR_ENV);
-        self.remove(SHUTDOWN_TOKEN_ENV);
-        self.remove(crate::config::BOOTSTRAP_FINGERPRINT_ENV);
+        for (name, value) in values {
+            // SAFETY: The process-wide environment lock is held for this scope.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
     }
 }
 
-impl Drop for Environment {
+impl Drop for EnvScope {
     fn drop(&mut self) {
-        // SAFETY: Restoration happens while the process-wide environment test lock is held.
-        unsafe {
-            for (key, value) in self.saved.drain(..).rev() {
+        for (name, value) in self.previous.drain(..) {
+            // SAFETY: The process-wide environment lock remains held during restoration.
+            unsafe {
                 match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
                 }
             }
         }
     }
 }
 
-fn configure_managed_bootstrap(environment: &Environment, state: &Path) {
-    environment.set(BOOTSTRAP_STATE_DIR_ENV, state);
-    environment.set(SHUTDOWN_TOKEN_ENV, "shutdown-token");
-    environment.set(crate::config::BOOTSTRAP_FINGERPRINT_ENV, "fingerprint");
-}
-
-fn read_http_headers(stream: &mut TcpStream) -> String {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 1024];
-    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-        let read = stream.read(&mut buffer).unwrap();
-        if read == 0 {
-            break;
-        }
-        request.extend_from_slice(&buffer[..read]);
+fn read_headers(stream: &mut std::net::TcpStream) -> String {
+    let mut bytes = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !bytes.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).unwrap();
+        bytes.push(byte[0]);
     }
-    String::from_utf8(request).unwrap()
+    String::from_utf8(bytes).unwrap()
 }
 
-fn request_header(request: &str, name: &str) -> String {
+fn header(request: &str, name: &str) -> String {
     request
         .lines()
         .find_map(|line| {
@@ -345,280 +69,171 @@ fn request_header(request: &str, name: &str) -> String {
                 .eq_ignore_ascii_case(name)
                 .then(|| value.trim().to_string())
         })
-        .unwrap_or_else(|| panic!("missing {name} in request: {request}"))
+        .unwrap()
 }
 
 #[test]
-fn state_files_distinguish_absence_from_read_failure() {
-    let dir = tempdir().unwrap();
-    let missing = dir.path().join("missing.json");
+fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let path = owner_path(dir.path(), url);
+    let record = OwnerRecord::new(42, url, "shutdown", Some("fingerprint"));
 
-    assert!(read_owner_record(&missing).unwrap().is_none());
-    assert!(read_ready_file(&missing).unwrap().is_none());
+    write_owner_record(&path, &record).unwrap();
 
-    let owner_error = read_owner_record(dir.path()).unwrap_err();
-    assert!(owner_error.contains("failed to read sidecar ownership"));
-    let ready_error = read_ready_file(dir.path()).unwrap_err();
-    assert!(ready_error.contains("failed to read sidecar readiness file"));
+    assert_eq!(read_owner_record(&path).unwrap(), Some(record.clone()));
+    assert!(record.valid_for(url));
+    assert!(!record.valid_for("http://127.0.0.1:47633"));
+    assert!(owner_path(dir.path(), url).ends_with("sidecar-127.0.0.1-47632.owner.json"));
+    assert_eq!(lock_name("not a url/with spaces"), "not_a_url_with_spaces");
 }
 
 #[test]
-fn state_directory_requires_a_user_configuration_home() {
-    let environment = Environment::isolated();
-    environment.remove("HOME");
-    environment.remove("USERPROFILE");
-    environment.remove("XDG_CONFIG_HOME");
+fn startup_lock_serializes_competing_mcp_processes() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let owner = lock_endpoint(dir.path(), url).unwrap();
 
-    let error = state_dir().unwrap_err();
+    let error = lock_endpoint_for(dir.path(), url, Duration::from_millis(25)).unwrap_err();
+    assert!(error.contains("timed out waiting"), "{error}");
 
-    assert!(error.contains("cannot determine"), "{error}");
+    drop(owner);
+    lock_endpoint_for(dir.path(), url, Duration::from_millis(25)).unwrap();
 }
 
 #[test]
-fn managed_owner_environment_is_validated_before_writing_state() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.clear_managed_bootstrap();
-
-    environment.set(BOOTSTRAP_STATE_DIR_ENV, "relative-state");
-    environment.set(SHUTDOWN_TOKEN_ENV, "shutdown-token");
-    let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
-    assert!(error.contains("must be an absolute path"), "{error}");
-
-    environment.set(BOOTSTRAP_STATE_DIR_ENV, dir.path());
-    environment.set(SHUTDOWN_TOKEN_ENV, "");
-    let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
-    assert!(error.contains(SHUTDOWN_TOKEN_ENV), "{error}");
-
-    environment.set(SHUTDOWN_TOKEN_ENV, "shutdown-token");
-    let error = publish_owner_from_env("0.0.0.0:47632".parse().unwrap()).unwrap_err();
-    assert!(error.contains("requires a loopback address"), "{error}");
-
-    let state_file = dir.path().join("state-file");
-    std::fs::write(&state_file, "not a directory").unwrap();
-    environment.set(BOOTSTRAP_STATE_DIR_ENV, &state_file);
-    let error = publish_owner_from_env("127.0.0.1:47632".parse().unwrap()).unwrap_err();
-    assert!(
-        error.contains("failed to create bootstrap state directory"),
-        "{error}"
-    );
-}
-
-#[test]
-fn managed_owner_is_endpoint_scoped_without_a_host_identity() {
-    let dir = tempdir().unwrap();
-    let state = dir.path().join("state");
-    let environment = Environment::isolated();
-    configure_managed_bootstrap(&environment, &state);
-    let address = "127.0.0.1:47633".parse().unwrap();
-
-    publish_owner_from_env(address).unwrap();
-
-    let url = format!("http://{address}");
-    validate_owner(
-        &owner_path(&state, &url),
-        &pid_path(&state, &url),
-        std::process::id(),
-        &url,
-        "shutdown-token",
-        Some("fingerprint"),
-    )
-    .unwrap();
-}
-
-#[test]
-fn publishing_endpoint_owner_migrates_legacy_agent_scoped_records() {
-    let dir = tempdir().unwrap();
-    let state = dir.path().join("state");
-    std::fs::create_dir_all(&state).unwrap();
-    let environment = Environment::isolated();
-    configure_managed_bootstrap(&environment, &state);
-    let address = "127.0.0.1:47636".parse().unwrap();
-    let url = format!("http://{address}");
-    let legacy_owner = state.join(format!("codex-sidecar-{}.owner.json", lock_name(&url)));
-    let legacy_pid = state.join(format!("codex-sidecar-{}.pid", lock_name(&url)));
-    write_owner(
-        &legacy_owner,
-        41,
-        &url,
-        "old-token",
-        Some("old-fingerprint"),
-    )
-    .unwrap();
-    std::fs::write(&legacy_pid, "41").unwrap();
-
-    publish_owner_from_env(address).unwrap();
-
-    assert!(!legacy_owner.exists());
-    assert!(!legacy_pid.exists());
-    assert!(owner_path(&state, &url).exists());
-    assert!(pid_path(&state, &url).exists());
-}
-
-#[test]
-fn failed_owner_publish_removes_the_partial_pid_record() {
-    let dir = tempdir().unwrap();
-    let state = dir.path().join("state");
-    std::fs::create_dir_all(&state).unwrap();
-    let environment = Environment::isolated();
-    configure_managed_bootstrap(&environment, &state);
+fn managed_owner_environment_is_validated_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let relative = OsStr::new("relative");
+    let absolute = dir.path().as_os_str();
     let address = "127.0.0.1:47632".parse().unwrap();
-    let url = format!("http://{address}");
-    let owner = owner_path(&state, &url);
-    let pid = pid_path(&state, &url);
-    std::fs::create_dir_all(&owner).unwrap();
-    #[cfg(windows)]
-    {
-        let file_name = owner.file_name().unwrap().to_string_lossy();
-        let stale_backup = owner.with_file_name(format!(".{file_name}.nemo-relay-replace.tmp"));
-        std::fs::create_dir_all(stale_backup).unwrap();
-    }
 
+    let _scope = EnvScope::set(&[
+        (BOOTSTRAP_STATE_DIR_ENV, Some(relative)),
+        (
+            "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN",
+            Some(OsStr::new("token")),
+        ),
+    ]);
     let error = publish_owner_from_env(address).unwrap_err();
+    assert!(error.contains("absolute path"), "{error}");
+    drop(_scope);
 
-    assert!(error.contains("failed to"), "{error}");
-    assert!(!pid.exists());
+    let _scope = EnvScope::set(&[
+        (BOOTSTRAP_STATE_DIR_ENV, Some(absolute)),
+        ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
+    ]);
+    let error = publish_owner_from_env(address).unwrap_err();
+    assert!(error.contains("SHUTDOWN_TOKEN"), "{error}");
+    drop(_scope);
+
+    let _scope = EnvScope::set(&[
+        (BOOTSTRAP_STATE_DIR_ENV, Some(absolute)),
+        (
+            "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN",
+            Some(OsStr::new("token")),
+        ),
+    ]);
+    let error = publish_owner_from_env("0.0.0.0:47632".parse().unwrap()).unwrap_err();
+    assert!(error.contains("loopback"), "{error}");
 }
 
 #[test]
-fn owner_validation_reports_a_missing_record() {
-    let dir = tempdir().unwrap();
-    let owner = dir.path().join("missing-owner.json");
-    let pid = dir.path().join("missing-owner.pid");
+fn server_owner_guard_cleans_only_its_own_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let address = "127.0.0.1:47632".parse().unwrap();
+    let _scope = EnvScope::set(&[
+        (BOOTSTRAP_STATE_DIR_ENV, Some(dir.path().as_os_str())),
+        (
+            "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN",
+            Some(OsStr::new("first-token")),
+        ),
+        (
+            crate::config::BOOTSTRAP_FINGERPRINT_ENV,
+            Some(OsStr::new("fingerprint")),
+        ),
+    ]);
+    let guard = publish_owner_from_env(address).unwrap().unwrap();
+    let path = owner_path(dir.path(), "http://127.0.0.1:47632");
+    assert!(path.exists());
 
-    let error = validate_owner(
-        &owner,
-        &pid,
-        42,
+    let replacement = OwnerRecord::new(
+        std::process::id(),
         "http://127.0.0.1:47632",
-        "shutdown-token",
+        "replacement-token",
         Some("fingerprint"),
-    )
-    .unwrap_err();
-
-    assert!(error.contains("file does not exist"), "{error}");
-}
-
-#[test]
-fn owner_enumeration_distinguishes_missing_and_unreadable_directories() {
-    let dir = tempdir().unwrap();
-    assert!(owner_paths(&dir.path().join("missing")).unwrap().is_empty());
-
-    let file = dir.path().join("not-a-directory");
-    std::fs::write(&file, "file").unwrap();
-    let error = owner_paths(&file).unwrap_err();
-    assert!(error.contains("failed to enumerate"), "{error}");
-}
-
-#[test]
-fn stale_owner_cleanup_requires_shutdown_credentials() {
-    let dir = tempdir().unwrap();
-    let url = "http://127.0.0.1:9";
-    let owner = owner_path(dir.path(), url);
-
-    assert!(
-        stop_owned_record(dir.path(), &owner).is_ok(),
-        "an already absent owner is clean"
     );
+    write_owner_record(&path, &replacement).unwrap();
+    drop(guard);
 
-    write_owner(&owner, 42, url, "", Some("fingerprint")).unwrap();
-    let error = stop_owned_record(dir.path(), &owner).unwrap_err();
-    assert!(error.contains("has no shutdown token"), "{error}");
-
-    write_owner(&owner, 42, url, "shutdown-token", None).unwrap();
-    let error = stop_owned_record(dir.path(), &owner).unwrap_err();
-    assert!(
-        error.contains("no authenticated bootstrap fingerprint"),
-        "{error}"
-    );
+    assert_eq!(read_owner_record(&path).unwrap(), Some(replacement));
 }
 
 #[test]
-fn unavailable_owned_sidecar_is_removed_without_sending_shutdown() {
-    let dir = tempdir().unwrap();
+fn stopping_an_absent_or_stale_owned_gateway_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let _scope = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+        ("HOME", Some(dir.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
     let url = "http://127.0.0.1:9";
-    let owner = owner_path(dir.path(), url);
-    let pid = pid_path(dir.path(), url);
-    write_owner(&owner, 42, url, "shutdown-token", Some("fingerprint")).unwrap();
-    std::fs::write(&pid, "42").unwrap();
 
-    stop_owned_record(dir.path(), &owner).unwrap();
+    stop_owned_and_reset(url).unwrap();
+    let state = state_dir().unwrap();
+    create_private_dir(&state).unwrap();
+    let path = owner_path(&state, url);
+    let owner = OwnerRecord::new(42, url, "shutdown", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
 
-    assert!(!owner.exists());
-    assert!(!pid.exists());
+    stop_owned_and_reset(url).unwrap();
+    assert!(!path.exists());
 }
 
 #[test]
-fn unavailable_legacy_owner_removes_the_legacy_pid_record() {
-    let dir = tempdir().unwrap();
-    let url = "http://127.0.0.1:9";
-    let owner = dir.path().join("codex-sidecar.owner.json");
-    let pid = dir.path().join("codex-sidecar.pid");
-    write_owner(&owner, 42, url, "shutdown-token", Some("fingerprint")).unwrap();
-    std::fs::write(&pid, "42").unwrap();
-
-    stop_owned_record(dir.path(), &owner).unwrap();
-
-    assert!(!owner.exists());
-    assert!(!pid.exists());
-}
-
-#[test]
-fn authenticated_owned_sidecar_is_shut_down_and_cleaned_up() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path().join("config"));
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
+fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config");
+    let _scope = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config.as_os_str())),
+        ("HOME", Some(dir.path().as_os_str())),
+        ("USERPROFILE", None),
+    ]);
     let key = crate::config::BootstrapChallengeKey::load().unwrap();
-    let reloaded_key = crate::config::BootstrapChallengeKey::load().unwrap();
-    assert!(reloaded_key.verify(
-        "fingerprint",
-        "test-nonce",
-        &key.proof("fingerprint", "test-nonce")
-    ));
-    let client_token = key.client_token();
-    assert!(reloaded_key.verify_client_token(&client_token));
-    assert!(!reloaded_key.verify_client_token("hmac-sha256:00"));
-    assert_ne!(
-        client_token,
-        key.proof("fingerprint", "test-nonce"),
-        "health and client proofs must remain domain-separated"
-    );
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let owner = owner_path(dir.path(), &url);
-    let pid = pid_path(dir.path(), &url);
-    write_owner(&owner, 42, &url, "shutdown-token", Some("fingerprint")).unwrap();
-    std::fs::write(&pid, "42").unwrap();
-    let server = thread::spawn(move || {
-        for _ in 0..2 {
-            let (mut health, _) = listener.accept().unwrap();
-            let request = read_http_headers(&mut health);
-            let fingerprint = request_header(&request, "x-nemo-relay-bootstrap-fingerprint");
-            let nonce = request_header(&request, "x-nemo-relay-bootstrap-nonce");
-            let proof = key.proof(&fingerprint, &nonce);
-            let body = format!(
-                r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
-                env!("CARGO_PKG_VERSION"),
-                BOOTSTRAP_PROTOCOL_VERSION
-            );
-            health
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
+    let state = state_dir().unwrap();
+    create_private_dir(&state).unwrap();
+    let path = owner_path(&state, &url);
+    let owner = OwnerRecord::new(42, &url, "shutdown-token", Some("fingerprint"));
+    write_owner_record(&path, &owner).unwrap();
+
+    let server = std::thread::spawn(move || {
+        let (mut health, _) = listener.accept().unwrap();
+        let request = read_headers(&mut health);
+        let nonce = header(&request, "x-nemo-relay-bootstrap-nonce");
+        let proof = key.proof("fingerprint", &nonce);
+        let body = format!(
+            "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"test-instance\"}}",
+            env!("CARGO_PKG_VERSION"),
+            BOOTSTRAP_PROTOCOL_VERSION
+        );
+        health
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
                 )
-                .unwrap();
-        }
+                .as_bytes(),
+            )
+            .unwrap();
 
         let (mut shutdown, _) = listener.accept().unwrap();
-        let request = read_http_headers(&mut shutdown);
+        let request = read_headers(&mut shutdown);
         assert!(request.starts_with("POST /bootstrap/shutdown HTTP/1.1"));
         assert_eq!(
-            request_header(&request, "x-nemo-relay-bootstrap-token"),
+            header(&request, "x-nemo-relay-bootstrap-token"),
             "shutdown-token"
         );
         shutdown
@@ -626,57 +241,7 @@ fn authenticated_owned_sidecar_is_shut_down_and_cleaned_up() {
             .unwrap();
     });
 
-    assert_eq!(probe(&url, Some("fingerprint")), RelayHealth::Compatible);
-    stop_owned_record(dir.path(), &owner).unwrap();
-
+    stop_owned_and_reset(&url).unwrap();
     server.join().unwrap();
-    assert!(!owner.exists());
-    assert!(!pid.exists());
-}
-
-#[test]
-fn stop_owned_aggregates_record_errors() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path());
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
-    let runtime = state_dir().unwrap();
-    std::fs::create_dir_all(&runtime).unwrap();
-    let url = "http://127.0.0.1:9";
-    let owner = owner_path(&runtime, url);
-    write_owner(&owner, 42, url, "", Some("fingerprint")).unwrap();
-
-    let error = stop_owned(url).unwrap_err();
-
-    assert!(error.contains("has no shutdown token"), "{error}");
-}
-
-#[test]
-fn stop_owned_succeeds_when_no_records_exist() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path());
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
-
-    stop_owned(crate::sidecar::DEFAULT_URL).unwrap();
-}
-
-#[test]
-fn stop_owned_leaves_other_managed_endpoints_untouched() {
-    let dir = tempdir().unwrap();
-    let environment = Environment::isolated();
-    environment.set("XDG_CONFIG_HOME", dir.path());
-    environment.set("HOME", dir.path());
-    environment.remove("USERPROFILE");
-    let runtime = state_dir().unwrap();
-    std::fs::create_dir_all(&runtime).unwrap();
-    let other_url = "http://127.0.0.1:47633";
-    let other_owner = owner_path(&runtime, other_url);
-    write_owner(&other_owner, 42, other_url, "", Some("fingerprint")).unwrap();
-
-    stop_owned(crate::sidecar::DEFAULT_URL).unwrap();
-
-    assert!(other_owner.exists());
+    assert!(!path.exists());
 }

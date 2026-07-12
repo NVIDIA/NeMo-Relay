@@ -85,17 +85,12 @@ configuration are verified.
 
 Hermes starts MCP discovery in the background, so an early lifecycle hook can
 arrive before the MCP process finishes acquiring the gateway. The installed
-hook command handles that race: it starts or reuses the same gateway under the
-same startup lock before delivery, guarded by the same install generation as
-the MCP entry. Its temporary endpoint lease makes any replacement spend the
-same recovery allowance as overlapping MCP clients. If delivery then fails
-before connecting, the command retries the original payload once. The payload
-is not reconstructed or replaced.
+hook waits for that MCP-owned gateway, verifies it, and forwards the original
+payload once. It never launches or recovers Relay.
 
 Concurrent Hermes, Claude Code, and Codex MCP clients can share one compatible
-gateway. Every open MCP client heartbeats the gateway. An endpoint-scoped
-recovery cohort permits one coordinated restart across all overlapping clients
-and hooks, even when one client misses the replacement between heartbeat ticks.
+gateway. Every open MCP client heartbeats the gateway. A startup lock and
+recovery record permit one coordinated restart across overlapping MCP clients.
 A second failure exits those MCP clients with an error. After the last client
 closes, the gateway exits after 300 idle seconds by default. Set
 `NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS` before setup and launch to choose another

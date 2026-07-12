@@ -5,7 +5,6 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
-use std::thread;
 use std::time::Duration;
 
 use reqwest::Url;
@@ -33,26 +32,19 @@ pub(crate) struct VerifiedHttpResponse {
 #[derive(Debug)]
 pub(crate) struct VerifiedHttpError {
     message: String,
-    retryable: bool,
 }
 
 impl VerifiedHttpError {
     fn before_payload(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            retryable: true,
         }
     }
 
     fn after_payload(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            retryable: false,
         }
-    }
-
-    pub(crate) fn is_retryable(&self) -> bool {
-        self.retryable
     }
 
     pub(super) fn missing_fingerprint() -> Self {
@@ -211,21 +203,6 @@ pub(crate) fn healthz_compatible(url: &str, bootstrap_fingerprint: &str) -> bool
 
 pub(crate) fn authenticated_instance_id(url: &str, bootstrap_fingerprint: &str) -> Option<String> {
     compatible_instance_id(url, Some(bootstrap_fingerprint))
-}
-
-pub(super) fn probe_after_lock(
-    url: &str,
-    bootstrap_fingerprint: Option<&str>,
-) -> (RelayHealth, Option<String>) {
-    let mut result = probe_with_instance(url, bootstrap_fingerprint);
-    for _ in 1..3 {
-        if result.0 != RelayHealth::Foreign {
-            break;
-        }
-        thread::sleep(Duration::from_millis(50));
-        result = probe_with_instance(url, bootstrap_fingerprint);
-    }
-    result
 }
 
 pub(super) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHealth {

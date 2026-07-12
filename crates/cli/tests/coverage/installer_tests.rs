@@ -111,111 +111,6 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
 }
 
 #[test]
-fn hook_delivery_generation_guard_blocks_replacement_until_drop() {
-    let dir = tempfile::tempdir().unwrap();
-    let generation_path = dir.path().join(".nemo-relay-generation");
-    crate::install_generation::write_new_generation(&generation_path).unwrap();
-    let generation = InstallGeneration::capture(generation_path.clone()).unwrap();
-    let guard = hook_generation_guard(&generation).unwrap();
-
-    let error = crate::install_generation::GenerationRetirement::acquire_with_timeout(
-        &generation_path,
-        std::time::Duration::from_millis(25),
-    )
-    .err()
-    .expect("hook delivery guard did not block generation retirement");
-    assert!(error.contains("timed out waiting"), "{error}");
-
-    drop(guard);
-    assert!(
-        crate::install_generation::GenerationRetirement::acquire_with_timeout(
-            &generation_path,
-            std::time::Duration::from_secs(1),
-        )
-        .unwrap()
-        .is_some()
-    );
-}
-
-#[test]
-fn hook_gateway_retries_retirement_during_acquisition_and_delivery_pinning() {
-    let mut outcomes = std::collections::VecDeque::from([
-        Err("shared Relay gateway lifecycle was retired by an integration update".to_string()),
-        Err("shared Relay gateway lifecycle was retired by an integration update".to_string()),
-        Ok("pinned"),
-    ]);
-    let mut attempts = 0;
-
-    let result = retry_retired_gateway_cohort(|| {
-        attempts += 1;
-        outcomes.pop_front().unwrap()
-    })
-    .unwrap();
-
-    assert_eq!(result, "pinned");
-    assert_eq!(attempts, 3);
-}
-
-#[test]
-fn hook_gateway_does_not_retry_non_retirement_failures() {
-    let mut attempts = 0;
-    let error = retry_retired_gateway_cohort::<()>(|| {
-        attempts += 1;
-        Err("foreign listener".into())
-    })
-    .unwrap_err();
-
-    assert_eq!(error, "foreign listener");
-    assert_eq!(attempts, 1);
-}
-
-#[test]
-fn hook_gateway_stops_retrying_retirement_at_its_deadline() {
-    let mut attempts = 0;
-    let error = retry_retired_gateway_cohort_until::<()>(Instant::now(), || {
-        attempts += 1;
-        Err("shared Relay gateway lifecycle was retired by an integration update".into())
-    })
-    .unwrap_err();
-
-    assert!(error.contains("retired by an integration update"));
-    assert_eq!(attempts, 1);
-}
-
-#[test]
-fn hook_gateway_retirement_retries_are_rate_limited() {
-    let mut attempts = 0;
-    let started = Instant::now();
-    let current = std::cell::Cell::new(started);
-    let sleeps = std::cell::RefCell::new(Vec::new());
-    let deadline = started + Duration::from_millis(125);
-    let error = retry_retired_gateway_cohort_with_clock::<()>(
-        deadline,
-        || current.get(),
-        |duration| {
-            sleeps.borrow_mut().push(duration);
-            current.set(current.get() + duration);
-        },
-        || {
-            attempts += 1;
-            Err("shared Relay gateway lifecycle was retired by an integration update".into())
-        },
-    )
-    .unwrap_err();
-
-    assert!(error.contains("retired by an integration update"));
-    assert_eq!(attempts, 4);
-    assert_eq!(
-        sleeps.into_inner(),
-        [
-            Duration::from_millis(50),
-            Duration::from_millis(50),
-            Duration::from_millis(25),
-        ]
-    );
-}
-
-#[test]
 fn hook_payload_reader_normalizes_blank_input_and_accepts_the_exact_limit() {
     assert_eq!(read_hook_payload_from(" \n\t".as_bytes(), 3).unwrap(), "{}");
     assert_eq!(
@@ -259,7 +154,7 @@ fn explicit_persistent_destinations_ignore_ambient_urls() {
         false,
     );
     assert_eq!(destination.gateway_url, "http://installed");
-    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Recover);
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
 
     let destination = resolve_hook_destination(None, Some("http://dynamic".into()), false, false);
     assert_eq!(destination.gateway_url, "http://dynamic");
@@ -284,7 +179,7 @@ fn explicit_persistent_destinations_ignore_ambient_urls() {
 
     let destination = resolve_hook_destination(None, None, false, false);
     assert_eq!(destination.gateway_url, crate::sidecar::DEFAULT_URL);
-    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Recover);
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
 }
 
 #[test]

@@ -577,6 +577,10 @@ fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
         drop(probe);
         let gateway_url = format!("http://{address}");
         let generation = write_active_generation(temp.path());
+        let (mut mcp, mcp_stdin) = start_mcp_client_with_idle_timeout(temp.path(), address, "10");
+        let owner = wait_for_owned_sidecar(temp.path(), None);
+        assert_eq!(owner["url"], gateway_url);
+
         let mut hook = Command::new(gateway_bin())
             .args(["hook-forward", agent, "--gateway-url", &gateway_url])
             .arg("--generation-file")
@@ -601,16 +605,11 @@ fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
         let hook_output = wait_child_with_output(hook);
         assert!(
             hook_output.status.success(),
-            "{agent} cold hook recovery failed: {}",
+            "{agent} hook failed: {}",
             String::from_utf8_lossy(&hook_output.stderr)
         );
-
-        let (mut mcp, mcp_stdin) = start_mcp_client_with_idle_timeout(temp.path(), address, "10");
         drop(mcp_stdin);
         assert!(wait_child(&mut mcp).success());
-
-        let owner = wait_for_owned_sidecar(temp.path(), None);
-        assert_eq!(owner["url"], gateway_url);
         stop_owned_sidecar(&owner);
         wait_for_port_closed(address);
     }
@@ -1246,17 +1245,13 @@ fn cli_mcp_restarts_one_stopped_gateway_then_fails_after_the_second_stop() {
 #[test]
 fn cli_mcp_staggered_clients_share_one_endpoint_restart_budget() {
     let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
     let (mut fast_client, _fast_stdin) =
-        start_mcp_client_with_idle_timeout(temp.path(), "127.0.0.1:0".parse().unwrap(), "1");
+        start_mcp_client_with_idle_timeout(temp.path(), address, "1");
     let first = wait_for_owned_sidecar(temp.path(), None);
     let first_pid = first["pid"].as_u64().unwrap();
-    let address = first["url"]
-        .as_str()
-        .unwrap()
-        .strip_prefix("http://")
-        .unwrap()
-        .parse()
-        .unwrap();
     // Offset the heartbeat phases while keeping the persistent fingerprint identical.
     thread::sleep(Duration::from_millis(150));
     let (mut slow_client, _slow_stdin) =
@@ -1282,52 +1277,6 @@ fn cli_mcp_staggered_clients_share_one_endpoint_restart_budget() {
         !unexpected,
         "a staggered MCP client restarted the endpoint a second time"
     );
-}
-
-#[test]
-fn cli_hook_recovery_consumes_the_same_restart_as_an_overlapping_mcp() {
-    let temp = tempfile::tempdir().unwrap();
-    let generation = temp.path().join("plugin/.nemo-relay-generation");
-    std::fs::create_dir_all(generation.parent().unwrap()).unwrap();
-    std::fs::write(&generation, "active-generation\n").unwrap();
-    let (mut mcp, _stdin) = start_mcp_client_with_generation(
-        temp.path(),
-        "127.0.0.1:0".parse().unwrap(),
-        "1",
-        Some(&generation),
-    );
-    let first = wait_for_owned_sidecar(temp.path(), None);
-    let first_pid = first["pid"].as_u64().unwrap();
-    let address = first["url"]
-        .as_str()
-        .unwrap()
-        .strip_prefix("http://")
-        .unwrap()
-        .parse::<SocketAddr>()
-        .unwrap();
-
-    stop_owned_sidecar(&first);
-    let hook = run_persistent_hook(temp.path(), address, &generation, true);
-    assert!(
-        hook.status.success(),
-        "hook recovery failed: {}",
-        String::from_utf8_lossy(&hook.stderr)
-    );
-    let second = wait_for_owned_sidecar(temp.path(), Some(first_pid));
-    let second_pid = second["pid"].as_u64().unwrap();
-    stop_owned_sidecar(&second);
-
-    assert!(!wait_child(&mut mcp).success());
-    let unexpected = find_runtime_files_matching(temp.path(), "sidecar-", ".owner.json")
-        .into_iter()
-        .filter_map(|path| std::fs::read(path).ok())
-        .filter_map(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-        .any(|owner| {
-            owner["pid"]
-                .as_u64()
-                .is_some_and(|pid| pid != first_pid && pid != second_pid)
-        });
-    assert!(!unexpected, "the MCP performed an unaccounted third launch");
 }
 
 #[test]
@@ -3359,7 +3308,7 @@ fn cli_forward_only_unfenced_hook_rejects_a_foreign_listener_before_posting() {
     let (output, requests) = run_forward_only_fake_bootstrap_listener(FakeBootstrapProof::Missing);
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("foreign process"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a compatible"));
     assert!(requests.iter().all(|request| !request.starts_with("POST ")));
 }
 

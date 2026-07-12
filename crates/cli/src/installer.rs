@@ -14,11 +14,10 @@ use crate::config::{
     CodingAgent, GATEWAY_URL_ENV, GatewayMode, HookForwardCommand, TRANSPARENT_RUN_ENV,
 };
 use crate::error::CliError;
-use crate::install_generation::{ActiveGenerationGuard, InstallGeneration};
+use crate::install_generation::InstallGeneration;
 
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 const HOOK_GATEWAY_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
-const HOOK_GATEWAY_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
 /// Forwards a hook payload from an installed shell command to a running gateway.
@@ -53,7 +52,9 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliE
         Ok(gateway) => gateway,
         Err(error) => return handle_hook_error(error, fail_closed),
     };
-    let mut generation_guard = if destination.lifecycle == HookGatewayLifecycle::Recover {
+    let _generation_guard = if destination.lifecycle == HookGatewayLifecycle::Existing
+        && !command.forward_only
+    {
         let install_host = command.agent.install_arg();
         let Some(generation_file) = command.generation_file.clone() else {
             return handle_hook_error(
@@ -80,6 +81,16 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliE
     } else {
         None
     };
+    let input = match read_hook_payload(
+        persistent
+            .as_ref()
+            .map_or(crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES, |launch| {
+                launch.max_hook_payload_bytes
+            }),
+    ) {
+        Ok(input) => input,
+        Err(error) => return handle_hook_error(error, fail_closed),
+    };
     if destination.lifecycle == HookGatewayLifecycle::Existing {
         let gateway = persistent
             .as_ref()
@@ -92,77 +103,14 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliE
             return handle_hook_error(error, fail_closed);
         }
     }
-    let input = match read_hook_payload(
-        persistent
-            .as_ref()
-            .map_or(crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES, |launch| {
-                launch.max_hook_payload_bytes
-            }),
-    ) {
-        Ok(input) => input,
-        Err(error) => return handle_hook_error(error, fail_closed),
-    };
-    // Keep this short-lived lease through delivery. Hooks therefore share the same endpoint
-    // recovery cohort as overlapping MCP clients instead of creating unaccounted replacements.
-    let mut gateway_acquisition = if destination.lifecycle == HookGatewayLifecycle::Recover {
-        let launch = persistent
-            .as_ref()
-            .expect("recoverable destinations resolve a gateway");
-        let generation_guard = generation_guard
-            .take()
-            .expect("recoverable destinations have an install generation");
-        match acquire_hook_gateway(launch.gateway.clone(), generation_guard).await {
-            Ok(acquisition) => Some(acquisition),
-            Err(error) => return handle_hook_error(error, fail_closed),
-        }
-    } else {
-        None
-    };
     let verified_gateway = persistent
         .as_ref()
         .map(|launch| &launch.gateway)
         .or(transparent_gateway.as_ref());
     if let Some(gateway) = verified_gateway {
-        let mut response = send_verified_hook_forward_request(
-            &command,
-            gateway,
-            &destination.gateway_url,
-            input.clone(),
-        )
-        .await?;
-        if response
-            .as_ref()
-            .is_err_and(crate::sidecar::VerifiedHttpError::is_retryable)
-            && destination.lifecycle == HookGatewayLifecycle::Recover
-        {
-            let acquisition = gateway_acquisition
-                .as_mut()
-                .expect("recoverable destinations hold a gateway acquisition");
-            if let Err(start_error) = recover_hook_gateway(acquisition).await {
-                let transport_error = response
-                    .as_ref()
-                    .expect_err("recovery only follows a retryable transport error");
-                let error = format!(
-                    "nemo-relay hook forward failed: {transport_error}; sidecar recovery failed: {start_error}"
-                );
-                eprintln!("{error}");
-                return if fail_closed {
-                    Err(CliError::Install(error))
-                } else {
-                    Ok(())
-                };
-            }
-            let recovered_gateway = persistent
-                .as_ref()
-                .expect("recoverable destinations resolve a persistent gateway");
-            response = send_verified_hook_forward_request(
-                &command,
-                &recovered_gateway.gateway,
-                &destination.gateway_url,
-                input,
-            )
-            .await?;
-        }
+        let response =
+            send_verified_hook_forward_request(&command, gateway, &destination.gateway_url, input)
+                .await?;
         return handle_verified_hook_forward_response(response, fail_closed);
     }
 
@@ -214,15 +162,12 @@ struct HookDestination {
 enum HookGatewayLifecycle {
     /// A transparent run owns the dynamic gateway and passes its URL through the environment.
     Transparent,
-    /// A source plugin may use an authenticated shared gateway but never start or recover one.
+    /// Persistent hooks use the authenticated gateway started and maintained by MCP.
     Existing,
-    /// An installed, generation-fenced hook participates in shared gateway recovery.
-    Recover,
 }
 
-// Installed hooks use the shared fixed gateway and may recover it. Transparent runs set the
-// dynamic environment URL and already own that gateway's lifecycle, so hook subprocesses never
-// replace it with a persistent sidecar.
+// Installed hooks use the shared fixed gateway that MCP owns. Transparent runs set the dynamic
+// environment URL and already own that gateway's lifecycle.
 fn hook_destination(command: &HookForwardCommand) -> HookDestination {
     resolve_hook_destination(
         command.gateway_url.clone(),
@@ -259,7 +204,7 @@ fn resolve_hook_destination(
     if let Some(gateway_url) = command_url {
         return HookDestination {
             gateway_url,
-            lifecycle: HookGatewayLifecycle::Recover,
+            lifecycle: HookGatewayLifecycle::Existing,
         };
     }
     if let Some(gateway_url) = environment_url {
@@ -270,7 +215,7 @@ fn resolve_hook_destination(
     }
     HookDestination {
         gateway_url: crate::sidecar::DEFAULT_URL.into(),
-        lifecycle: HookGatewayLifecycle::Recover,
+        lifecycle: HookGatewayLifecycle::Existing,
     }
 }
 
@@ -288,7 +233,7 @@ async fn wait_for_existing_gateway(
                 }
                 Ok(None) => {
                     return Err(format!(
-                        "no compatible Relay gateway became ready at {gateway_url}; start the plugin's `nemo-relay mcp` bootstrap before using --forward-only"
+                        "no compatible Relay gateway became ready at {gateway_url}; ensure the host started `nemo-relay mcp`"
                     ));
                 }
                 Err(error) => return Err(error),
@@ -309,143 +254,6 @@ fn transparent_gateway_spec(gateway_url: &str) -> Result<crate::sidecar::Gateway
     let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
     Ok(crate::sidecar::GatewaySpec::new(bind)
         .with_fingerprint(crate::config::transparent_gateway_fingerprint(gateway_url)))
-}
-
-async fn acquire_hook_gateway(
-    gateway: crate::sidecar::GatewaySpec,
-    generation_guard: ActiveGenerationGuard,
-) -> Result<HookGatewayAcquisition, CliError> {
-    tokio::task::spawn_blocking(move || {
-        let (gateway, cohort_guard) = acquire_pinned_hook_gateway(&gateway)?;
-        Ok(HookGatewayAcquisition {
-            gateway,
-            cohort_guard: Some(cohort_guard),
-            _generation_guard: generation_guard,
-        })
-    })
-    .await
-    .map_err(|error| CliError::Launch(format!("hook acquisition task failed: {error}")))?
-    .map_err(CliError::Launch)
-}
-
-fn gateway_cohort_was_retired(error: &str) -> bool {
-    error.contains("was retired by an integration update")
-}
-
-fn acquire_pinned_hook_gateway(
-    gateway: &crate::sidecar::GatewaySpec,
-) -> Result<
-    (
-        crate::sidecar::GatewayAcquisition,
-        crate::sidecar::GatewayCohortGuard,
-    ),
-    String,
-> {
-    retry_retired_gateway_cohort(|| {
-        let acquisition = gateway.acquire()?;
-        let guard = acquisition.guard_cohort()?;
-        Ok((acquisition, guard))
-    })
-}
-
-fn retry_retired_gateway_cohort<T>(
-    operation: impl FnMut() -> Result<T, String>,
-) -> Result<T, String> {
-    retry_retired_gateway_cohort_until(Instant::now() + HOOK_GATEWAY_RETRY_TIMEOUT, operation)
-}
-
-fn retry_retired_gateway_cohort_until<T>(
-    deadline: Instant,
-    operation: impl FnMut() -> Result<T, String>,
-) -> Result<T, String> {
-    retry_retired_gateway_cohort_with_clock(deadline, Instant::now, std::thread::sleep, operation)
-}
-
-fn retry_retired_gateway_cohort_with_clock<T>(
-    deadline: Instant,
-    mut now: impl FnMut() -> Instant,
-    mut sleep: impl FnMut(Duration),
-    mut operation: impl FnMut() -> Result<T, String>,
-) -> Result<T, String> {
-    loop {
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(error) if gateway_cohort_was_retired(&error) => {
-                let current = now();
-                if current >= deadline {
-                    return Err(error);
-                }
-                let remaining = deadline.saturating_duration_since(current);
-                sleep(HOOK_GATEWAY_RETRY_INTERVAL.min(remaining));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-struct HookGatewayAcquisition {
-    gateway: crate::sidecar::GatewayAcquisition,
-    // The shared endpoint guard blocks replacement while allowing concurrent deliveries; the
-    // generation guard separately prevents this host's installed command from being retired.
-    // Both remain held until the HTTP response is accepted or delivery fails.
-    cohort_guard: Option<crate::sidecar::GatewayCohortGuard>,
-    _generation_guard: ActiveGenerationGuard,
-}
-
-#[cfg(test)]
-fn hook_generation_guard(generation: &InstallGeneration) -> Result<ActiveGenerationGuard, String> {
-    generation.guard_current()
-}
-
-async fn recover_hook_gateway(acquisition: &mut HookGatewayAcquisition) -> Result<(), CliError> {
-    // Recovery itself needs the endpoint transaction lock. Release the delivery guard, then
-    // reacquire and validate the same cohort before the caller retries the HTTP request.
-    drop(acquisition.cohort_guard.take());
-    let gateway = acquisition.gateway.spec.clone();
-    let expected_instance = acquisition.gateway.endpoint.instance_id.clone();
-    let gateway_url = acquisition.gateway.endpoint.url.clone();
-    let cohort_id = acquisition.gateway.lease.cohort_id().to_string();
-    let refreshed = tokio::task::spawn_blocking(move || {
-        let targeted = gateway
-            .recover(&expected_instance, &cohort_id)
-            .and_then(|endpoint| {
-                crate::sidecar::guard_gateway_cohort(&gateway_url, &cohort_id)
-                    .map(|guard| (endpoint, guard))
-            });
-        match targeted {
-            Ok((endpoint, guard)) => Ok(HookGatewayRefresh::Recovered(endpoint, guard)),
-            Err(error) if gateway_cohort_was_retired(&error) => {
-                let (acquisition, guard) = acquire_pinned_hook_gateway(&gateway)?;
-                Ok(HookGatewayRefresh::Reacquired(acquisition, guard))
-            }
-            Err(error) => Err(error),
-        }
-    })
-    .await
-    .map_err(|error| CliError::Launch(format!("hook recovery task failed: {error}")))?
-    .map_err(CliError::Launch)?;
-    match refreshed {
-        HookGatewayRefresh::Recovered(endpoint, guard) => {
-            acquisition.gateway.endpoint = endpoint;
-            acquisition.cohort_guard = Some(guard);
-        }
-        HookGatewayRefresh::Reacquired(gateway, guard) => {
-            acquisition.gateway = gateway;
-            acquisition.cohort_guard = Some(guard);
-        }
-    }
-    Ok(())
-}
-
-enum HookGatewayRefresh {
-    Recovered(
-        crate::sidecar::GatewayEndpoint,
-        crate::sidecar::GatewayCohortGuard,
-    ),
-    Reacquired(
-        crate::sidecar::GatewayAcquisition,
-        crate::sidecar::GatewayCohortGuard,
-    ),
 }
 
 async fn send_verified_hook_forward_request(

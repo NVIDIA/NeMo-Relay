@@ -150,15 +150,11 @@ exits after 300 idle seconds by default. If the gateway exits while MCP stdio is
 open, the client performs one coordinated restart and fails if recovery does
 not succeed. A foreign process on the configured port is rejected with an
 actionable conflict instead of being accepted because it returned HTTP 200.
-Health and readiness include a per-process instance ID. Process-held endpoint
-leases and a private recovery cohort make the one-restart allowance global to
-all overlapping MCP clients and in-flight persistent hooks, including a client
-whose heartbeat misses the first replacement. Every heartbeat verifies that
-its cohort is still current, so an integration replacement retires old clients
-deterministically instead of allowing them to adopt the replacement gateway.
-After the last participant closes, the next acquisition starts a fresh recovery
-epoch. A serialized integration replacement explicitly retires the current
-cohort and creates a fresh one even while old leases drain.
+Health and readiness include a per-process instance ID. A per-user startup lock
+serializes launch and recovery, and a small recovery record ensures overlapping
+MCP clients share the same single restart. The gateway server itself owns
+activity tracking, idle shutdown, and cleanup of its authenticated ownership
+record.
 
 Codex marks the MCP server as required, so the captured turn waits for verified
 gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
@@ -167,11 +163,10 @@ asynchronously, so its first lifecycle hook can still run first. Every
 installed MCP entry and `hook-forward` command carry both the generation-file
 path and the immutable identity expected at that path. A host process that
 cached an older plugin configuration therefore cannot adopt a replacement
-installation after `--force`. Each hook temporarily joins the same endpoint
-recovery cohort and closes that race by starting or reusing the same gateway
-under the same startup lock. A hook that
-cannot establish the authenticated delivery connection may recover the gateway
-and retry once. Relay does not retry after payload transmission begins.
+installation after `--force`. Persistent hooks wait for the MCP-owned gateway,
+verify it on the same connection used for delivery, and send the canonical
+payload once. They never start or recover the gateway. Relay does not retry
+after payload transmission begins.
 The MCP server advertises no tools in any host.
 
 A fixed-endpoint `hook-forward` command without a valid installer-owned
@@ -188,27 +183,22 @@ payload. Authentication and delivery use the same TCP connection, so a process
 that replaces the listener after a health probe cannot receive lifecycle data.
 The mode never launches or recovers Relay.
 
-Hook recovery retries only connection failures that are known to precede an
-HTTP response. Relay does not claim crash-consistent exactly-once delivery
+Relay does not claim crash-consistent exactly-once delivery
 across a gateway failure after request acceptance: there is no durable hook
 outbox or delivery-deduplication journal. The opt-in E2E assertions below verify
 exactly-once lifecycle output for the exercised healthy and cold-start paths,
 not arbitrary process crashes between request acceptance and response delivery.
 
-On Windows, Relay requests Job Object breakaway only when the host job permits
-it. If the host applies a restrictive job but permits nested jobs, Relay keeps
-the sidecar scoped to that host job and retains a nested cleanup job for its
-process tree; the sidecar cannot outlive the host job. If Relay cannot create or
-configure the cleanup job, or the host rejects nested assignment, persistent
-bootstrap fails actionably instead of starting without process-tree cleanup
-guarantees.
+On Windows, Relay requests Job Object breakaway when the host job permits it.
+When breakaway is unavailable, the gateway remains scoped to the host job and
+can exit before the normal idle reuse window.
 
 The compatibility fingerprint covers resolved provider, exporter, dynamic
 plugin, and relevant environment settings without exposing their values in the
 health response. For Claude Code and Codex,
 `nemo-relay install <host> --force` rotates the immutable MCP and hook generation
-identity, then rotates the endpoint recovery cohort and uses a private ownership
-token to stop the shared fixed-endpoint sidecar as one serialized operation.
+identity, then uses a private ownership token to stop the shared fixed-endpoint
+gateway as one serialized operation.
 Ownership is keyed by endpoint, not host, so an upgrade
 from any installed host can retire a gateway originally started by another.
 Custom managed endpoints are left untouched. Relay never sends its shutdown

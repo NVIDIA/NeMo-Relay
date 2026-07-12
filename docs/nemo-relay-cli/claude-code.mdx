@@ -73,10 +73,9 @@ Code, Codex, and Hermes MCP clients share a compatible gateway, and the gateway
 exits after the final client's idle timeout. The MCP server advertises no tools.
 
 The generated entry sets `alwaysLoad: true`, so Claude Code 2.1.121 or newer
-waits for the MCP connection before session startup. The installed command
-hook carries the same install-generation fence, joins the shared endpoint
-recovery cohort while it delivers a payload, and retains the same-gateway retry
-path for an unexpected outage after startup. MCP owns the normal session-long
+waits for the MCP connection before session startup. The installed command hook
+carries the same install-generation fence, waits for the MCP-owned gateway, and
+forwards the canonical payload once. MCP owns the session-long gateway
 lifecycle.
 
 Persistent plugin mode loads system and user Relay configuration only and uses

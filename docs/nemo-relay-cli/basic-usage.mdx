@@ -348,9 +348,9 @@ as transparent so it cannot recover the fixed gateway.
 
 Persistent Claude Code, Codex, and Hermes hooks also use
 `nemo-relay hook-forward <agent>`. A persistent generated command identifies
-the fixed gateway and private install-generation fence explicitly, preflights
-its Relay identity, and joins the shared endpoint recovery cohort before
-forwarding the unchanged payload. Hermes
+the fixed gateway and private install-generation fence explicitly, waits for
+and verifies the MCP-owned Relay gateway, then forwards the unchanged payload
+once. Hermes
 setup stores the canonical absolute command and trusts its exact event pairs;
 it does not enable global hook auto-acceptance.
 

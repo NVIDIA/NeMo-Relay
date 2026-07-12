@@ -114,14 +114,9 @@ without activity by default. No
 wrapper, launch agent, system user service, scheduled task, login item, or
 persistent supervisor is installed.
 
-On Windows, Relay requests Job Object breakaway only when the host job permits
-it. If the host uses a restrictive Job Object but permits nested jobs, Relay
-keeps the sidecar scoped to that host job and retains a nested cleanup job for
-the sidecar process tree. The sidecar cannot outlive the host job, so the usual
-300-second idle reuse window can end early. If Relay cannot create or configure
-the cleanup job, or the host rejects nested job assignment, persistent bootstrap
-fails with an actionable process-tree cleanup error instead of starting without
-that guarantee.
+On Windows, Relay requests Job Object breakaway when the host job permits it.
+When breakaway is unavailable, the gateway remains scoped to the host job and
+the usual 300-second idle reuse window can end early.
 
 Persistent plugin mode loads system and user Relay configuration only. It does
 not load a project's `.nemo-relay` files. The sidecar starts in the user Relay
@@ -143,10 +138,10 @@ middleware, observability, or upstream
 forwarding.
 
 Installer-owned hook commands pin `http://127.0.0.1:47632` and the exact
-install-generation fence explicitly. Each delivery temporarily joins the same
-endpoint recovery cohort as overlapping MCP clients, so a hook cannot create an
-unaccounted second replacement. An ambient `NEMO_RELAY_GATEWAY_URL` cannot
-split hook traffic from the required MCP-managed gateway.
+install-generation fence explicitly. Hooks wait for the MCP-owned gateway and
+forward each canonical payload once; they never launch or recover Relay. An
+ambient `NEMO_RELAY_GATEWAY_URL` cannot split hook traffic from the required
+MCP-managed gateway.
 
 If user configuration, forwarded credentials, or the Relay version changes
 while an old sidecar is still running, the new MCP client reports an actionable

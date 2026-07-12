@@ -250,7 +250,8 @@ async fn serve_listener_with_dynamic_inner(
     if let Some(identity) = managed_bootstrap.as_ref() {
         identity.verify_current()?;
     }
-    crate::sidecar::publish_sidecar_owner_from_env(local_address).map_err(CliError::Launch)?;
+    let _owner =
+        crate::sidecar::publish_sidecar_owner_from_env(local_address).map_err(CliError::Launch)?;
     if let Some(path) = ready_file {
         write_ready_file(path, local_address, &instance_id)?;
     }

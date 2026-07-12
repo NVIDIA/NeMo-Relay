@@ -66,10 +66,6 @@ fn main() -> ExitCode {
 // exit. Errors are printed once here so subcommands can return structured errors without also
 // owning process-level reporting.
 async fn async_main() -> ExitCode {
-    if let Err(error) = sidecar::join_sidecar_job_from_env() {
-        eprintln!("{error}");
-        return ExitCode::FAILURE;
-    }
     match run().await {
         Ok(code) => code,
         Err(error) => {

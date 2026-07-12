@@ -16,11 +16,9 @@ documentation set.
   the captured turn and `/responses` traffic wait for verified Relay gateway
   readiness.
 - On Windows, a restrictive host Job Object can prevent a coding-agent plugin's
-  Relay sidecar from breaking away. When nested job assignment is supported,
-  the sidecar remains scoped to the host job and the shared gateway might not
-  remain available for the full 300-second idle reuse window. If Relay cannot
-  create or configure its cleanup job, bootstrap fails instead of starting
-  without descendant-cleanup guarantees.
+  Relay gateway from breaking away. In that case the gateway remains scoped to
+  the host job and might not remain available for the full 300-second idle reuse
+  window.
 - The Codex 0.143 plugin hook schema does not expose `SessionEnd`. Relay writes a
   cumulative trajectory snapshot for every delivered `Stop`, so the final turn
   snapshot is also the final session snapshot.

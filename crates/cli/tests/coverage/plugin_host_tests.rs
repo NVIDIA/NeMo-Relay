@@ -10,7 +10,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -20,24 +20,6 @@ use super::*;
 use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
 
 const TEST_PLUGIN_GENERATION: &str = "test-generation";
-
-#[cfg(unix)]
-fn wait_for_published_pid(path: &Path, process: &str) -> i32 {
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        if let Some(pid) = fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| raw.trim().parse::<i32>().ok())
-        {
-            return pid;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "{process} did not publish a complete PID"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
-}
 
 #[derive(Default)]
 struct FakeCodexHooksClient {
@@ -2751,414 +2733,6 @@ fn claude_reinstall_uses_fresh_backup_after_prior_restore() {
 }
 
 #[test]
-fn advisory_sidecar_lock_blocks_until_the_owner_releases_it() {
-    let dir = tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let owner = lock_sidecar_endpoint(dir.path(), url).unwrap();
-    let path = dir.path().to_path_buf();
-    let (ready_sender, ready_receiver) = std::sync::mpsc::channel();
-    let (acquired_sender, acquired_receiver) = std::sync::mpsc::channel();
-    let contender = thread::spawn(move || {
-        ready_sender.send(()).unwrap();
-        let lock = lock_sidecar_endpoint(&path, url).unwrap();
-        acquired_sender.send(()).unwrap();
-        drop(lock);
-    });
-
-    ready_receiver.recv_timeout(Duration::from_secs(5)).unwrap();
-    let error = lock_sidecar_endpoint_for(dir.path(), url, Duration::ZERO).unwrap_err();
-    assert!(error.contains("timed out waiting for sidecar lock"));
-    drop(owner);
-    acquired_receiver
-        .recv_timeout(Duration::from_secs(5))
-        .unwrap();
-    contender.join().unwrap();
-}
-
-#[test]
-fn sidecar_lock_zero_wait_fails_when_the_endpoint_is_owned() {
-    let dir = tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let owner = lock_sidecar_endpoint(dir.path(), url).unwrap();
-
-    let error = lock_sidecar_endpoint_for(dir.path(), url, Duration::ZERO).unwrap_err();
-
-    assert!(error.contains("timed out waiting for sidecar lock"));
-    drop(owner);
-}
-
-#[test]
-fn sidecar_ownership_records_are_endpoint_scoped_and_recognize_legacy_files() {
-    let dir = tempdir().unwrap();
-    let first = sidecar_owner_path(dir.path(), "http://127.0.0.1:47632");
-    let second = sidecar_owner_path(dir.path(), "http://127.0.0.1:47633");
-    let legacy = dir.path().join("codex-sidecar.owner.json");
-    let ignored = sidecar_owner_path(dir.path(), "http://127.0.0.1:47634");
-    for path in [&first, &second, &legacy, &ignored] {
-        fs::write(path, "{}").unwrap();
-    }
-
-    let paths = sidecar_owner_paths(dir.path()).unwrap();
-
-    assert_eq!(paths.len(), 4);
-    assert!(paths.contains(&first));
-    assert!(paths.contains(&second));
-    assert!(paths.contains(&legacy));
-    assert!(paths.contains(&ignored));
-    assert_ne!(first, second);
-}
-
-#[test]
-fn managed_sidecar_publishes_valid_ownership_before_parent_validation() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let state = dir.path().join("bootstrap-state");
-    let _state = EnvVarGuard::set_path(BOOTSTRAP_STATE_DIR_ENV, &state);
-    let _token =
-        EnvVarGuard::set_value("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", "test-shutdown-token");
-    let _fingerprint =
-        EnvVarGuard::set_value(crate::config::BOOTSTRAP_FINGERPRINT_ENV, "test-fingerprint");
-    let address = "127.0.0.1:47632".parse().unwrap();
-
-    publish_sidecar_owner_from_env(address).unwrap();
-
-    let url = format!("http://{address}");
-    let owner_path = sidecar_owner_path(&state, &url);
-    let pid_path = sidecar_pid_path(&state, &url);
-    validate_sidecar_owner(
-        &owner_path,
-        &pid_path,
-        std::process::id(),
-        &url,
-        "test-shutdown-token",
-        Some("test-fingerprint"),
-    )
-    .unwrap();
-}
-
-#[test]
-fn managed_shutdown_rejects_a_listener_without_authenticated_health_proof() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let state = dir.path().join("bootstrap-state");
-    fs::create_dir_all(&state).unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let owner_path = sidecar_owner_path(&state, &url);
-    write_sidecar_owner(
-        &owner_path,
-        std::process::id(),
-        &url,
-        "must-not-be-sent",
-        Some("hmac-sha256:fake-owner-fingerprint"),
-    )
-    .unwrap();
-    let (request_sender, request_receiver) = std::sync::mpsc::channel();
-    let listener_thread = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let request = read_http_request(&mut stream);
-        request_sender.send(request).unwrap();
-        let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
-        );
-        stream
-            .write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                )
-                .as_bytes(),
-            )
-            .unwrap();
-    });
-
-    let error = stop_owned_sidecar_record(&state, &owner_path).unwrap_err();
-
-    assert!(error.contains("foreign listener"), "{error}");
-    let request = request_receiver
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap();
-    let request = String::from_utf8(request).unwrap();
-    assert!(request.starts_with("GET /healthz HTTP/1.1"), "{request}");
-    assert!(!request.contains("must-not-be-sent"), "{request}");
-    assert!(owner_path.exists());
-    listener_thread.join().unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-fn failed_sidecar_startup_terminates_the_detached_process_group() {
-    let dir = tempdir().unwrap();
-    let grandchild_pid_path = dir.path().join("grandchild.pid");
-    let mut command = std::process::Command::new("sh");
-    command
-        .args(["-c", "sleep 30 & echo $! > \"$1\"; exit 1", "sh"])
-        .arg(&grandchild_pid_path);
-    configure_detached_sidecar(&mut command);
-    let mut child = command.spawn().unwrap();
-    let grandchild_pid = wait_for_published_pid(&grandchild_pid_path, "sidecar grandchild");
-    assert!(!child.wait().unwrap().success());
-
-    terminate_sidecar_process_tree(&mut child);
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        // SAFETY: Signal 0 performs an existence check and does not alter the target process.
-        let result = unsafe { libc::kill(grandchild_pid, 0) };
-        if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            // SAFETY: Best-effort cleanup of the test process if the process-group assertion fails.
-            unsafe { libc::kill(grandchild_pid, libc::SIGKILL) };
-            panic!("detached sidecar grandchild {grandchild_pid} survived startup termination");
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_sidecar_job_terminates_an_assigned_process() {
-    let job = SidecarJob::create().unwrap();
-    assert!(job.name().starts_with("Local\\NeMoRelaySidecar-"));
-    let mut command = std::process::Command::new("cmd");
-    command.args(["/C", "ping -n 30 127.0.0.1 >NUL"]);
-    configure_detached_sidecar(&mut command);
-    let mut child = command.spawn().unwrap();
-    match job.assign(&child) {
-        Ok(()) => {
-            job.terminate();
-            assert!(!child.wait().unwrap().success());
-        }
-        Err(error) => {
-            // Restrictive host Job Objects may forbid nested assignment; production reports the
-            // error and refuses to serve without its process-tree cleanup guarantee.
-            assert!(error.contains("Job Object"), "{error}");
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
-}
-
-#[test]
-fn sidecar_reaper_removes_only_the_exited_process_records() {
-    let dir = tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let owner_path = sidecar_owner_path(dir.path(), url);
-    let pid_path = sidecar_pid_path(dir.path(), url);
-    let endpoint_lock = lock_sidecar_endpoint(dir.path(), url).unwrap();
-    #[cfg(windows)]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "ping -n 2 127.0.0.1 >NUL"]);
-        command
-    };
-    #[cfg(not(windows))]
-    let mut command = {
-        let mut command = std::process::Command::new("sh");
-        command.args(["-c", "sleep 0.1"]);
-        command
-    };
-    let child = command.spawn().unwrap();
-    let pid = child.id();
-    write_sidecar_owner(
-        &owner_path,
-        pid,
-        url,
-        "test-shutdown-token",
-        Some("test-fingerprint"),
-    )
-    .unwrap();
-    fs::write(&pid_path, pid.to_string()).unwrap();
-
-    handoff_sidecar_to_reaper(
-        child,
-        owner_path.clone(),
-        pid_path.clone(),
-        sidecar_lock_path(dir.path(), url),
-    )
-    .unwrap();
-    drop(endpoint_lock);
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while (owner_path.exists() || pid_path.exists()) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!owner_path.exists());
-    assert!(!pid_path.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn sidecar_reaper_terminates_descendants_left_by_an_exited_gateway() {
-    let dir = tempdir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let owner_path = sidecar_owner_path(dir.path(), url);
-    let pid_path = sidecar_pid_path(dir.path(), url);
-    let descendant_pid_path = dir.path().join("descendant.pid");
-    let endpoint_lock = lock_sidecar_endpoint(dir.path(), url).unwrap();
-    let mut command = std::process::Command::new("sh");
-    command
-        .args(["-c", "sleep 30 & echo $! > \"$1\"; exit 0", "sh"])
-        .arg(&descendant_pid_path);
-    configure_detached_sidecar(&mut command);
-    let child = command.spawn().unwrap();
-    let pid = child.id();
-    write_sidecar_owner(
-        &owner_path,
-        pid,
-        url,
-        "test-shutdown-token",
-        Some("test-fingerprint"),
-    )
-    .unwrap();
-    fs::write(&pid_path, pid.to_string()).unwrap();
-    handoff_sidecar_to_reaper(
-        child,
-        owner_path.clone(),
-        pid_path.clone(),
-        sidecar_lock_path(dir.path(), url),
-    )
-    .unwrap();
-    drop(endpoint_lock);
-
-    let descendant_pid = wait_for_published_pid(&descendant_pid_path, "sidecar descendant");
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        // SAFETY: Signal 0 only checks whether the finite test process is still present.
-        let descendant_gone = unsafe { libc::kill(descendant_pid, 0) } == -1
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-        if descendant_gone && !owner_path.exists() && !pid_path.exists() {
-            break;
-        }
-        if Instant::now() >= deadline {
-            // SAFETY: Best-effort cleanup of the finite test process on assertion failure.
-            unsafe { libc::kill(descendant_pid, libc::SIGKILL) };
-            panic!("sidecar descendant {descendant_pid} survived direct gateway exit");
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[test]
-fn sidecar_reaper_does_not_block_other_cleanup_on_a_contended_lock() {
-    let dir = tempdir().unwrap();
-    let blocked_url = "http://127.0.0.1:47632";
-    let free_url = "http://127.0.0.1:47633";
-    let blocked_lock = lock_sidecar_endpoint(dir.path(), blocked_url).unwrap();
-    let mut records = Vec::new();
-    for url in [blocked_url, free_url] {
-        let child = short_lived_command().spawn().unwrap();
-        let pid = child.id();
-        let owner_path = sidecar_owner_path(dir.path(), url);
-        let pid_path = sidecar_pid_path(dir.path(), url);
-        write_sidecar_owner(
-            &owner_path,
-            pid,
-            url,
-            "test-shutdown-token",
-            Some("test-fingerprint"),
-        )
-        .unwrap();
-        fs::write(&pid_path, pid.to_string()).unwrap();
-        handoff_sidecar_to_reaper(
-            child,
-            owner_path.clone(),
-            pid_path.clone(),
-            sidecar_lock_path(dir.path(), url),
-        )
-        .unwrap();
-        records.push((owner_path, pid_path));
-    }
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while (records[1].0.exists() || records[1].1.exists()) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!records[1].0.exists());
-    assert!(!records[1].1.exists());
-    assert!(records[0].0.exists());
-
-    drop(blocked_lock);
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while (records[0].0.exists() || records[0].1.exists()) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!records[0].0.exists());
-    assert!(!records[0].1.exists());
-}
-
-#[test]
-fn sidecar_state_directory_does_not_follow_runtime_environment() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let _config_home = EnvVarGuard::remove("XDG_CONFIG_HOME");
-    let first = {
-        let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &dir.path().join("runtime-a"));
-        sidecar_state_dir().unwrap()
-    };
-    let second = {
-        let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &dir.path().join("runtime-b"));
-        sidecar_state_dir().unwrap()
-    };
-
-    assert_eq!(first, second);
-}
-
-#[test]
-fn sidecar_lock_name_uses_gateway_host_and_port() {
-    assert_eq!(
-        sidecar_lock_name("http://127.0.0.1:47632/hooks"),
-        "127.0.0.1-47632"
-    );
-    assert_eq!(sidecar_lock_name("http://localhost"), "localhost-80");
-    assert_eq!(
-        sidecar_lock_name("not a url/with spaces"),
-        "not_a_url_with_spaces"
-    );
-}
-
-#[test]
-fn runtime_dir_fallback_is_user_scoped() {
-    let runtime = runtime_dir_for(
-        None,
-        None,
-        None,
-        std::path::PathBuf::from("/tmp"),
-        Some("alice/example".into()),
-        None,
-    );
-
-    assert_eq!(
-        runtime,
-        std::path::PathBuf::from("/tmp")
-            .join("alice_example")
-            .join("nemo-relay-plugin")
-    );
-}
-
-#[test]
-fn runtime_dir_prefers_explicit_runtime_base_without_user_segment() {
-    let runtime = runtime_dir_for(
-        Some("/run/user/1000".into()),
-        None,
-        None,
-        std::path::PathBuf::from("/tmp"),
-        Some("alice".into()),
-        None,
-    );
-
-    assert_eq!(
-        runtime,
-        std::path::PathBuf::from("/run/user/1000").join("nemo-relay-plugin")
-    );
-}
-
-#[test]
 fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe");
     let generation =
@@ -3273,23 +2847,6 @@ fn compile_windows_hook_test_relay(output: &Path) {
 }
 
 #[test]
-fn windows_sidecar_flags_only_request_permitted_job_breakaway() {
-    let base = WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW;
-    assert_eq!(windows_sidecar_creation_flags(false, None), (base, false));
-    assert_eq!(
-        windows_sidecar_creation_flags(true, Some(WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK)),
-        (base | WINDOWS_CREATE_BREAKAWAY_FROM_JOB, false)
-    );
-    assert_eq!(
-        windows_sidecar_creation_flags(true, Some(WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)),
-        (base, false)
-    );
-    assert_eq!(windows_sidecar_creation_flags(true, Some(0)), (base, true));
-    assert_eq!(windows_sidecar_creation_flags(true, None), (base, true));
-    assert_eq!(WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_CLOSE, 0x0000_2000);
-}
-
-#[test]
 fn posix_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from("/tmp/NeMo $Relay`test'/bin/nemo-relay");
     let generation =
@@ -3310,73 +2867,13 @@ fn posix_shell_argument_quoting_and_hook_encoding_preserve_paths() {
 }
 
 #[test]
-fn unready_sidecar_child_is_terminated_and_pid_removed() {
-    let dir = tempdir().unwrap();
-    let pid_path = dir.path().join("codex-sidecar.pid");
-    let mut command = long_lived_command();
-    let child = command.spawn().unwrap();
-    fs::write(&pid_path, child.id().to_string()).unwrap();
-
-    let error = terminate_unready_sidecar(child, &pid_path, DEFAULT_URL).unwrap_err();
-
-    assert!(error.contains("terminated startup process"));
-    assert!(!pid_path.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn spawned_sidecar_uses_an_independent_process_group() {
-    let mut command = long_lived_command();
-    configure_detached_sidecar(&mut command);
-    let mut child = command.spawn().unwrap();
-
-    let output = std::process::Command::new("ps")
-        .args(["-o", "pgid=", "-p", &child.id().to_string()])
-        .output()
-        .unwrap();
-    let process_group = String::from_utf8(output.stdout)
-        .unwrap()
-        .trim()
-        .parse::<u32>()
-        .unwrap();
-
-    assert_eq!(process_group, child.id());
-    child.kill().unwrap();
-    child.wait().unwrap();
-}
-
-#[test]
-fn ensure_sidecar_releases_lock_when_startup_fails_fast() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let runtime = dir.path().join("runtime");
-    let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &runtime);
-
-    let error = loopback_bind("not a loopback url")
-        .and_then(|bind| {
-            GatewaySpec::new(bind)
-                .acquire()
-                .map(|result| result.endpoint)
-        })
-        .unwrap_err();
-
-    assert!(error.contains("loopback URL"));
-    assert!(
-        !runtime
-            .join("nemo-relay-plugin")
-            .join("not_a_loopback_url-sidecar.lock")
-            .exists()
-    );
-}
-
-#[test]
 fn healthz_rejects_foreign_success_response() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
-        for _ in 0..3 {
+        for _ in 0..2 {
             let (mut stream, _) = listener.accept().unwrap();
             let _ = read_http_request(&mut stream);
             stream
@@ -3389,118 +2886,12 @@ fn healthz_rejects_foreign_success_response() {
 
     let error = GatewaySpec::new(address)
         .acquire()
-        .err()
-        .expect("foreign listener unexpectedly acquired");
+        .expect_err("foreign listener unexpectedly acquired");
     assert!(
         error.contains("not a compatible NeMo Relay gateway"),
         "{error}"
     );
     handle.join().unwrap();
-}
-
-#[test]
-fn startup_reprobes_a_transient_foreign_health_result_after_locking() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let handle = thread::spawn(move || {
-        let (mut starting, _) = listener.accept().unwrap();
-        let _ = read_http_request(&mut starting);
-        starting
-            .write_all(b"HTTP/1.1 503 Starting\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .unwrap();
-        drop(starting);
-
-        let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
-        );
-        for _ in 0..2 {
-            let (mut ready, _) = listener.accept().unwrap();
-            let _ = read_http_request(&mut ready);
-            ready
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .unwrap();
-        }
-    });
-
-    let endpoint = GatewaySpec::new(address).acquire().unwrap().endpoint;
-
-    assert_eq!(endpoint.address, address);
-    handle.join().unwrap();
-}
-
-#[test]
-fn active_startup_lock_waits_for_relay_identity_instead_of_rejecting_listener() {
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let runtime_base = dir.path().join("runtime");
-    let _runtime = EnvVarGuard::set_path("XDG_RUNTIME_DIR", &runtime_base);
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let state = sidecar_state_dir().unwrap();
-    fs::create_dir_all(&state).unwrap();
-    let url = format!("http://{address}");
-    let lock_path = sidecar_lock_path(&state, &url);
-    let owner_lock = lock_sidecar_endpoint(&state, &url).unwrap();
-    let handle = thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
-        drop(owner_lock);
-
-        let body = format!(
-            r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
-        );
-        for _ in 0..2 {
-            let (mut ready, _) = listener.accept().unwrap();
-            let _ = read_http_request(&mut ready);
-            ready
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .unwrap();
-        }
-    });
-
-    let endpoint = GatewaySpec::new(address).acquire().unwrap().endpoint;
-
-    assert_eq!(endpoint.address, address);
-    assert_eq!(endpoint.url, format!("http://{address}"));
-    handle.join().unwrap();
-    assert!(lock_path.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn start_sidecar_reports_child_exit_before_healthz_ready() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempdir().unwrap();
-    let _home = HomeScope::enter(dir.path());
-    let relay = dir.path().join("nemo-relay");
-    fs::write(&relay, "#!/bin/sh\nexit 7\n").unwrap();
-    let mut permissions = fs::metadata(&relay).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&relay, permissions).unwrap();
-    let _binary = EnvVarGuard::set_path("NEMO_RELAY_PLUGIN_BINARY", &relay);
-
-    let error = start_sidecar("http://127.0.0.1:0", dir.path()).unwrap_err();
-
-    assert!(error.contains("exited before becoming ready"), "{error}");
-    assert!(!dir.path().join("codex-sidecar.pid").exists());
 }
 
 #[test]
@@ -3593,34 +2984,6 @@ fn codex_uninstall_hooks_removes_all_generated_url_variants_for_launcher() {
         "SessionStart",
         &new_command
     ));
-}
-
-#[cfg(windows)]
-fn long_lived_command() -> std::process::Command {
-    let mut command = std::process::Command::new("cmd");
-    command.args(["/C", "ping -n 60 127.0.0.1 >NUL"]);
-    command
-}
-
-#[cfg(windows)]
-fn short_lived_command() -> std::process::Command {
-    let mut command = std::process::Command::new("cmd");
-    command.args(["/C", "ping -n 2 127.0.0.1 >NUL"]);
-    command
-}
-
-#[cfg(not(windows))]
-fn long_lived_command() -> std::process::Command {
-    let mut command = std::process::Command::new("sh");
-    command.args(["-c", "sleep 60"]);
-    command
-}
-
-#[cfg(not(windows))]
-fn short_lived_command() -> std::process::Command {
-    let mut command = std::process::Command::new("sh");
-    command.args(["-c", "sleep 0.1"]);
-    command
 }
 
 #[test]
@@ -4054,7 +3417,7 @@ fn shared_filesystem_helpers_cover_tables_snapshots_and_lock_branches() {
 }
 
 #[test]
-fn shared_defaults_cover_runtime_username_and_empty_segments() {
+fn shared_defaults_cover_idle_lifecycle_and_lock_names() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
     let _plugin_url = EnvVarGuard::remove("NEMO_RELAY_PLUGIN_GATEWAY_URL");
@@ -4067,24 +3430,7 @@ fn shared_defaults_cover_runtime_username_and_empty_segments() {
         plugin_heartbeat_interval().unwrap(),
         Duration::from_secs(30)
     );
-    assert_eq!(
-        runtime_dir_for(
-            None,
-            None,
-            Some("/tmp/temp-base".into()),
-            dir.path().join("ignored"),
-            None,
-            Some("bob/name".into()),
-        ),
-        std::path::PathBuf::from("/tmp/temp-base")
-            .join("bob_name")
-            .join("nemo-relay-plugin")
-    );
     assert_eq!(sidecar_lock_name(""), "unknown");
-    assert_eq!(
-        runtime_dir_for(None, None, None, dir.path().into(), None, None),
-        dir.path().join("unknown-user").join("nemo-relay-plugin")
-    );
 }
 
 #[test]

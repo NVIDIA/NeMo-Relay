@@ -74,13 +74,13 @@ async fn lifecycle_retirement_is_checked_before_a_healthy_heartbeat() {
             async { Ok(Some("replacement".into())) }
         },
         |_address, _expected| async { panic!("retired lifecycle attempted recovery") },
-        || async { Err(CliError::Launch("cohort retired".into())) },
+        || async { Err(CliError::Launch("generation retired".into())) },
     ));
 
     tokio::time::advance(Duration::from_secs(30)).await;
     let error = monitor.await.unwrap().unwrap_err();
 
-    assert!(error.to_string().contains("cohort retired"));
+    assert!(error.to_string().contains("generation retired"));
     assert_eq!(health_calls.load(Ordering::SeqCst), 0);
 }
 
@@ -112,7 +112,7 @@ async fn lifecycle_retirement_during_health_is_checked_before_adoption() {
             let retired = retired_for_verification.load(Ordering::SeqCst);
             async move {
                 if retired {
-                    Err(CliError::Launch("cohort retired during health".into()))
+                    Err(CliError::Launch("generation retired during health".into()))
                 } else {
                     Ok(())
                 }
@@ -131,84 +131,8 @@ async fn lifecycle_retirement_during_health_is_checked_before_adoption() {
 }
 
 #[test]
-fn production_lifecycle_verifier_rejects_a_rotated_cohort() {
-    use std::ffi::OsString;
-
-    struct EnvRestore {
-        previous: Option<OsString>,
-    }
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            // SAFETY: This test holds the repository-wide environment mutex.
-            unsafe {
-                match self.previous.take() {
-                    Some(value) => {
-                        std::env::set_var(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, value)
-                    }
-                    None => std::env::remove_var(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV),
-                }
-            }
-        }
-    }
-
-    let _environment = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let state = tempfile::tempdir().unwrap();
-    let previous = std::env::var_os(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV);
-    // SAFETY: This test holds the repository-wide environment mutex.
-    unsafe { std::env::set_var(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, state.path()) };
-    let _restore = EnvRestore { previous };
-    let url = "http://127.0.0.1:47632";
-    let old = crate::sidecar::EndpointLease::acquire(state.path(), url).unwrap();
-    let cohort = old.cohort_id().to_string();
-    crate::sidecar::stop_owned_sidecar_and_reset(url).unwrap();
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    let error = runtime
-        .block_on(verify_lifecycle_async(None, cohort, url.into()))
-        .unwrap_err();
-
-    assert!(
-        error
-            .to_string()
-            .contains("retired by an integration update"),
-        "{error}"
-    );
-}
-
-#[test]
 fn generation_transaction_polling_is_cancellable_for_clean_mcp_shutdown() {
-    struct EnvRestore(Option<std::ffi::OsString>);
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            // SAFETY: The test holds the repository-wide environment mutex.
-            unsafe {
-                match self.0.take() {
-                    Some(value) => {
-                        std::env::set_var(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, value)
-                    }
-                    None => std::env::remove_var(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV),
-                }
-            }
-        }
-    }
-
-    let _environment = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let state = dir.path().join("state");
-    let previous = std::env::var_os(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV);
-    // SAFETY: This test holds the repository-wide environment mutex.
-    unsafe { std::env::set_var(crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, &state) };
-    let _restore = EnvRestore(previous);
-    let gateway_url = "http://127.0.0.1:47632";
-    let endpoint_lease = crate::sidecar::EndpointLease::acquire(&state, gateway_url).unwrap();
-    let cohort = endpoint_lease.cohort_id().to_string();
     let path = dir
         .path()
         .join(crate::install_generation::GENERATION_FILE_NAME);
@@ -224,11 +148,7 @@ fn generation_transaction_polling_is_cancellable_for_clean_mcp_shutdown() {
         .build()
         .unwrap();
     runtime.block_on(async {
-        let verification = tokio::spawn(verify_lifecycle_async(
-            Some(generation),
-            cohort,
-            gateway_url.into(),
-        ));
+        let verification = tokio::spawn(verify_lifecycle_async(Some(generation)));
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(!verification.is_finished());
         verification.abort();
@@ -240,54 +160,6 @@ fn generation_transaction_polling_is_cancellable_for_clean_mcp_shutdown() {
     });
     retirement.restore_after_rollback().unwrap();
 }
-
-#[test]
-fn endpoint_transaction_polling_is_cancellable_for_clean_mcp_shutdown() {
-    struct EnvRestore(Option<std::ffi::OsString>);
-    impl Drop for EnvRestore {
-        fn drop(&mut self) {
-            // SAFETY: The test holds the repository-wide environment mutex.
-            unsafe {
-                match self.0.take() {
-                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
-                }
-            }
-        }
-    }
-
-    let _environment = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let dir = tempfile::tempdir().unwrap();
-    let previous = std::env::var_os("XDG_CONFIG_HOME");
-    // SAFETY: The test holds the repository-wide environment mutex.
-    unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
-    let _restore = EnvRestore(previous);
-    let state = crate::sidecar::sidecar_state_dir().unwrap();
-    let url = "http://127.0.0.1:47632";
-    let lease = crate::sidecar::EndpointLease::acquire(&state, url).unwrap();
-    let cohort = lease.cohort_id().to_string();
-    let transaction = crate::sidecar::lock_sidecar_endpoint(&state, url).unwrap();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    runtime.block_on(async {
-        let verification = tokio::spawn(verify_lifecycle_async(None, cohort, url.into()));
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!verification.is_finished());
-        verification.abort();
-        let error = tokio::time::timeout(Duration::from_millis(250), verification)
-            .await
-            .expect("endpoint lifecycle poll ignored MCP cancellation")
-            .unwrap_err();
-        assert!(error.is_cancelled());
-    });
-    drop(transaction);
-}
-
 #[tokio::test]
 async fn concurrent_clients_consume_the_same_replacement_allowance() {
     use std::sync::atomic::{AtomicUsize, Ordering};
