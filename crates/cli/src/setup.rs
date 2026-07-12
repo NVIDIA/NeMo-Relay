@@ -326,5 +326,5 @@ fn setup_error(err: dialoguer::Error) -> CliError {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/setup_tests.rs"]
+#[path = "../tests/coverage/shared/setup_tests.rs"]
 mod tests;

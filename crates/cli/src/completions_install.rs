@@ -112,5 +112,5 @@ fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), CliError> {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/completions_install_tests.rs"]
+#[path = "../tests/coverage/shared/completions_install_tests.rs"]
 mod tests;

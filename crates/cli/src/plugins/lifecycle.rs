@@ -2621,5 +2621,5 @@ pub(super) fn inspect_compat_data(record: &DynamicPluginRecord) -> Value {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/plugins_lifecycle_tests.rs"]
+#[path = "../../tests/coverage/shared/plugins_lifecycle_tests.rs"]
 mod tests;

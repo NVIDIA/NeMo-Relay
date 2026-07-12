@@ -26,7 +26,7 @@ use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 
-use crate::alignment::{self, GatewayRouteKind};
+use crate::agents::alignment::{self, GatewayRouteKind};
 use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, header_string};
 use crate::error::CliError;
 use crate::server::AppState;
@@ -1282,5 +1282,5 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/gateway_tests.rs"]
+#[path = "../tests/coverage/shared/gateway_tests.rs"]
 mod tests;

@@ -285,5 +285,5 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/model_pricing_tests.rs"]
+#[path = "../tests/coverage/commands/model_pricing_tests.rs"]
 mod tests;

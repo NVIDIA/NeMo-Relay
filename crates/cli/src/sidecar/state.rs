@@ -323,5 +323,5 @@ pub(crate) fn lock_name(url: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/sidecar_state_tests.rs"]
+#[path = "../../tests/coverage/shared/sidecar_state_tests.rs"]
 mod tests;

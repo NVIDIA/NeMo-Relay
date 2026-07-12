@@ -1205,5 +1205,5 @@ fn retired_generation_error(path: &Path) -> String {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/install_generation_tests.rs"]
+#[path = "../tests/coverage/shared/install_generation_tests.rs"]
 mod tests;

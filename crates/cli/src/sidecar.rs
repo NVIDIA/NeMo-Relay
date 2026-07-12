@@ -531,5 +531,5 @@ pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/sidecar_tests.rs"]
+#[path = "../tests/coverage/shared/sidecar_tests.rs"]
 mod tests;

@@ -29,7 +29,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::adapters::{claude_code, codex, hermes};
+use crate::agents::adapters::{claude_code, codex, hermes};
 use crate::config::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
 };
@@ -829,5 +829,5 @@ fn hook_payload_rejection(rejection: JsonRejection) -> CliError {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/server_tests.rs"]
+#[path = "../tests/coverage/shared/server_tests.rs"]
 mod tests;

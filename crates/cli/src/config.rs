@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
-pub(crate) use crate::coding_agent::CodingAgent;
+pub(crate) use crate::agents::CodingAgent;
 use crate::error::CliError;
 use crate::file_io::{LockAttempt, try_lock_exclusive, try_lock_shared};
 #[cfg(test)]
@@ -2285,5 +2285,5 @@ impl GatewayMode {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/config_tests.rs"]
+#[path = "../tests/coverage/shared/config_tests.rs"]
 mod tests;

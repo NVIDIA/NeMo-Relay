@@ -553,7 +553,7 @@ fn hook_command_for_platform(relay: &Path, arguments: &[String], windows: bool) 
 fn posix_hook_command(relay: &Path, arguments: &[String]) -> String {
     std::iter::once(relay.display().to_string())
         .chain(arguments.iter().cloned())
-        .map(|argument| crate::plugin_host::shell_quote_arg_for_platform(&argument, false))
+        .map(|argument| crate::agents::host::shell_quote_arg_for_platform(&argument, false))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -896,5 +896,5 @@ fn insert_header(
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/installer_tests.rs"]
+#[path = "../tests/coverage/shared/installer_tests.rs"]
 mod tests;

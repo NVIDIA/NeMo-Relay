@@ -389,5 +389,5 @@ impl RecoveryState {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/mcp_gateway_tests.rs"]
+#[path = "../../tests/coverage/shared/mcp_gateway_tests.rs"]
 mod tests;

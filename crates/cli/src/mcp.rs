@@ -105,5 +105,5 @@ use session::serve_stdio;
 use transport::{MAX_MCP_FRAME_BYTES, read_bounded_frame};
 
 #[cfg(test)]
-#[path = "../tests/coverage/mcp_tests.rs"]
+#[path = "../tests/coverage/shared/mcp_tests.rs"]
 mod tests;

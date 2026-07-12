@@ -1948,5 +1948,5 @@ fn escape_pointer(segment: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/plugins_schema_tests.rs"]
+#[path = "../../tests/coverage/shared/plugins_schema_tests.rs"]
 mod tests;

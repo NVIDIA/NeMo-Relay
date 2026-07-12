@@ -23,8 +23,8 @@ use nemo_relay::api::tool::{
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
-use crate::adapters::{SKILL_LOAD_SOURCE_KEY, SKILL_LOAD_SOURCE_PROMPT_EXPANSION};
-use crate::alignment::{
+use crate::agents::adapters::{SKILL_LOAD_SOURCE_KEY, SKILL_LOAD_SOURCE_PROMPT_EXPANSION};
+use crate::agents::alignment::{
     self, GatewayManagementPolicy, PendingSubagentStart, SessionAlias, SessionAlignmentState,
     insert_optional, json_string_at, json_value_at, merge_metadata,
 };
@@ -2603,5 +2603,5 @@ fn gateway_session_for_call(
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/session_tests.rs"]
+#[path = "../tests/coverage/shared/session_tests.rs"]
 mod tests;

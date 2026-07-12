@@ -517,5 +517,5 @@ pub(crate) fn loopback_authority(host: &str, port: u16) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/sidecar_health_tests.rs"]
+#[path = "../../tests/coverage/shared/sidecar_health_tests.rs"]
 mod tests;

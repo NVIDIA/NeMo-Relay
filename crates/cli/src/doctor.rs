@@ -65,7 +65,7 @@ pub(crate) struct DoctorReport {
     pub environment: EnvironmentInfo,
     pub configuration: ConfigurationInfo,
     pub agents: Vec<AgentInfo>,
-    pub host_plugins: Vec<crate::plugin_install::HostPluginReadiness>,
+    pub host_plugins: Vec<crate::agents::install::HostPluginReadiness>,
     pub observability: Vec<Check>,
     pub completions: Vec<Check>,
 }
@@ -177,7 +177,7 @@ pub(crate) async fn collect_report(
             &plugin_diagnostics,
         ),
         agents: collect_agents(target_agent, &resolved).await,
-        host_plugins: crate::plugin_install::collect_default_host_plugin_readiness(),
+        host_plugins: crate::agents::install::collect_default_host_plugin_readiness(),
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
     })
@@ -520,7 +520,7 @@ fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
             (Status::Pass, "hooks: injected during run".into())
         }
         CodingAgent::Hermes => match agents.hermes.hooks_path.as_deref() {
-            Some(path) => match crate::hermes::diagnose_persistent(path) {
+            Some(path) => match crate::agents::hermes::diagnose_persistent(path) {
                 Ok(details) => (Status::Pass, details),
                 Err(error) => (
                     Status::Fail,
@@ -1592,5 +1592,5 @@ const _: fn() = || {
 };
 
 #[cfg(test)]
-#[path = "../tests/coverage/doctor_tests.rs"]
+#[path = "../tests/coverage/shared/doctor_tests.rs"]
 mod tests;
