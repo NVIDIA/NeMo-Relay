@@ -89,6 +89,27 @@ fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
 }
 
 #[test]
+fn recovery_records_preserve_pending_and_ready_attempts() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "http://127.0.0.1:47632";
+    let pending = RecoveryRecord {
+        from_instance: "first".into(),
+        endpoint_url: String::new(),
+        to_instance: String::new(),
+    };
+    write_recovery(dir.path(), url, &pending).unwrap();
+    assert_eq!(read_recovery(dir.path(), url).unwrap(), Some(pending));
+
+    let ready = RecoveryRecord {
+        from_instance: "first".into(),
+        endpoint_url: url.into(),
+        to_instance: "second".into(),
+    };
+    write_recovery(dir.path(), url, &ready).unwrap();
+    assert_eq!(read_recovery(dir.path(), url).unwrap(), Some(ready));
+}
+
+#[test]
 fn startup_lock_serializes_competing_mcp_processes() {
     let dir = tempfile::tempdir().unwrap();
     let url = "http://127.0.0.1:47632";

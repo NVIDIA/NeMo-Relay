@@ -32,7 +32,7 @@ pub(super) struct OwnerRecord {
     bootstrap_fingerprint: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(super) struct RecoveryRecord {
     pub(super) from_instance: String,
     pub(super) endpoint_url: String,

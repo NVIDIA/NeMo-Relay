@@ -197,8 +197,10 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
     if let Some(previous) = state::read_recovery(&state, &requested_url)?
         && previous.from_instance == expected_instance
     {
-        if spec.healthy_instance(&previous.endpoint_url).as_deref()
-            == Some(previous.to_instance.as_str())
+        if !previous.endpoint_url.is_empty()
+            && !previous.to_instance.is_empty()
+            && spec.healthy_instance(&previous.endpoint_url).as_deref()
+                == Some(previous.to_instance.as_str())
         {
             let address = loopback_bind(&previous.endpoint_url)?;
             return compatible_endpoint(address, previous.endpoint_url, Some(previous.to_instance));
@@ -206,6 +208,18 @@ fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<Gatewa
         return Err("shared Relay gateway became unhealthy after its coordinated restart".into());
     }
 
+    // Record the attempt while holding the startup lock. If the replacement
+    // dies before readiness, another overlapping MCP must not start a second
+    // replacement.
+    state::write_recovery(
+        &state,
+        &requested_url,
+        &state::RecoveryRecord {
+            from_instance: expected_instance.into(),
+            endpoint_url: String::new(),
+            to_instance: String::new(),
+        },
+    )?;
     let endpoint = start_gateway(spec, &state)?;
     state::write_recovery(
         &state,

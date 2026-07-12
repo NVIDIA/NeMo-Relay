@@ -441,6 +441,7 @@ impl EnvVarGuard {
         Self { key, previous }
     }
 
+    #[cfg(unix)]
     fn set_value(key: &'static str, value: &str) -> Self {
         let previous = std::env::var_os(key);
         // SAFETY: Callers hold the process-wide environment mutex through HomeScope.
