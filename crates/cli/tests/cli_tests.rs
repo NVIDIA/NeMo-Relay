@@ -297,12 +297,7 @@ fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
         response["result"]["serverInfo"]["name"],
         serde_json::json!("nemo-relay")
     );
-    let log = std::fs::read_to_string(
-        find_runtime_file(temp.path(), "gateway-sidecar.log")
-            .expect("gateway sidecar log should exist"),
-    )
-    .unwrap();
-    assert!(log.contains("Gateway        http://127.0.0.1:"));
+    assert!(find_runtime_file(temp.path(), "gateway-sidecar.log").is_none());
     stop_owned_sidecar(&owner);
     wait_for_port_closed(address);
 }
@@ -331,7 +326,7 @@ fn cli_mcp_starts_gateway_even_when_stdio_closes_before_request() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty());
-    assert!(find_runtime_file(temp.path(), "gateway-sidecar.log").is_some());
+    assert!(find_runtime_file(temp.path(), "gateway-sidecar.log").is_none());
     let owner = wait_for_owned_sidecar(temp.path(), None);
     let address = sidecar_address(temp.path());
     stop_owned_sidecar(&owner);
@@ -931,23 +926,21 @@ fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
 fn sidecar_address(temp: &std::path::Path) -> SocketAddr {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let log_path = find_runtime_file(temp, "gateway-sidecar.log");
-        if let Some(log_path) = log_path.as_ref()
-            && let Ok(log) = std::fs::read_to_string(log_path)
-            && let Some(address) = log.lines().find_map(|line| {
-                line.split("Gateway        http://")
-                    .nth(1)
-                    .and_then(|value| value.split_whitespace().next())
-                    .and_then(|value| value.parse().ok())
-            })
-        {
-            return address;
+        for path in find_runtime_files_matching(temp, "sidecar-", ".owner.json") {
+            if let Ok(raw) = std::fs::read(path)
+                && let Ok(owner) = serde_json::from_slice::<serde_json::Value>(&raw)
+                && let Some(address) = owner["url"]
+                    .as_str()
+                    .and_then(|url| url.strip_prefix("http://"))
+                    .and_then(|address| address.parse().ok())
+            {
+                return address;
+            }
         }
         assert!(
             Instant::now() < deadline,
-            "sidecar address was not logged under {}; log: {:?}",
-            temp.display(),
-            log_path.and_then(|path| std::fs::read_to_string(path).ok())
+            "sidecar ownership was not published under {}",
+            temp.display()
         );
         thread::sleep(Duration::from_millis(20));
     }

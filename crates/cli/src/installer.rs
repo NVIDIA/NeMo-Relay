@@ -5,6 +5,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+#[cfg(any(windows, test))]
 use base64::Engine;
 use futures_util::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -559,6 +560,7 @@ fn posix_hook_command(relay: &Path, arguments: &[String]) -> String {
 
 // `cmd.exe` accepts at most 8,191 characters. Leave room for `/C` and the executable path added
 // by the hook host instead of generating a command that will be truncated at runtime.
+#[cfg(any(windows, test))]
 const MAX_WINDOWS_HOOK_COMMAND_UTF16_UNITS: usize = 8_000;
 
 /// Encode a native Relay invocation so Windows hook hosts can pass it through `cmd.exe /C` as one
@@ -640,6 +642,7 @@ fn windows_powershell_path() -> Result<String, String> {
     Ok(powershell)
 }
 
+#[cfg(any(windows, test))]
 fn safe_windows_launcher_token(launcher: &str) -> bool {
     !launcher.is_empty()
         && launcher.chars().all(|character| {
@@ -653,6 +656,7 @@ fn safe_windows_launcher_token(launcher: &str) -> bool {
 /// Decode only the exact PowerShell envelope emitted by [`encoded_windows_hook_command`].
 ///
 /// Hermes uses this to migrate and replace Relay-owned hooks whose generation arguments change.
+#[cfg(test)]
 pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
     const COMMAND_SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
     const SCRIPT_PREFIX: &str = "$ErrorActionPreference='Stop'; & ";
@@ -691,6 +695,7 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
     parse_powershell_single_quoted_arguments(invocation)
 }
 
+#[cfg(test)]
 fn parse_powershell_single_quoted_arguments(mut raw: &str) -> Option<Vec<String>> {
     let mut arguments = Vec::new();
     while !raw.is_empty() {

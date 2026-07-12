@@ -17,9 +17,9 @@ use serde_json::{Map, Value, json};
 #[cfg(test)]
 use self::config::persistent_hook_command_for_platform;
 use self::config::{
-    MCP_SERVER_NAME, expected_mcp_server, forwarded_environment_names, is_managed_hook_command,
-    is_managed_mcp_server, parse_yaml_object, persistent_config, relay_is_executable,
-    remove_managed_mcp, strip_managed_hooks, user_config_path_with_override, yaml_bytes,
+    MCP_SERVER_NAME, expected_mcp_server, forwarded_environment_names, owned_install_command,
+    parse_yaml_object, persistent_config, relay_is_executable, remove_owned_mcp, strip_owned_hooks,
+    user_config_path_with_override, yaml_bytes,
 };
 use self::files::{
     FileSnapshot, INSTALL_LOCK_TIMEOUT, PersistentPaths, acquire_allowlist_lock,
@@ -159,7 +159,7 @@ fn persistent_paths_have_managed_state(paths: &PersistentPaths) -> Result<bool, 
     }
     if let Some(raw) = read_optional_utf8(&paths.allowlist)? {
         let allowlist = parse_json_object(Some(&raw), "Hermes shell-hook allowlist")?;
-        if allowlist_has_managed_state(&allowlist) {
+        if allowlist_has_owned_command(&allowlist, None) {
             return Ok(true);
         }
     }
@@ -167,29 +167,28 @@ fn persistent_paths_have_managed_state(paths: &PersistentPaths) -> Result<bool, 
 }
 
 fn config_has_managed_state(config: &Value) -> bool {
-    config
-        .get("mcp_servers")
-        .and_then(|servers| servers.get(MCP_SERVER_NAME))
-        .is_some_and(is_managed_mcp_server)
-        || config
-            .get("hooks")
-            .and_then(Value::as_object)
-            .into_iter()
-            .flat_map(Map::values)
-            .filter_map(Value::as_array)
-            .flatten()
-            .filter_map(|entry| entry.get("command").and_then(Value::as_str))
-            .any(is_managed_hook_command)
+    owned_command_from_config(config, None).is_some()
 }
 
-fn allowlist_has_managed_state(allowlist: &Value) -> bool {
-    allowlist
-        .get("approvals")
-        .and_then(Value::as_array)
-        .into_iter()
+fn allowlist_has_owned_command(allowlist: &Value, command: Option<&str>) -> bool {
+    command.is_some_and(|command| {
+        allowlist
+            .get("approvals")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|entry| entry.get("command").and_then(Value::as_str) == Some(command))
+    })
+}
+
+fn owned_command_from_config(config: &Value, generation: Option<&Path>) -> Option<String> {
+    let relay = config
+        .pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}/command"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)?;
+    owned_install_command(config, &relay, generation)
+        .ok()
         .flatten()
-        .filter_map(|entry| entry.get("command").and_then(Value::as_str))
-        .any(is_managed_hook_command)
 }
 
 pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> {
@@ -278,17 +277,21 @@ fn relay_executable_from_config(config: &Value) -> Result<PathBuf, String> {
         .get("mcp_servers")
         .and_then(|servers| servers.get(MCP_SERVER_NAME))
         .ok_or_else(|| format!("Hermes MCP server `{MCP_SERVER_NAME}` is missing"))?;
-    if !is_managed_mcp_server(server) {
+    let relay = PathBuf::from(
+        server
+            .get("command")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Hermes Relay MCP command is missing".to_string())?,
+    );
+    if owned_install_command(config, &relay, None)
+        .map_err(|error| error.to_string())?
+        .is_none()
+    {
         return Err(format!(
             "Hermes MCP server `{MCP_SERVER_NAME}` is not a managed Relay MCP client"
         ));
     }
-    Ok(PathBuf::from(
-        server
-            .get("command")
-            .and_then(Value::as_str)
-            .expect("managed MCP server has a string command"),
-    ))
+    Ok(relay)
 }
 
 #[cfg(test)]
@@ -325,6 +328,13 @@ where
         .collect::<Result<Vec<_>, _>>()?;
     let existing_config = read_optional_utf8(&paths.config)?;
     let existing_allowlist = read_optional_utf8(&paths.allowlist)?;
+    let previous_command = match existing_config.as_deref() {
+        Some(raw) => {
+            let root = parse_yaml_object(Some(raw), "Hermes config")?;
+            owned_install_command(&root, relay, Some(&paths.generation))?
+        }
+        None => None,
+    };
     let environment = forwarded_environment_names(environment, plugin_config);
     let token = uuid::Uuid::now_v7().to_string();
     let command =
@@ -337,7 +347,13 @@ where
         &token,
         &environment,
     )?;
-    let allowlist = trusted_hooks(existing_allowlist.as_deref(), &command, relay, now)?;
+    let allowlist = trusted_hooks(
+        existing_allowlist.as_deref(),
+        previous_command.as_deref(),
+        &command,
+        relay,
+        now,
+    )?;
     let config = yaml_bytes(&config)?;
     let allowlist = json_bytes(&allowlist)?;
     let generation = format!("{token}\n").into_bytes();
@@ -383,8 +399,9 @@ where
     let config = read_optional_utf8(&paths.config)?
         .map(|raw| {
             let mut root = parse_yaml_object(Some(&raw), "Hermes config")?;
-            strip_managed_hooks(&mut root)?;
-            remove_managed_mcp(&mut root)?;
+            let owned = owned_command_from_config(&root, Some(&paths.generation));
+            strip_owned_hooks(&mut root, owned.as_deref())?;
+            remove_owned_mcp(&mut root, owned.is_some())?;
             if root.as_object().is_some_and(Map::is_empty) {
                 Ok(None)
             } else {
@@ -393,6 +410,9 @@ where
         })
         .transpose()?
         .flatten();
+    let owned = read_optional_utf8(&paths.config)?
+        .and_then(|raw| parse_yaml_object(Some(&raw), "Hermes config").ok())
+        .and_then(|root| owned_command_from_config(&root, Some(&paths.generation)));
     let allowlist = read_optional_utf8(&paths.allowlist)?
         .map(|raw| {
             let mut root = parse_json_object(Some(&raw), "Hermes shell-hook allowlist")?;
@@ -409,7 +429,7 @@ where
                     entry
                         .get("command")
                         .and_then(Value::as_str)
-                        .is_none_or(|command| !is_managed_hook_command(command))
+                        .is_none_or(|command| Some(command) != owned.as_deref())
                 });
                 if approvals.is_empty() {
                     object.remove("approvals");
@@ -428,7 +448,7 @@ where
         remove_optional_file(&paths.generation)?;
         replace_optional_file(&paths.allowlist, allowlist.as_deref(), &mut write)?;
         replace_optional_file(&paths.config, config.as_deref(), &mut write)?;
-        verify_uninstall(&paths)
+        verify_uninstall(&paths, owned.as_deref())
     })();
     if let Err(error) = result {
         return rollback_error("uninstall", error, &snapshots, &mut write);
@@ -500,49 +520,33 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
             .iter()
             .filter(|group| group.get("command").and_then(Value::as_str) == Some(command))
             .count();
-        let managed = groups
-            .iter()
-            .filter_map(|group| group.get("command").and_then(Value::as_str))
-            .filter(|candidate| is_managed_hook_command(candidate))
-            .count();
-        if matching != 1 || managed != 1 {
+        if matching != 1 {
             return Err(format!(
                 "Hermes hook {event} expected exactly one trusted Relay handler"
             ));
         }
     }
-    let hooks = config
+    for (event, groups) in config
         .get("hooks")
         .and_then(Value::as_object)
-        .ok_or_else(|| "Hermes hooks are missing".to_string())?;
-    let mut managed = Vec::new();
-    for (event, groups) in hooks {
+        .into_iter()
+        .flat_map(Map::iter)
+    {
         let groups = groups
             .as_array()
             .ok_or_else(|| format!("Hermes {event} hooks must be an array"))?;
-        for group in groups {
-            let Some(candidate) = group.get("command").and_then(Value::as_str) else {
-                continue;
-            };
-            if is_managed_hook_command(candidate) {
-                managed.push((event.as_str(), candidate));
-            }
+        if !CodingAgent::Hermes.hook_events().contains(&event.as_str())
+            && groups
+                .iter()
+                .any(|group| group.get("command").and_then(Value::as_str) == Some(command))
+        {
+            return Err("Hermes config contains an unexpected Relay hook handler".into());
         }
-    }
-    managed.sort_unstable();
-    let mut expected = CodingAgent::Hermes
-        .hook_events()
-        .iter()
-        .map(|event| (*event, command))
-        .collect::<Vec<_>>();
-    expected.sort_unstable();
-    if managed != expected {
-        return Err("Hermes config contains an unexpected Relay hook handler".into());
     }
     Ok(())
 }
 
-fn verify_uninstall(paths: &PersistentPaths) -> Result<(), String> {
+fn verify_uninstall(paths: &PersistentPaths, owned_command: Option<&str>) -> Result<(), String> {
     if paths.generation.exists() {
         return Err("Hermes MCP generation fence still exists".into());
     }
@@ -555,7 +559,7 @@ fn verify_uninstall(paths: &PersistentPaths) -> Result<(), String> {
     if let Some(raw) = read_optional_utf8(&paths.allowlist).map_err(|error| error.to_string())? {
         let allowlist = parse_json_object(Some(&raw), "Hermes shell-hook allowlist")
             .map_err(|e| e.to_string())?;
-        if allowlist_has_managed_state(&allowlist) {
+        if allowlist_has_owned_command(&allowlist, owned_command) {
             return Err("managed Hermes Relay trust approval still exists".into());
         }
     }

@@ -31,8 +31,9 @@ pub(crate) fn transparent_config(
     gateway_url: &str,
 ) -> Result<String, CliError> {
     let mut root = parse_yaml_object(Some(existing), "Hermes config")?;
-    strip_managed_hooks(&mut root)?;
-    remove_managed_mcp(&mut root)?;
+    let owned = owned_install_command(&root, relay, None)?;
+    strip_owned_hooks(&mut root, owned.as_deref())?;
+    remove_owned_mcp(&mut root, owned.is_some())?;
     let command = crate::installer::transparent_hook_forward_command(
         relay,
         crate::config::CodingAgent::Hermes,
@@ -84,14 +85,17 @@ pub(super) fn persistent_config(
     environment: &[String],
 ) -> Result<Value, CliError> {
     let mut root = parse_yaml_object(existing, "Hermes config")?;
-    if let Some(server) = root.pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}"))
-        && !is_managed_mcp_server(server)
+    let owned = owned_install_command(&root, relay, Some(generation))?;
+    if root
+        .pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}"))
+        .is_some()
+        && owned.is_none()
     {
         return Err(CliError::Install(format!(
             "Hermes MCP server `{MCP_SERVER_NAME}` already exists and is not managed by Relay; rename or remove it before installing the Relay integration"
         )));
     }
-    strip_managed_hooks(&mut root)?;
+    strip_owned_hooks(&mut root, owned.as_deref())?;
     root = merge_hooks(
         root,
         generated_hooks(crate::config::CodingAgent::Hermes, command),
@@ -128,7 +132,10 @@ pub(super) fn forwarded_environment_names(
     crate::mcp_environment::forwarded_names(environment.iter().cloned(), plugin_config)
 }
 
-pub(super) fn strip_managed_hooks(root: &mut Value) -> Result<(), CliError> {
+pub(super) fn strip_owned_hooks(
+    root: &mut Value,
+    owned_command: Option<&str>,
+) -> Result<(), CliError> {
     let Some(hooks) = root.get_mut("hooks") else {
         return Ok(());
     };
@@ -145,7 +152,7 @@ pub(super) fn strip_managed_hooks(root: &mut Value) -> Result<(), CliError> {
                 group
                     .get("command")
                     .and_then(Value::as_str)
-                    .is_none_or(|command| !is_managed_hook_command(command))
+                    .is_none_or(|command| Some(command) != owned_command)
             });
             if groups.is_empty() {
                 empty.push(event.clone());
@@ -164,17 +171,14 @@ pub(super) fn strip_managed_hooks(root: &mut Value) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(super) fn remove_managed_mcp(root: &mut Value) -> Result<(), CliError> {
+pub(super) fn remove_owned_mcp(root: &mut Value, owned: bool) -> Result<(), CliError> {
     let Some(servers) = root.get_mut("mcp_servers") else {
         return Ok(());
     };
     let servers = servers
         .as_object_mut()
         .ok_or_else(|| CliError::Install("Hermes mcp_servers must be an object".into()))?;
-    if servers
-        .get(MCP_SERVER_NAME)
-        .is_some_and(is_managed_mcp_server)
-    {
+    if owned {
         servers.remove(MCP_SERVER_NAME);
     }
     if servers.is_empty() {
@@ -185,57 +189,95 @@ pub(super) fn remove_managed_mcp(root: &mut Value) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(super) fn is_managed_mcp_server(server: &Value) -> bool {
-    crate::mcp::is_managed_server(server, is_relay_executable)
+pub(super) fn owned_install_command(
+    root: &Value,
+    relay: &Path,
+    expected_generation: Option<&Path>,
+) -> Result<Option<String>, CliError> {
+    let Some(server) = root.pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}")) else {
+        return Ok(None);
+    };
+    if server.get("command") != Some(&json!(relay)) {
+        return Ok(None);
+    }
+    let env = server.get("env").and_then(Value::as_object);
+    if server.get("args") == Some(&json!(["mcp"]))
+        && env.and_then(|env| env.get("NEMO_RELAY_GATEWAY_BIND"))
+            == Some(&json!(crate::sidecar::DEFAULT_BIND))
+    {
+        let generation = env
+            .and_then(|env| env.get(crate::install_generation::GENERATION_FILE_ENV))
+            .and_then(Value::as_str);
+        let token = env
+            .and_then(|env| env.get(crate::install_generation::GENERATION_TOKEN_ENV))
+            .and_then(Value::as_str);
+        if let (Some(generation), Some(token)) = (generation, token)
+            && !token.is_empty()
+            && expected_generation.is_none_or(|expected| Path::new(generation) == expected)
+        {
+            let command = persistent_hook_command(relay, Path::new(generation), token)
+                .map_err(CliError::Install)?;
+            return Ok(has_complete_hook_set(root, &command).then_some(command));
+        }
+    }
+    legacy_owned_command(root, relay)
 }
 
-pub(crate) fn is_managed_hook_command(command: &str) -> bool {
-    if let Some(arguments) = crate::installer::decode_windows_hook_command(command) {
-        if arguments.len() < 3
-            || !is_relay_executable(&arguments[0])
-            || arguments[1] != "hook-forward"
-            || arguments[2] != "hermes"
-        {
-            return false;
-        }
-        let options = &arguments[3..];
-        return options.is_empty()
-            || (options.len() == 3
-                && options[0] == "--gateway-url"
-                && options[2] == "--transparent-run")
-            || (options.len() == 6
-                && options[0] == "--gateway-url"
-                && options[2] == "--generation-file"
-                && options[4] == "--generation-token");
-    }
-    [" hook-forward hermes", " plugin-shim hook hermes"]
-        .into_iter()
-        .any(|separator| {
-            command
-                .trim()
-                .rsplit_once(separator)
-                .is_some_and(|(executable, arguments)| {
-                    is_relay_executable(executable)
-                        && (arguments.is_empty()
-                            || arguments.starts_with(" --gateway-url ")
-                            || arguments.starts_with(" --fail-closed"))
+fn has_complete_hook_set(root: &Value, command: &str) -> bool {
+    crate::config::CodingAgent::Hermes
+        .hook_events()
+        .iter()
+        .all(|event| {
+            root.pointer(&format!("/hooks/{event}"))
+                .and_then(Value::as_array)
+                .is_some_and(|groups| {
+                    groups
+                        .iter()
+                        .filter(|entry| {
+                            entry.get("command").and_then(Value::as_str) == Some(command)
+                        })
+                        .count()
+                        == 1
                 })
         })
 }
 
-fn is_relay_executable(raw: &str) -> bool {
-    let mut candidate = raw.trim().to_string();
-    if candidate.starts_with('\'') && candidate.ends_with('\'') && candidate.len() >= 2 {
-        candidate = candidate[1..candidate.len() - 1].replace("'\\''", "'");
-    } else if candidate.starts_with('"') && candidate.ends_with('"') && candidate.len() >= 2 {
-        candidate = candidate[1..candidate.len() - 1].to_string();
+fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, CliError> {
+    let server = &root["mcp_servers"][MCP_SERVER_NAME];
+    if server.get("args") != Some(&json!(["mcp", "--agent", "hermes"])) {
+        return Ok(None);
     }
-    candidate = candidate.replace('^', "").replace("%%", "%");
-    let normalized = candidate.replace('\\', "/");
-    matches!(
-        normalized.rsplit('/').next().map(str::to_ascii_lowercase),
-        Some(name) if name == "nemo-relay" || name == "nemo-relay.exe"
-    )
+    let Some(hooks) = root.get("hooks").and_then(Value::as_object) else {
+        return Ok(None);
+    };
+    let mut common = None;
+    for event in crate::config::CodingAgent::Hermes.hook_events() {
+        let commands = hooks
+            .get(*event)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("command").and_then(Value::as_str))
+            .filter(|command| legacy_command_uses_relay(command, relay))
+            .collect::<Vec<_>>();
+        if commands.len() != 1 || common.is_some_and(|value| value != commands[0]) {
+            return Ok(None);
+        }
+        common = Some(commands[0]);
+    }
+    Ok(common.map(str::to_owned))
+}
+
+fn legacy_command_uses_relay(command: &str, relay: &Path) -> bool {
+    let relay = relay.to_string_lossy();
+    let quoted = crate::plugin_host::shell_quote_arg_for_platform(&relay, cfg!(windows));
+    [relay.as_ref(), quoted.as_str()].into_iter().any(|prefix| {
+        command.strip_prefix(prefix).is_some_and(|arguments| {
+            [" hook-forward hermes", " plugin-shim hook hermes"]
+                .iter()
+                .any(|marker| arguments.starts_with(marker))
+        })
+    })
 }
 
 pub(super) fn relay_is_executable(path: &Path) -> bool {

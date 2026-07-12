@@ -10,12 +10,12 @@ use std::time::SystemTime;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
-use super::config::is_managed_hook_command;
 use crate::config::CodingAgent;
 use crate::error::CliError;
 
 pub(super) fn trusted_hooks(
     existing: Option<&str>,
+    previous_command: Option<&str>,
     command: &str,
     relay: &Path,
     now: SystemTime,
@@ -34,7 +34,7 @@ pub(super) fn trusted_hooks(
         entry
             .get("command")
             .and_then(Value::as_str)
-            .is_none_or(|candidate| !is_managed_hook_command(candidate))
+            .is_none_or(|candidate| Some(candidate) != previous_command)
     });
     let approved_at = timestamp(now);
     let script_mtime_at_approval = fs::metadata(relay)
@@ -79,29 +79,17 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
             ));
         }
     }
-    let mut managed = Vec::new();
     for entry in approvals {
-        let Some(candidate) = entry.get("command").and_then(Value::as_str) else {
-            continue;
-        };
-        if !is_managed_hook_command(candidate) {
+        if entry.get("command").and_then(Value::as_str) != Some(command) {
             continue;
         }
         let event = entry
             .get("event")
             .and_then(Value::as_str)
             .ok_or_else(|| "Hermes Relay hook approval is missing its event".to_string())?;
-        managed.push((event, candidate));
-    }
-    managed.sort_unstable();
-    let mut expected = CodingAgent::Hermes
-        .hook_events()
-        .iter()
-        .map(|event| (*event, command))
-        .collect::<Vec<_>>();
-    expected.sort_unstable();
-    if managed != expected {
-        return Err("Hermes allowlist contains an unexpected Relay hook approval".into());
+        if !CodingAgent::Hermes.hook_events().contains(&event) {
+            return Err("Hermes allowlist contains an unexpected Relay hook approval".into());
+        }
     }
     Ok(())
 }

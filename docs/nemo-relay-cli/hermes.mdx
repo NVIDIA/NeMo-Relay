@@ -100,6 +100,13 @@ Persistent MCP mode reads only system and user Relay configuration. It does not
 load a project's `.nemo-relay` layer. Use transparent run mode for
 project-specific Relay configuration.
 
+Relay removes or replaces Hermes MCP entries, hooks, and approvals only when
+the canonical executable, generation fence, and complete required hook set form
+one coherent installed identity. Manual or partial lookalike entries are
+preserved. Rename or remove a conflicting manual `mcp_servers.nemo-relay` entry
+before installation. Legacy entries are migrated only when their MCP entry and
+complete hook set use the same canonical Relay executable.
+
 ## Route Model Traffic
 
 Hermes API hooks can provide sanitized model request and response data. Route
@@ -195,9 +202,9 @@ It is intentionally outside mandatory Rust CI.
 ## Troubleshoot
 
 If Hermes reports that the MCP server failed to start, run
-`nemo-relay doctor --plugin hermes` and inspect the sidecar log path named in
-the error. A foreign listener on `127.0.0.1:47632` is rejected rather than
-adopted.
+`nemo-relay doctor --plugin hermes` and inspect the reported configuration or
+endpoint error. Detached gateways do not create persistent log files. A foreign
+listener on `127.0.0.1:47632` is rejected rather than adopted.
 
 If lifecycle events appear but direct model spans do not, check whether the
 Hermes provider base URL points at Relay. If model spans attach to the parent

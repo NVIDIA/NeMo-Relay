@@ -772,29 +772,3 @@ fn persistent_mcp_server_contract_is_host_neutral_and_generation_fenced() {
         "generation-token"
     );
 }
-
-#[test]
-fn managed_mcp_server_recognizes_one_current_contract_and_legacy_migrations() {
-    let relay = |command: &str| command.ends_with("nemo-relay");
-    assert!(is_managed_server(
-        &json!({"command": "/bin/nemo-relay", "args": ["mcp"]}),
-        relay
-    ));
-    for agent in ["claude", "codex", "hermes"] {
-        assert!(is_managed_server(
-            &json!({
-                "command": "/bin/nemo-relay",
-                "args": ["mcp", "--agent", agent]
-            }),
-            relay
-        ));
-    }
-    for foreign in [
-        json!({"command": "/bin/other", "args": ["mcp"]}),
-        json!({"command": "/bin/nemo-relay", "args": ["mcp", "--agent", "unknown"]}),
-        json!({"command": "/bin/nemo-relay", "args": ["mcp", "--extra"]}),
-        json!({"command": "/bin/nemo-relay"}),
-    ] {
-        assert!(!is_managed_server(&foreign, relay), "{foreign}");
-    }
-}

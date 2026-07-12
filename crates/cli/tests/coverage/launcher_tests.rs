@@ -1017,7 +1017,7 @@ fn hermes_hooks_path_prefers_configured_then_env_then_home() {
 }
 
 #[test]
-fn hermes_overlay_preserves_original_file() {
+fn hermes_overlay_preserves_ambiguous_manual_mcp_and_original_file() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let hooks_path = temp.path().join("hermes-home/config.yaml");
@@ -1070,7 +1070,10 @@ hooks:
             "--transparent-run",
         ],
     ));
-    assert!(patched_yaml["mcp_servers"].get("nemo-relay").is_none());
+    assert_eq!(
+        patched_yaml["mcp_servers"]["nemo-relay"]["args"],
+        json!(["mcp", "--agent", "hermes"])
+    );
     assert_eq!(
         patched_yaml["mcp_servers"]["filesystem"]["command"],
         json!("fs-mcp")

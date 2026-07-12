@@ -72,35 +72,6 @@ pub(crate) fn persistent_server(
     })
 }
 
-/// Returns whether a server entry is owned by Relay's current or legacy MCP launch contract.
-///
-/// Legacy `--agent` spellings are accepted only for migration. New configurations always use the
-/// single host-neutral `nemo-relay mcp` command.
-pub(crate) fn is_managed_server(
-    server: &Value,
-    relay_executable: impl FnOnce(&str) -> bool,
-) -> bool {
-    let executable_matches = server
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(relay_executable);
-    if !executable_matches {
-        return false;
-    }
-    if server.get("args") == Some(&json!(LAUNCH_ARGS)) {
-        return true;
-    }
-    let Some(arguments) = server.get("args").and_then(Value::as_array) else {
-        return false;
-    };
-    arguments.len() == 3
-        && arguments[0] == "mcp"
-        && arguments[1] == "--agent"
-        && arguments[2]
-            .as_str()
-            .is_some_and(|agent| matches!(agent, "claude" | "codex" | "hermes"))
-}
-
 fn transparent_run_active() -> bool {
     std::env::var(crate::config::TRANSPARENT_RUN_ENV)
         .ok()

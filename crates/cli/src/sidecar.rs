@@ -9,7 +9,7 @@ mod state;
 
 use std::env;
 use std::ffi::OsString;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -260,21 +260,12 @@ fn incompatible_relay_error(url: &str) -> String {
 
 fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, String> {
     let relay = relay_binary()?;
-    let log_path = state.join("gateway-sidecar.log");
     let ready_path = state.join(format!(
         "gateway-{}-{}.ready.json",
         std::process::id(),
         uuid::Uuid::now_v7()
     ));
     let _ = fs::remove_file(&ready_path);
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .map_err(|error| format!("failed to open {}: {error}", log_path.display()))?;
-    let err_log = log
-        .try_clone()
-        .map_err(|error| format!("failed to clone gateway log handle: {error}"))?;
     let shutdown_token = uuid::Uuid::now_v7().to_string();
     let mut command = Command::new(relay);
     command
@@ -296,8 +287,8 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
         .env_remove(crate::install_generation::GENERATION_FILE_ENV)
         .env_remove(crate::install_generation::GENERATION_TOKEN_ENV)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(err_log));
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     if spec.user_config_scope {
         command.env("NEMO_RELAY_CONFIG_SCOPE", "user");
         if let Some(config_dir) = crate::config::user_config_dir() {
@@ -335,9 +326,8 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
             Ok(Some(status)) => {
                 let _ = fs::remove_file(&ready_path);
                 return Err(format!(
-                    "nemo-relay gateway exited before becoming ready at http://{}: {status}; inspect {}",
-                    spec.bind,
-                    log_path.display()
+                    "nemo-relay gateway exited before becoming ready at http://{}: {status}",
+                    spec.bind
                 ));
             }
             Ok(None) => {}
@@ -352,9 +342,8 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
     }
     let _ = fs::remove_file(&ready_path);
     Err(format!(
-        "nemo-relay gateway did not become ready at http://{}; inspect {}",
-        spec.bind,
-        log_path.display()
+        "nemo-relay gateway did not become ready at http://{}",
+        spec.bind
     ))
 }
 
