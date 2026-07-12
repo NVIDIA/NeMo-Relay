@@ -13,6 +13,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -313,12 +314,10 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
             && spec.healthy_instance(&endpoint.url).as_deref()
                 == Some(endpoint.instance_id.as_str())
         {
-            let mut detached = child.disarm();
-            let _ = thread::Builder::new()
-                .name("nemo-relay-gateway-wait".into())
-                .spawn(move || {
-                    let _ = detached.wait();
-                });
+            if let Err(error) = hand_off_to_reaper(child.disarm()) {
+                let _ = fs::remove_file(&ready_path);
+                return Err(error);
+            }
             let _ = fs::remove_file(&ready_path);
             return Ok(endpoint);
         }
@@ -345,6 +344,40 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
         "nemo-relay gateway did not become ready at http://{}",
         spec.bind
     ))
+}
+
+fn hand_off_to_reaper(child: Child) -> Result<(), String> {
+    hand_off_to_reaper_with(
+        child,
+        |slot| {
+            thread::Builder::new()
+                .name("nemo-relay-gateway-wait".into())
+                .spawn(move || {
+                    let mut slot = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if let Some(mut child) = slot.take() {
+                        let _ = child.wait();
+                    }
+                })
+                .map(|_| ())
+        },
+        process::terminate_tree,
+    )
+}
+
+fn hand_off_to_reaper_with(
+    child: Child,
+    spawn: impl FnOnce(Arc<Mutex<Option<Child>>>) -> std::io::Result<()>,
+    terminate: impl FnOnce(&mut Child),
+) -> Result<(), String> {
+    let slot = Arc::new(Mutex::new(Some(child)));
+    if let Err(error) = spawn(Arc::clone(&slot)) {
+        let mut slot = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(mut child) = slot.take() {
+            terminate(&mut child);
+        }
+        return Err(format!("failed to start gateway reaper thread: {error}"));
+    }
+    Ok(())
 }
 
 struct ArmedChild(Option<Child>);

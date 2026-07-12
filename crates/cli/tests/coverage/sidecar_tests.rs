@@ -5,10 +5,35 @@ use super::*;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::process::Command;
 
 struct EnvScope {
     _guard: std::sync::MutexGuard<'static, ()>,
     previous: Vec<(&'static str, Option<OsString>)>,
+}
+
+#[test]
+fn failed_reaper_spawn_terminates_and_reaps_the_retained_child() {
+    let child = Command::new(std::env::current_exe().unwrap())
+        .arg("--list")
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let terminated = std::sync::atomic::AtomicBool::new(false);
+
+    let error = hand_off_to_reaper_with(
+        child,
+        |_| Err(std::io::Error::other("thread limit")),
+        |child| {
+            terminated.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = child.kill();
+            child.wait().unwrap();
+        },
+    )
+    .unwrap_err();
+
+    assert!(terminated.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(error.contains("failed to start gateway reaper thread"));
 }
 
 impl EnvScope {

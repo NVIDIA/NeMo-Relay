@@ -199,7 +199,8 @@ fn replacement_generation_guard_removes_an_owned_lock_after_marker_removal() {
     let marker = dir.path().join("generation-marker");
     let lock = dir.path().join("generation.lock");
     crate::install_generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
-    let guard = acquire_replacement_generation_lock(IntegrationHost::Codex, &marker, true).unwrap();
+    let guard =
+        acquire_replacement_generation_lock(IntegrationHost::Codex, &marker, &lock, true).unwrap();
 
     std::fs::remove_file(marker).unwrap();
     drop(guard);
@@ -213,7 +214,8 @@ fn replacement_generation_guard_retains_its_lock_when_marker_state_is_uncertain(
     let marker = dir.path().join("generation-marker");
     let lock = dir.path().join("generation.lock");
     crate::install_generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
-    let guard = acquire_replacement_generation_lock(IntegrationHost::Codex, &marker, true).unwrap();
+    let guard =
+        acquire_replacement_generation_lock(IntegrationHost::Codex, &marker, &lock, true).unwrap();
 
     std::fs::remove_file(&marker).unwrap();
     std::fs::create_dir(&marker).unwrap();
@@ -2869,14 +2871,13 @@ fn ordinary_claude_reinstall_requires_force_for_a_fenced_plugin() {
 }
 
 #[test]
-fn force_install_replaces_a_relocated_fenced_install_without_old_residue() {
+fn force_install_rejects_persisted_roots_outside_selected_layout() {
     let dir = tempdir().unwrap();
     let selected_dir = dir.path().join("selected");
     let relocated_dir = dir.path().join("relocated");
     let relocated = write_relocated_codex_install(&selected_dir, &relocated_dir);
     let sentinel = relocated.plugin_root.join("relocated-install");
     std::fs::write(&sentinel, "preserve-until-commit").unwrap();
-    let previous = InstallGeneration::capture(relocated.generation_fence.clone()).unwrap();
     let runner = MockRunner::default()
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex")
@@ -2884,52 +2885,6 @@ fn force_install_replaces_a_relocated_fenced_install_without_old_residue() {
     let setup_runner = MockSetupRunner::default();
     let install_options = PluginInstallOptions {
         force: true,
-        ..options(&selected_dir)
-    };
-
-    install_host(
-        IntegrationHost::Codex,
-        &install_options,
-        &runner,
-        &setup_runner,
-    )
-    .unwrap();
-
-    let current = PluginLayout::new(IntegrationHost::Codex, &selected_dir);
-    assert!(current.marketplace_root.exists());
-    assert!(current.generation_lock.exists());
-    assert!(!relocated.marketplace_root.exists());
-    assert!(!relocated.generation_lock.exists());
-    assert!(!sentinel.exists());
-    assert!(previous.verify_current().unwrap_err().contains("retired"));
-    let state = read_state(IntegrationHost::Codex, &selected_dir).unwrap();
-    assert_eq!(state.marketplace_root, current.marketplace_root);
-    assert_eq!(state.plugin_root, current.plugin_root);
-    assert_no_force_replacement_residue(&selected_dir);
-    assert_no_force_replacement_residue(&relocated_dir);
-}
-
-#[test]
-fn force_install_rollback_restores_a_relocated_fenced_install_and_registration() {
-    let dir = tempdir().unwrap();
-    let selected_dir = dir.path().join("selected");
-    let relocated_dir = dir.path().join("relocated");
-    let relocated = write_relocated_codex_install(&selected_dir, &relocated_dir);
-    let sentinel = relocated.plugin_root.join("relocated-install");
-    std::fs::write(&sentinel, "restore-exactly").unwrap();
-    let original_state = std::fs::read(state_path(IntegrationHost::Codex, &selected_dir)).unwrap();
-    let previous = InstallGeneration::capture(relocated.generation_fence.clone()).unwrap();
-    let runner = MockRunner::default()
-        .with_executable("nemo-relay", "/bin/nemo-relay")
-        .with_executable("codex", "/bin/codex")
-        .with_codex_registration_sequence(&[(true, true), (false, false), (false, false)]);
-    let setup_runner = MockSetupRunner {
-        failing_call: Some(format!("doctor codex {DEFAULT_GATEWAY_URL}")),
-        ..MockSetupRunner::default()
-    };
-    let install_options = PluginInstallOptions {
-        force: true,
-        skip_doctor: false,
         ..options(&selected_dir)
     };
 
@@ -2941,7 +2896,49 @@ fn force_install_rollback_restores_a_relocated_fenced_install_and_registration()
     )
     .unwrap_err();
 
-    assert!(error.contains("doctor codex"), "{error}");
+    let current = PluginLayout::new(IntegrationHost::Codex, &selected_dir);
+    assert!(
+        error.contains("outside the selected install layout"),
+        "{error}"
+    );
+    assert!(!current.marketplace_root.exists());
+    assert!(relocated.marketplace_root.exists());
+    assert!(relocated.generation_lock.exists());
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).unwrap(),
+        "preserve-until-commit"
+    );
+    assert_no_force_replacement_residue(&selected_dir);
+    assert_no_force_replacement_residue(&relocated_dir);
+}
+
+#[test]
+fn uninstall_rejects_persisted_roots_outside_selected_layout() {
+    let dir = tempdir().unwrap();
+    let selected_dir = dir.path().join("selected");
+    let relocated_dir = dir.path().join("relocated");
+    let relocated = write_relocated_codex_install(&selected_dir, &relocated_dir);
+    let sentinel = relocated.plugin_root.join("relocated-install");
+    std::fs::write(&sentinel, "restore-exactly").unwrap();
+    let original_state = std::fs::read(state_path(IntegrationHost::Codex, &selected_dir)).unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, true);
+    let setup_runner = MockSetupRunner::default();
+
+    let error = uninstall_host(
+        IntegrationHost::Codex,
+        &options(&selected_dir),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.contains("outside the selected install layout"),
+        "{error}"
+    );
     let current = PluginLayout::new(IntegrationHost::Codex, &selected_dir);
     assert!(!current.marketplace_root.exists());
     assert!(!current.generation_lock.exists());
@@ -2951,29 +2948,12 @@ fn force_install_rollback_restores_a_relocated_fenced_install_and_registration()
         std::fs::read_to_string(&sentinel).unwrap(),
         "restore-exactly"
     );
-    previous.verify_current().unwrap();
     assert_eq!(
         std::fs::read(state_path(IntegrationHost::Codex, &selected_dir)).unwrap(),
         original_state
     );
-    let marketplace_adds = runner
-        .commands()
-        .into_iter()
-        .filter(|command| command.contains("plugin marketplace add"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        marketplace_adds.last(),
-        Some(&format!(
-            "/bin/codex plugin marketplace add {}",
-            relocated.marketplace_root.display()
-        ))
-    );
-    assert!(
-        setup_runner
-            .calls()
-            .iter()
-            .any(|call| call == "restore snapshot")
-    );
+    assert!(runner.commands().is_empty());
+    assert!(setup_runner.calls().is_empty());
     assert_no_force_replacement_residue(&selected_dir);
     assert_no_force_replacement_residue(&relocated_dir);
 }

@@ -368,9 +368,24 @@ impl GenerationRetirement {
         Self::acquire_with_timeout(path, DEFAULT_GENERATION_LOCK_TIMEOUT)
     }
 
+    pub(crate) fn acquire_for_plugin(
+        path: &Path,
+        external_lock: &Path,
+    ) -> Result<Option<Self>, String> {
+        Self::acquire_impl(path, DEFAULT_GENERATION_LOCK_TIMEOUT, Some(external_lock))
+    }
+
     pub(crate) fn acquire_with_timeout(
         path: &Path,
         timeout: Duration,
+    ) -> Result<Option<Self>, String> {
+        Self::acquire_impl(path, timeout, None)
+    }
+
+    fn acquire_impl(
+        path: &Path,
+        timeout: Duration,
+        allowed_external_lock: Option<&Path>,
     ) -> Result<Option<Self>, String> {
         if !inspected_path_exists(path, "MCP install generation")? {
             return Ok(None);
@@ -380,6 +395,15 @@ impl GenerationRetirement {
         let marker = open_generation(path)?;
         let observed = read_generation_marker(&marker, path)?;
         let lock_path = observed.lock_path().to_owned();
+        if let Some(allowed) = allowed_external_lock
+            && !is_legacy_sibling_lock(path, &lock_path)?
+            && absolute_lock_path(allowed)? != absolute_lock_path(&lock_path)?
+        {
+            return Err(format!(
+                "MCP install generation {} references an external lock outside its plugin layout",
+                path.display()
+            ));
+        }
         let file = open_marker_generation_lock(path, &lock_path)?;
         lock_exclusive_with_timeout(&file, path, timeout)?;
         let lock_id = if is_legacy_sibling_lock(path, &lock_path)? {

@@ -98,6 +98,44 @@ impl PluginLayout {
             state_path,
         }
     }
+
+    pub(super) fn validate_persisted_state(&self, state: &PluginState) -> Result<(), String> {
+        if state.marketplace_root != self.marketplace_root || state.plugin_root != self.plugin_root
+        {
+            return Err(format!(
+                "refusing persisted {} plugin state outside the selected install layout {}",
+                self.host.label(),
+                self.state_path.display()
+            ));
+        }
+        if self.marketplace_root.exists() {
+            let install_dir = self.state_path.parent().ok_or_else(|| {
+                format!(
+                    "plugin state path {} has no parent",
+                    self.state_path.display()
+                )
+            })?;
+            let canonical_install = install_dir.canonicalize().map_err(|error| {
+                format!(
+                    "failed to validate install directory {}: {error}",
+                    install_dir.display()
+                )
+            })?;
+            let canonical_marketplace = self.marketplace_root.canonicalize().map_err(|error| {
+                format!(
+                    "failed to validate marketplace root {}: {error}",
+                    self.marketplace_root.display()
+                )
+            })?;
+            if !canonical_marketplace.starts_with(&canonical_install) {
+                return Err(format!(
+                    "refusing persisted {} marketplace root outside the selected install directory",
+                    self.host.label()
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -9,6 +9,23 @@ use tempfile::tempdir;
 use super::*;
 
 #[test]
+fn plugin_retirement_rejects_an_external_lock_outside_its_layout() {
+    let dir = tempdir().unwrap();
+    let marker = dir.path().join("plugin").join(GENERATION_FILE_NAME);
+    let expected_lock = dir.path().join("expected.lock");
+    let unrelated_lock = dir.path().join("unrelated.lock");
+    write_new_generation_with_token_at(&marker, &unrelated_lock).unwrap();
+
+    let error = match GenerationRetirement::acquire_for_plugin(&marker, &expected_lock) {
+        Err(error) => error,
+        Ok(_) => panic!("out-of-layout lock was accepted"),
+    };
+
+    assert!(error.contains("outside its plugin layout"), "{error}");
+    assert!(unrelated_lock.exists());
+}
+
+#[test]
 fn generation_markers_have_one_canonical_encoding() {
     let lock_path = PathBuf::from("generation.lock");
     let active = GenerationMarker::active("generation-a", &lock_path);

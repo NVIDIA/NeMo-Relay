@@ -667,6 +667,7 @@ fn install_host_locked(
             replacement_generation_lock = match acquire_replacement_generation_lock(
                 host,
                 &staged.layout.generation_fence,
+                &layout.generation_lock,
                 staged.generation_lock_created,
             ) {
                 Ok(lock) => Some(lock),
@@ -760,6 +761,7 @@ fn install_host_locked(
             replacement_generation_lock = match acquire_replacement_generation_lock(
                 host,
                 &layout.generation_fence,
+                &layout.generation_lock,
                 generation_lock_created,
             ) {
                 Ok(lock) => Some(lock),
@@ -986,13 +988,22 @@ fn uninstall_host_locked(
 ) -> Result<(), String> {
     let state = read_state(host, &options.install_dir);
     let layout = PluginLayout::new(host, &options.install_dir);
+    if let Some(state) = state.as_ref() {
+        layout.validate_persisted_state(state)?;
+    }
     let plugin_root = state
         .as_ref()
         .map(|state| state.plugin_root.as_path())
         .unwrap_or(&layout.plugin_root);
     let local_install_exists = state.is_some() || layout.marketplace_root.exists();
-    let mut generation_retirement =
-        retire_installed_generation(host, plugin_root, local_install_exists, options, runner)?;
+    let mut generation_retirement = retire_installed_generation(
+        host,
+        plugin_root,
+        &layout.generation_lock,
+        local_install_exists,
+        options,
+        runner,
+    )?;
     if let Some(retirement) = generation_retirement.as_mut() {
         retirement.invalidate_for_replacement().map_err(|error| {
             format!(
@@ -1033,6 +1044,7 @@ fn uninstall_host_locked(
 fn retire_installed_generation(
     host: IntegrationHost,
     plugin_root: &Path,
+    expected_generation_lock: &Path,
     local_install_exists: bool,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -1050,8 +1062,9 @@ fn retire_installed_generation(
             return Err(missing_generation_fence_error(host, &generation_fence));
         }
     }
-    let retirement = GenerationRetirement::acquire(&generation_fence)
-        .map_err(|cause| invalid_generation_fence_error(host, &generation_fence, &cause))?;
+    let retirement =
+        GenerationRetirement::acquire_for_plugin(&generation_fence, expected_generation_lock)
+            .map_err(|cause| invalid_generation_fence_error(host, &generation_fence, &cause))?;
     if retirement.is_none() && !existing_install {
         let registration = host_registration_report(host, options, runner)?;
         existing_install =
@@ -1092,9 +1105,12 @@ fn retire_replacement_before_rollback(
         }
         return Ok(None);
     }
-    let mut retirement = GenerationRetirement::acquire(&layout.generation_fence)
-        .map_err(|cause| invalid_generation_fence_error(host, &layout.generation_fence, &cause))?
-        .ok_or_else(|| missing_generation_fence_error(host, &layout.generation_fence))?;
+    let mut retirement =
+        GenerationRetirement::acquire_for_plugin(&layout.generation_fence, &layout.generation_lock)
+            .map_err(|cause| {
+                invalid_generation_fence_error(host, &layout.generation_fence, &cause)
+            })?
+            .ok_or_else(|| missing_generation_fence_error(host, &layout.generation_fence))?;
     retirement.invalidate_for_replacement().map_err(|error| {
         format!(
             "failed to retire replacement MCP generation {} before rollback: {error}",
@@ -1187,16 +1203,15 @@ fn uninstall_host_with_setup_override(
     setup_runner: &dyn PluginSetupRunner,
     force_plugin_setup_uninstall: bool,
 ) -> Result<(), String> {
-    let state = read_state(host, &options.install_dir).unwrap_or_else(|| {
-        let layout = PluginLayout::new(host, &options.install_dir);
-        PluginState {
-            marketplace_root: layout.marketplace_root,
-            plugin_root: layout.plugin_root,
-            host_plugin_removed: false,
-            host_marketplace_removed: false,
-            plugin_setup_installed: true,
-        }
+    let layout = PluginLayout::new(host, &options.install_dir);
+    let state = read_state(host, &options.install_dir).unwrap_or_else(|| PluginState {
+        marketplace_root: layout.marketplace_root.clone(),
+        plugin_root: layout.plugin_root.clone(),
+        host_plugin_removed: false,
+        host_marketplace_removed: false,
+        plugin_setup_installed: true,
     });
+    layout.validate_persisted_state(&state)?;
     if let Err(error) = require_relay(options, runner)
         .and_then(|relay| validate_relay_hook_forward(&relay, options, runner))
     {
@@ -1658,9 +1673,10 @@ struct ReplacementGenerationLock {
 fn acquire_replacement_generation_lock(
     host: IntegrationHost,
     marker_path: &Path,
+    expected_generation_lock: &Path,
     remove_lock_if_unreferenced: bool,
 ) -> Result<ReplacementGenerationLock, String> {
-    match GenerationRetirement::acquire(marker_path) {
+    match GenerationRetirement::acquire_for_plugin(marker_path, expected_generation_lock) {
         Ok(Some(retirement)) => Ok(ReplacementGenerationLock::new(
             retirement,
             remove_lock_if_unreferenced,
@@ -1765,6 +1781,9 @@ fn prepare_plugin_install(
     runner: &dyn CommandRunner,
 ) -> Result<PluginInstallPreflight, String> {
     let persisted = read_state(host, &options.install_dir);
+    if let Some(state) = persisted.as_ref() {
+        layout.validate_persisted_state(state)?;
+    }
     let registration = host_registration_report(host, options, runner)?;
     let plugin_registered = registration.host_plugin_registered;
     let marketplace_registered = registration.host_marketplace_registered;
@@ -1818,13 +1837,14 @@ fn prepare_plugin_install(
             }
         } else {
             Some(
-                GenerationRetirement::acquire(&previous_generation_fence)
-                    .map_err(|cause| {
-                        invalid_generation_fence_error(host, &previous_generation_fence, &cause)
-                    })?
-                    .ok_or_else(|| {
-                        missing_generation_fence_error(host, &previous_generation_fence)
-                    })?,
+                GenerationRetirement::acquire_for_plugin(
+                    &previous_generation_fence,
+                    &layout.generation_lock,
+                )
+                .map_err(|cause| {
+                    invalid_generation_fence_error(host, &previous_generation_fence, &cause)
+                })?
+                .ok_or_else(|| missing_generation_fence_error(host, &previous_generation_fence))?,
             )
         }
     } else {
