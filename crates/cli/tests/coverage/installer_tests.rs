@@ -281,6 +281,47 @@ fn explicit_persistent_destinations_ignore_ambient_urls() {
     let destination = resolve_hook_destination(Some("http://embedded".into()), None, false, true);
     assert_eq!(destination.gateway_url, "http://embedded");
     assert_eq!(destination.lifecycle, HookGatewayLifecycle::Transparent);
+
+    let destination = resolve_hook_destination(None, None, false, false);
+    assert_eq!(destination.gateway_url, crate::sidecar::DEFAULT_URL);
+    assert_eq!(destination.lifecycle, HookGatewayLifecycle::Recover);
+}
+
+#[test]
+fn verified_hook_response_rejects_invalid_status_and_fail_open_http_errors() {
+    let error = handle_verified_hook_forward_response(
+        Ok(crate::sidecar::VerifiedHttpResponse {
+            status: 0,
+            body: Vec::new(),
+        }),
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid status"), "{error}");
+
+    handle_hook_forward_status(reqwest::StatusCode::BAD_GATEWAY, String::new(), false).unwrap();
+}
+
+#[test]
+fn windows_hook_decoder_rejects_unsafe_odd_and_trailing_argument_envelopes() {
+    const SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
+    #[cfg(windows)]
+    let launcher = windows_powershell_path().unwrap();
+    #[cfg(not(windows))]
+    let launcher = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe".to_string();
+
+    assert!(decode_windows_hook_command(&format!("powershell.exe{SEPARATOR}QQ==")).is_none());
+    assert!(decode_windows_hook_command(&format!("{launcher}{SEPARATOR}QQ==")).is_none());
+
+    let script = "$ErrorActionPreference='Stop'; & 'relay' ; if ($null -eq $LASTEXITCODE) { exit 1 }; exit $LASTEXITCODE";
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    assert!(decode_windows_hook_command(&format!("{launcher}{SEPARATOR}{encoded}")).is_none());
 }
 
 #[test]

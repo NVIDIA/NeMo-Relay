@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::cell::Cell;
+use std::ffi::OsString;
 use std::path::Path;
+use std::sync::MutexGuard;
 use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -34,6 +36,38 @@ fn yaml(path: &Path) -> Value {
 
 fn json_file(path: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+struct XdgConfigHomeScope {
+    _guard: MutexGuard<'static, ()>,
+    previous: Option<OsString>,
+}
+
+impl XdgConfigHomeScope {
+    fn enter(path: &Path) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var_os("XDG_CONFIG_HOME");
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", path) };
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for XdgConfigHomeScope {
+    fn drop(&mut self) {
+        // SAFETY: This restores the process environment while the mutex is still held.
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
 }
 
 #[test]
@@ -1026,4 +1060,343 @@ fn malformed_user_files_fail_before_any_state_is_replaced() {
     for (index, path) in paths.all().iter().enumerate() {
         assert_eq!(std::fs::read(path).unwrap(), before[index]);
     }
+}
+
+#[test]
+fn hermes_entrypoints_reject_missing_or_foreign_relay_binaries() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("hermes/config.yaml");
+    let missing_relay = temp.path().join("missing/nemo-relay");
+
+    let error = install_persistent(&config_path, &missing_relay)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("missing or not executable"), "{error}");
+
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            "mcp_servers:\n  {MCP_SERVER_NAME}:\n    command: {}\n    args: [mcp]\n",
+            missing_relay.display()
+        ),
+    )
+    .unwrap();
+    let error = configured_relay_executable(&config_path).unwrap_err();
+    assert!(error.contains("missing or not executable"), "{error}");
+
+    let foreign = json!({
+        "mcp_servers": {
+            MCP_SERVER_NAME: {
+                "command": "foreign-mcp",
+                "args": ["serve"]
+            }
+        }
+    });
+    let error = relay_executable_from_config(&foreign).unwrap_err();
+    assert!(error.contains("not a managed Relay MCP client"), "{error}");
+}
+
+#[test]
+fn hermes_diagnosis_validates_binary_bind_generation_and_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let _config_home = XdgConfigHomeScope::enter(&temp.path().join("xdg"));
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
+
+    let original = yaml(&paths.config);
+    std::fs::remove_file(&relay).unwrap();
+    let error = diagnose_persistent(&paths.config).unwrap_err();
+    assert!(error.contains("missing or not executable"), "{error}");
+
+    let relay = relay_binary(temp.path());
+    let mut wrong_bind = original.clone();
+    wrong_bind["mcp_servers"][MCP_SERVER_NAME]["env"]["NEMO_RELAY_GATEWAY_BIND"] =
+        json!("127.0.0.1:1");
+    std::fs::write(&paths.config, serde_yaml::to_string(&wrong_bind).unwrap()).unwrap();
+    let error = diagnose_persistent(&paths.config).unwrap_err();
+    assert!(error.contains("shared gateway bind"), "{error}");
+
+    let mut wrong_generation = original.clone();
+    wrong_generation["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_FILE_ENV] =
+        json!(temp.path().join("wrong-generation").display().to_string());
+    std::fs::write(
+        &paths.config,
+        serde_yaml::to_string(&wrong_generation).unwrap(),
+    )
+    .unwrap();
+    let error = diagnose_persistent(&paths.config).unwrap_err();
+    assert!(error.contains("points at the wrong file"), "{error}");
+
+    let mut missing_environment = original;
+    assert!(
+        missing_environment["mcp_servers"][MCP_SERVER_NAME]["env"]
+            .as_object_mut()
+            .unwrap()
+            .remove("OPENAI_API_KEY")
+            .is_some()
+    );
+    std::fs::write(
+        &paths.config,
+        serde_yaml::to_string(&missing_environment).unwrap(),
+    )
+    .unwrap();
+    let error = diagnose_persistent(&paths.config).unwrap_err();
+    assert!(error.contains("missing environment names"), "{error}");
+    assert!(error.contains("OPENAI_API_KEY"), "{error}");
+    assert!(error.contains("install hermes --force"), "{error}");
+
+    assert!(relay.exists());
+}
+
+#[test]
+fn hermes_generation_finish_preserves_primary_errors_and_reports_restore_failures() {
+    let primary = CliError::Install("primary failure".into());
+    let error = finish_generation_mutation::<()>(Err(primary), None, "install")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("primary failure"), "{error}");
+
+    let temp = tempfile::tempdir().unwrap();
+    let generation = temp.path().join(GENERATION_FILE_NAME);
+    crate::install_generation::write_new_generation(&generation).unwrap();
+    let mut retirement = GenerationRetirement::acquire(&generation).unwrap().unwrap();
+    retirement.invalidate_for_replacement().unwrap();
+    std::fs::write(&generation, "foreign-generation\n").unwrap();
+
+    let error = finish_generation_mutation::<()>(
+        Err(CliError::Install("mutation failed".into())),
+        Some(&mut retirement),
+        "install",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("mutation failed"), "{error}");
+    assert!(error.contains("additionally failed to restore"), "{error}");
+}
+
+#[test]
+fn hermes_uninstall_and_verification_reject_malformed_or_residual_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let hermes_paths = paths(&temp.path().join("hermes"));
+    install_persistent_with(
+        hermes_paths.clone(),
+        &relay,
+        &[],
+        None,
+        UNIX_EPOCH,
+        atomic_write,
+    )
+    .unwrap();
+
+    let config = yaml(&hermes_paths.config);
+    let command = config["hooks"]["on_session_start"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let token = InstallGeneration::capture(hermes_paths.generation.clone())
+        .unwrap()
+        .token()
+        .to_owned();
+    let expected_environment = forwarded_environment_names(&[], None);
+
+    let mut duplicate_hook = config.clone();
+    duplicate_hook["hooks"]["on_session_start"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"command": command}));
+    let error = verify_hook_definitions(&duplicate_hook, &command).unwrap_err();
+    assert!(
+        error.contains("exactly one trusted Relay handler"),
+        "{error}"
+    );
+
+    let mut harmless_missing_command = config.clone();
+    harmless_missing_command["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .insert("custom".into(), json!([{"timeout": 1}]));
+    verify_hook_definitions(&harmless_missing_command, &command).unwrap();
+
+    verify_install(
+        &hermes_paths,
+        &relay,
+        &command,
+        &expected_environment,
+        &token,
+        None,
+    )
+    .unwrap();
+
+    install_persistent_with(
+        hermes_paths.clone(),
+        &relay,
+        &expected_environment,
+        None,
+        UNIX_EPOCH,
+        atomic_write,
+    )
+    .unwrap();
+    let config = yaml(&hermes_paths.config);
+    let command = config["hooks"]["on_session_start"][0]["command"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let expected_token = InstallGeneration::capture(hermes_paths.generation.clone())
+        .unwrap()
+        .token()
+        .to_owned();
+    crate::install_generation::write_new_generation(&hermes_paths.generation).unwrap();
+    let error = verify_install(
+        &hermes_paths,
+        &relay,
+        &command,
+        &expected_environment,
+        &expected_token,
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("generation did not persist exactly"),
+        "{error}"
+    );
+
+    let malformed_paths = paths(&temp.path().join("malformed"));
+    std::fs::create_dir_all(malformed_paths.config.parent().unwrap()).unwrap();
+    std::fs::write(&malformed_paths.allowlist, r#"{"approvals":{}}"#).unwrap();
+    let error = uninstall_persistent_with(malformed_paths, atomic_write)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("approvals must be an array"), "{error}");
+}
+
+#[test]
+fn hermes_uninstall_verifier_identifies_each_residual_owned_surface() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
+
+    let error = verify_uninstall(&paths).unwrap_err();
+    assert!(error.contains("generation fence still exists"), "{error}");
+
+    std::fs::remove_file(&paths.generation).unwrap();
+    let error = verify_uninstall(&paths).unwrap_err();
+    assert!(
+        error.contains("managed Hermes Relay config still exists"),
+        "{error}"
+    );
+
+    std::fs::remove_file(&paths.config).unwrap();
+    let error = verify_uninstall(&paths).unwrap_err();
+    assert!(
+        error.contains("managed Hermes Relay trust approval still exists"),
+        "{error}"
+    );
+}
+
+#[test]
+fn hermes_file_helpers_report_path_lock_read_remove_and_restore_failures() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let error = PersistentPaths::for_config(PathBuf::from("/"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("has no parent directory"), "{error}");
+    let error = acquire_install_lock(Path::new("/"), Duration::ZERO).unwrap_err();
+    assert!(error.contains("has no parent directory"), "{error}");
+
+    let parent_file = temp.path().join("parent-file");
+    std::fs::write(&parent_file, "file").unwrap();
+    let error = acquire_allowlist_lock(&parent_file.join("allowlist"), Duration::ZERO).unwrap_err();
+    assert!(error.contains("failed to create"), "{error}");
+    let error =
+        acquire_allowlist_lock(&parent_file.join("nested/allowlist"), Duration::ZERO).unwrap_err();
+    assert!(error.contains("failed to create"), "{error}");
+
+    let allowlist = temp.path().join("allowlist.json");
+    let lock_dir = temp.path().join("allowlist.json.lock");
+    std::fs::create_dir(&lock_dir).unwrap();
+    let error = acquire_allowlist_lock(&allowlist, Duration::ZERO).unwrap_err();
+    assert!(
+        error.contains("failed to open Hermes install lock"),
+        "{error}"
+    );
+
+    let held_config = temp.path().join("held/config.yaml");
+    let _held = acquire_install_lock(&held_config, Duration::ZERO).unwrap();
+    let error = acquire_install_lock(&held_config, Duration::from_millis(30)).unwrap_err();
+    assert!(error.contains("timed out waiting"), "{error}");
+
+    let directory = temp.path().join("directory");
+    std::fs::create_dir(&directory).unwrap();
+    let error = read_optional_utf8(&directory).unwrap_err().to_string();
+    assert!(error.contains("failed to read"), "{error}");
+    let error = match FileSnapshot::capture(&directory) {
+        Ok(_) => panic!("directory snapshot unexpectedly succeeded"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("failed to snapshot"), "{error}");
+    let error = remove_optional_file(&directory).unwrap_err();
+    assert!(error.contains("failed to remove"), "{error}");
+    remove_optional_file(&temp.path().join("missing")).unwrap();
+
+    let restored = temp.path().join("restored");
+    std::fs::write(&restored, "original").unwrap();
+    let snapshot = FileSnapshot::capture(&restored).unwrap();
+    std::fs::remove_file(&restored).unwrap();
+    let error = snapshot.restore(&mut |_path, _bytes| Ok(())).unwrap_err();
+    assert!(error.contains("failed to restore permissions"), "{error}");
+
+    let absent = temp.path().join("absent");
+    let snapshot = FileSnapshot::capture(&absent).unwrap();
+    std::fs::write(&absent, "transient").unwrap();
+    snapshot.restore(&mut atomic_write).unwrap();
+    assert!(!absent.exists());
+}
+
+#[test]
+fn hermes_rollback_reports_both_primary_and_snapshot_restore_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state");
+    std::fs::write(&path, "original").unwrap();
+    let snapshot = FileSnapshot::capture(&path).unwrap();
+    let error = rollback_error::<(), _>(
+        "install",
+        "primary failure".into(),
+        &[snapshot],
+        &mut |_path, _bytes| Err("restore failure".into()),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("primary failure"), "{error}");
+    assert!(
+        error.contains("rollback also failed: restore failure"),
+        "{error}"
+    );
+}
+
+#[test]
+fn hermes_uninstall_removes_an_allowlist_containing_only_managed_approvals() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = paths(&temp.path().join("hermes"));
+    std::fs::create_dir_all(paths.allowlist.parent().unwrap()).unwrap();
+    std::fs::write(
+        &paths.allowlist,
+        serde_json::to_vec(&json!({
+            "approvals": [{
+                "event": "on_session_start",
+                "command": "nemo-relay hook-forward hermes"
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let affected = uninstall_persistent_with(paths.clone(), atomic_write).unwrap();
+
+    assert_eq!(affected, vec![paths.allowlist.clone()]);
+    assert!(!paths.allowlist.exists());
 }

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -99,6 +99,15 @@ fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
             .details
             .contains("collector stopped unexpectedly")
     );
+
+    let hermes = failed_host_plugin_readiness(
+        IntegrationHost::Hermes,
+        dir.path().join("config.yaml"),
+        "fixture failure",
+    );
+    assert!(hermes.marketplace.is_none());
+    assert!(hermes.plugin.is_none());
+    assert!(!hermes.ok());
 }
 
 #[test]
@@ -332,6 +341,30 @@ impl<'a> HomeScope<'a> {
             prev_hermes_home,
         }
     }
+
+    fn without_home() -> Self {
+        let guard = plugin_install_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let prev_home = std::env::var_os("HOME");
+        let prev_userprofile = std::env::var_os("USERPROFILE");
+        let prev_codex_home = std::env::var_os("CODEX_HOME");
+        let prev_hermes_home = std::env::var_os("HERMES_HOME");
+        // SAFETY: This test holds a process-wide mutex for the lifetime of the env override.
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("USERPROFILE");
+            std::env::remove_var("CODEX_HOME");
+            std::env::remove_var("HERMES_HOME");
+        }
+        Self {
+            _guard: guard,
+            prev_home,
+            prev_userprofile,
+            prev_codex_home,
+            prev_hermes_home,
+        }
+    }
 }
 
 impl Drop for HomeScope<'_> {
@@ -356,6 +389,15 @@ impl Drop for HomeScope<'_> {
             }
         }
     }
+}
+
+#[test]
+fn plugin_operation_lock_directory_requires_a_user_home() {
+    let _home = HomeScope::without_home();
+
+    let error = default_operation_lock_dir().unwrap_err();
+
+    assert!(error.contains("set HOME or USERPROFILE"), "{error}");
 }
 
 struct PathScope<'a> {
@@ -662,6 +704,64 @@ struct MockSetupRunner {
 struct BlockingRefreshFailure {
     entered: std::sync::mpsc::Sender<()>,
     continue_refresh: std::sync::mpsc::Receiver<()>,
+}
+
+struct FailStateWriteAfterRefresh {
+    state_path: PathBuf,
+    injected: Cell<bool>,
+}
+
+impl PluginSetupRunner for FailStateWriteAfterRefresh {
+    fn snapshot(&self, _host: IntegrationHost) -> Result<Option<PluginSetupSnapshot>, String> {
+        Ok(Some(PluginSetupSnapshot::Mock))
+    }
+
+    fn restore_snapshot(&self, _snapshot: &PluginSetupSnapshot) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn refresh_gateway(&self) -> Result<(), String> {
+        if !self.injected.replace(true) {
+            crate::file_io::fail_next_atomic_write(&self.state_path);
+        }
+        Ok(())
+    }
+
+    fn setup(
+        &self,
+        _host: IntegrationHost,
+        _gateway_url: &str,
+        _plugin_root: &Path,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn uninstall(
+        &self,
+        _host: IntegrationHost,
+        _gateway_url: &str,
+        _plugin_root: &Path,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn doctor(
+        &self,
+        _host: IntegrationHost,
+        _gateway_url: &str,
+        _plugin_root: &Path,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn doctor_json(
+        &self,
+        _host: IntegrationHost,
+        _gateway_url: &str,
+        _plugin_root: &Path,
+    ) -> Result<serde_json::Value, String> {
+        Ok(json!({"ok": true, "checks": {}}))
+    }
 }
 
 impl PluginSetupRunner for BlockingRefreshFailure {
@@ -2072,6 +2172,62 @@ fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it()
     assert_eq!(hermes.state_path, config);
     assert!(hermes.marketplace.is_none());
     assert!(hermes.plugin.is_none());
+
+    doctor_hermes_host(&options(dir.path()), &runner).unwrap();
+
+    std::fs::remove_file(&configured_relay).unwrap();
+    let error = doctor_hermes_host(&options(dir.path()), &runner).unwrap_err();
+    assert!(error.contains("doctor checks failed"), "{error}");
+    let report = doctor_hermes_json_value(&options(dir.path()), &runner).unwrap();
+    let failed = report["readiness_checks"].as_array().unwrap();
+    for expected in [
+        "Configured Relay binary",
+        "Relay hook support",
+        "Relay MCP support",
+    ] {
+        assert!(
+            failed
+                .iter()
+                .any(|check| check["name"] == expected && check["ok"] == json!(false)),
+            "missing failed {expected} check: {failed:?}"
+        );
+    }
+}
+
+#[test]
+fn hermes_install_and_uninstall_dry_runs_preserve_persistent_state() {
+    let dir = tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _home = HomeScope::enter(&home);
+    let mut dry_run = options(dir.path());
+    dry_run.dry_run = true;
+    dry_run.skip_doctor = false;
+    let runner = MockRunner::default();
+
+    install_hermes_host(&dry_run, &runner).unwrap();
+    let config = hermes_config_path().unwrap();
+    assert!(!config.exists());
+
+    let hermes_home = config.parent().unwrap();
+    std::fs::create_dir_all(hermes_home).unwrap();
+    let allowlist = hermes_home.join("shell-hooks-allowlist.json");
+    let generation = hermes_home.join(GENERATION_FILE_NAME);
+    let sentinels = [
+        (&config, b"sentinel config\n".as_slice()),
+        (&allowlist, b"sentinel allowlist\n".as_slice()),
+        (&generation, b"sentinel generation\n".as_slice()),
+    ];
+    for (path, contents) in sentinels {
+        std::fs::write(path, contents).unwrap();
+    }
+
+    uninstall_hermes_host(&dry_run).unwrap();
+
+    for (path, contents) in sentinels {
+        assert_eq!(std::fs::read(path).unwrap(), contents);
+    }
+    assert!(runner.quiet_commands().is_empty());
 }
 
 #[test]
@@ -3264,6 +3420,233 @@ fn force_install_restores_previous_install_after_doctor_failure() {
         let name = name.to_string_lossy();
         !name.contains("install-stage") && !name.contains("marketplace-backup")
     }));
+}
+
+#[test]
+fn force_install_restores_previous_install_after_state_write_failure() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, true);
+    let install_options = PluginInstallOptions {
+        force: true,
+        ..options(dir.path())
+    };
+    write_installed_state(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    let sentinel = layout.plugin_root.join("previous-install");
+    std::fs::write(&sentinel, "preserve").unwrap();
+    let original_state = std::fs::read(&layout.state_path).unwrap();
+    let previous = InstallGeneration::capture(layout.generation_fence.clone()).unwrap();
+    let setup_runner = FailStateWriteAfterRefresh {
+        state_path: layout.state_path.clone(),
+        injected: Cell::new(false),
+    };
+
+    let error = install_host(
+        IntegrationHost::Codex,
+        &install_options,
+        &runner,
+        &setup_runner,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("injected test failure"), "{error}");
+    assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "preserve");
+    assert_eq!(std::fs::read(&layout.state_path).unwrap(), original_state);
+    previous.verify_current().unwrap();
+    assert_no_force_replacement_residue(dir.path());
+}
+
+#[test]
+fn first_install_cleans_generated_marketplace_after_state_write_failure() {
+    let dir = tempdir().unwrap();
+    let runner = MockRunner::default()
+        .with_executable("nemo-relay", "/bin/nemo-relay")
+        .with_executable("codex", "/bin/codex");
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    crate::file_io::fail_next_atomic_write(&layout.state_path);
+
+    let error = install_host(
+        IntegrationHost::Codex,
+        &options(dir.path()),
+        &runner,
+        &MockSetupRunner::default(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("injected test failure"), "{error}");
+    assert!(!layout.marketplace_root.exists());
+    assert!(!layout.state_path.exists());
+    assert!(!layout.generation_lock.exists());
+}
+
+#[test]
+fn force_replacement_restoration_aggregates_independent_cleanup_failures() {
+    let dir = tempdir().unwrap();
+    let install_file = dir.path().join("install-file");
+    std::fs::write(&install_file, "not a directory").unwrap();
+    let layout = PluginLayout::new(IntegrationHost::Codex, &install_file);
+    let original_marketplace_root = dir.path().join("original-marketplace");
+    let original_plugin_root = dir.path().join("original-plugin");
+    let mut snapshot = ForceInstallSnapshot {
+        state_bytes: Some(b"original state".to_vec()),
+        setup_snapshot: Some(PluginSetupSnapshot::Mock),
+        original_marketplace_root: original_marketplace_root.clone(),
+        original_plugin_root: original_plugin_root.clone(),
+        original_generation_fence: original_plugin_root.join(GENERATION_FILE_NAME),
+        plugin_registered: false,
+        marketplace_registered: false,
+        backup_marketplace_root: dir.path().join("missing-marketplace-backup"),
+        backup_plugin_root: Some(dir.path().join("missing-plugin-backup")),
+        marketplace_moved: true,
+        plugin_moved: true,
+        replacement_promoted: true,
+        generation_retirement: None,
+    };
+    let mut runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(true, true);
+    runner.failing_suffixes = vec![
+        "plugin remove nemo-relay-plugin@nemo-relay-local".into(),
+        "plugin marketplace remove nemo-relay-local".into(),
+    ];
+    let setup_runner = MockSetupRunner {
+        failing_call: Some("restore snapshot".into()),
+        ..MockSetupRunner::default()
+    };
+
+    let error = restore_force_replacement_after_error::<()>(
+        IntegrationHost::Codex,
+        &layout,
+        &mut snapshot,
+        &options(&install_file),
+        &runner,
+        &setup_runner,
+        "replacement failed".into(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("replacement failed"), "{error}");
+    assert!(
+        error.contains("failed to restore previous install"),
+        "{error}"
+    );
+    assert!(error.contains("plugin remove"), "{error}");
+    assert!(error.contains("plugin marketplace remove"), "{error}");
+    assert!(error.contains("failed to restore marketplace"), "{error}");
+    assert!(error.contains("failed to restore plugin root"), "{error}");
+    assert!(error.contains("restore snapshot failed"), "{error}");
+    assert!(error.contains("failed to restore"), "{error}");
+}
+
+#[test]
+fn force_replacement_restoration_reports_failed_host_reregistration() {
+    let dir = tempdir().unwrap();
+    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    let original_marketplace_root = dir.path().join("original-marketplace");
+    let mut snapshot = ForceInstallSnapshot {
+        state_bytes: None,
+        setup_snapshot: None,
+        original_marketplace_root: original_marketplace_root.clone(),
+        original_plugin_root: original_marketplace_root.join("plugins/nemo-relay-plugin"),
+        original_generation_fence: original_marketplace_root.join(GENERATION_FILE_NAME),
+        plugin_registered: true,
+        marketplace_registered: true,
+        backup_marketplace_root: dir.path().join("unused-marketplace-backup"),
+        backup_plugin_root: None,
+        marketplace_moved: false,
+        plugin_moved: false,
+        replacement_promoted: false,
+        generation_retirement: None,
+    };
+    let mut runner = MockRunner::default()
+        .with_executable("codex", "/bin/codex")
+        .with_codex_registration(false, false);
+    runner.failing_suffixes = vec![
+        format!(
+            "plugin marketplace add {}",
+            original_marketplace_root.display()
+        ),
+        "plugin add nemo-relay-plugin@nemo-relay-local".into(),
+    ];
+
+    let error = restore_force_replacement(
+        IntegrationHost::Codex,
+        &layout,
+        &mut snapshot,
+        &options(dir.path()),
+        &runner,
+        &MockSetupRunner::default(),
+    )
+    .unwrap_err();
+
+    assert!(error.contains("plugin marketplace add"), "{error}");
+    assert!(error.contains("plugin add"), "{error}");
+}
+
+#[test]
+fn force_replacement_moves_and_restores_a_separate_plugin_tree() {
+    let dir = tempdir().unwrap();
+    let previous_marketplace_root = dir.path().join("previous-marketplace");
+    let previous_plugin_root = dir.path().join("relocated-plugin");
+    std::fs::create_dir_all(&previous_marketplace_root).unwrap();
+    std::fs::create_dir_all(&previous_plugin_root).unwrap();
+    std::fs::write(
+        previous_marketplace_root.join("marketplace.json"),
+        "marketplace",
+    )
+    .unwrap();
+    std::fs::write(previous_plugin_root.join("plugin.json"), "plugin").unwrap();
+    let target = PluginLayout::new(IntegrationHost::Codex, &dir.path().join("target"));
+    let preflight = PluginInstallPreflight {
+        persisted: None,
+        state_bytes: None,
+        previous_marketplace_root: previous_marketplace_root.clone(),
+        previous_plugin_root: previous_plugin_root.clone(),
+        previous_generation_fence: previous_plugin_root.join(GENERATION_FILE_NAME),
+        plugin_registered: false,
+        marketplace_registered: false,
+        previous_setup_installed: false,
+        previous_install_exists: true,
+        generation_retirement: None,
+    };
+    let setup_runner = MockSetupRunner::default();
+    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
+    let mut snapshot = begin_force_replacement(
+        IntegrationHost::Codex,
+        &target,
+        preflight,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
+
+    assert!(snapshot.marketplace_moved);
+    assert!(snapshot.plugin_moved);
+    assert!(!previous_marketplace_root.exists());
+    assert!(!previous_plugin_root.exists());
+
+    restore_force_replacement(
+        IntegrationHost::Codex,
+        &target,
+        &mut snapshot,
+        &options(dir.path()),
+        &runner,
+        &setup_runner,
+    )
+    .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(previous_marketplace_root.join("marketplace.json")).unwrap(),
+        "marketplace"
+    );
+    assert_eq!(
+        std::fs::read_to_string(previous_plugin_root.join("plugin.json")).unwrap(),
+        "plugin"
+    );
 }
 
 #[test]
@@ -4518,6 +4901,80 @@ fn generated_codex_mcp_check_rejects_malformed_or_unapproved_environment_superse
             "{error}"
         );
     }
+}
+
+#[test]
+fn generated_mcp_check_rejects_host_shape_and_non_environment_drift() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".mcp.json");
+    let expected = json!({
+        "nemo-relay": {
+            "command": "/bin/nemo-relay",
+            "args": ["mcp"],
+            "env_vars": ["OPENAI_API_KEY"]
+        }
+    });
+
+    let mut wrong_command = expected.clone();
+    wrong_command["nemo-relay"]["command"] = json!("/bin/foreign-relay");
+    write_json(&path, &wrong_command).unwrap();
+    let error =
+        generated_mcp_config_check(IntegrationHost::ClaudeCode, &path, &expected).unwrap_err();
+    assert!(error.contains("install claude-code --force"), "{error}");
+
+    let expected_without_vars = json!({
+        "nemo-relay": {
+            "command": "/bin/nemo-relay",
+            "args": ["mcp"]
+        }
+    });
+    write_json(&path, &wrong_command).unwrap();
+    let error = generated_mcp_config_check(IntegrationHost::Codex, &path, &expected_without_vars)
+        .unwrap_err();
+    assert!(error.contains("unexpected MCP server manifest"), "{error}");
+
+    let mut actual_without_vars = expected.clone();
+    actual_without_vars["nemo-relay"]
+        .as_object_mut()
+        .unwrap()
+        .remove("env_vars");
+    write_json(&path, &actual_without_vars).unwrap();
+    let error = generated_mcp_config_check(IntegrationHost::Codex, &path, &expected).unwrap_err();
+    assert!(error.contains("unexpected MCP server manifest"), "{error}");
+
+    write_json(&path, &wrong_command).unwrap();
+    let error = generated_mcp_config_check(IntegrationHost::Codex, &path, &expected).unwrap_err();
+    assert!(error.contains("unexpected MCP server manifest"), "{error}");
+    assert!(error.contains("install codex --force"), "{error}");
+}
+
+#[test]
+fn legacy_claude_manifest_inspection_distinguishes_absent_unreadable_and_malformed_files() {
+    let dir = tempdir().unwrap();
+    let plugin_root = dir.path().join("plugin");
+    std::fs::create_dir_all(&plugin_root).unwrap();
+    assert!(!legacy_plugin_without_mcp(IntegrationHost::ClaudeCode, &plugin_root).unwrap());
+
+    let manifest = plugin_manifest_path(IntegrationHost::ClaudeCode, &plugin_root);
+    std::fs::create_dir_all(&manifest).unwrap();
+    let error = legacy_plugin_without_mcp(IntegrationHost::ClaudeCode, &plugin_root).unwrap_err();
+    assert!(
+        error.contains("failed to inspect legacy plugin manifest"),
+        "{error}"
+    );
+
+    std::fs::remove_dir(&manifest).unwrap();
+    std::fs::write(&manifest, "{not-json").unwrap();
+    let error = legacy_plugin_without_mcp(IntegrationHost::ClaudeCode, &plugin_root).unwrap_err();
+    assert!(
+        error.contains("failed to inspect legacy plugin manifest"),
+        "{error}"
+    );
+
+    std::fs::write(&manifest, r#"{"name":"legacy"}"#).unwrap();
+    assert!(legacy_plugin_without_mcp(IntegrationHost::ClaudeCode, &plugin_root).unwrap());
+    std::fs::write(&manifest, r#"{"mcpServers":{}}"#).unwrap();
+    assert!(!legacy_plugin_without_mcp(IntegrationHost::ClaudeCode, &plugin_root).unwrap());
 }
 
 #[test]

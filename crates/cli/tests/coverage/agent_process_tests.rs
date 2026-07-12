@@ -45,6 +45,10 @@ fn wrapper_probe_uses_last_host_token_and_validates_opaque_wrappers() {
         ),
         ["custom-codex-wrapper", "--profile", "dev", "--version"]
     );
+    assert_eq!(
+        version_probe_argv(CodingAgent::Codex, &[]),
+        ["codex", "--version"]
+    );
 }
 
 #[test]
@@ -71,6 +75,7 @@ fn platform_resolution_supports_explicit_paths_and_windows_pathext() {
         ),
         Some(shim)
     );
+    assert_eq!(resolve_executable_for_platform("", None, None, false), None);
 }
 
 #[cfg(unix)]

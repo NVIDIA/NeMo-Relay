@@ -1581,6 +1581,17 @@ fn ordinary_server_ignores_managed_bootstrap_fingerprint_environment() {
         !xdg.join("nemo-relay/bootstrap/fingerprint-hmac.key")
             .exists()
     );
+
+    scope.set_bootstrap_fingerprint("");
+    let managed_args = ServerArgs {
+        ready_file: Some(temp.path().join("managed.ready.json")),
+        ..args
+    };
+    assert!(
+        managed_bootstrap_identity(&managed_args, &resolved, &[])
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

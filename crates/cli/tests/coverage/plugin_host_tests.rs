@@ -21,6 +21,24 @@ use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
 
 const TEST_PLUGIN_GENERATION: &str = "test-generation";
 
+#[cfg(unix)]
+fn wait_for_published_pid(path: &Path, process: &str) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Some(pid) = fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<i32>().ok())
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{process} did not publish a complete PID"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[derive(Default)]
 struct FakeCodexHooksClient {
     hook_lists: VecDeque<Result<Vec<CodexHookMetadata>, String>>,
@@ -2881,15 +2899,7 @@ fn failed_sidecar_startup_terminates_the_detached_process_group() {
         .arg(&grandchild_pid_path);
     configure_detached_sidecar(&mut command);
     let mut child = command.spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !grandchild_pid_path.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
-    let grandchild_pid = fs::read_to_string(&grandchild_pid_path)
-        .unwrap()
-        .trim()
-        .parse::<i32>()
-        .unwrap();
+    let grandchild_pid = wait_for_published_pid(&grandchild_pid_path, "sidecar grandchild");
     assert!(!child.wait().unwrap().success());
 
     terminate_sidecar_process_tree(&mut child);
@@ -3016,15 +3026,7 @@ fn sidecar_reaper_terminates_descendants_left_by_an_exited_gateway() {
     .unwrap();
     drop(endpoint_lock);
 
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while !descendant_pid_path.exists() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
-    let descendant_pid = fs::read_to_string(&descendant_pid_path)
-        .unwrap()
-        .trim()
-        .parse::<i32>()
-        .unwrap();
+    let descendant_pid = wait_for_published_pid(&descendant_pid_path, "sidecar descendant");
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         // SAFETY: Signal 0 only checks whether the finite test process is still present.

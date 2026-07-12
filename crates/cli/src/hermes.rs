@@ -478,21 +478,6 @@ fn verify_install(
     verify_hook_definitions(&config, command)?;
     verify_trust(&paths.allowlist, command)?;
 
-    let raw = fs::read_to_string(&paths.allowlist)
-        .map_err(|error| format!("failed to verify {}: {error}", paths.allowlist.display()))?;
-    let allowlist =
-        parse_json_object(Some(&raw), "Hermes shell-hook allowlist").map_err(|e| e.to_string())?;
-    let approvals = allowlist["approvals"]
-        .as_array()
-        .expect("trust verification checked approvals");
-    if approvals
-        .iter()
-        .filter_map(|entry| entry.get("command").and_then(Value::as_str))
-        .any(|candidate| is_managed_hook_command(candidate) && candidate != command)
-    {
-        return Err("stale Hermes Relay hook approvals remain".into());
-    }
-
     let actual_token = match generation_transaction {
         Some(transaction) => transaction.active_visible_token()?,
         None => InstallGeneration::capture(paths.generation.clone())?

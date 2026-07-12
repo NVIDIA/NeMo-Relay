@@ -1238,6 +1238,138 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
             .to_string()
             .contains("field `env` must be a JSON object")
     );
+
+    let temp = tempfile::tempdir().unwrap();
+    let non_object_path = temp.path().join("array-settings.json");
+    std::fs::write(&non_object_path, "[]").unwrap();
+    let non_object = vec![
+        "claude".into(),
+        format!("--settings={}", non_object_path.display()),
+    ];
+    assert!(
+        claude_settings_overlay(&non_object, 0, "http://127.0.0.1:4321")
+            .unwrap_err()
+            .to_string()
+            .contains("must contain a JSON object")
+    );
+
+    let empty_inline = vec!["claude".into(), "--settings=".into()];
+    assert!(
+        claude_settings_overlay(&empty_inline, 0, "http://127.0.0.1:4321")
+            .unwrap_err()
+            .to_string()
+            .contains("missing its value")
+    );
+
+    let missing_file = vec![
+        "claude".into(),
+        "--verbose".into(),
+        "--settings".into(),
+        temp.path()
+            .join("missing-settings.json")
+            .display()
+            .to_string(),
+    ];
+    assert!(
+        claude_settings_overlay(&missing_file, 0, "http://127.0.0.1:4321")
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read Claude Code settings")
+    );
+
+    let malformed_json = vec!["claude".into(), "--settings={not-json".into()];
+    assert!(
+        claude_settings_overlay(&malformed_json, 0, "http://127.0.0.1:4321")
+            .unwrap_err()
+            .to_string()
+            .contains("failed to parse Claude Code --settings JSON")
+    );
+}
+
+#[test]
+fn codex_session_hook_state_rejects_every_malformed_generated_shape() {
+    let malformed = [
+        (
+            json!({"hooks": {"SessionStart": {}}}),
+            "hook groups were malformed",
+        ),
+        (
+            json!({"hooks": {"SessionStart": [true]}}),
+            "hook group was malformed",
+        ),
+        (
+            json!({"hooks": {"SessionStart": [{}]}}),
+            "hook handlers were malformed",
+        ),
+        (
+            json!({"hooks": {"SessionStart": [{"hooks": [true]}]}}),
+            "command hook was malformed",
+        ),
+        (
+            json!({"hooks": {"SessionStart": [{"hooks": [{"type": "prompt", "command": "relay"}]}]}}),
+            "hook was not a command",
+        ),
+        (
+            json!({"hooks": {"SessionStart": [{"hooks": [{"type": "command"}]}]}}),
+            "hook command was missing",
+        ),
+    ];
+    for (generated, expected) in malformed {
+        let error = codex_session_hook_state_override(&generated)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+    }
+
+    let generated = json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "*",
+                "hooks": [{
+                    "type": "command",
+                    "command": "/opt/nemo relay/bin/nemo-relay hook-forward codex",
+                    "timeout": 0,
+                    "statusMessage": "Forwarding to Relay"
+                }]
+            }]
+        }
+    });
+    let group = generated["hooks"]["PreToolUse"][0].as_object().unwrap();
+    let handler = &group["hooks"].as_array().unwrap()[0];
+    let hash = codex_command_hook_hash("pre_tool_use", group, handler).unwrap();
+
+    let normalized_handler = json!({
+        "type": "command",
+        "command": "/opt/nemo relay/bin/nemo-relay hook-forward codex",
+        "timeout": 1,
+        "statusMessage": "Forwarding to Relay"
+    });
+    assert_eq!(
+        hash,
+        codex_command_hook_hash("pre_tool_use", group, &normalized_handler).unwrap()
+    );
+
+    let mut without_matcher = group.clone();
+    without_matcher.remove("matcher");
+    assert_ne!(
+        hash,
+        codex_command_hook_hash("pre_tool_use", &without_matcher, handler).unwrap()
+    );
+
+    let mut without_status = normalized_handler;
+    without_status
+        .as_object_mut()
+        .unwrap()
+        .remove("statusMessage");
+    assert_ne!(
+        hash,
+        codex_command_hook_hash("pre_tool_use", group, &without_status).unwrap()
+    );
+
+    let state = codex_session_hook_state_override(&generated).unwrap();
+    assert!(state.contains("pre_tool_use"));
+    assert!(state.contains("trusted_hash"));
+    assert!(state.contains("enabled=false"));
 }
 
 #[test]

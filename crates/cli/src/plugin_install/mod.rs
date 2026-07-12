@@ -705,9 +705,6 @@ fn install_host_locked(
         None
     };
     if options.force && staged.is_none() {
-        if !options.dry_run {
-            setup_runner.refresh_gateway()?;
-        }
         force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
     }
     if let Some(staged) = staged.as_ref() {
