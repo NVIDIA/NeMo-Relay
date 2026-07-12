@@ -43,6 +43,64 @@ impl Drop for BootstrapConfigHome {
     }
 }
 
+struct TransparentRunEnvironment {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous_run: Option<OsString>,
+    previous_gateway: Option<OsString>,
+}
+
+impl TransparentRunEnvironment {
+    fn without_gateway() -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_run = std::env::var_os(crate::config::TRANSPARENT_RUN_ENV);
+        let previous_gateway = std::env::var_os(crate::config::GATEWAY_URL_ENV);
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe {
+            std::env::set_var(crate::config::TRANSPARENT_RUN_ENV, "1");
+            std::env::remove_var(crate::config::GATEWAY_URL_ENV);
+        }
+        Self {
+            _guard: guard,
+            previous_run,
+            previous_gateway,
+        }
+    }
+}
+
+impl Drop for TransparentRunEnvironment {
+    fn drop(&mut self) {
+        // SAFETY: This restores the process environment while the mutex remains held.
+        unsafe {
+            match self.previous_run.take() {
+                Some(value) => std::env::set_var(crate::config::TRANSPARENT_RUN_ENV, value),
+                None => std::env::remove_var(crate::config::TRANSPARENT_RUN_ENV),
+            }
+            match self.previous_gateway.take() {
+                Some(value) => std::env::set_var(crate::config::GATEWAY_URL_ENV, value),
+                None => std::env::remove_var(crate::config::GATEWAY_URL_ENV),
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn transparent_mcp_requires_the_wrapper_gateway_url() {
+    let _environment = TransparentRunEnvironment::without_gateway();
+
+    let error = run(&crate::config::ServerArgs::default())
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains(crate::config::GATEWAY_URL_ENV), "{error}");
+    assert!(
+        error.contains(crate::config::TRANSPARENT_RUN_ENV),
+        "{error}"
+    );
+}
+
 #[test]
 fn bounded_mcp_reader_accepts_the_limit_and_preserves_following_frames() {
     let mut input = vec![b'a'; MAX_MCP_FRAME_BYTES - 1];

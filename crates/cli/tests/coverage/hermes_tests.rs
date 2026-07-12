@@ -452,6 +452,59 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
 }
 
 #[test]
+fn hermes_structure_and_trust_validation_cover_exact_failure_shapes() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let generation = temp.path().join(GENERATION_FILE_NAME);
+    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+
+    let error = trusted_hooks(Some(r#"{"approvals": {}}"#), &command, &relay, UNIX_EPOCH)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("approvals must be an array"), "{error}");
+
+    let error = parse_json_object(Some("[]"), "test allowlist")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("must contain a JSON object"), "{error}");
+
+    let mut malformed_hooks = json!({"hooks": {"on_session_start": {}}});
+    let error = strip_managed_hooks(&mut malformed_hooks)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("on_session_start hooks must be an array"),
+        "{error}"
+    );
+
+    let error = parse_yaml_object(Some("[]"), "test config")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("must contain an object"), "{error}");
+    assert!(is_managed_hook_command(
+        "nemo-relay hook-forward hermes --fail-closed"
+    ));
+
+    let path = temp.path().join("shell-hooks-allowlist.json");
+    let mut missing = trusted_hooks(None, &command, &relay, UNIX_EPOCH).unwrap();
+    missing["approvals"].as_array_mut().unwrap().remove(0);
+    std::fs::write(&path, serde_json::to_vec(&missing).unwrap()).unwrap();
+    let error = verify_trust(&path, &command).unwrap_err();
+    assert!(
+        error.contains("expected exactly one trust approval"),
+        "{error}"
+    );
+
+    let mut with_opaque_entry = trusted_hooks(None, &command, &relay, UNIX_EPOCH).unwrap();
+    with_opaque_entry["approvals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"metadata": "unrelated"}));
+    std::fs::write(&path, serde_json::to_vec(&with_opaque_entry).unwrap()).unwrap();
+    verify_trust(&path, &command).unwrap();
+}
+
+#[test]
 fn install_is_verified_idempotent_and_rotates_the_generation() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());

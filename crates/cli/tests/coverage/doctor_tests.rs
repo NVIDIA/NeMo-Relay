@@ -749,6 +749,62 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
 
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn collect_agents_distinguishes_required_and_optional_version_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let codex = temp.path().join("codex");
+    std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.1.0\\n'\n").unwrap();
+    make_executable(&codex);
+
+    let mut configured = ResolvedConfig::default();
+    configured.agents.codex.command = Some(codex.display().to_string());
+    let required = collect_agents(Some(CodingAgent::Codex), &configured).await;
+    assert_eq!(required[0].status, Status::Fail);
+    assert!(required[0].annotation.contains("is unsupported"));
+
+    let _environment = EnvScope::set(&[("PATH", Some(temp.path().as_os_str()))]);
+    let discovered = collect_agents(None, &ResolvedConfig::default()).await;
+    let optional = discovered
+        .iter()
+        .find(|agent| agent.name == "codex")
+        .unwrap();
+    assert_eq!(optional.status, Status::Warn);
+    assert!(optional.annotation.contains("is unsupported"));
+
+    std::fs::write(&codex, "#!/bin/sh\nexit 0\n").unwrap();
+    make_executable(&codex);
+    let required = collect_agents(Some(CodingAgent::Codex), &configured).await;
+    assert_eq!(required[0].status, Status::Fail);
+    assert!(
+        required[0]
+            .annotation
+            .contains("could not determine version")
+    );
+
+    let discovered = collect_agents(None, &ResolvedConfig::default()).await;
+    let optional = discovered
+        .iter()
+        .find(|agent| agent.name == "codex")
+        .unwrap();
+    assert_eq!(optional.status, Status::Warn);
+    assert!(optional.annotation.contains("could not determine version"));
+}
+
+#[test]
+fn hermes_hook_status_reports_actionable_persistent_diagnosis_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut agents = AgentConfigs::default();
+    agents.hermes.hooks_path = Some(temp.path().join("missing-config.yaml"));
+
+    let (status, details) = hook_status(CodingAgent::Hermes, &agents);
+
+    assert_eq!(status, Status::Fail);
+    assert!(details.contains("persistent MCP/hooks"), "{details}");
+    assert!(details.contains("install hermes --force"), "{details}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
     let temp = tempfile::tempdir().unwrap();
     let quiet = temp.path().join("quiet-agent");

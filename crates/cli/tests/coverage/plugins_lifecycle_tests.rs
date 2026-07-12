@@ -1662,6 +1662,87 @@ fn python_activation_snapshot_is_attested_copied_and_tamper_evident() {
 }
 
 #[test]
+fn python_entrypoint_validation_reports_each_authored_contract_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_python_dynamic_manifest(&plugin_dir, "acme.python-validation");
+    let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&manifest_path).unwrap();
+
+    let mut missing_source = manifest.clone();
+    missing_source.source = None;
+    let error = environment::validate_python_entrypoint_artifact(&missing_source, &manifest_ref)
+        .unwrap_err();
+    assert!(
+        error.contains("must declare source.manifest_root"),
+        "{error}"
+    );
+
+    let mut missing_separator = manifest.clone();
+    let DynamicPluginManifestLoad::Worker(load) = &mut missing_separator.load else {
+        panic!("fixture must be a worker plugin");
+    };
+    load.entrypoint = Some("plugin".into());
+    let error = environment::validate_python_entrypoint_artifact(&missing_separator, &manifest_ref)
+        .unwrap_err();
+    assert!(error.contains("module:function form"), "{error}");
+
+    let mut empty_module = manifest.clone();
+    let DynamicPluginManifestLoad::Worker(load) = &mut empty_module.load else {
+        panic!("fixture must be a worker plugin");
+    };
+    load.entrypoint = Some(":main".into());
+    let error =
+        environment::validate_python_entrypoint_artifact(&empty_module, &manifest_ref).unwrap_err();
+    assert!(error.contains("module:function form"), "{error}");
+
+    let mut missing_root = manifest;
+    missing_root
+        .source
+        .as_mut()
+        .expect("fixture declares source")
+        .manifest_root = Some("missing-root".into());
+    let error =
+        environment::validate_python_entrypoint_artifact(&missing_root, &manifest_ref).unwrap_err();
+    assert!(
+        error.contains("could not resolve Python plugin source.manifest_root"),
+        "{error}"
+    );
+}
+
+#[test]
+fn python_environment_attestation_rejects_invalid_json_and_source_identity_drift() {
+    let temp = tempfile::tempdir().unwrap();
+    let environment_path = temp.path().join("environment");
+    std::fs::create_dir_all(&environment_path).unwrap();
+    let attestation_path = environment_path.join(environment::ENVIRONMENT_ATTESTATION_FILE);
+
+    std::fs::write(&attestation_path, "{not-json").unwrap();
+    let error =
+        environment::read_environment_attestation(&environment_path, "expected").unwrap_err();
+    assert!(error.contains("attestation"), "{error}");
+    assert!(error.contains("is invalid"), "{error}");
+
+    std::fs::write(
+        &attestation_path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "source_artifact_sha256": "different",
+            "environment_sha256": "0".repeat(64),
+            "authentication": "unused"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let error =
+        environment::read_environment_attestation(&environment_path, "expected").unwrap_err();
+    assert!(
+        error.contains("does not match the trusted source artifact"),
+        "{error}"
+    );
+}
+
+#[test]
 fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
