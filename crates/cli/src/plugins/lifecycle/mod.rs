@@ -2248,5 +2248,5 @@ fn required_startup_failure(
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/shared/plugins_lifecycle_tests.rs"]
+#[path = "../../../tests/coverage/shared/plugins_lifecycle_tests.rs"]
 mod tests;

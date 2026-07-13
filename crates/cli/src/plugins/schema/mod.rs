@@ -1310,5 +1310,5 @@ fn find_anchor<'a>(schema: &'a Value, anchor: &str) -> Option<&'a Value> {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/shared/plugins_schema_tests.rs"]
+#[path = "../../../tests/coverage/shared/plugins_schema_tests.rs"]
 mod tests;
