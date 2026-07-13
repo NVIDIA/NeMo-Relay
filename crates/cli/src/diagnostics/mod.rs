@@ -70,7 +70,7 @@ pub(crate) struct DoctorReport {
     pub environment: EnvironmentInfo,
     pub configuration: ConfigurationInfo,
     pub agents: Vec<AgentInfo>,
-    pub host_plugins: Vec<crate::agents::install::HostPluginReadiness>,
+    pub host_plugins: Vec<crate::installation::marketplace::HostPluginReadiness>,
     pub observability: Vec<Check>,
     pub completions: Vec<Check>,
 }
@@ -182,7 +182,7 @@ pub(crate) async fn collect_report(
             &plugin_diagnostics,
         ),
         agents: collect_agents(target_agent, &resolved).await,
-        host_plugins: crate::agents::install::collect_default_host_plugin_readiness(),
+        host_plugins: crate::installation::marketplace::collect_default_host_plugin_readiness(),
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
     })

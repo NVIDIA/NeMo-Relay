@@ -3,8 +3,8 @@
 
 //! Local marketplace installer for Claude Code and Codex plugins.
 
+mod assets;
 mod host;
-mod marketplace;
 mod setup;
 mod state;
 
@@ -25,14 +25,14 @@ use crate::installation::generation::{
 use crate::installation::{InstallRequest, UninstallRequest};
 
 use crate::installation::operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
+use assets::{
+    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config,
+    write_plugin_marketplace, write_plugin_marketplace_for_generation,
+};
 use host::{
     CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,
     run_host_marketplace_registration, run_host_marketplace_removal, run_host_plugin_registration,
     run_host_plugin_removal, validate_relay_hook_forward, validate_relay_mcp,
-};
-use marketplace::{
-    marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config,
-    write_plugin_marketplace, write_plugin_marketplace_for_generation,
 };
 use setup::{
     PluginSetupRunner, PluginSetupSnapshot, RealPluginSetupRunner, run_plugin_doctor_json,
@@ -2377,7 +2377,7 @@ fn with_schema(mut value: Value) -> Value {
 }
 
 #[cfg(test)]
-use marketplace::*;
+use assets::*;
 #[cfg(test)]
 use setup::setup_action_description;
 #[cfg(test)]

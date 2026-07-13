@@ -201,7 +201,7 @@ fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
     let mut report = empty_report();
     report
         .host_plugins
-        .push(crate::agents::install::HostPluginReadiness {
+        .push(crate::installation::marketplace::HostPluginReadiness {
             host: "codex".into(),
             remediation: "nemo-relay install codex --force".into(),
             state_path: PathBuf::from("/tmp/codex.json"),
@@ -209,7 +209,7 @@ fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
             plugin: Some(PathBuf::from(
                 "/tmp/codex-marketplace/plugins/nemo-relay-plugin",
             )),
-            checks: vec![crate::agents::install::HostPluginReadinessCheck {
+            checks: vec![crate::installation::marketplace::HostPluginReadinessCheck {
                 name: "Host CLI".into(),
                 ok: false,
                 details: "required `codex` CLI was not found on PATH".into(),

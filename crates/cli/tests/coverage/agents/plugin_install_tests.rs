@@ -1028,7 +1028,7 @@ impl CrossProcessLockHolder {
         command
             .args([
                 "--exact",
-                "agents::install::tests::cross_process_lock_holder",
+                "installation::marketplace::tests::cross_process_lock_holder",
                 "--nocapture",
             ])
             .env(env_name, target)

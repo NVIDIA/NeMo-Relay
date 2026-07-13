@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 pub(crate) mod generation;
+pub(crate) mod marketplace;
 pub(crate) mod operation_lock;
 
 #[derive(Debug, Clone)]

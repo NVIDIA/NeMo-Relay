@@ -6,7 +6,6 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod hermes;
-pub(crate) mod install;
 pub(crate) mod shared;
 
 use semver::Version;
