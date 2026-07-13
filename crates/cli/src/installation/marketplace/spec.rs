@@ -33,4 +33,15 @@ pub(crate) trait MarketplaceHost: Copy {
         options: &PluginInstallOptions,
         runner: &dyn CommandRunner,
     ) -> Result<HostRegistrationReport, String>;
+    fn setup_may_mutate_before_success(self) -> bool;
+    fn unsafe_generation_fence_error(self, problem: &str) -> String;
+    fn accepts_legacy_hook_only_plugin(self) -> bool;
+    fn accepts_mcp_environment_superset(self) -> bool;
+    fn local_install_exists(
+        self,
+        marketplace_root: &Path,
+        plugin_root: &Path,
+        plugin_manifest: &Path,
+        generation_fence: &Path,
+    ) -> bool;
 }

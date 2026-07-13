@@ -681,7 +681,7 @@ fn install_host_locked(
             return Err(error);
         }
         registration.host_plugin_added = true;
-        if !matches!(host, CodingAgent::Codex) {
+        if host.setup_may_mutate_before_success() {
             setup_installed = true;
         }
         run_plugin_setup_with_generation(
@@ -964,7 +964,7 @@ fn retire_replacement_before_rollback(
     Ok(Some(retirement))
 }
 
-fn existing_plugin_install_requires_force_error(host: CodingAgent) -> String {
+fn existing_plugin_install_requires_force_error(host: impl MarketplaceHost) -> String {
     format!(
         "an existing fenced {} plugin install was found; rerun `nemo-relay install {} --force` to replace it safely",
         host.label(),
@@ -972,7 +972,7 @@ fn existing_plugin_install_requires_force_error(host: CodingAgent) -> String {
     )
 }
 
-fn missing_generation_fence_error(host: CodingAgent, generation_fence: &Path) -> String {
+fn missing_generation_fence_error(host: impl MarketplaceHost, generation_fence: &Path) -> String {
     unsafe_generation_fence_error(
         host,
         &format!("is missing at {}", generation_fence.display()),
@@ -980,7 +980,7 @@ fn missing_generation_fence_error(host: CodingAgent, generation_fence: &Path) ->
 }
 
 fn invalid_generation_fence_error(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     generation_fence: &Path,
     cause: &str,
 ) -> String {
@@ -993,22 +993,15 @@ fn invalid_generation_fence_error(
     )
 }
 
-fn unsafe_generation_fence_error(host: CodingAgent, problem: &str) -> String {
-    match host {
-        CodingAgent::Codex => format!(
-            "cannot safely replace or uninstall an existing Codex plugin because its MCP generation marker {problem}; close all Codex clients and standalone `nemo-relay mcp` processes, run `codex plugin remove nemo-relay-plugin@nemo-relay-local` and `codex plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install codex --force` to create a fenced install (and `nemo-relay uninstall codex` afterward if removal was intended)"
-        ),
-        CodingAgent::ClaudeCode => format!(
-            "cannot safely replace or uninstall an existing Claude Code plugin because its MCP generation marker {problem}; close all Claude Code clients and standalone `nemo-relay mcp` processes, run `claude plugin uninstall nemo-relay-plugin` and `claude plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install claude-code --force` to create a fenced install (and `nemo-relay uninstall claude-code` afterward if removal was intended)"
-        ),
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before generation validation")
-        }
-    }
+fn unsafe_generation_fence_error(host: impl MarketplaceHost, problem: &str) -> String {
+    host.unsafe_generation_fence_error(problem)
 }
 
-fn legacy_plugin_without_mcp(host: CodingAgent, plugin_root: &Path) -> Result<bool, String> {
-    if !matches!(host, CodingAgent::ClaudeCode) || plugin_root.join(".mcp.json").exists() {
+fn legacy_plugin_without_mcp(
+    host: impl MarketplaceHost,
+    plugin_root: &Path,
+) -> Result<bool, String> {
+    if !host.accepts_legacy_hook_only_plugin() || plugin_root.join(".mcp.json").exists() {
         return Ok(false);
     }
     let manifest_path = plugin_manifest_path(host, plugin_root);
@@ -1346,7 +1339,7 @@ fn generated_manifest_check(path: &Path, expected: &Value, label: &str) -> Resul
 }
 
 fn generated_mcp_config_check(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     path: &Path,
     expected: &Value,
 ) -> Result<String, String> {
@@ -1354,7 +1347,7 @@ fn generated_mcp_config_check(
 }
 
 fn generated_mcp_config_check_for_platform(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     path: &Path,
     expected: &Value,
     windows: bool,
@@ -1370,7 +1363,7 @@ fn generated_mcp_config_check_for_platform(
     if actual == *expected {
         return Ok(format!("valid at {}", path.display()));
     }
-    if !matches!(host, CodingAgent::Codex) {
+    if !host.accepts_mcp_environment_superset() {
         return Err(format!(
             "unexpected MCP server manifest contents at {}; run `nemo-relay install {} --force`",
             path.display(),
@@ -1629,17 +1622,13 @@ fn prepare_plugin_install(
         .map(|state| state.plugin_root.clone())
         .unwrap_or_else(|| layout.plugin_root.clone());
     let previous_generation_fence = previous_plugin_root.join(GENERATION_FILE_NAME);
-    let local_install_exists = match host {
-        CodingAgent::Codex => layout.marketplace_root.exists(),
-        CodingAgent::ClaudeCode => {
-            plugin_manifest_path(host, &previous_plugin_root).exists()
-                || previous_plugin_root.join(".mcp.json").exists()
-                || previous_generation_fence.exists()
-        }
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before install preflight")
-        }
-    };
+    let previous_plugin_manifest = plugin_manifest_path(host, &previous_plugin_root);
+    let local_install_exists = host.local_install_exists(
+        &layout.marketplace_root,
+        &previous_plugin_root,
+        &previous_plugin_manifest,
+        &previous_generation_fence,
+    );
     let previous_install_exists = state_bytes.is_some()
         || local_install_exists
         || plugin_registered

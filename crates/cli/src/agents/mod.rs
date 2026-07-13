@@ -242,6 +242,48 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
         }
     }
+
+    fn setup_may_mutate_before_success(self) -> bool {
+        !matches!(self, Self::Codex)
+    }
+
+    fn unsafe_generation_fence_error(self, problem: &str) -> String {
+        match self {
+            Self::Codex => format!(
+                "cannot safely replace or uninstall an existing Codex plugin because its MCP generation marker {problem}; close all Codex clients and standalone `nemo-relay mcp` processes, run `codex plugin remove nemo-relay-plugin@nemo-relay-local` and `codex plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install codex --force` to create a fenced install (and `nemo-relay uninstall codex` afterward if removal was intended)"
+            ),
+            Self::ClaudeCode => format!(
+                "cannot safely replace or uninstall an existing Claude Code plugin because its MCP generation marker {problem}; close all Claude Code clients and standalone `nemo-relay mcp` processes, run `claude plugin uninstall nemo-relay-plugin` and `claude plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install claude-code --force` to create a fenced install (and `nemo-relay uninstall claude-code` afterward if removal was intended)"
+            ),
+            Self::Hermes => unreachable!("Hermes does not use marketplace generations"),
+        }
+    }
+
+    fn accepts_legacy_hook_only_plugin(self) -> bool {
+        matches!(self, Self::ClaudeCode)
+    }
+
+    fn accepts_mcp_environment_superset(self) -> bool {
+        matches!(self, Self::Codex)
+    }
+
+    fn local_install_exists(
+        self,
+        marketplace_root: &std::path::Path,
+        plugin_root: &std::path::Path,
+        plugin_manifest: &std::path::Path,
+        generation_fence: &std::path::Path,
+    ) -> bool {
+        match self {
+            Self::Codex => marketplace_root.exists(),
+            Self::ClaudeCode => {
+                plugin_manifest.exists()
+                    || plugin_root.join(".mcp.json").exists()
+                    || generation_fence.exists()
+            }
+            Self::Hermes => unreachable!("Hermes does not use marketplace installs"),
+        }
+    }
 }
 
 pub(crate) fn marketplace_manifest(
