@@ -36,6 +36,7 @@ typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest*
 typedef char* (*NemoRelayLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NemoRelayLlmResponseFn)(void* user_data, const char* response_json);
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 typedef struct FfiPluginContext FfiPluginContext;
 
 // Middleware chain next function types
@@ -203,6 +204,22 @@ type FinalizerFunc func() string
 // implement [Event]. The Go binding snapshots FFI event fields before invoking
 // the callback, so it is safe to retain the event after the callback returns.
 type EventSubscriberFunc func(event Event)
+
+// EventSanitizeFields contains the observability fields an event sanitizer may replace.
+//
+// A sanitizer result replaces all three fields; it does not patch the input fields.
+// Start with the provided fields and modify only the fields you intend to change.
+// A zero-value json.RawMessage serializes as JSON null and clears its corresponding
+// event field, so a newly constructed EventSanitizeFields clears every field left
+// at its zero value.
+type EventSanitizeFields struct {
+	Data            json.RawMessage `json:"data"`
+	CategoryProfile json.RawMessage `json:"category_profile"`
+	Metadata        json.RawMessage `json:"metadata"`
+}
+
+// EventSanitizeFunc sanitizes mark or scope event observability fields.
+type EventSanitizeFunc func(event Event, fields EventSanitizeFields) EventSanitizeFields
 
 // CodecFunc is a bidirectional codec with decode and encode methods.
 // Decode receives the full LLM request (headers + content) as JSON and returns
@@ -411,6 +428,22 @@ func goEventSubscriberTrampoline(userData unsafe.Pointer, event *C.FfiEvent) {
 	fn := lookupClosure(userData).(EventSubscriberFunc)
 	goEvent := newEvent(event)
 	fn(goEvent)
+}
+
+//export goEventSanitizeTrampoline
+func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, fieldsJSON *C.char) *C.char {
+	fn := lookupClosure(userData).(EventSanitizeFunc)
+	var fields EventSanitizeFields
+	if err := json.Unmarshal([]byte(C.GoString(fieldsJSON)), &fields); err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	result, err := json.Marshal(fn(newEvent(event), fields))
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(result))
 }
 
 //export goFreeTrampoline

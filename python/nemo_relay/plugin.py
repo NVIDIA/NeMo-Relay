@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, TypedDict, cast
 
 from nemo_relay import (
+    EventSanitizeGuardrail,
     Json,
     JsonObject,
     LlmConditionalExecutionGuardrail,
@@ -80,6 +81,20 @@ class PluginContext(Protocol):
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
+        ...
+
+    def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: EventSanitizeGuardrail) -> None:
+        """Register a mark event sanitizer for this component."""
+        ...
+
+    def register_scope_sanitize_start_guardrail(
+        self, name: str, priority: int, callback: EventSanitizeGuardrail
+    ) -> None:
+        """Register a scope-start event sanitizer for this component."""
+        ...
+
+    def register_scope_sanitize_end_guardrail(self, name: str, priority: int, callback: EventSanitizeGuardrail) -> None:
+        """Register a scope-end event sanitizer for this component."""
         ...
 
     def register_tool_sanitize_request_guardrail(

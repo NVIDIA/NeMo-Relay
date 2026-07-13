@@ -434,6 +434,12 @@ async fn collect_agents(
         if !hook_details.is_empty() {
             details.push(hook_details);
         }
+        if agent == CodingAgent::ClaudeCode
+            && let Some(warning) = version.as_deref().and_then(claude_hook_floor_warning)
+        {
+            status = combine_status(status, Status::Warn, true);
+            details.push(warning);
+        }
         out.push(AgentInfo {
             name: display_name,
             status,
@@ -579,6 +585,36 @@ fn hook_file_status(
             format!("{label}: could not read {}: {error}", path.display()),
         ),
     }
+}
+
+// Claude Code validates plugin hooks.json against a strict event-name whitelist and rejects the
+// entire plugin's hooks on one unknown name. 2.1.116 is the oldest release that accepts every
+// event in the generated hook config (`UserPromptExpansion` was added to the whitelist there),
+// so older hosts silently load no relay hooks at all. Keep in sync with `HOOK_EVENTS` in
+// installer.rs.
+const CLAUDE_HOOK_EVENT_FLOOR: (u64, u64, u64) = (2, 1, 116);
+
+// Returns a doctor warning when a probed Claude Code version predates the hook-event floor.
+// Unparseable version strings return None: a missing warning is recoverable, a false one is not.
+fn claude_hook_floor_warning(version: &str) -> Option<String> {
+    let parsed = parse_leading_semver(version)?;
+    (parsed < CLAUDE_HOOK_EVENT_FLOOR).then(|| {
+        let (major, minor, patch) = CLAUDE_HOOK_EVENT_FLOOR;
+        format!(
+            "version predates {major}.{minor}.{patch}; this Claude Code rejects \
+             UserPromptExpansion and will silently load no relay hooks"
+        )
+    })
+}
+
+// Parses the leading `major.minor.patch` token from a probed version line such as
+// "2.1.206 (Claude Code)". Suffixes like prerelease tags fail the numeric parse and yield None.
+fn parse_leading_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split_whitespace().next()?.splitn(3, '.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
 }
 
 async fn probe_version(binary: &Path) -> Option<String> {

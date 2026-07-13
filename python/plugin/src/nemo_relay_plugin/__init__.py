@@ -18,6 +18,7 @@ appropriate executor.
 Public data types:
     Json: Any JSON-serializable Python value.
     Event: A Relay event represented as a JSON object.
+    EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
     AnnotatedLlmRequest: An annotated Relay LLM request represented as a JSON
         object.
@@ -38,6 +39,7 @@ Public data types:
 
 Public callback aliases:
     SubscriberCallback: Event subscriber callback.
+    EventSanitizeCallback: Mark or scope event sanitizer callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
     ToolRequestCallback: Tool request intercept callback.
@@ -66,6 +68,8 @@ from ._api import (
     ConfigDiagnostic,
     DiagnosticLevel,
     Event,
+    EventSanitizeCallback,
+    EventSanitizeFields,
     Json,
     LlmConditionalCallback,
     LlmExecutionCallback,
@@ -105,6 +109,8 @@ __all__ = [
     "ConfigDiagnostic",
     "DiagnosticLevel",
     "Event",
+    "EventSanitizeCallback",
+    "EventSanitizeFields",
     "Json",
     "LlmConditionalCallback",
     "LlmExecutionCallback",

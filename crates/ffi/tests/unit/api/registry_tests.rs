@@ -4,6 +4,429 @@
 //! Unit tests for registry in the NeMo Relay FFI crate.
 
 use super::*;
+use nemo_relay::plugin::rollback_registrations;
+
+unsafe extern "C" fn event_sanitize_cb(
+    _user_data: *mut libc::c_void,
+    event: *const FfiEvent,
+    fields_json: *const c_char,
+) -> *mut c_char {
+    let name = unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default();
+    let mut fields: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(fields_json) }
+            .to_str()
+            .unwrap_or("null"),
+    )
+    .unwrap();
+    fields["data"] = json!({"sanitized_by": name});
+    fields["category_profile"] = json!({"subtype": "ffi.sanitized"});
+    fields["metadata"] = Json::Null;
+    CString::new(fields.to_string()).unwrap().into_raw()
+}
+
+unsafe extern "C" fn invalid_event_sanitize_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+    _fields_json: *const c_char,
+) -> *mut c_char {
+    CString::new("not-json").unwrap().into_raw()
+}
+
+#[test]
+fn test_ffi_event_sanitizer_registries_and_error_paths() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let subscriber_name = cstring(&unique_name("ffi_event_sanitize_subscriber"));
+        assert_eq!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mark_guard = cstring(&unique_name("ffi_mark_sanitize"));
+        let start_guard = cstring(&unique_name("ffi_scope_start_sanitize"));
+        let end_guard = cstring(&unique_name("ffi_scope_end_sanitize"));
+        for status in [
+            nemo_relay_register_mark_sanitize_guardrail(
+                mark_guard.as_ptr(),
+                1,
+                event_sanitize_cb,
+                Box::into_raw(Box::new(1usize)).cast(),
+                Some(plugin_free),
+            ),
+            nemo_relay_register_scope_sanitize_start_guardrail(
+                start_guard.as_ptr(),
+                1,
+                event_sanitize_cb,
+                Box::into_raw(Box::new(2usize)).cast(),
+                Some(plugin_free),
+            ),
+            nemo_relay_register_scope_sanitize_end_guardrail(
+                end_guard.as_ptr(),
+                1,
+                event_sanitize_cb,
+                Box::into_raw(Box::new(3usize)).cast(),
+                Some(plugin_free),
+            ),
+        ] {
+            assert_eq!(status, NemoRelayStatus::Ok);
+        }
+
+        let scope_name = cstring("ffi-global-scope");
+        let original = cstring(r#"{"secret":true}"#);
+        let mut scope = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                original.as_ptr(),
+                original.as_ptr(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mark_name = cstring("ffi-global-mark");
+        assert_eq!(
+            nemo_relay_event(
+                mark_name.as_ptr(),
+                scope,
+                original.as_ptr(),
+                original.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let events = lock_unpoisoned(event_log());
+        for name in ["ffi-global-scope", "ffi-global-mark"] {
+            for event in events.iter().filter(|event| event["name"] == name) {
+                assert_eq!(event["data"], json!({"sanitized_by": name}));
+                assert_eq!(
+                    event["json"]["category_profile"]["subtype"],
+                    "ffi.sanitized"
+                );
+                assert_eq!(event["metadata"], Json::Null);
+            }
+        }
+        for phase in ["start", "end"] {
+            assert!(events.iter().any(|event| {
+                event["name"] == "ffi-global-scope" && event["json"]["scope_category"] == phase
+            }));
+        }
+        drop(events);
+
+        assert_eq!(
+            nemo_relay_deregister_mark_sanitize_guardrail(mark_guard.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_deregister_scope_sanitize_start_guardrail(start_guard.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_deregister_scope_sanitize_end_guardrail(end_guard.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 3);
+
+        let invalid_guard = cstring(&unique_name("ffi_invalid_event_sanitize"));
+        assert_eq!(
+            nemo_relay_register_mark_sanitize_guardrail(
+                invalid_guard.as_ptr(),
+                1,
+                invalid_event_sanitize_cb,
+                Box::into_raw(Box::new(4usize)).cast(),
+                Some(plugin_free),
+            ),
+            NemoRelayStatus::Ok
+        );
+        let invalid_mark = cstring("ffi-invalid-callback-mark");
+        assert_eq!(
+            nemo_relay_event(
+                invalid_mark.as_ptr(),
+                ptr::null(),
+                original.as_ptr(),
+                original.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_deregister_mark_sanitize_guardrail(invalid_guard.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 4);
+
+        let mut owner = ptr::null_mut();
+        let owner_name = cstring("ffi-event-owner");
+        assert_eq!(
+            nemo_relay_push_scope(
+                owner_name.as_ptr(),
+                NemoRelayScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut owner,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let owner_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(owner)).unwrap());
+        let local_mark = cstring(&unique_name("ffi_local_mark_sanitize"));
+        let local_start = cstring(&unique_name("ffi_local_start_sanitize"));
+        let local_end = cstring(&unique_name("ffi_local_end_sanitize"));
+        for status in [
+            nemo_relay_scope_register_mark_sanitize_guardrail(
+                owner_uuid.as_ptr(),
+                local_mark.as_ptr(),
+                1,
+                event_sanitize_cb,
+                Box::into_raw(Box::new(5usize)).cast(),
+                Some(plugin_free),
+            ),
+            nemo_relay_scope_register_scope_sanitize_start_guardrail(
+                owner_uuid.as_ptr(),
+                local_start.as_ptr(),
+                1,
+                event_sanitize_cb,
+                Box::into_raw(Box::new(6usize)).cast(),
+                Some(plugin_free),
+            ),
+            nemo_relay_scope_register_scope_sanitize_end_guardrail(
+                owner_uuid.as_ptr(),
+                local_end.as_ptr(),
+                1,
+                event_sanitize_cb,
+                Box::into_raw(Box::new(7usize)).cast(),
+                Some(plugin_free),
+            ),
+        ] {
+            assert_eq!(status, NemoRelayStatus::Ok);
+        }
+        let child_name = cstring("ffi-local-child");
+        let mut child = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_push_scope(
+                child_name.as_ptr(),
+                NemoRelayScopeType::Function,
+                ptr::null(),
+                0,
+                original.as_ptr(),
+                original.as_ptr(),
+                ptr::null(),
+                &mut child,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let local_mark_name = cstring("ffi-local-mark");
+        assert_eq!(
+            nemo_relay_event(
+                local_mark_name.as_ptr(),
+                child,
+                original.as_ptr(),
+                original.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_pop_scope(child, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(child);
+        assert_eq!(
+            nemo_relay_scope_deregister_mark_sanitize_guardrail(
+                owner_uuid.as_ptr(),
+                local_mark.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_scope_deregister_scope_sanitize_start_guardrail(
+                owner_uuid.as_ptr(),
+                local_start.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            nemo_relay_scope_deregister_scope_sanitize_end_guardrail(
+                owner_uuid.as_ptr(),
+                local_end.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 7);
+
+        let invalid_uuid = cstring("not-a-uuid");
+        let invalid_name = cstring("invalid-scope-event-sanitizer");
+        assert_eq!(
+            nemo_relay_scope_register_mark_sanitize_guardrail(
+                invalid_uuid.as_ptr(),
+                invalid_name.as_ptr(),
+                1,
+                event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_scope_deregister_scope_sanitize_start_guardrail(
+                invalid_uuid.as_ptr(),
+                invalid_name.as_ptr(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_eq!(
+            nemo_relay_register_scope_sanitize_end_guardrail(
+                ptr::null(),
+                1,
+                event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_deregister_mark_sanitize_guardrail(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_register_scope_sanitize_end_guardrail(
+                owner_uuid.as_ptr(),
+                ptr::null(),
+                1,
+                event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_scope_deregister_scope_sanitize_end_guardrail(
+                owner_uuid.as_ptr(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        assert_eq!(
+            nemo_relay_pop_scope(owner, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(owner);
+        assert_eq!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        let events = lock_unpoisoned(event_log());
+        let invalid_callback_event = events
+            .iter()
+            .find(|event| event["name"] == "ffi-invalid-callback-mark")
+            .expect("invalid callback mark should be delivered");
+        assert_eq!(invalid_callback_event["data"], json!({"secret": true}));
+        assert_eq!(invalid_callback_event["metadata"], json!({"secret": true}));
+        for name in ["ffi-local-child", "ffi-local-mark"] {
+            for event in events.iter().filter(|event| event["name"] == name) {
+                assert_eq!(event["data"], json!({"sanitized_by": name}));
+                assert_eq!(
+                    event["json"]["category_profile"]["subtype"],
+                    "ffi.sanitized"
+                );
+                assert_eq!(event["metadata"], Json::Null);
+            }
+        }
+        for phase in ["start", "end"] {
+            assert!(events.iter().any(|event| {
+                event["name"] == "ffi-local-child" && event["json"]["scope_category"] == phase
+            }));
+        }
+        drop(events);
+
+        let mut context = PluginRegistrationContext::with_namespace(unique_name("ffi_plugin_"));
+        let mut ffi_context = FfiPluginContext(&mut context);
+        for (name, status) in [
+            (
+                cstring("mark"),
+                nemo_relay_plugin_context_register_mark_sanitize_guardrail(
+                    &mut ffi_context,
+                    cstring("mark").as_ptr(),
+                    1,
+                    event_sanitize_cb,
+                    Box::into_raw(Box::new(8usize)).cast(),
+                    Some(plugin_free),
+                ),
+            ),
+            (
+                cstring("start"),
+                nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(
+                    &mut ffi_context,
+                    cstring("start").as_ptr(),
+                    1,
+                    event_sanitize_cb,
+                    Box::into_raw(Box::new(9usize)).cast(),
+                    Some(plugin_free),
+                ),
+            ),
+            (
+                cstring("end"),
+                nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(
+                    &mut ffi_context,
+                    cstring("end").as_ptr(),
+                    1,
+                    event_sanitize_cb,
+                    Box::into_raw(Box::new(10usize)).cast(),
+                    Some(plugin_free),
+                ),
+            ),
+        ] {
+            assert!(!name.as_bytes().is_empty());
+            assert_eq!(status, NemoRelayStatus::Ok);
+        }
+        assert_eq!(
+            nemo_relay_plugin_context_register_mark_sanitize_guardrail(
+                ptr::null_mut(),
+                invalid_name.as_ptr(),
+                1,
+                event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_eq!(
+            nemo_relay_plugin_context_register_mark_sanitize_guardrail(
+                &mut ffi_context,
+                ptr::null(),
+                1,
+                event_sanitize_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        let mut registrations = context.into_registrations();
+        rollback_registrations(&mut registrations);
+        assert_eq!(*lock_unpoisoned(plugin_frees()), 10);
+
+        assert_eq!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
 
 #[test]
 fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {

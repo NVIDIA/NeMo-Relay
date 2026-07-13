@@ -161,11 +161,24 @@ extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* 
 
 // Subscribers
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 extern int32_t nemo_relay_register_subscriber(const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_subscriber(const char* name);
 extern int32_t nemo_relay_flush_subscribers(void);
+extern int32_t nemo_relay_register_mark_sanitize_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_deregister_mark_sanitize_guardrail(const char* name);
+extern int32_t nemo_relay_register_scope_sanitize_start_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_deregister_scope_sanitize_start_guardrail(const char* name);
+extern int32_t nemo_relay_register_scope_sanitize_end_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_deregister_scope_sanitize_end_guardrail(const char* name);
 
 // Scope-local tool guardrails
+extern int32_t nemo_relay_scope_register_mark_sanitize_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_deregister_mark_sanitize_guardrail(const char* scope_uuid, const char* name);
+extern int32_t nemo_relay_scope_register_scope_sanitize_start_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_deregister_scope_sanitize_start_guardrail(const char* scope_uuid, const char* name);
+extern int32_t nemo_relay_scope_register_scope_sanitize_end_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_deregister_scope_sanitize_end_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_tool_sanitize_request_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_tool_sanitize_response_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayToolSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -254,6 +267,7 @@ extern void nemo_relay_openinference_subscriber_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
+extern char* goEventSanitizeTrampoline(void*, const FfiEvent*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
 extern void goEventSubscriberTrampoline(void*, const FfiEvent*);
@@ -1190,6 +1204,58 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 // Guardrail/Intercept registration (Tool)
 // ---------------------------------------------------------------------------
 
+func registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, kind int) error {
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	var status C.int32_t
+	switch kind {
+	case 0:
+		status = C.nemo_relay_register_mark_sanitize_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	case 1:
+		status = C.nemo_relay_register_scope_sanitize_start_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	default:
+		status = C.nemo_relay_register_scope_sanitize_end_guardrail(cName, C.int32_t(priority), C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline), id, C.NemoRelayFreeFn(C.goFreeTrampoline))
+	}
+	return checkStatus(status)
+}
+
+// RegisterMarkSanitizeGuardrail registers a global mark event sanitizer.
+func RegisterMarkSanitizeGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
+	return registerEventSanitizer(name, priority, fn, 0)
+}
+
+// DeregisterMarkSanitizeGuardrail removes a global mark event sanitizer.
+func DeregisterMarkSanitizeGuardrail(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_deregister_mark_sanitize_guardrail(cName))
+}
+
+// RegisterScopeSanitizeStartGuardrail registers a global scope-start event sanitizer.
+func RegisterScopeSanitizeStartGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
+	return registerEventSanitizer(name, priority, fn, 1)
+}
+
+// DeregisterScopeSanitizeStartGuardrail removes a global scope-start event sanitizer.
+func DeregisterScopeSanitizeStartGuardrail(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_deregister_scope_sanitize_start_guardrail(cName))
+}
+
+// RegisterScopeSanitizeEndGuardrail registers a global scope-end event sanitizer.
+func RegisterScopeSanitizeEndGuardrail(name string, priority int32, fn EventSanitizeFunc) error {
+	return registerEventSanitizer(name, priority, fn, 2)
+}
+
+// DeregisterScopeSanitizeEndGuardrail removes a global scope-end event sanitizer.
+func DeregisterScopeSanitizeEndGuardrail(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_deregister_scope_sanitize_end_guardrail(cName))
+}
+
 // RegisterToolSanitizeRequestGuardrail registers a guardrail that sanitizes
 // tool request arguments before they are passed to the tool. The callback
 // receives the tool name and arguments JSON and must return the (possibly
@@ -2072,6 +2138,68 @@ func (s *OpenInferenceSubscriber) Close() {
 // ---------------------------------------------------------------------------
 // Scope-local guardrail/intercept registration (Tool)
 // ---------------------------------------------------------------------------
+
+func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn EventSanitizeFunc, kind int) error {
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	callback := C.NemoRelayEventSanitizeFn(C.goEventSanitizeTrampoline)
+	free := C.NemoRelayFreeFn(C.goFreeTrampoline)
+	var status C.int32_t
+	switch kind {
+	case 0:
+		status = C.nemo_relay_scope_register_mark_sanitize_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
+	case 1:
+		status = C.nemo_relay_scope_register_scope_sanitize_start_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
+	default:
+		status = C.nemo_relay_scope_register_scope_sanitize_end_guardrail(cScopeUUID, cName, C.int32_t(priority), callback, id, free)
+	}
+	return checkStatus(status)
+}
+
+// ScopeRegisterMarkSanitizeGuardrail registers a scope-local mark sanitizer.
+func ScopeRegisterMarkSanitizeGuardrail(scopeUUID, name string, priority int32, fn EventSanitizeFunc) error {
+	return registerScopeEventSanitizer(scopeUUID, name, priority, fn, 0)
+}
+
+// ScopeDeregisterMarkSanitizeGuardrail removes a scope-local mark sanitizer.
+func ScopeDeregisterMarkSanitizeGuardrail(scopeUUID, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_deregister_mark_sanitize_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterScopeSanitizeStartGuardrail registers a scope-local scope-start sanitizer.
+func ScopeRegisterScopeSanitizeStartGuardrail(scopeUUID, name string, priority int32, fn EventSanitizeFunc) error {
+	return registerScopeEventSanitizer(scopeUUID, name, priority, fn, 1)
+}
+
+// ScopeDeregisterScopeSanitizeStartGuardrail removes a scope-local scope-start sanitizer.
+func ScopeDeregisterScopeSanitizeStartGuardrail(scopeUUID, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_deregister_scope_sanitize_start_guardrail(cScopeUUID, cName))
+}
+
+// ScopeRegisterScopeSanitizeEndGuardrail registers a scope-local scope-end sanitizer.
+func ScopeRegisterScopeSanitizeEndGuardrail(scopeUUID, name string, priority int32, fn EventSanitizeFunc) error {
+	return registerScopeEventSanitizer(scopeUUID, name, priority, fn, 2)
+}
+
+// ScopeDeregisterScopeSanitizeEndGuardrail removes a scope-local scope-end sanitizer.
+func ScopeDeregisterScopeSanitizeEndGuardrail(scopeUUID, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_deregister_scope_sanitize_end_guardrail(cScopeUUID, cName))
+}
 
 // ScopeRegisterToolSanitizeRequestGuardrail registers a scope-local guardrail
 // that sanitizes tool request arguments. The guardrail is scoped to the given

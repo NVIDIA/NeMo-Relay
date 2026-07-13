@@ -37,6 +37,10 @@ class TestPiiRedactionConfigHelpers:
         assert isinstance(wrapped_config, dict)
         assert wrapped_config["version"] == 1
         assert wrapped_config["mode"] == "builtin"
+        assert wrapped_config["mark"] is True
+
+        opted_out = PiiRedactionConfig(mark=False).to_dict()
+        assert opted_out["mark"] is False
 
     def test_validation_rejects_bad_values(self):
         report = validate_config(

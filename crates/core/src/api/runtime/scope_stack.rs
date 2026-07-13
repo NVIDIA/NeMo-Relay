@@ -9,6 +9,7 @@
 //! context into worker threads.
 
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use uuid::Uuid;
@@ -21,12 +22,15 @@ use crate::registry::{RegistryEntry, SortedRegistry};
 
 /// Mutable stack of active scopes plus their scope-local registries.
 ///
-/// The stack always contains an implicit root scope. Additional scopes are
-/// pushed as the public API opens lifecycle spans and removed when those spans
-/// close.
+/// The stack always contains an implicit root agent scope. It owns freshness
+/// for work that is not nested under an explicit agent; non-agent scopes inherit
+/// their nearest agent's freshness instead of creating a separate budget.
+/// Additional scopes are pushed as the public API opens lifecycle spans and
+/// removed when those spans close.
 pub struct ScopeStack {
     stack: Vec<ScopeHandle>,
-    scope_registries: std::collections::HashMap<Uuid, ScopeLocalRegistries>,
+    scope_registries: HashMap<Uuid, ScopeLocalRegistries>,
+    fresh_agents: HashSet<Uuid>,
 }
 
 impl ScopeStack {
@@ -40,9 +44,11 @@ impl ScopeStack {
             .name("root")
             .scope_type(ScopeType::Agent)
             .build();
+        let root_uuid = root.uuid;
         Self {
             stack: vec![root],
-            scope_registries: std::collections::HashMap::new(),
+            scope_registries: HashMap::new(),
+            fresh_agents: HashSet::from([root_uuid]),
         }
     }
 
@@ -51,6 +57,9 @@ impl ScopeStack {
     /// # Parameters
     /// - `handle`: Scope handle to make the new top-most active scope.
     pub fn push(&mut self, handle: ScopeHandle) {
+        if matches!(handle.scope_type, ScopeType::Agent) {
+            self.fresh_agents.insert(handle.uuid);
+        }
         self.stack.push(handle);
     }
 
@@ -134,6 +143,7 @@ impl ScopeStack {
                 ));
             }
             self.scope_registries.remove(uuid);
+            self.fresh_agents.remove(uuid);
             return Ok(self
                 .stack
                 .pop()
@@ -147,6 +157,34 @@ impl ScopeStack {
         }
 
         Err(FlowError::NotFound("scope handle not found".into()))
+    }
+
+    fn owning_agent_uuid(&self, parent_uuid: Option<Uuid>) -> Uuid {
+        let search_end = parent_uuid
+            .and_then(|parent_uuid| {
+                self.stack
+                    .iter()
+                    .position(|scope| scope.uuid == parent_uuid)
+            })
+            .map_or(self.stack.len(), |index| index + 1);
+        self.stack[..search_end]
+            .iter()
+            .rev()
+            .find(|scope| matches!(scope.scope_type, ScopeType::Agent))
+            .map(|scope| scope.uuid)
+            .expect("scope stack should always contain an owning agent")
+    }
+
+    /// Return whether the owning agent is fresh, then mark it stale.
+    pub(crate) fn take_agent_freshness(&mut self, parent_uuid: Option<Uuid>) -> bool {
+        let uuid = self.owning_agent_uuid(parent_uuid);
+        self.fresh_agents.remove(&uuid)
+    }
+
+    /// Mark the agent that owns a compaction event as fresh.
+    pub(crate) fn mark_agent_fresh(&mut self, parent_uuid: Option<Uuid>) {
+        let uuid = self.owning_agent_uuid(parent_uuid);
+        self.fresh_agents.insert(uuid);
     }
 
     /// Get or create the scope-local registries for an active scope.
@@ -210,6 +248,7 @@ impl std::fmt::Debug for ScopeStack {
         f.debug_struct("ScopeStack")
             .field("stack", &self.stack)
             .field("scope_registries_count", &self.scope_registries.len())
+            .field("fresh_agent_count", &self.fresh_agents.len())
             .finish()
     }
 }

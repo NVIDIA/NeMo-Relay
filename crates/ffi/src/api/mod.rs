@@ -14,17 +14,17 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::callable::{
-    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
+    NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb, NemoRelayEventSanitizeCb,
     NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayJsonCb,
     NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
     NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
     NemoRelayPluginValidateCb, NemoRelayToolConditionalCb, NemoRelayToolExecCb,
     NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn,
-    wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn, wrap_llm_exec_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_fn, wrap_tool_exec_intercept_fn,
-    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
+    wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
+    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_fn,
+    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::convert::{
     c_str_to_json, c_str_to_opt_json, c_str_to_string, json_to_c_string, nemo_relay_string_free,
@@ -66,6 +66,7 @@ use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use tokio::runtime::Runtime;
 
 mod adaptive;
+mod event_registry;
 mod llm;
 mod llm_registry;
 mod observability;
@@ -77,6 +78,7 @@ mod tool_lifecycle;
 mod tool_registry;
 
 pub use adaptive::*;
+pub use event_registry::*;
 pub use llm::*;
 pub use llm_registry::*;
 pub use observability::*;

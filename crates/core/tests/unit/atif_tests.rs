@@ -2781,6 +2781,36 @@ fn test_exporter_ignores_marks_with_hook_metadata() {
 }
 
 #[test]
+fn test_exporter_omits_skill_load_mark_from_atif_steps() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let mark_uuid = Uuid::now_v7();
+
+    let tool_start = event_builder(tool_uuid, EventType::Start)
+        .name("read_file")
+        .scope_type(ScopeType::Tool)
+        .build();
+    let mark = event_builder(mark_uuid, EventType::Mark)
+        .name("skill.load")
+        .parent_uuid(tool_uuid)
+        .data(json!({"skill_name": "review"}))
+        .metadata(json!({
+            "skill_load_source": "structured_read",
+            "tool_name": "read_file"
+        }))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(tool_start);
+        state.events.push(mark);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert!(trajectory.steps.is_empty());
+}
+
+#[test]
 fn test_exporter_embeds_nested_subagent_trajectory() {
     let root_uuid = Uuid::now_v7();
     let child_uuid = Uuid::now_v7();

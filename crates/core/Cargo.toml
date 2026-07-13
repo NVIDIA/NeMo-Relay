@@ -99,6 +99,7 @@ object_store = { version = "0.13", default-features = false, features = ["aws"],
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"], optional = true }
 tower = { version = "0.5", features = ["util"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+shell-words = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "sync", "test-util", "rt-multi-thread", "time"] }

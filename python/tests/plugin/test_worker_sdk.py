@@ -275,6 +275,15 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def subscriber(event: Json) -> None:
             await ctx.runtime.emit_mark("tests.subscriber", event)
 
+        async def mark_sanitize(event: Json, fields: Json) -> Json:
+            return {**fields, "data": {"sanitized": f"mark:{event['name']}"}, "metadata": None}
+
+        async def scope_start_sanitize(event: Json, fields: Json) -> Json:
+            return {**fields, "data": {"sanitized": f"scope-start:{event['name']}"}, "metadata": None}
+
+        async def scope_end_sanitize(event: Json, fields: Json) -> Json:
+            return {**fields, "data": {"sanitized": f"scope-end:{event['name']}"}, "metadata": None}
+
         def tool_sanitize(name: str, value: Json) -> Json:
             return _tag(value, f"sanitize_{name}")
 
@@ -320,6 +329,9 @@ class AllSurfacesPlugin(WorkerPlugin):
                 yield _tag(chunk, "llm_stream_execution")
 
         ctx.register_subscriber("subscriber", subscriber)
+        ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
+        ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
+        ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
         ctx.register_tool_sanitize_request_guardrail("tool_sanitize", tool_sanitize, priority=1)
         ctx.register_tool_sanitize_response_guardrail("tool_sanitize", tool_sanitize, priority=2)
         ctx.register_tool_conditional_execution_guardrail("tool_conditional", tool_block, priority=3)
@@ -361,6 +373,9 @@ def test_generated_proto_matches_worker_contract():
     assert pb.SUBSCRIBER == 1
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    assert pb.MARK_SANITIZE_GUARDRAIL == 30
+    assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
+    assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
     assert pb.CUSTOM == 10
 
 
@@ -399,6 +414,9 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     ]
     assert registrations == [
         ("subscriber", pb.SUBSCRIBER, 0, False),
+        ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
+        ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
+        ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
         ("tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL, 1, False),
         ("tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL, 2, False),
         ("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False),
@@ -679,6 +697,52 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert registrations.count(("duplicate", pb.TOOL_REQUEST_INTERCEPT)) == 1
     assert ("shared", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        pb.MARK_SANITIZE_GUARDRAIL,
+        pb.SCOPE_SANITIZE_START_GUARDRAIL,
+        pb.SCOPE_SANITIZE_END_GUARDRAIL,
+    ],
+)
+async def test_event_sanitizer_surfaces_receive_context_and_return_all_fields(
+    service: _WorkerService, surface: int
+) -> None:
+    await _register(service)
+    registration = {
+        pb.MARK_SANITIZE_GUARDRAIL: "event_sanitize",
+        pb.SCOPE_SANITIZE_START_GUARDRAIL: "event_sanitize",
+        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitize",
+    }[surface]
+    sanitizer = {
+        pb.MARK_SANITIZE_GUARDRAIL: "mark",
+        pb.SCOPE_SANITIZE_START_GUARDRAIL: "scope-start",
+        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope-end",
+    }[surface]
+    response = await service.Invoke(
+        _invoke_request(
+            registration,
+            surface,
+            event=_json_envelope(
+                EVENT_SCHEMA,
+                {
+                    "kind": "mark" if surface == pb.MARK_SANITIZE_GUARDRAIL else "scope",
+                    "name": "worker-event",
+                    "data": {"secret": True},
+                    "category_profile": {"subtype": "test"},
+                    "metadata": {"secret": True},
+                },
+            ),
+        ),
+        AbortContext(),
+    )
+    assert _envelope_value(response.json.value) == {
+        "data": {"sanitized": f"{sanitizer}:worker-event"},
+        "category_profile": {"subtype": "test"},
+        "metadata": None,
+    }
 
 
 async def test_validate_accepts_missing_config_and_dict_diagnostics():
@@ -2453,6 +2517,9 @@ def _llm_stream_next(runtime: PluginRuntime, request: Json) -> AsyncIterator[Jso
 def _all_expected_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.MARK_SANITIZE_GUARDRAIL,
+        pb.SCOPE_SANITIZE_START_GUARDRAIL,
+        pb.SCOPE_SANITIZE_END_GUARDRAIL,
         pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
         pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
         pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,

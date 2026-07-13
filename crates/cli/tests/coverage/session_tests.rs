@@ -3460,6 +3460,72 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
 }
 
 #[tokio::test]
+async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _ = clear_plugin_configuration();
+    let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    let subscriber_name = "cli-inferred-skill-load-atof-test";
+    let _ = deregister_subscriber(subscriber_name);
+    register_subscriber(subscriber_name, atof_exporter.subscriber()).unwrap();
+    let manager = SessionManager::new(session_test_config());
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "inferred-skill-load".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::HookMark(SessionEvent {
+                    session_id: "inferred-skill-load".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptExpansion".into(),
+                    payload: json!({"skill_name": "review"}),
+                    metadata: json!({
+                        "agent_kind": "claude-code",
+                        "skill_load_source": "prompt_expansion",
+                        "inferred": true
+                    }),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "inferred-skill-load".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionEnd".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    atof_exporter.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+    let events = read_atof_events(atof_exporter.path());
+    let marks = events
+        .iter()
+        .filter(|event| event["name"] == "skill.load.inferred")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marks.len(),
+        1,
+        "expected one inferred skill mark: {events:#?}"
+    );
+    assert_eq!(marks[0]["data"], json!({"skill_name": "review"}));
+    assert_eq!(marks[0]["metadata"]["agent_kind"], "claude-code");
+    assert_eq!(
+        marks[0]["metadata"]["skill_load_source"],
+        "prompt_expansion"
+    );
+    assert_eq!(marks[0]["metadata"]["inferred"], true);
+}
+
+#[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),

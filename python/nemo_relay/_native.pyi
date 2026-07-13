@@ -24,16 +24,23 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from datetime import datetime
-from typing import ClassVar, Literal, Optional, TypeAlias
+from typing import ClassVar, Literal, Optional, TypeAlias, TypedDict
 
 _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
 _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
+
+class _EventSanitizeFields(TypedDict):
+    data: _Json | None
+    category_profile: _JsonObject | None
+    metadata: _Json | None
+
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
 _LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest"], "LLMRequest"]
 _LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_JsonObject], _JsonObject]
+_EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
 _ToolExecutionIntercept: TypeAlias = Callable[
@@ -1189,7 +1196,32 @@ class PluginContext:
         Python plugin protocols expose the public shape. The native class exists
         for runtime registration callbacks.
     """
+    def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: _EventSanitizeGuardrail) -> None: ...
+    def register_scope_sanitize_start_guardrail(
+        self, name: str, priority: int, callback: _EventSanitizeGuardrail
+    ) -> None: ...
+    def register_scope_sanitize_end_guardrail(
+        self, name: str, priority: int, callback: _EventSanitizeGuardrail
+    ) -> None: ...
 
+def register_mark_sanitize_guardrail(name: str, priority: int, guardrail: _EventSanitizeGuardrail) -> None: ...
+def deregister_mark_sanitize_guardrail(name: str) -> bool: ...
+def register_scope_sanitize_start_guardrail(name: str, priority: int, guardrail: _EventSanitizeGuardrail) -> None: ...
+def deregister_scope_sanitize_start_guardrail(name: str) -> bool: ...
+def register_scope_sanitize_end_guardrail(name: str, priority: int, guardrail: _EventSanitizeGuardrail) -> None: ...
+def deregister_scope_sanitize_end_guardrail(name: str) -> bool: ...
+def scope_register_mark_sanitize_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: _EventSanitizeGuardrail
+) -> None: ...
+def scope_deregister_mark_sanitize_guardrail(scope_uuid: str, name: str) -> bool: ...
+def scope_register_scope_sanitize_start_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: _EventSanitizeGuardrail
+) -> None: ...
+def scope_deregister_scope_sanitize_start_guardrail(scope_uuid: str, name: str) -> bool: ...
+def scope_register_scope_sanitize_end_guardrail(
+    scope_uuid: str, name: str, priority: int, guardrail: _EventSanitizeGuardrail
+) -> None: ...
+def scope_deregister_scope_sanitize_end_guardrail(scope_uuid: str, name: str) -> bool: ...
 def create_scope_stack() -> ScopeStack:
     """Create a fresh native scope stack.
 
