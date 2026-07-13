@@ -43,10 +43,10 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bind = listener.local_addr().unwrap();
     let gateway_url = format!("http://{bind}");
-    let fingerprint = crate::config::transparent_gateway_fingerprint(&gateway_url);
-    let config = crate::config::GatewayConfig {
+    let fingerprint = crate::configuration::transparent_gateway_fingerprint(&gateway_url);
+    let config = crate::configuration::GatewayConfig {
         bind,
-        ..crate::config::GatewayConfig::default()
+        ..crate::configuration::GatewayConfig::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(

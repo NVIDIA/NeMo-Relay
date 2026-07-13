@@ -9,11 +9,11 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::config::IntegrationHost;
-use crate::install_generation::{
+use crate::configuration::IntegrationHost;
+use crate::hooks::generated_hooks;
+use crate::installation::generation::{
     write_new_generation_with_token_at, write_staged_generation_with_token,
 };
-use crate::installer::generated_hooks;
 
 use super::state::{PluginInstallOptions, PluginLayout, remove_path, write_json};
 use super::{MARKETPLACE_NAME, PLUGIN_NAME};
@@ -229,7 +229,7 @@ pub(super) fn plugin_hooks(
     let generation_fence = absolute_or_self(generation_fence);
     Ok(generated_hooks(
         agent,
-        &crate::installer::persistent_hook_forward_command(
+        &crate::hooks::persistent_hook_forward_command(
             relay,
             agent,
             &generation_fence,
@@ -240,7 +240,8 @@ pub(super) fn plugin_hooks(
 
 pub(super) fn plugin_mcp_env_vars() -> Result<Vec<String>, String> {
     let environment = env::vars_os().filter_map(|(name, _)| name.into_string().ok());
-    let config = crate::config::user_plugin_runtime_config().map_err(|error| error.to_string())?;
+    let config =
+        crate::configuration::user_plugin_runtime_config().map_err(|error| error.to_string())?;
     Ok(plugin_mcp_env_vars_from(environment, config.as_ref()))
 }
 

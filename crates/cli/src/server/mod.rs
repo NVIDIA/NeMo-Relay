@@ -30,13 +30,13 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::agents::adapters::{claude_code, codex, hermes};
-use crate::config::{
+use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
 };
 use crate::error::CliError;
 use crate::gateway;
 use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
-use crate::session::SessionManager;
+use crate::sessions::SessionManager;
 
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -118,7 +118,7 @@ fn render_startup_status(bind: SocketAddr, config: &GatewayConfig, color: bool) 
         "NeMo Relay".to_string(),
         format!("  Gateway        http://{bind}"),
     ];
-    let destinations = crate::launcher::exporter_destinations(config);
+    let destinations = crate::process::launcher::exporter_destinations(config);
     if destinations.is_empty() {
         lines.push("  Exporters      not configured".into());
     } else {
@@ -135,7 +135,7 @@ fn render_startup_status(bind: SocketAddr, config: &GatewayConfig, color: bool) 
         }
     }
 
-    crate::launcher::render_status_frame(&lines, color)
+    crate::process::launcher::render_status_frame(&lines, color)
 }
 
 /// Serves the gateway router on a caller-owned listener with optional graceful shutdown.
@@ -829,5 +829,5 @@ fn hook_payload_rejection(rejection: JsonRejection) -> CliError {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/server_tests.rs"]
+#[path = "../../tests/coverage/shared/server_tests.rs"]
 mod tests;

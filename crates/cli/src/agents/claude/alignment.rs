@@ -12,8 +12,8 @@ use nemo_relay::api::llm::LlmRequest;
 use serde_json::Value;
 
 use crate::agents::alignment::json_string_at;
-use crate::config::header_string;
-use crate::model::{AgentKind, ToolEvent};
+use crate::configuration::header_string;
+use crate::events::{AgentKind, ToolEvent};
 
 // Identifies gateway providers that should be labeled as Claude-owned when an Anthropic request
 // arrives before a SessionStart hook. Other providers are left generic so mixed gateway traffic

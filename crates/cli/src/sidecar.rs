@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::config::{ServerArgs, resolve_persistent_server_config};
+use crate::configuration::{ServerArgs, resolve_persistent_server_config};
 use crate::error::CliError;
 use health::{RelayHealth, probe_with_instance as probe_relay_health_with_instance};
 pub(crate) use health::{
@@ -276,23 +276,23 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
         .arg(&ready_path)
         .args(&spec.launch_args)
         .env(
-            crate::config::PLUGIN_IDLE_TIMEOUT_ENV,
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV,
             plugin_idle_timeout()?.as_secs().to_string(),
         )
         .env(
-            crate::config::BOOTSTRAP_FINGERPRINT_ENV,
+            crate::configuration::BOOTSTRAP_FINGERPRINT_ENV,
             spec.bootstrap_fingerprint.as_deref().unwrap_or_default(),
         )
         .env(BOOTSTRAP_STATE_DIR_ENV, state)
         .env("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", &shutdown_token)
-        .env_remove(crate::install_generation::GENERATION_FILE_ENV)
-        .env_remove(crate::install_generation::GENERATION_TOKEN_ENV)
+        .env_remove(crate::installation::generation::GENERATION_FILE_ENV)
+        .env_remove(crate::installation::generation::GENERATION_TOKEN_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if spec.user_config_scope {
         command.env("NEMO_RELAY_CONFIG_SCOPE", "user");
-        if let Some(config_dir) = crate::config::user_config_dir() {
+        if let Some(config_dir) = crate::configuration::user_config_dir() {
             fs::create_dir_all(&config_dir).map_err(|error| {
                 format!(
                     "failed to create gateway working directory {}: {error}",
@@ -510,17 +510,18 @@ pub(super) fn current_exe() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn plugin_idle_timeout() -> Result<Duration, String> {
-    let raw = env::var(crate::config::PLUGIN_IDLE_TIMEOUT_ENV).unwrap_or_else(|_| "300".into());
+    let raw =
+        env::var(crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV).unwrap_or_else(|_| "300".into());
     let seconds = raw.parse::<u64>().map_err(|error| {
         format!(
             "{} must be a positive integer: {error}",
-            crate::config::PLUGIN_IDLE_TIMEOUT_ENV
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV
         )
     })?;
     if seconds == 0 {
         return Err(format!(
             "{} must be greater than 0",
-            crate::config::PLUGIN_IDLE_TIMEOUT_ENV
+            crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV
         ));
     }
     Ok(Duration::from_secs(seconds))

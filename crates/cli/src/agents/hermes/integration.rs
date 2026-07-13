@@ -23,12 +23,12 @@ use super::files::{
     acquire_install_lock, read_optional_utf8, remove_optional_file, replace_optional_file,
 };
 use super::trust::{json_bytes, parse_json_object, trusted_hooks, verify_trust};
-use crate::config::CodingAgent;
+use crate::configuration::CodingAgent;
 use crate::error::CliError;
-use crate::file_io::atomic_write;
+use crate::filesystem::atomic_write;
 #[cfg(test)]
-use crate::install_generation::GENERATION_FILE_NAME;
-use crate::install_generation::{
+use crate::installation::generation::GENERATION_FILE_NAME;
+use crate::installation::generation::{
     GENERATION_FILE_ENV, GENERATION_TOKEN_ENV, GenerationRetirement, InstallGeneration,
 };
 use crate::sidecar::DEFAULT_BIND;
@@ -53,7 +53,7 @@ pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<Path
         acquire_install_lock(&paths.config, INSTALL_LOCK_TIMEOUT).map_err(CliError::Install)?;
     let _allowlist_lock = acquire_allowlist_lock(&paths.allowlist, INSTALL_LOCK_TIMEOUT)
         .map_err(CliError::Install)?;
-    let plugin_config = crate::config::user_plugin_runtime_config()?;
+    let plugin_config = crate::configuration::user_plugin_runtime_config()?;
     let environment = env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
         .collect::<Vec<_>>();
@@ -229,7 +229,8 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
         return Err("Hermes Relay MCP expected generation identity is stale".into());
     }
 
-    let plugin_config = crate::config::user_plugin_runtime_config().map_err(|e| e.to_string())?;
+    let plugin_config =
+        crate::configuration::user_plugin_runtime_config().map_err(|e| e.to_string())?;
     let environment = env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
         .collect::<Vec<_>>();

@@ -17,7 +17,7 @@ use nemo_relay::plugin::dynamic::{
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::config::{
+use crate::configuration::{
     MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, PluginsAddCommand, PluginsDisableCommand,
     PluginsEnableCommand, PluginsInspectCommand, PluginsListCommand, PluginsRemoveCommand,
     PluginsValidateCommand, ResolvedConfig, ResolvedDynamicPluginConfig, ServerArgs,
@@ -2067,7 +2067,7 @@ fn load_manifest_for_action(
     path: impl Into<PathBuf>,
 ) -> Result<(DynamicPluginManifest, String), CliError> {
     let path = path.into();
-    crate::config::load_bounded_dynamic_plugin_manifest(&path)
+    crate::configuration::load_bounded_dynamic_plugin_manifest(&path)
         .map_err(|error| CliError::Config(format!("dynamic plugin {action} failed: {error}")))
 }
 
@@ -2119,7 +2119,7 @@ fn ensure_scope(
     scopes.len() - 1
 }
 
-fn scope_flags_selected(scope: &crate::config::PluginsScopeArgs) -> bool {
+fn scope_flags_selected(scope: &crate::configuration::PluginsScopeArgs) -> bool {
     scope.user || scope.project || scope.global
 }
 
@@ -2211,7 +2211,9 @@ fn required_startup_failure(
             ));
         }
 
-        if let Err(error) = crate::config::load_bounded_dynamic_plugin_manifest(&manifest_ref) {
+        if let Err(error) =
+            crate::configuration::load_bounded_dynamic_plugin_manifest(&manifest_ref)
+        {
             return Some(format!(
                 "- {}: required dynamic plugin manifest at {} is unreadable: {}",
                 entry.record.metadata.id,

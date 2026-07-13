@@ -11,7 +11,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::agents::alignment::{SessionAlias, insert_optional, json_string_at, merge_metadata};
-use crate::model::{AgentKind, SessionEvent, SubagentEvent};
+use crate::events::{AgentKind, SessionEvent, SubagentEvent};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SubagentContext {

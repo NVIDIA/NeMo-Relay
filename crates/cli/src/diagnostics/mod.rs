@@ -25,7 +25,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
-use crate::config::{
+use crate::configuration::{
     AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
     ServerArgs, default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
@@ -211,7 +211,7 @@ fn collect_configuration(
     home: Option<&Path>,
     resolution: Check,
     configured_agents: Vec<String>,
-    dynamic_plugins: &[crate::config::ResolvedDynamicPluginConfig],
+    dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
     let workspace_path = cwd
@@ -219,7 +219,7 @@ fn collect_configuration(
         .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
     // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
-    let global_path = crate::config::user_config_dir()
+    let global_path = crate::configuration::user_config_dir()
         .map(|dir| dir.join("config.toml"))
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
@@ -400,12 +400,12 @@ async fn collect_agents(
         let configured = agent_configured(agent, &resolved.agents);
         let target_requested = target_agent == Some(agent);
         let command = agent_command(agent, &resolved.agents);
-        let argv = crate::agent_process::command_argv(&command);
+        let argv = crate::process::command_argv(&command);
         let exec = argv.first().map(String::as_str).unwrap_or_default();
-        let path = crate::agent_process::resolve_executable(exec);
+        let path = crate::process::resolve_executable(exec);
         let version = match &path {
             Some(_) => {
-                let probe = crate::agent_process::version_probe_argv(agent, &argv);
+                let probe = crate::process::version_probe_argv(agent, &argv);
                 probe_version(&probe).await
             }
             None => None,
@@ -540,7 +540,7 @@ fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
 async fn probe_version(argv: &[String]) -> Option<String> {
     // Run the shared wrapper-preserving probe and read the first line of stdout. Bounded by the network
     // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
-    let mut cmd = crate::agent_process::tokio_command(argv);
+    let mut cmd = crate::process::tokio_command(argv);
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
@@ -1592,5 +1592,5 @@ const _: fn() = || {
 };
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/doctor_tests.rs"]
+#[path = "../../tests/coverage/shared/doctor_tests.rs"]
 mod tests;

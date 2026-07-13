@@ -10,7 +10,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::CodingAgent;
+use crate::configuration::CodingAgent;
 
 const TEST_GENERATION_TOKEN: &str = "test-generation";
 
@@ -122,7 +122,7 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
         "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:47632 --generation-file /tmp/generation --generation-token test-generation"
     );
     assert_eq!(
-        crate::installer::decode_windows_hook_command(&persistent_hook_command_for_platform(
+        crate::hooks::decode_windows_hook_command(&persistent_hook_command_for_platform(
             Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
             Path::new(r"C:\Temp\generation"),
             TEST_GENERATION_TOKEN,
@@ -142,7 +142,7 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
         ]
     );
     assert_eq!(
-        crate::installer::transparent_hook_forward_command_for_platform(
+        crate::hooks::transparent_hook_forward_command_for_platform(
             relay,
             CodingAgent::Hermes,
             "http://127.0.0.1:1234",
@@ -156,7 +156,7 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
         TEST_GENERATION_TOKEN,
         true,
     );
-    let encoded_codex = crate::installer::persistent_hook_forward_command_for_platform(
+    let encoded_codex = crate::hooks::persistent_hook_forward_command_for_platform(
         Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
         CodingAgent::Codex,
         Path::new(r"C:\Temp\generation"),
@@ -582,7 +582,7 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
             .unwrap();
     assert_eq!(written, paths.all());
     let first_generation =
-        crate::install_generation::InstallGeneration::capture(paths.generation.clone())
+        crate::installation::generation::InstallGeneration::capture(paths.generation.clone())
             .unwrap()
             .token()
             .to_owned();
@@ -602,7 +602,7 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
 
     install_persistent_with(paths.clone(), &relay, &environment, None, now, atomic_write).unwrap();
     let second_generation =
-        crate::install_generation::InstallGeneration::capture(paths.generation.clone())
+        crate::installation::generation::InstallGeneration::capture(paths.generation.clone())
             .unwrap()
             .token()
             .to_owned();
@@ -819,7 +819,8 @@ fn composed_install_rollback_restores_the_visible_preexisting_generation() {
     std::fs::create_dir_all(paths.config.parent().unwrap()).unwrap();
     install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
     let previous =
-        crate::install_generation::InstallGeneration::capture(paths.generation.clone()).unwrap();
+        crate::installation::generation::InstallGeneration::capture(paths.generation.clone())
+            .unwrap();
     let mut retirement = GenerationRetirement::acquire(&paths.generation)
         .unwrap()
         .unwrap();
@@ -850,7 +851,7 @@ fn composed_install_rollback_restores_the_visible_preexisting_generation() {
         "{error}"
     );
     previous.verify_current().unwrap();
-    crate::install_generation::InstallGeneration::capture(paths.generation).unwrap();
+    crate::installation::generation::InstallGeneration::capture(paths.generation).unwrap();
 }
 
 #[test]
@@ -981,7 +982,8 @@ fn composed_uninstall_rollback_restores_the_visible_preexisting_generation() {
     std::fs::write(&paths.allowlist, "{\"owner\":\"keep\"}\n").unwrap();
     install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
     let previous =
-        crate::install_generation::InstallGeneration::capture(paths.generation.clone()).unwrap();
+        crate::installation::generation::InstallGeneration::capture(paths.generation.clone())
+            .unwrap();
     let mut retirement = GenerationRetirement::acquire(&paths.generation)
         .unwrap()
         .unwrap();
@@ -1005,7 +1007,7 @@ fn composed_uninstall_rollback_restores_the_visible_preexisting_generation() {
         "{error}"
     );
     previous.verify_current().unwrap();
-    crate::install_generation::InstallGeneration::capture(paths.generation).unwrap();
+    crate::installation::generation::InstallGeneration::capture(paths.generation).unwrap();
 }
 
 #[test]
@@ -1109,7 +1111,7 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
 fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
-    let command = crate::installer::transparent_hook_forward_command(
+    let command = crate::hooks::transparent_hook_forward_command(
         &relay,
         CodingAgent::Hermes,
         "http://127.0.0.1:1234",
@@ -1287,7 +1289,7 @@ fn hermes_generation_finish_preserves_primary_errors_and_reports_restore_failure
 
     let temp = tempfile::tempdir().unwrap();
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    crate::install_generation::write_new_generation(&generation).unwrap();
+    crate::installation::generation::write_new_generation(&generation).unwrap();
     let mut retirement = GenerationRetirement::acquire(&generation).unwrap().unwrap();
     retirement.invalidate_for_replacement().unwrap();
     std::fs::write(&generation, "foreign-generation\n").unwrap();
@@ -1375,7 +1377,7 @@ fn hermes_uninstall_and_verification_reject_malformed_or_residual_state() {
         .unwrap()
         .token()
         .to_owned();
-    crate::install_generation::write_new_generation(&hermes_paths.generation).unwrap();
+    crate::installation::generation::write_new_generation(&hermes_paths.generation).unwrap();
     let error = verify_install(
         &hermes_paths,
         &relay,

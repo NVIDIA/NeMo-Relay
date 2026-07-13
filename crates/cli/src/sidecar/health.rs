@@ -11,7 +11,7 @@ use reqwest::Url;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::Value;
 
-use crate::config::BootstrapChallengeKey;
+use crate::configuration::BootstrapChallengeKey;
 
 use super::{BOOTSTRAP_PROTOCOL_VERSION, HEALTHZ_TIMEOUT};
 

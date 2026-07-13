@@ -112,8 +112,8 @@ fn config() -> GatewayConfig {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
-        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
 
@@ -1918,16 +1918,16 @@ fn bootstrap_hmac_key_uses_and_repairs_a_private_windows_dacl() {
 
     let original = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
 
-    assert!(crate::file_io::windows_path_is_private(path.parent().unwrap()).unwrap());
-    assert!(crate::file_io::windows_path_is_private(&path).unwrap());
+    assert!(crate::filesystem::windows_path_is_private(path.parent().unwrap()).unwrap());
+    assert!(crate::filesystem::windows_path_is_private(&path).unwrap());
 
     set_test_windows_dacl(&path, "D:P(A;;FA;;;WD)");
-    assert!(!crate::file_io::windows_path_is_private(&path).unwrap());
+    assert!(!crate::filesystem::windows_path_is_private(&path).unwrap());
 
     let reloaded = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
 
     assert_eq!(reloaded, original);
-    assert!(crate::file_io::windows_path_is_private(&path).unwrap());
+    assert!(crate::filesystem::windows_path_is_private(&path).unwrap());
 }
 
 #[test]
@@ -2610,11 +2610,11 @@ fn gateway_body_limit_defaults_are_stable() {
 
     assert_eq!(
         gateway.max_hook_payload_bytes,
-        crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
+        crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
     );
     assert_eq!(
         gateway.max_passthrough_body_bytes,
-        crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES
+        crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES
     );
 }
 

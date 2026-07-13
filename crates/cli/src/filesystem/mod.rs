@@ -586,5 +586,5 @@ fn replace_file(tmp: &Path, path: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/file_io_tests.rs"]
+#[path = "../../tests/coverage/shared/file_io_tests.rs"]
 mod tests;

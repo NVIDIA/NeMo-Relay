@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::file_io::{LockAttempt, atomic_write, try_lock_exclusive};
+use crate::filesystem::{LockAttempt, atomic_write, try_lock_exclusive};
 
 use super::health::{RelayHealth, probe, request_shutdown};
 use super::{BOOTSTRAP_PROTOCOL_VERSION, SIDECAR_LOCK_TIMEOUT};
@@ -75,7 +75,7 @@ impl Drop for OwnerGuard {
 }
 
 pub(crate) fn state_dir() -> Result<PathBuf, String> {
-    crate::config::user_config_dir()
+    crate::configuration::user_config_dir()
         .map(|path| path.join("bootstrap"))
         .ok_or_else(|| {
             "cannot determine the per-user NeMo Relay bootstrap state directory; set HOME or USERPROFILE"
@@ -202,7 +202,7 @@ pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<Option<Owner
     }
     create_private_dir(&state)?;
     let url = format!("http://{address}");
-    let fingerprint = env::var(crate::config::BOOTSTRAP_FINGERPRINT_ENV)
+    let fingerprint = env::var(crate::configuration::BOOTSTRAP_FINGERPRINT_ENV)
         .ok()
         .filter(|value| !value.is_empty());
     let record = OwnerRecord::new(std::process::id(), &url, &token, fingerprint.as_deref());

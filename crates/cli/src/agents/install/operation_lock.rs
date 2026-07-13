@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::config::IntegrationHost;
-use crate::file_io::{LockAttempt, try_lock_exclusive};
+use crate::configuration::IntegrationHost;
+use crate::filesystem::{LockAttempt, try_lock_exclusive};
 
 pub(super) const DEFAULT_OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);

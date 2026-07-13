@@ -6,9 +6,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::config::ServerArgs;
+use crate::configuration::ServerArgs;
 use crate::error::CliError;
-use crate::install_generation::{ActiveGenerationGuard, InstallGeneration};
+use crate::installation::generation::{ActiveGenerationGuard, InstallGeneration};
 use crate::sidecar::{GatewayEndpoint, GatewaySpec};
 
 const UNHEALTHY_CONFIRMATIONS: u8 = 3;
@@ -123,7 +123,7 @@ impl GatewayLease {
         .ok_or_else(|| {
             CliError::Launch(format!(
                 "{} does not identify the authenticated NeMo Relay gateway owned by this transparent run",
-                crate::config::GATEWAY_URL_ENV
+                crate::configuration::GATEWAY_URL_ENV
             ))
         })?;
         let monitor = tokio::spawn(async move {

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::error::CliError;
-use crate::installer::{generated_hooks, merge_hooks};
+use crate::hooks::{generated_hooks, merge_hooks};
 
 pub(super) use crate::mcp::SERVER_NAME as MCP_SERVER_NAME;
 
@@ -34,15 +34,15 @@ pub(crate) fn transparent_config(
     let owned = owned_install_command(&root, relay, None)?;
     strip_owned_hooks(&mut root, owned.as_deref())?;
     remove_owned_mcp(&mut root, owned.is_some())?;
-    let command = crate::installer::transparent_hook_forward_command(
+    let command = crate::hooks::transparent_hook_forward_command(
         relay,
-        crate::config::CodingAgent::Hermes,
+        crate::configuration::CodingAgent::Hermes,
         gateway_url,
     )
     .map_err(CliError::Install)?;
     let root = merge_hooks(
         root,
-        generated_hooks(crate::config::CodingAgent::Hermes, &command),
+        generated_hooks(crate::configuration::CodingAgent::Hermes, &command),
     )?;
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }
@@ -52,9 +52,9 @@ pub(crate) fn persistent_hook_command(
     generation: &Path,
     generation_token: &str,
 ) -> Result<String, String> {
-    crate::installer::persistent_hook_forward_command(
+    crate::hooks::persistent_hook_forward_command(
         relay,
-        crate::config::CodingAgent::Hermes,
+        crate::configuration::CodingAgent::Hermes,
         generation,
         generation_token,
     )
@@ -67,9 +67,9 @@ pub(super) fn persistent_hook_command_for_platform(
     generation_token: &str,
     windows: bool,
 ) -> String {
-    crate::installer::persistent_hook_forward_command_for_platform(
+    crate::hooks::persistent_hook_forward_command_for_platform(
         relay,
-        crate::config::CodingAgent::Hermes,
+        crate::configuration::CodingAgent::Hermes,
         generation,
         generation_token,
         windows,
@@ -98,7 +98,7 @@ pub(super) fn persistent_config(
     strip_owned_hooks(&mut root, owned.as_deref())?;
     root = merge_hooks(
         root,
-        generated_hooks(crate::config::CodingAgent::Hermes, command),
+        generated_hooks(crate::configuration::CodingAgent::Hermes, command),
     )?;
     let servers = object_field_mut(&mut root, "mcp_servers", "mcp_servers")?;
     servers.insert(
@@ -206,10 +206,10 @@ pub(super) fn owned_install_command(
             == Some(&json!(crate::sidecar::DEFAULT_BIND))
     {
         let generation = env
-            .and_then(|env| env.get(crate::install_generation::GENERATION_FILE_ENV))
+            .and_then(|env| env.get(crate::installation::generation::GENERATION_FILE_ENV))
             .and_then(Value::as_str);
         let token = env
-            .and_then(|env| env.get(crate::install_generation::GENERATION_TOKEN_ENV))
+            .and_then(|env| env.get(crate::installation::generation::GENERATION_TOKEN_ENV))
             .and_then(Value::as_str);
         if let (Some(generation), Some(token)) = (generation, token)
             && !token.is_empty()
@@ -224,7 +224,7 @@ pub(super) fn owned_install_command(
 }
 
 fn has_complete_hook_set(root: &Value, command: &str) -> bool {
-    crate::config::CodingAgent::Hermes
+    crate::configuration::CodingAgent::Hermes
         .hook_events()
         .iter()
         .all(|event| {
@@ -251,7 +251,7 @@ fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, Cl
         return Ok(None);
     };
     let mut common = None;
-    for event in crate::config::CodingAgent::Hermes.hook_events() {
+    for event in crate::configuration::CodingAgent::Hermes.hook_events() {
         let commands = hooks
             .get(*event)
             .and_then(Value::as_array)

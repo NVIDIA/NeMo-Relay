@@ -17,7 +17,7 @@ use tempfile::tempdir;
 use toml_edit::{DocumentMut, Item, Value as TomlValue};
 
 use super::*;
-use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
+use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
 
 const TEST_PLUGIN_GENERATION: &str = "test-generation";
 
@@ -101,7 +101,7 @@ fn write_plugin_generation_for_hooks(path: &Path) {
     let plugin_root = path.parent().and_then(Path::parent).unwrap();
     fs::create_dir_all(plugin_root).unwrap();
     fs::write(
-        plugin_root.join(crate::install_generation::GENERATION_FILE_NAME),
+        plugin_root.join(crate::installation::generation::GENERATION_FILE_NAME),
         format!("{TEST_PLUGIN_GENERATION}\n"),
     )
     .unwrap();
@@ -1385,7 +1385,7 @@ fn codex_uninstall_sanitizes_an_extended_contaminated_backup_without_the_key() {
         .insert("x-user-header", TomlValue::from("keep-header"));
     fs::write(&path, installed.to_string()).unwrap();
     fs::write(backup_path(&path), fs::read(&path).unwrap()).unwrap();
-    let key_path = crate::config::user_config_dir()
+    let key_path = crate::configuration::user_config_dir()
         .unwrap()
         .join("bootstrap/fingerprint-hmac.key");
     fs::remove_file(key_path).unwrap();
@@ -1423,7 +1423,7 @@ fn codex_uninstall_sanitizes_an_extended_contaminated_backup_after_key_rotation(
         .insert("x-user-header", TomlValue::from("keep-header"));
     fs::write(&path, installed.to_string()).unwrap();
     fs::write(backup_path(&path), fs::read(&path).unwrap()).unwrap();
-    let key_path = crate::config::user_config_dir()
+    let key_path = crate::configuration::user_config_dir()
         .unwrap()
         .join("bootstrap/fingerprint-hmac.key");
     fs::write(key_path, [0x5a; 32]).unwrap();
@@ -1456,7 +1456,7 @@ fn codex_reinstall_repairs_a_rotated_client_proof_and_keeps_custom_headers() {
         .unwrap()
         .insert("x-user-header", TomlValue::from("keep-header"));
     fs::write(&path, installed.to_string()).unwrap();
-    let key_path = crate::config::user_config_dir()
+    let key_path = crate::configuration::user_config_dir()
         .unwrap()
         .join("bootstrap/fingerprint-hmac.key");
     fs::write(key_path, [0x3c; 32]).unwrap();
@@ -1523,7 +1523,7 @@ fn codex_install_rollback_restores_the_original_windows_dacl() {
     fs::create_dir_all(&codex_dir).unwrap();
     fs::write(&path, "model_provider = \"openai\"\n").unwrap();
     set_windows_dacl(&path, "D:P(A;;FA;;;SY)(A;;GRGW;;;WD)");
-    let original_dacl = crate::file_io::read_windows_dacl(&path).unwrap();
+    let original_dacl = crate::filesystem::read_windows_dacl(&path).unwrap();
 
     let error = install_codex_with_trust(
         DEFAULT_URL,
@@ -1538,7 +1538,7 @@ fn codex_install_rollback_restores_the_original_windows_dacl() {
         "model_provider = \"openai\"\n"
     );
     assert_eq!(
-        crate::file_io::read_windows_dacl(&path).unwrap(),
+        crate::filesystem::read_windows_dacl(&path).unwrap(),
         original_dacl
     );
 }
@@ -1783,9 +1783,9 @@ fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
     let dir = tempdir().unwrap();
     let plugin_root = dir.path().join("plugin");
     let hooks_path = plugin_root.join("hooks").join("hooks.json");
-    let generation_path = plugin_root.join(crate::install_generation::GENERATION_FILE_NAME);
+    let generation_path = plugin_root.join(crate::installation::generation::GENERATION_FILE_NAME);
     let generation_lock = dir.path().join("generation-transaction.lock");
-    let token = crate::install_generation::write_new_generation_with_token_at(
+    let token = crate::installation::generation::write_new_generation_with_token_at(
         &generation_path,
         &generation_lock,
     )
@@ -1799,9 +1799,10 @@ fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
         serde_json::to_vec_pretty(&generated_hooks(CodingAgent::Codex, &command)).unwrap(),
     )
     .unwrap();
-    let _transaction = crate::install_generation::GenerationRetirement::acquire(&generation_path)
-        .unwrap()
-        .unwrap();
+    let _transaction =
+        crate::installation::generation::GenerationRetirement::acquire(&generation_path)
+            .unwrap()
+            .unwrap();
 
     assert!(
         codex_hooks_installed_with_generation(&hooks_path, Some(&token)).unwrap(),
@@ -2527,7 +2528,7 @@ fn claude_enable_rolls_back_backup_when_settings_write_fails() {
         .unwrap(),
     )
     .unwrap();
-    crate::file_io::fail_next_atomic_write(&settings);
+    crate::filesystem::fail_next_atomic_write(&settings);
 
     let error = enable_claude_provider(DEFAULT_URL).unwrap_err();
 
@@ -2743,7 +2744,7 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         r#""C:\Program Files\NeMo 100%%cd:~,%\bin\nemo-relay.exe""#
     );
     assert_eq!(
-        crate::installer::decode_windows_hook_command(&codex_plugin_hook_command_for_platform(
+        crate::hooks::decode_windows_hook_command(&codex_plugin_hook_command_for_platform(
             &relay,
             &generation,
             "test-generation",
@@ -3188,7 +3189,7 @@ fn codex_install_config_rolls_back_backup_when_write_fails() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
     fs::write(&path, "model_provider = \"openai\"\n").unwrap();
-    crate::file_io::fail_next_atomic_write(&path);
+    crate::filesystem::fail_next_atomic_write(&path);
 
     let error = install_codex_config(&path, DEFAULT_URL).unwrap_err();
 
@@ -3261,7 +3262,7 @@ fn codex_install_rolls_back_hooks_when_provider_config_write_fails() {
         "model_provider = \"openai\"\n",
     )
     .unwrap();
-    crate::file_io::fail_next_atomic_write(&codex_dir.join("config.toml"));
+    crate::filesystem::fail_next_atomic_write(&codex_dir.join("config.toml"));
     let hooks_path = codex_dir.join("hooks.json");
     let original_hooks = serde_json::to_vec_pretty(&json!({
         "hooks": {

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{
+use crate::configuration::{
     PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
     user_plugin_config_path,
 };

@@ -27,10 +27,10 @@ use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 
 use crate::agents::alignment::{self, GatewayRouteKind};
-use crate::config::{BOOTSTRAP_CLIENT_TOKEN_HEADER, header_string};
+use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, header_string};
 use crate::error::CliError;
 use crate::server::AppState;
-use crate::session::{GatewayCallPrep, GatewaySessionFinish, LlmGatewayStart, SessionManager};
+use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, LlmGatewayStart, SessionManager};
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
@@ -76,7 +76,7 @@ struct PreparedGatewayRequest {
 // for both upstream forwarding and NeMo Relay LLM start events. Provider JSON parse failures are not
 // request failures because the gateway still forwards raw bytes unchanged.
 async fn prepare_gateway_request(
-    config: &crate::config::GatewayConfig,
+    config: &crate::configuration::GatewayConfig,
     request: Request<Body>,
     allow_environment_provider_auth: bool,
 ) -> Result<PreparedGatewayRequest, CliError> {
@@ -1059,7 +1059,11 @@ impl ProviderRoute {
     // Builds the upstream URL by combining the configured provider base with the original path and
     // query string. Trailing slashes are stripped from the base to avoid double-slash variants in
     // configured enterprise or local proxy endpoints.
-    fn upstream_url(self, config: &crate::config::GatewayConfig, path_and_query: &str) -> String {
+    fn upstream_url(
+        self,
+        config: &crate::configuration::GatewayConfig,
+        path_and_query: &str,
+    ) -> String {
         let base = match self {
             Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
                 config.openai_base_url.as_str()
@@ -1282,5 +1286,5 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/gateway_tests.rs"]
+#[path = "../../tests/coverage/shared/gateway_tests.rs"]
 mod tests;

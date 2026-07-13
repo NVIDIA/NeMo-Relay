@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::error::CliError;
-use crate::file_io::{LockAttempt, try_lock_exclusive};
-use crate::install_generation::GENERATION_FILE_NAME;
+use crate::filesystem::{LockAttempt, try_lock_exclusive};
+use crate::installation::generation::GENERATION_FILE_NAME;
 
 const ALLOWLIST_FILE_NAME: &str = "shell-hooks-allowlist.json";
 const INSTALL_LOCK_FILE_NAME: &str = ".nemo-relay-operation.lock";

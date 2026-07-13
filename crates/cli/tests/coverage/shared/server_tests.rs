@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 use tower::ServiceExt;
 
 use super::*;
-use crate::config::BootstrapChallengeKey;
+use crate::configuration::BootstrapChallengeKey;
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
@@ -165,8 +165,8 @@ fn test_config() -> GatewayConfig {
         anthropic_base_url: "http://127.0.0.1".into(),
         metadata: None,
         plugin_config: None,
-        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     }
 }
 
@@ -430,12 +430,12 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
     let mut headers = HeaderMap::new();
     assert!(!state.allows_environment_provider_auth(&headers));
     headers.insert(
-        crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
         HeaderValue::from_static("hmac-sha256:wrong"),
     );
     assert!(!state.allows_environment_provider_auth(&headers));
     headers.insert(
-        crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
         HeaderValue::from_str(&key.client_token()).unwrap(),
     );
     assert!(state.allows_environment_provider_auth(&headers));

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::install_generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
+use crate::installation::generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
 
 const BASE_MCP_ENV_VARS: &[&str] = &[
     "ALL_PROXY",

@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use super::*;
-use crate::install_generation::{
+use crate::installation::generation::{
     GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration, write_new_generation,
 };
 
@@ -54,12 +54,12 @@ impl TransparentRunEnvironment {
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous_run = std::env::var_os(crate::config::TRANSPARENT_RUN_ENV);
-        let previous_gateway = std::env::var_os(crate::config::GATEWAY_URL_ENV);
+        let previous_run = std::env::var_os(crate::configuration::TRANSPARENT_RUN_ENV);
+        let previous_gateway = std::env::var_os(crate::configuration::GATEWAY_URL_ENV);
         // SAFETY: This scope holds the process-wide environment mutex.
         unsafe {
-            std::env::set_var(crate::config::TRANSPARENT_RUN_ENV, "1");
-            std::env::remove_var(crate::config::GATEWAY_URL_ENV);
+            std::env::set_var(crate::configuration::TRANSPARENT_RUN_ENV, "1");
+            std::env::remove_var(crate::configuration::GATEWAY_URL_ENV);
         }
         Self {
             _guard: guard,
@@ -74,12 +74,12 @@ impl Drop for TransparentRunEnvironment {
         // SAFETY: This restores the process environment while the mutex remains held.
         unsafe {
             match self.previous_run.take() {
-                Some(value) => std::env::set_var(crate::config::TRANSPARENT_RUN_ENV, value),
-                None => std::env::remove_var(crate::config::TRANSPARENT_RUN_ENV),
+                Some(value) => std::env::set_var(crate::configuration::TRANSPARENT_RUN_ENV, value),
+                None => std::env::remove_var(crate::configuration::TRANSPARENT_RUN_ENV),
             }
             match self.previous_gateway.take() {
-                Some(value) => std::env::set_var(crate::config::GATEWAY_URL_ENV, value),
-                None => std::env::remove_var(crate::config::GATEWAY_URL_ENV),
+                Some(value) => std::env::set_var(crate::configuration::GATEWAY_URL_ENV, value),
+                None => std::env::remove_var(crate::configuration::GATEWAY_URL_ENV),
             }
         }
     }
@@ -89,14 +89,17 @@ impl Drop for TransparentRunEnvironment {
 async fn transparent_mcp_requires_the_wrapper_gateway_url() {
     let _environment = TransparentRunEnvironment::without_gateway();
 
-    let error = run(&crate::config::ServerArgs::default())
+    let error = run(&crate::configuration::ServerArgs::default())
         .await
         .unwrap_err()
         .to_string();
 
-    assert!(error.contains(crate::config::GATEWAY_URL_ENV), "{error}");
     assert!(
-        error.contains(crate::config::TRANSPARENT_RUN_ENV),
+        error.contains(crate::configuration::GATEWAY_URL_ENV),
+        "{error}"
+    );
+    assert!(
+        error.contains(crate::configuration::TRANSPARENT_RUN_ENV),
         "{error}"
     );
 }
@@ -279,9 +282,9 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
     let _bootstrap_home = BootstrapConfigHome::enter(&temp.path().join("xdg"));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bind = listener.local_addr().unwrap();
-    let config = crate::config::GatewayConfig {
+    let config = crate::configuration::GatewayConfig {
         bind,
-        ..crate::config::GatewayConfig::default()
+        ..crate::configuration::GatewayConfig::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let fingerprint = "test-fingerprint";
@@ -380,10 +383,10 @@ async fn borrowed_transparent_gateway_is_authenticated_and_monitored() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bind = listener.local_addr().unwrap();
     let url = format!("http://{bind}");
-    let fingerprint = crate::config::transparent_gateway_fingerprint(&url);
-    let config = crate::config::GatewayConfig {
+    let fingerprint = crate::configuration::transparent_gateway_fingerprint(&url);
+    let config = crate::configuration::GatewayConfig {
         bind,
-        ..crate::config::GatewayConfig::default()
+        ..crate::configuration::GatewayConfig::default()
     };
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let gateway = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
@@ -619,7 +622,7 @@ async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
     let plugin_root = dir.path().join("plugin");
     let generation_path = plugin_root.join(GENERATION_FILE_NAME);
     let generation_lock = dir.path().join("generation-transaction.lock");
-    crate::install_generation::write_new_generation_with_token_at(
+    crate::installation::generation::write_new_generation_with_token_at(
         &generation_path,
         &generation_lock,
     )
@@ -676,7 +679,7 @@ async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
     // Force installation swaps the whole plugin tree while retaining its external transaction
     // lock until the replacement is committed.
     std::fs::rename(&plugin_root, dir.path().join("retired-plugin")).unwrap();
-    crate::install_generation::write_staged_generation_with_token(
+    crate::installation::generation::write_staged_generation_with_token(
         &generation_path,
         &generation_lock,
     )

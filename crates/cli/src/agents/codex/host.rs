@@ -12,12 +12,12 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
 
-use crate::config::{
+use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, CodingAgent, RELAY_PLUGIN_ID,
 };
-use crate::installer::generated_hooks;
+use crate::hooks::generated_hooks;
 #[cfg(test)]
-use crate::installer::merge_hooks;
+use crate::hooks::merge_hooks;
 
 use super::codex_app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
 use super::shared::{
@@ -584,8 +584,9 @@ fn expected_plugin_hook_command_with_token(
     let generation_token = match generation_token {
         Some(token) => token,
         None => {
-            captured =
-                crate::install_generation::InstallGeneration::capture(generation_path.clone())?;
+            captured = crate::installation::generation::InstallGeneration::capture(
+                generation_path.clone(),
+            )?;
             captured.token()
         }
     };
@@ -596,7 +597,7 @@ fn plugin_generation_file(plugin_hooks_path: &Path) -> Result<PathBuf, String> {
     let generation = plugin_hooks_path
         .parent()
         .and_then(Path::parent)
-        .map(|root| root.join(crate::install_generation::GENERATION_FILE_NAME))
+        .map(|root| root.join(crate::installation::generation::GENERATION_FILE_NAME))
         .ok_or_else(|| {
             format!(
                 "Codex plugin hooks path {} is not inside a plugin hooks directory",
@@ -1586,7 +1587,7 @@ pub(super) fn codex_plugin_hook_command(
     generation: &Path,
     generation_token: &str,
 ) -> Result<String, String> {
-    crate::installer::persistent_hook_forward_command(
+    crate::hooks::persistent_hook_forward_command(
         relay,
         CodingAgent::Codex,
         generation,
@@ -1601,7 +1602,7 @@ pub(super) fn codex_plugin_hook_command_for_platform(
     generation_token: &str,
     windows: bool,
 ) -> String {
-    crate::installer::persistent_hook_forward_command_for_platform(
+    crate::hooks::persistent_hook_forward_command_for_platform(
         relay,
         CodingAgent::Codex,
         generation,

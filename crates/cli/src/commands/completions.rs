@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::CommandFactory;
 
-use crate::config::{Cli, CompletionsCommand};
+use crate::configuration::{Cli, CompletionsCommand};
 use crate::error::CliError;
 
 pub(super) fn execute(command: CompletionsCommand) -> Result<ExitCode, CliError> {

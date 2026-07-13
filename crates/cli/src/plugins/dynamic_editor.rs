@@ -282,7 +282,7 @@ fn load_dynamic_plugin_state(
     entry: DynamicPluginConfigEntry,
     plugin_ids: &mut HashSet<String>,
 ) -> Result<DynamicPluginEditorState, CliError> {
-    let (manifest, manifest_ref) = crate::config::load_bounded_dynamic_plugin_manifest(
+    let (manifest, manifest_ref) = crate::configuration::load_bounded_dynamic_plugin_manifest(
         &entry.manifest_path,
     )
     .map_err(|error| {

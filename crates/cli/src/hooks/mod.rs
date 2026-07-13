@@ -11,11 +11,11 @@ use futures_util::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
-use crate::config::{
+use crate::configuration::{
     CodingAgent, GATEWAY_URL_ENV, GatewayMode, HookForwardCommand, TRANSPARENT_RUN_ENV,
 };
 use crate::error::CliError;
-use crate::install_generation::InstallGeneration;
+use crate::installation::generation::InstallGeneration;
 
 const HOOK_FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 const HOOK_GATEWAY_RETRY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -82,13 +82,10 @@ pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliE
     } else {
         None
     };
-    let input = match read_hook_payload(
-        persistent
-            .as_ref()
-            .map_or(crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES, |launch| {
-                launch.max_hook_payload_bytes
-            }),
-    ) {
+    let input = match read_hook_payload(persistent.as_ref().map_or(
+        crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        |launch| launch.max_hook_payload_bytes,
+    )) {
         Ok(input) => input,
         Err(error) => return handle_hook_error(error, fail_closed),
     };
@@ -253,8 +250,9 @@ fn recovery_plan(gateway_url: &str) -> Result<crate::sidecar::PluginGatewaySpec,
 
 fn transparent_gateway_spec(gateway_url: &str) -> Result<crate::sidecar::GatewaySpec, CliError> {
     let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
-    Ok(crate::sidecar::GatewaySpec::new(bind)
-        .with_fingerprint(crate::config::transparent_gateway_fingerprint(gateway_url)))
+    Ok(crate::sidecar::GatewaySpec::new(bind).with_fingerprint(
+        crate::configuration::transparent_gateway_fingerprint(gateway_url),
+    ))
 }
 
 async fn send_verified_hook_forward_request(
@@ -896,5 +894,5 @@ fn insert_header(
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/installer_tests.rs"]
+#[path = "../../tests/coverage/shared/installer_tests.rs"]
 mod tests;

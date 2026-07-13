@@ -170,7 +170,7 @@ fn server_owner_guard_cleans_only_its_own_record() {
             Some(OsStr::new("first-token")),
         ),
         (
-            crate::config::BOOTSTRAP_FINGERPRINT_ENV,
+            crate::configuration::BOOTSTRAP_FINGERPRINT_ENV,
             Some(OsStr::new("fingerprint")),
         ),
     ]);
@@ -221,7 +221,7 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
         ("HOME", Some(dir.path().as_os_str())),
         ("USERPROFILE", None),
     ]);
-    let key = crate::config::BootstrapChallengeKey::load().unwrap();
+    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let state = state_dir().unwrap();

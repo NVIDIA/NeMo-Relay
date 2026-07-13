@@ -3,27 +3,24 @@
 
 //! Internal application library for the `nemo-relay` executable.
 
-mod agent_process;
 mod agents;
 mod banner;
 mod commands;
 mod completions_install;
-mod config;
-mod doctor;
+mod configuration;
+mod diagnostics;
 mod error;
-mod file_io;
+mod events;
+mod filesystem;
 mod gateway;
-mod install_generation;
-mod installer;
-mod json_path;
-mod launcher;
+mod hooks;
+mod installation;
 mod mcp;
 mod mcp_environment;
-mod model;
-mod model_pricing;
 mod plugins;
+mod process;
 mod server;
-mod session;
+mod sessions;
 mod setup;
 mod sidecar;
 

@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::agents::alignment::GatewayRouteKind;
-use crate::config::GatewayConfig;
+use crate::configuration::GatewayConfig;
 use crate::server::AppState;
-use crate::session::{LlmGatewayStart, SessionManager};
+use crate::sessions::{LlmGatewayStart, SessionManager};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
@@ -25,7 +25,7 @@ fn removes_hop_by_hop_headers() {
         "host"
     )));
     assert!(!should_forward_request_header(&HeaderName::from_static(
-        crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER
+        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER
     )));
     assert!(should_forward_request_header(&HeaderName::from_static(
         "authorization"
@@ -54,7 +54,7 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
         .method(Method::POST)
         .uri("/v1/responses")
         .header(
-            crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER,
+            crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
             "hmac-sha256:private-proof",
         )
         .body(Body::from(r#"{"model":"gpt-test"}"#))
@@ -68,7 +68,7 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
     assert!(
         !prepared
             .headers
-            .contains_key(crate::config::BOOTSTRAP_CLIENT_TOKEN_HEADER)
+            .contains_key(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER)
     );
 }
 
@@ -153,8 +153,8 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
         anthropic_base_url: "http://anthropic/".into(),
         metadata: None,
         plugin_config: None,
-        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
     assert_eq!(
@@ -183,8 +183,8 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
-        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
 
     assert_eq!(
@@ -791,8 +791,8 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
-        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
         config: config.clone(),
@@ -825,8 +825,8 @@ async fn models_rejects_non_get_requests_directly() {
         anthropic_base_url: "http://anthropic".into(),
         metadata: None,
         plugin_config: None,
-        max_hook_payload_bytes: crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-        max_passthrough_body_bytes: crate::config::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
+        max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
+        max_passthrough_body_bytes: crate::configuration::DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
     };
     let state = AppState {
         config: config.clone(),

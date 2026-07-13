@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 
-use crate::file_io::{LockAttempt, atomic_write, try_lock_exclusive, try_lock_shared, unlock_file};
+use crate::filesystem::{
+    LockAttempt, atomic_write, try_lock_exclusive, try_lock_shared, unlock_file,
+};
 
 pub(crate) const GENERATION_FILE_ENV: &str = "NEMO_RELAY_MCP_GENERATION_FILE";
 pub(crate) const GENERATION_TOKEN_ENV: &str = "NEMO_RELAY_MCP_GENERATION";
@@ -1205,5 +1207,5 @@ fn retired_generation_error(path: &Path) -> String {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/install_generation_tests.rs"]
+#[path = "../../tests/coverage/shared/install_generation_tests.rs"]
 mod tests;

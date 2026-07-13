@@ -226,5 +226,5 @@ pub(super) fn hook_state_key_path(key: &str) -> String {
 }
 
 fn codex_app_server_command() -> Command {
-    crate::agent_process::std_command(&["codex".into(), "app-server".into()])
+    crate::process::std_command(&["codex".into(), "app-server".into()])
 }

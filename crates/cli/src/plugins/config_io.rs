@@ -12,7 +12,7 @@ use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::config::{
+use crate::configuration::{
     PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
     user_plugin_config_path,
 };
@@ -423,7 +423,7 @@ pub(crate) fn remove_dynamic_plugin_reference(
             target_manifest_ref
                 .as_ref()
                 .is_some_and(|target_manifest_ref| manifest_ref == target_manifest_ref)
-                || crate::config::load_bounded_dynamic_plugin_manifest(manifest_ref)
+                || crate::configuration::load_bounded_dynamic_plugin_manifest(manifest_ref)
                     .map(|(manifest, _)| manifest.plugin.id.trim() == plugin_id)
                     .unwrap_or(false)
         });

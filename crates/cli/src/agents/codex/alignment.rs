@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use crate::agents::alignment::{
     GatewayRouteKind, SessionAlias, insert_optional, json_string_at, merge_metadata,
 };
-use crate::model::{AgentKind, SessionEvent, SubagentEvent};
+use crate::events::{AgentKind, SessionEvent, SubagentEvent};
 
 // ChatGPT backend base URL used by Codex when authenticated with ChatGPT. This mirrors Codex's own
 // `CHATGPT_CODEX_BASE_URL`; API-key auth continues through the normal OpenAI base.

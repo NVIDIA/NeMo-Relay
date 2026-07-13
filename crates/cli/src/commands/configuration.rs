@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use crate::config::ConfigCommand;
+use crate::configuration::ConfigCommand;
 use crate::error::CliError;
 
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {

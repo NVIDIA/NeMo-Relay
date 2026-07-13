@@ -16,11 +16,11 @@ use nemo_relay::api::scope::COMPACTION_EVENT_NAME;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use crate::config::header_string;
-use crate::json_path::{
+use crate::configuration::header_string;
+use crate::events::json_path::{
     string_at, string_at_any as first_string_at, value_at, value_at_any as first_value_at,
 };
-use crate::model::{
+use crate::events::{
     AgentKind, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
 };
 

@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::config::IntegrationHost;
-use crate::install_generation::GENERATION_FILE_NAME;
+use crate::configuration::IntegrationHost;
+use crate::installation::generation::GENERATION_FILE_NAME;
 
 use super::PLUGIN_NAME;
 
@@ -295,7 +295,7 @@ pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     }
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
-    crate::file_io::atomic_write(path, &bytes)
+    crate::filesystem::atomic_write(path, &bytes)
 }
 
 pub(super) fn remove_path(path: &Path, options: &PluginInstallOptions) -> Result<(), String> {

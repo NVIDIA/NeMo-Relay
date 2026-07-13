@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::config::{AgentCommandConfig, GatewayConfig};
+use crate::configuration::{AgentCommandConfig, GatewayConfig};
 use std::ffi::OsString;
 use std::sync::Mutex;
 
@@ -42,7 +42,7 @@ impl EnvScope {
         Self::set(&[
             (crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, None),
             ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
-            (crate::config::BOOTSTRAP_FINGERPRINT_ENV, None),
+            (crate::configuration::BOOTSTRAP_FINGERPRINT_ENV, None),
         ])
     }
 }
@@ -312,7 +312,7 @@ fn prepares_codex_config_overrides() {
     assert!(
         prepared
             .env
-            .contains(&(crate::config::TRANSPARENT_RUN_ENV.into(), "1".into()))
+            .contains(&(crate::configuration::TRANSPARENT_RUN_ENV.into(), "1".into()))
     );
     let path = prepared
         .env
@@ -648,21 +648,18 @@ fn invocation_resolves_wrapper_host_before_appending_pass_through_arguments() {
 #[test]
 fn version_probe_preserves_known_wrappers_and_validates_opaque_ones() {
     assert_eq!(
-        crate::agent_process::version_probe_argv(
-            CodingAgent::Codex,
-            &["codex".into(), "exec".into()]
-        ),
+        crate::process::version_probe_argv(CodingAgent::Codex, &["codex".into(), "exec".into()]),
         vec!["codex", "--version"]
     );
     assert_eq!(
-        crate::agent_process::version_probe_argv(
+        crate::process::version_probe_argv(
             CodingAgent::Codex,
             &["npx".into(), "--yes".into(), "codex".into(), "exec".into(),],
         ),
         vec!["npx", "--yes", "codex", "--version"]
     );
     assert_eq!(
-        crate::agent_process::version_probe_argv(
+        crate::process::version_probe_argv(
             CodingAgent::Hermes,
             &["company-agent-wrapper".into(), "chat".into()],
         ),
@@ -681,7 +678,7 @@ async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
     )
     .unwrap();
     make_executable(&wrapper);
-    let probe = crate::agent_process::version_probe_argv(
+    let probe = crate::process::version_probe_argv(
         CodingAgent::Codex,
         &[wrapper.display().to_string(), "codex".into(), "exec".into()],
     );

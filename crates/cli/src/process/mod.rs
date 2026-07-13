@@ -3,11 +3,13 @@
 
 //! Shared coding-agent command parsing, discovery, and process construction.
 
+pub(crate) mod launcher;
+
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::config::CodingAgent;
+use crate::configuration::CodingAgent;
 
 /// Parses the intentionally simple command strings accepted by `[agents.*].command`.
 ///
@@ -126,5 +128,5 @@ mod supervision;
 pub(crate) use supervision::SupervisedChild;
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/agent_process_tests.rs"]
+#[path = "../../tests/coverage/shared/agent_process_tests.rs"]
 mod tests;

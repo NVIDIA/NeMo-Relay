@@ -24,7 +24,7 @@ use strum::{Display, IntoStaticStr};
 
 pub(crate) use crate::agents::CodingAgent;
 use crate::error::CliError;
-use crate::file_io::{LockAttempt, try_lock_exclusive, try_lock_shared};
+use crate::filesystem::{LockAttempt, try_lock_exclusive, try_lock_shared};
 #[cfg(test)]
 use crate::plugins::lifecycle::active_dynamic_plugin_components;
 use crate::plugins::lifecycle::{
@@ -1448,7 +1448,7 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
         ))
     })?;
     #[cfg(windows)]
-    crate::file_io::protect_private_windows_path(parent).map_err(|error| {
+    crate::filesystem::protect_private_windows_path(parent).map_err(|error| {
         CliError::Config(format!(
             "failed to protect bootstrap state directory {}: {error}",
             parent.display()
@@ -1467,7 +1467,7 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
     })?;
 
     #[cfg(windows)]
-    let mut file = crate::file_io::open_private_windows_file(path).map_err(|error| {
+    let mut file = crate::filesystem::open_private_windows_file(path).map_err(|error| {
         CliError::Config(format!(
             "failed to open bootstrap HMAC key {}: {error}",
             path.display()
@@ -2285,5 +2285,5 @@ impl GatewayMode {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/config_tests.rs"]
+#[path = "../../tests/coverage/shared/config_tests.rs"]
 mod tests;

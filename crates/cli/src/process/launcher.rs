@@ -14,13 +14,13 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use crate::config::{
+use crate::configuration::{
     AgentConfigs, CodingAgent, EasyPathCommand, GatewayConfig, RELAY_PLUGIN_ID,
     RELAY_SOURCE_PLUGIN_ID, ResolvedConfig, RunCommand, ServerArgs, any_config_file_exists,
     resolve_run_config,
 };
 use crate::error::CliError;
-use crate::installer::{generated_hooks, transparent_hook_forward_command};
+use crate::hooks::{generated_hooks, transparent_hook_forward_command};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 
@@ -113,7 +113,7 @@ impl TransparentRun {
         let invocation = resolve_agent_invocation(&command, &resolved.agents)?;
         let agent = invocation.agent;
         if !dry_run {
-            let probe = crate::agent_process::version_probe_argv(
+            let probe = crate::process::version_probe_argv(
                 agent,
                 &invocation.argv[..=invocation.host_index],
             );
@@ -183,7 +183,7 @@ async fn execute_live_run_with_dynamic(
     gateway_url: &str,
     prepared: PreparedRun,
 ) -> Result<ExitCode, CliError> {
-    let bootstrap_fingerprint = crate::config::transparent_gateway_fingerprint(gateway_url);
+    let bootstrap_fingerprint = crate::configuration::transparent_gateway_fingerprint(gateway_url);
     let running_server = RunningGateway::start(
         listener,
         gateway_config,
@@ -302,7 +302,7 @@ const fn default_command_for(agent: CodingAgent) -> &'static str {
 /// Builds a version probe that preserves wrappers such as `npx codex` or `mise exec -- codex`.
 /// Opaque wrappers remain supported when their `--version` output identifies the selected host.
 async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<(), CliError> {
-    let mut command = crate::agent_process::tokio_command(probe);
+    let mut command = crate::process::tokio_command(probe);
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -343,7 +343,7 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
 // commands should be passed after `--` by the caller.
 fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<String>> {
     let command = agents.get(agent).command.as_ref()?;
-    let argv = crate::agent_process::command_argv(command);
+    let argv = crate::process::command_argv(command);
     (!argv.is_empty()).then_some(argv)
 }
 
@@ -365,7 +365,7 @@ impl RunningGateway {
     // task handle so health failures and normal exits use identical cleanup semantics.
     fn start(
         listener: TcpListener,
-        config: crate::config::GatewayConfig,
+        config: crate::configuration::GatewayConfig,
         dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
         bootstrap_fingerprint: String,
     ) -> Self {
@@ -450,8 +450,11 @@ impl PreparedRun {
             argv,
             host_index,
             env: vec![
-                (crate::config::GATEWAY_URL_ENV.into(), gateway_url.into()),
-                (crate::config::TRANSPARENT_RUN_ENV.into(), "1".into()),
+                (
+                    crate::configuration::GATEWAY_URL_ENV.into(),
+                    gateway_url.into(),
+                ),
+                (crate::configuration::TRANSPARENT_RUN_ENV.into(), "1".into()),
             ],
             temp_dirs: Vec::new(),
             notes: Vec::new(),
@@ -529,7 +532,7 @@ impl PreparedRun {
         let settings = claude_settings_overlay(&self.argv, self.host_index, gateway_url)?;
         let settings_bytes = serde_json::to_vec_pretty(&settings)
             .map_err(|error| CliError::Launch(error.to_string()))?;
-        crate::file_io::atomic_write_private(&settings_path, &settings_bytes)
+        crate::filesystem::atomic_write_private(&settings_path, &settings_bytes)
             .map_err(CliError::Launch)?;
         insert_after_host(
             &mut self.argv,
@@ -618,7 +621,7 @@ impl PreparedRun {
             .env
             .iter()
             .find_map(|(name, value)| {
-                (name == crate::config::GATEWAY_URL_ENV).then_some(value.as_str())
+                (name == crate::configuration::GATEWAY_URL_ENV).then_some(value.as_str())
             })
             .expect("transparent runs always define their gateway URL");
         let overlay_home = create_hermes_overlay(source_home, &source_config, gateway_url)?;
@@ -647,12 +650,12 @@ impl PreparedRun {
 
     // Spawns the prepared child process with injected environment.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
-    async fn spawn(&self) -> Result<crate::agent_process::SupervisedChild, CliError> {
-        let mut command = crate::agent_process::tokio_command(&self.argv);
+    async fn spawn(&self) -> Result<crate::process::SupervisedChild, CliError> {
+        let mut command = crate::process::tokio_command(&self.argv);
         for (name, value) in &self.env {
             command.env(name, value);
         }
-        crate::agent_process::SupervisedChild::spawn(&mut command)
+        crate::process::SupervisedChild::spawn(&mut command)
             .await
             .map_err(CliError::from)
     }
@@ -1420,5 +1423,5 @@ fn private_temp_dir(parent: &Path, prefix: &str) -> Result<PathBuf, CliError> {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/agents/launcher_tests.rs"]
+#[path = "../../tests/coverage/agents/launcher_tests.rs"]
 mod tests;

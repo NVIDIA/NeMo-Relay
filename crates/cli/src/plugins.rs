@@ -16,7 +16,7 @@ use dialoguer::{Input, Select};
 use nemo_relay::config_editor::{EditorFieldKind, EditorFieldSpec};
 use serde_json::{Value, json};
 
-use crate::config::PluginsEditCommand;
+use crate::configuration::PluginsEditCommand;
 use crate::error::CliError;
 
 pub(crate) mod config_io;
@@ -24,6 +24,7 @@ mod dynamic_editor;
 mod editor_model;
 pub(crate) mod lifecycle;
 pub(crate) mod policy;
+pub(crate) mod pricing;
 pub(crate) mod schema;
 
 use self::config_io::*;

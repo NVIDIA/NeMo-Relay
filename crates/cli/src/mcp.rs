@@ -14,9 +14,9 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use crate::config::ServerArgs;
+use crate::configuration::ServerArgs;
 use crate::error::CliError;
-use crate::install_generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
+use crate::installation::generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
 
 pub(crate) const SERVER_NAME: &str = "nemo-relay";
 const LAUNCH_ARGS: &[&str] = &["mcp"];
@@ -26,14 +26,15 @@ pub(crate) async fn run(server_args: &ServerArgs) -> Result<ExitCode, CliError> 
         // An installed plugin can still be enabled inside `nemo-relay run`. In that process the
         // wrapper already owns a healthy dynamic gateway, so this MCP instance authenticates and
         // monitors it instead of launching the fixed persistent sidecar.
-        let gateway_url = std::env::var(crate::config::GATEWAY_URL_ENV).map_err(|_| {
+        let gateway_url = std::env::var(crate::configuration::GATEWAY_URL_ENV).map_err(|_| {
             CliError::Launch(format!(
                 "{} is required when {}=1",
-                crate::config::GATEWAY_URL_ENV,
-                crate::config::TRANSPARENT_RUN_ENV
+                crate::configuration::GATEWAY_URL_ENV,
+                crate::configuration::TRANSPARENT_RUN_ENV
             ))
         })?;
-        let bootstrap_fingerprint = crate::config::transparent_gateway_fingerprint(&gateway_url);
+        let bootstrap_fingerprint =
+            crate::configuration::transparent_gateway_fingerprint(&gateway_url);
         let lease = gateway::GatewayLease::borrow(gateway_url, bootstrap_fingerprint).await?;
         let frames = transport::spawn_stdin_reader()?;
         session::run(lease, frames, tokio::io::stdout()).await?;
@@ -73,7 +74,7 @@ pub(crate) fn persistent_server(
 }
 
 fn transparent_run_active() -> bool {
-    std::env::var(crate::config::TRANSPARENT_RUN_ENV)
+    std::env::var(crate::configuration::TRANSPARENT_RUN_ENV)
         .ok()
         .as_deref()
         == Some("1")

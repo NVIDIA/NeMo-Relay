@@ -135,10 +135,11 @@ fn generation_transaction_polling_is_cancellable_for_clean_mcp_shutdown() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir
         .path()
-        .join(crate::install_generation::GENERATION_FILE_NAME);
-    crate::install_generation::write_new_generation(&path).unwrap();
-    let generation = crate::install_generation::InstallGeneration::capture(path.clone()).unwrap();
-    let mut retirement = crate::install_generation::GenerationRetirement::acquire(&path)
+        .join(crate::installation::generation::GENERATION_FILE_NAME);
+    crate::installation::generation::write_new_generation(&path).unwrap();
+    let generation =
+        crate::installation::generation::InstallGeneration::capture(path.clone()).unwrap();
+    let mut retirement = crate::installation::generation::GenerationRetirement::acquire(&path)
         .unwrap()
         .unwrap();
     retirement.invalidate_for_replacement().unwrap();

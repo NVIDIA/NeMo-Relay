@@ -28,9 +28,9 @@ use crate::agents::alignment::{
     self, GatewayManagementPolicy, PendingSubagentStart, SessionAlias, SessionAlignmentState,
     insert_optional, json_string_at, json_value_at, merge_metadata,
 };
-use crate::config::{GatewayConfig, SessionConfig};
+use crate::configuration::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
-use crate::model::{
+use crate::events::{
     AgentKind, LlmEvent, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
 };
 
@@ -2603,5 +2603,5 @@ fn gateway_session_for_call(
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/session_tests.rs"]
+#[path = "../../tests/coverage/shared/session_tests.rs"]
 mod tests;

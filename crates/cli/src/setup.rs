@@ -18,7 +18,7 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, MultiSelect, Select};
 use toml_edit::DocumentMut;
 
-use crate::config::CodingAgent;
+use crate::configuration::CodingAgent;
 use crate::error::CliError;
 
 mod model;

@@ -13,9 +13,11 @@ use axum::http::HeaderMap;
 use nemo_relay::api::llm::LlmRequest;
 use serde_json::{Map, Value, json};
 
-use crate::config::header_string;
-pub(crate) use crate::json_path::{string_at_any as json_string_at, value_at_any as json_value_at};
-use crate::model::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
+use crate::configuration::header_string;
+pub(crate) use crate::events::json_path::{
+    string_at_any as json_string_at, value_at_any as json_value_at,
+};
+use crate::events::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
 
 #[path = "claude/alignment.rs"]
 pub(crate) mod claude_code;

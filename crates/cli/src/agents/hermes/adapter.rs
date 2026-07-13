@@ -8,8 +8,8 @@ use crate::agents::adapters::{
     AdapterOutcome, ClassificationRules, HERMES_PAYLOAD_EXTRACTOR, classify, common_session_event,
     event_name, metadata, normalize_name, session_id,
 };
-use crate::json_path::value_at;
-use crate::model::{AgentKind, LlmEvent, NormalizedEvent};
+use crate::events::json_path::value_at;
+use crate::events::{AgentKind, LlmEvent, NormalizedEvent};
 
 /// Normalizes Hermes shell hook payloads without emitting control directives.
 ///
@@ -21,17 +21,15 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     let normalized = normalize_name(&event_name);
     if normalized == "preapirequest" {
         return AdapterOutcome {
-            events: vec![crate::model::NormalizedEvent::LlmStarted(hermes_llm_event(
-                &payload,
-                headers,
-                &event_name,
-            ))],
+            events: vec![crate::events::NormalizedEvent::LlmStarted(
+                hermes_llm_event(&payload, headers, &event_name),
+            )],
             response: json!({}),
         };
     }
     if normalized == "postapirequest" {
         return AdapterOutcome {
-            events: vec![crate::model::NormalizedEvent::LlmEnded(hermes_llm_event(
+            events: vec![crate::events::NormalizedEvent::LlmEnded(hermes_llm_event(
                 &payload,
                 headers,
                 &event_name,
@@ -41,7 +39,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
     }
     if normalized == "apirequesterror" {
         return AdapterOutcome {
-            events: vec![crate::model::NormalizedEvent::LlmEnded(hermes_llm_event(
+            events: vec![crate::events::NormalizedEvent::LlmEnded(hermes_llm_event(
                 &payload,
                 headers,
                 &event_name,

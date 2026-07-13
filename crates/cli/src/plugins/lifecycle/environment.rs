@@ -289,7 +289,7 @@ pub(super) fn read_environment_attestation(
             attestation_path.display()
         ));
     }
-    if !crate::config::verify_python_environment_attestation(
+    if !crate::configuration::verify_python_environment_attestation(
         &attestation.source_artifact_sha256,
         &attestation.environment_sha256,
         &attestation.authentication,
@@ -326,7 +326,7 @@ pub(super) fn write_environment_attestation(
     let digest = environment_tree_digest(environment)?;
     let path = environment.join(ENVIRONMENT_ATTESTATION_FILE);
     let authentication =
-        crate::config::sign_python_environment_attestation(source_artifact_sha256, &digest)
+        crate::configuration::sign_python_environment_attestation(source_artifact_sha256, &digest)
             .map_err(|error| error.to_string())?;
     let mut bytes = serde_json::to_vec_pretty(&EnvironmentAttestation {
         version: 1,
@@ -464,13 +464,15 @@ fn digest_environment_directory(
                 path.display()
             ));
         }
-        let bytes =
-            crate::config::read_bounded_regular_file(&source, "managed Python environment file")?;
+        let bytes = crate::configuration::read_bounded_regular_file(
+            &source,
+            "managed Python environment file",
+        )?;
         *total = total.saturating_add(bytes.len() as u64);
-        if *total > crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
+        if *total > crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
             return Err(format!(
                 "managed Python environment exceeds the {}-byte attestation budget",
-                crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES
+                crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES
             ));
         }
         digest.update(relative.to_string_lossy().as_bytes());

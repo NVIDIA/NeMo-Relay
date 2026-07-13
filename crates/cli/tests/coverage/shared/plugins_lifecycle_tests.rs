@@ -8,7 +8,7 @@ use std::{
 };
 
 use super::*;
-use crate::config::{
+use crate::configuration::{
     PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand, PluginsInspectCommand,
     PluginsListCommand, PluginsRemoveCommand, PluginsScopeArgs, PluginsValidateCommand, ServerArgs,
 };
@@ -768,7 +768,7 @@ entrypoint = "../worker-runtime/worker.sh"
         .write(true)
         .open(&artifact_path)
         .unwrap()
-        .set_len(crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .set_len(crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
         .unwrap();
     std::fs::set_permissions(&artifact_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(&manifest_path, b"not valid TOML").unwrap();
@@ -776,7 +776,7 @@ entrypoint = "../worker-runtime/worker.sh"
         .write(true)
         .open(&manifest_path)
         .unwrap()
-        .set_len(crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .set_len(crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
         .unwrap();
 
     let error = match load_worker_plugins(vec![WorkerPluginLoadSpec {
@@ -1000,7 +1000,7 @@ fn activation_snapshot_budgets_reject_entry_and_byte_overflow() {
     let byte_error = byte_budget
         .record_bytes(
             path,
-            usize::try_from(crate::config::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES).unwrap() + 1,
+            usize::try_from(crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES).unwrap() + 1,
         )
         .unwrap_err()
         .to_string();
@@ -1759,7 +1759,7 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
             },
             path: plugin_dir.clone(),
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap();
 
@@ -2470,7 +2470,7 @@ fn active_dynamic_plugin_components_project_enabled_native_records_only() {
     let plugin_dir = temp.path().join("plugins").join("native");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_native_dynamic_manifest(&plugin_dir, "acme.native");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -2517,7 +2517,7 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
     let plugin_dir = temp.path().join("plugins").join("worker");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -2560,7 +2560,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
     let plugin_dir = temp.path().join("plugins").join("worker");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -2622,7 +2622,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
             },
             path: plugin_dir.clone(),
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap();
 
@@ -2634,7 +2634,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
             },
             path: plugin_dir,
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2700,7 +2700,7 @@ allowed = false
             },
             path: plugin_dir,
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap_err();
 
@@ -2774,7 +2774,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
             },
             path: plugin_dir,
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap();
 
@@ -2846,7 +2846,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
             },
             path: plugin_dir,
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap();
 
@@ -2895,7 +2895,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
             target: "missing.plugin".into(),
             json: false,
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2906,7 +2906,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
             id: "missing.plugin".into(),
             json: false,
         },
-        &crate::config::ServerArgs::default(),
+        &crate::configuration::ServerArgs::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2915,7 +2915,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
     assert_eq!(
         list(
             PluginsListCommand::default(),
-            &crate::config::ServerArgs::default()
+            &crate::configuration::ServerArgs::default()
         )
         .unwrap(),
         ()
@@ -2930,7 +2930,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -3516,7 +3516,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.enable-blocked");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -3597,7 +3597,7 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -3646,7 +3646,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.validate-blocked");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {
@@ -3789,7 +3789,7 @@ fn add_can_revive_tombstoned_records() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.revive");
-    let server = crate::config::ServerArgs::default();
+    let server = crate::configuration::ServerArgs::default();
 
     add(
         PluginsAddCommand {

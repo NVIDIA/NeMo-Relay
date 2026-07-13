@@ -21,7 +21,7 @@ use super::host::{
 };
 use super::*;
 use crate::agents::host::strip_windows_verbatim_prefix;
-use crate::config::CodingAgent;
+use crate::configuration::CodingAgent;
 
 const OPERATION_LOCK_HELPER_DIR_ENV: &str = "NEMO_RELAY_TEST_OPERATION_LOCK_DIR";
 const OPERATION_LOCK_HELPER_GLOBAL_DIR_ENV: &str = "NEMO_RELAY_TEST_OPERATION_LOCK_GLOBAL_DIR";
@@ -198,7 +198,7 @@ fn replacement_generation_guard_removes_an_owned_lock_after_marker_removal() {
     let dir = tempdir().unwrap();
     let marker = dir.path().join("generation-marker");
     let lock = dir.path().join("generation.lock");
-    crate::install_generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
+    crate::installation::generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
     let guard =
         acquire_replacement_generation_lock(IntegrationHost::Codex, &marker, &lock, true).unwrap();
 
@@ -213,7 +213,7 @@ fn replacement_generation_guard_retains_its_lock_when_marker_state_is_uncertain(
     let dir = tempdir().unwrap();
     let marker = dir.path().join("generation-marker");
     let lock = dir.path().join("generation.lock");
-    crate::install_generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
+    crate::installation::generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
     let guard =
         acquire_replacement_generation_lock(IntegrationHost::Codex, &marker, &lock, true).unwrap();
 
@@ -724,7 +724,7 @@ impl PluginSetupRunner for FailStateWriteAfterRefresh {
 
     fn refresh_gateway(&self) -> Result<(), String> {
         if !self.injected.replace(true) {
-            crate::file_io::fail_next_atomic_write(&self.state_path);
+            crate::filesystem::fail_next_atomic_write(&self.state_path);
         }
         Ok(())
     }
@@ -929,7 +929,8 @@ fn replace_generation_with_legacy_marker(layout: &PluginLayout) -> (String, Path
         generation.token().to_owned()
     };
     std::fs::remove_file(&layout.generation_lock).unwrap();
-    crate::install_generation::write_legacy_generation(&layout.generation_fence, &token).unwrap();
+    crate::installation::generation::write_legacy_generation(&layout.generation_fence, &token)
+        .unwrap();
     let mut lock_path = layout.generation_fence.as_os_str().to_os_string();
     lock_path.push(".lock");
     (token, PathBuf::from(lock_path))
@@ -1225,7 +1226,7 @@ fn generation_retirement_lock_contention_is_bounded_across_processes() {
     let dir = tempdir().unwrap();
     let synchronization = tempdir().unwrap();
     let generation = dir.path().join(GENERATION_FILE_NAME);
-    crate::install_generation::write_new_generation(&generation).unwrap();
+    crate::installation::generation::write_new_generation(&generation).unwrap();
     let holder = CrossProcessLockHolder::spawn(
         GENERATION_LOCK_HELPER_PATH_ENV,
         &generation,
@@ -1349,7 +1350,7 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
         )
         .unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(
-            crate::installer::persistent_hook_forward_command(
+            crate::hooks::persistent_hook_forward_command(
                 Path::new("/bin/nemo-relay"),
                 CodingAgent::Codex,
                 &generation_fence,
@@ -1367,7 +1368,7 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
         )
         .unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(
-            crate::installer::persistent_hook_forward_command(
+            crate::hooks::persistent_hook_forward_command(
                 Path::new("/bin/nemo-relay"),
                 CodingAgent::ClaudeCode,
                 &generation_fence,
@@ -1400,7 +1401,7 @@ fn relay_identity_uses_running_executable_when_path_points_elsewhere() {
         )
         .unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(
-            crate::installer::persistent_hook_forward_command(
+            crate::hooks::persistent_hook_forward_command(
                 &relay,
                 CodingAgent::Codex,
                 &generation,
@@ -1985,7 +1986,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     std::fs::create_dir_all(&empty_path).unwrap();
     let _path = PathScope::set_isolated(&empty_path, &dir.path().join("home"));
 
-    let install_error = install(crate::config::InstallCommand {
+    let install_error = install(crate::configuration::InstallCommand {
         host: IntegrationHost::All,
         install_dir: Some(dir.path().join("install")),
         force: false,
@@ -1999,7 +2000,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         "error was: {install_error}"
     );
 
-    let uninstall_error = uninstall(crate::config::UninstallCommand {
+    let uninstall_error = uninstall(crate::configuration::UninstallCommand {
         host: IntegrationHost::All,
         install_dir: Some(dir.path().join("install")),
         dry_run: false,
@@ -2031,7 +2032,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     );
 
     assert_eq!(
-        install(crate::config::InstallCommand {
+        install(crate::configuration::InstallCommand {
             host: IntegrationHost::Codex,
             install_dir: Some(dir.path().join("dry-run-install")),
             force: false,
@@ -3293,7 +3294,7 @@ fn replacement_retirement_aggregates_refresh_and_restore_failures_without_rewrit
 
     entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     std::fs::rename(&layout.plugin_root, &backup).unwrap();
-    let replacement_token = crate::install_generation::write_staged_generation_with_token(
+    let replacement_token = crate::installation::generation::write_staged_generation_with_token(
         &layout.generation_fence,
         &layout.generation_lock,
     )
@@ -3446,7 +3447,7 @@ fn first_install_cleans_generated_marketplace_after_state_write_failure() {
         .with_executable("nemo-relay", "/bin/nemo-relay")
         .with_executable("codex", "/bin/codex");
     let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
-    crate::file_io::fail_next_atomic_write(&layout.state_path);
+    crate::filesystem::fail_next_atomic_write(&layout.state_path);
 
     let error = install_host(
         IntegrationHost::Codex,
@@ -3680,7 +3681,7 @@ fn first_install_removes_a_partially_written_marketplace() {
         .with_executable("codex", "/bin/codex");
     let setup_runner = MockSetupRunner::default();
     let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
-    crate::file_io::fail_next_atomic_write(&layout.plugin_manifest);
+    crate::filesystem::fail_next_atomic_write(&layout.plugin_manifest);
 
     let error = install_host(
         IntegrationHost::Codex,
@@ -3704,7 +3705,7 @@ fn failed_staging_removes_a_new_external_generation_lock() {
     let target = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let stage_parent = dir.path().join("deterministic-stage");
     let staged = PluginLayout::new(IntegrationHost::Codex, &stage_parent);
-    crate::file_io::fail_next_atomic_write(&staged.mcp_config);
+    crate::filesystem::fail_next_atomic_write(&staged.mcp_config);
 
     let error = match stage_plugin_marketplace_at(
         IntegrationHost::Codex,
@@ -3728,7 +3729,7 @@ fn failed_staging_preserves_a_preexisting_external_generation_lock() {
     let dir = tempdir().unwrap();
     let target = PluginLayout::new(IntegrationHost::Codex, dir.path());
     let orphan_marker = dir.path().join("orphan-generation");
-    crate::install_generation::write_new_generation_with_token_at(
+    crate::installation::generation::write_new_generation_with_token_at(
         &orphan_marker,
         &target.generation_lock,
     )
@@ -3737,7 +3738,7 @@ fn failed_staging_preserves_a_preexisting_external_generation_lock() {
     let original_lock = std::fs::read(&target.generation_lock).unwrap();
     let stage_parent = dir.path().join("deterministic-existing-lock-stage");
     let staged = PluginLayout::new(IntegrationHost::Codex, &stage_parent);
-    crate::file_io::fail_next_atomic_write(&staged.mcp_config);
+    crate::filesystem::fail_next_atomic_write(&staged.mcp_config);
 
     let error = match stage_plugin_marketplace_at(
         IntegrationHost::Codex,
@@ -3770,7 +3771,7 @@ fn failed_staging_preserves_a_preexisting_dangling_generation_lock_symlink() {
     symlink(&symlink_target, &target.generation_lock).unwrap();
     let stage_parent = dir.path().join("deterministic-symlink-stage");
     let staged = PluginLayout::new(IntegrationHost::Codex, &stage_parent);
-    crate::file_io::fail_next_atomic_write(&staged.mcp_config);
+    crate::filesystem::fail_next_atomic_write(&staged.mcp_config);
 
     let error = match stage_plugin_marketplace_at(
         IntegrationHost::Codex,
@@ -5383,7 +5384,7 @@ fn uninstall_retry_skips_host_removal_after_prior_success() {
         &options(dir.path()),
     )
     .unwrap();
-    crate::install_generation::write_new_generation(&layout.generation_fence).unwrap();
+    crate::installation::generation::write_new_generation(&layout.generation_fence).unwrap();
 
     uninstall_host(
         IntegrationHost::Codex,
@@ -5418,7 +5419,7 @@ fn uninstall_retry_skips_plugin_removal_after_marketplace_failure() {
     let setup_runner = MockSetupRunner::default();
     let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
     write_state(&layout, &options(dir.path())).unwrap();
-    crate::install_generation::write_new_generation(&layout.generation_fence).unwrap();
+    crate::installation::generation::write_new_generation(&layout.generation_fence).unwrap();
 
     let error = uninstall_host(
         IntegrationHost::Codex,

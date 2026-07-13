@@ -18,9 +18,11 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::config::{CodingAgent, InstallCommand, IntegrationHost, UninstallCommand};
+use crate::configuration::{CodingAgent, InstallCommand, IntegrationHost, UninstallCommand};
 use crate::error::CliError;
-use crate::install_generation::{GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration};
+use crate::installation::generation::{
+    GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration,
+};
 
 use host::{
     CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,
@@ -1363,7 +1365,8 @@ fn collect_host_plugin_readiness(
                 .map(|_| "hook-forward is supported".into()),
         );
         if let Some(plugin) = readiness.plugin.as_ref() {
-            let generation_fence = plugin.join(crate::install_generation::GENERATION_FILE_NAME);
+            let generation_fence =
+                plugin.join(crate::installation::generation::GENERATION_FILE_NAME);
             readiness.push(
                 "Generated hooks",
                 InstallGeneration::capture(generation_fence.clone()).and_then(|generation| {
@@ -1383,7 +1386,8 @@ fn collect_host_plugin_readiness(
                 .map(|_| "native mcp subcommand is supported".into()),
         );
         if let Some(plugin) = readiness.plugin.as_ref() {
-            let generation_fence = plugin.join(crate::install_generation::GENERATION_FILE_NAME);
+            let generation_fence =
+                plugin.join(crate::installation::generation::GENERATION_FILE_NAME);
             let mcp_config = plugin_mcp_config_path(plugin);
             readiness.push(
                 "MCP generation fence",

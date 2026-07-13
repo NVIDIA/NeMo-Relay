@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 pub(crate) fn command_has_arguments(command: &str, expected: &[&str]) -> bool {
-    let arguments = crate::installer::decode_windows_hook_command(command)
+    let arguments = crate::hooks::decode_windows_hook_command(command)
         .or_else(|| shell_words::split(command).ok());
     arguments.is_some_and(|arguments| {
         arguments.windows(expected.len()).any(|window| {

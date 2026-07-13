@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use crate::config::{InstallCommand, UninstallCommand};
+use crate::configuration::{InstallCommand, UninstallCommand};
 use crate::error::CliError;
 
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {

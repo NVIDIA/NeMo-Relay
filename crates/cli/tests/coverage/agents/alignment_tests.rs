@@ -6,7 +6,7 @@ use nemo_relay::api::llm::LlmRequest;
 use serde_json::Map;
 
 use super::*;
-use crate::model::{LlmEvent, LlmHintEvent};
+use crate::events::{LlmEvent, LlmHintEvent};
 
 fn session_event(session_id: &str, event_name: &str) -> SessionEvent {
     SessionEvent {

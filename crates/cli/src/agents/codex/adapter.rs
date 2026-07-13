@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::agents::adapters::{
     AdapterOutcome, CODEX_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
 };
-use crate::model::AgentKind;
+use crate::events::AgentKind;
 
 /// Normalizes Codex hook payloads while leaving Codex hook control flow untouched.
 ///

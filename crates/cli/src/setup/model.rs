@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, value};
 
-use crate::config::CodingAgent;
-use crate::config::{PluginsEditCommand, PluginsScopeArgs};
+use crate::configuration::CodingAgent;
+use crate::configuration::{PluginsEditCommand, PluginsScopeArgs};
 use crate::error::CliError;
 
 /// Where the setup saves its output.
@@ -85,8 +85,7 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
     CodingAgent::ALL
         .into_iter()
         .filter(|agent| {
-            crate::agent_process::resolve_executable_in_path(agent.executable(), Some(path_var))
-                .is_some()
+            crate::process::resolve_executable_in_path(agent.executable(), Some(path_var)).is_some()
         })
         .collect()
 }

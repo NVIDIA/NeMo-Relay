@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::agents::adapters::{
     AdapterOutcome, CLAUDE_CODE_PAYLOAD_EXTRACTOR, ClassificationRules, classify,
 };
-use crate::model::{AgentKind, NormalizedEvent};
+use crate::events::{AgentKind, NormalizedEvent};
 
 /// Normalizes Claude Code hook payloads and returns the hook response Claude expects.
 ///

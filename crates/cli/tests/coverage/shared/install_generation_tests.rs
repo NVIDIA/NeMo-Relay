@@ -1028,7 +1028,7 @@ fn failed_invalidation_aggregates_a_failed_marker_restore() {
 
     let error = retirement
         .invalidate_with(|path, _retired| {
-            crate::file_io::fail_next_atomic_write(path);
+            crate::filesystem::fail_next_atomic_write(path);
             Err("injected invalidation failure".into())
         })
         .unwrap_err();

@@ -12,7 +12,7 @@ use nemo_relay::codec::response::Usage;
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 use serde_json::Value;
 
-use crate::config::{
+use crate::configuration::{
     PricingAddSourceCommand, PricingInitCommand, PricingResolveCommand, PricingScopeArgs,
     PricingValidateCommand, ServerArgs, resolve_server_config,
 };
@@ -285,5 +285,5 @@ fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/commands/model_pricing_tests.rs"]
+#[path = "../../tests/coverage/commands/model_pricing_tests.rs"]
 mod tests;

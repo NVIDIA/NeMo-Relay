@@ -31,7 +31,7 @@ use codex::{
 };
 use shared::{current_exe, healthz, print_check, print_info};
 
-use crate::config::CodingAgent;
+use crate::configuration::CodingAgent;
 
 #[cfg(test)]
 pub(super) use crate::sidecar::DEFAULT_URL;
@@ -209,7 +209,7 @@ fn doctor_ok(
 }
 
 #[cfg(test)]
-use crate::installer::generated_hooks;
+use crate::hooks::generated_hooks;
 #[cfg(test)]
 use crate::sidecar::*;
 #[cfg(test)]

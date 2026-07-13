@@ -11,7 +11,7 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-use crate::config::IntegrationHost;
+use crate::configuration::IntegrationHost;
 
 use super::state::PluginInstallOptions;
 use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
@@ -489,18 +489,18 @@ impl CommandRunner for RealCommandRunner {
     }
 
     fn resolve_executable(&self, command: &str) -> Result<Option<PathBuf>, String> {
-        Ok(crate::agent_process::resolve_executable(command))
+        Ok(crate::process::resolve_executable(command))
     }
 
     fn run(&self, program: &Path, args: &[String]) -> Result<i32, String> {
-        let status = crate::agent_process::std_command(&command_argv(program, args))
+        let status = crate::process::std_command(&command_argv(program, args))
             .status()
             .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         Ok(status.code().unwrap_or(1))
     }
 
     fn run_quiet(&self, program: &Path, args: &[String]) -> Result<i32, String> {
-        let status = crate::agent_process::std_command(&command_argv(program, args))
+        let status = crate::process::std_command(&command_argv(program, args))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -510,7 +510,7 @@ impl CommandRunner for RealCommandRunner {
     }
 
     fn run_capture(&self, program: &Path, args: &[String]) -> Result<CommandOutput, String> {
-        let output = crate::agent_process::std_command(&command_argv(program, args))
+        let output = crate::process::std_command(&command_argv(program, args))
             .output()
             .map_err(|error| format!("failed to run {}: {error}", program.display()))?;
         Ok(command_output(output))

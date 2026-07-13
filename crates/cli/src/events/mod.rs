@@ -3,6 +3,8 @@
 
 use serde_json::Value;
 
+pub(crate) mod json_path;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum AgentKind {
     Codex,

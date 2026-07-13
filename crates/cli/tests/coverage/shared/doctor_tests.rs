@@ -8,7 +8,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::config::ResolvedDynamicPluginConfig;
+use crate::configuration::ResolvedDynamicPluginConfig;
 
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -621,7 +621,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
 #[test]
 fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert_eq!(
-        crate::agent_process::command_argv("codex --full-auto"),
+        crate::process::command_argv("codex --full-auto"),
         ["codex", "--full-auto"]
     );
     assert_eq!(
@@ -875,11 +875,11 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     assert_eq!(info.configured_agents, vec!["codex".to_string()]);
 
     assert_eq!(
-        crate::agent_process::resolve_executable("definitely-missing"),
+        crate::process::resolve_executable("definitely-missing"),
         None
     );
     assert_eq!(
-        crate::agent_process::resolve_executable("/definitely/missing"),
+        crate::process::resolve_executable("/definitely/missing"),
         None
     );
     let binary = temp
@@ -887,7 +887,7 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         .join(format!("agent-bin{}", std::env::consts::EXE_SUFFIX));
     std::fs::write(&binary, "").unwrap();
     assert_eq!(
-        crate::agent_process::resolve_executable(binary.to_str().unwrap()).as_deref(),
+        crate::process::resolve_executable(binary.to_str().unwrap()).as_deref(),
         Some(binary.as_path())
     );
 }

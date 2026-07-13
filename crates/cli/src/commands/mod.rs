@@ -17,10 +17,13 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::config::{Cli, CodingAgent, Command, ServerArgs};
+use crate::configuration::{Cli, CodingAgent, Command, ServerArgs};
 #[cfg(test)]
-use crate::config::{CompletionsCommand, PluginsCommand, PricingCommand};
-use crate::{config, doctor, error, server, setup};
+use crate::configuration::{CompletionsCommand, PluginsCommand, PricingCommand};
+use crate::{
+    configuration as runtime_configuration, diagnostics as runtime_diagnostics, error, server,
+    setup,
+};
 
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
 // exit. Errors are printed once here so subcommands can return structured errors without also
@@ -67,7 +70,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
         Command::Doctor(command) => diagnostics::execute(command).await,
-        Command::Agents(command) => doctor::run_agents(command.json).await,
+        Command::Agents(command) => runtime_diagnostics::run_agents(command.json).await,
         Command::Completions(command) => completions::execute(command),
     }
 }
@@ -90,13 +93,16 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
     //   `nemo-relay config` remains the reconfiguration path.
     if server_args.requested_daemon_mode() {
-        let resolved = config::resolve_server_config(server_args)?;
+        let resolved = runtime_configuration::resolve_server_config(server_args)?;
         let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
             server_args.config.as_ref(),
             &resolved,
         )?;
-        let managed_bootstrap =
-            config::managed_bootstrap_identity(server_args, &resolved, &dynamic_plugins)?;
+        let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(
+            server_args,
+            &resolved,
+            &dynamic_plugins,
+        )?;
         server::serve_with_dynamic(
             resolved.gateway,
             dynamic_plugins,
@@ -105,8 +111,8 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
         )
         .await?;
         Ok(ExitCode::SUCCESS)
-    } else if config::any_config_file_exists() {
-        doctor::run_doctor(None, false).await
+    } else if runtime_configuration::any_config_file_exists() {
+        runtime_diagnostics::run_doctor(None, false).await
     } else {
         setup::run(None).await?;
         Ok(ExitCode::SUCCESS)

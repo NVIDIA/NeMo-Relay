@@ -114,7 +114,7 @@ fn compatible_gateway_is_reused_without_starting_another_process() {
         ("HOME", Some(temp.path().as_os_str())),
         ("USERPROFILE", None),
     ]);
-    let key = crate::config::BootstrapChallengeKey::load().unwrap();
+    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
@@ -221,7 +221,7 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
     assert_eq!(resolved.gateway.bind(), bind);
     assert_eq!(
         resolved.max_hook_payload_bytes,
-        crate::config::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
+        crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
     );
     assert!(resolved.gateway.bootstrap_fingerprint.is_some());
     assert!(resolved.gateway.user_config_scope);
@@ -237,7 +237,7 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
 #[test]
 fn idle_timeout_drives_heartbeat_and_rejects_invalid_values() {
     let _environment = EnvScope::set(&[(
-        crate::config::PLUGIN_IDLE_TIMEOUT_ENV,
+        crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV,
         Some(OsStr::new("9")),
     )]);
     assert_eq!(plugin_idle_timeout().unwrap(), Duration::from_secs(9));
@@ -245,7 +245,7 @@ fn idle_timeout_drives_heartbeat_and_rejects_invalid_values() {
     drop(_environment);
 
     let _environment = EnvScope::set(&[(
-        crate::config::PLUGIN_IDLE_TIMEOUT_ENV,
+        crate::configuration::PLUGIN_IDLE_TIMEOUT_ENV,
         Some(OsStr::new("0")),
     )]);
     assert!(
