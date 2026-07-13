@@ -186,7 +186,7 @@ pub(super) fn windows_powershell_launcher() -> Result<String, String> {
 }
 
 #[cfg(windows)]
-pub(super) fn windows_powershell_path() -> Result<String, String> {
+pub(crate) fn windows_powershell_path() -> Result<String, String> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 

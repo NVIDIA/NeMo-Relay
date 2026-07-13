@@ -475,7 +475,7 @@ fn open_windows_file(
 }
 
 #[cfg(windows)]
-pub(super) fn windows_wide(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
+pub(crate) fn windows_wide(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
 
     value.as_ref().encode_wide().chain(Some(0)).collect()
