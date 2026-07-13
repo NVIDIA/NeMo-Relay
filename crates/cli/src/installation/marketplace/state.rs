@@ -15,7 +15,7 @@ use crate::installation::generation::GENERATION_FILE_NAME;
 use super::PLUGIN_NAME;
 
 /// Agent-owned identity and layout information required by marketplace transactions.
-pub(crate) trait MarketplaceHostIdentity: Copy {
+pub(crate) trait MarketplaceHost: Copy {
     fn install_arg(self) -> &'static str;
     fn label(self) -> &'static str;
     fn executable(self) -> &'static str;
@@ -31,6 +31,8 @@ pub(crate) trait MarketplaceHostIdentity: Copy {
         generation_fence: &Path,
         generation_token: &str,
     ) -> Result<Value, String>;
+    fn plugin_registration_args(self, plugin_id: &str) -> Vec<String>;
+    fn plugin_removal_args(self, plugin_name: &str, plugin_id: &str) -> Vec<String>;
 }
 
 #[derive(Debug, Clone)]
@@ -76,7 +78,7 @@ pub(super) struct PluginLayout {
 }
 
 impl PluginLayout {
-    pub(super) fn new(host: impl MarketplaceHostIdentity, install_dir: &Path) -> Self {
+    pub(super) fn new(host: impl MarketplaceHost, install_dir: &Path) -> Self {
         let marketplace_root = install_dir.join(format!("{}-marketplace", host.install_arg()));
         let marketplace_manifest = host
             .marketplace_manifest_relative()
@@ -232,7 +234,7 @@ pub(super) fn write_state(
 }
 
 pub(super) fn mark_plugin_setup_installed(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
@@ -248,7 +250,7 @@ pub(super) fn mark_plugin_setup_installed(
 }
 
 pub(super) fn write_state_for_host(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     state: &PluginState,
     install_dir: &Path,
     options: &PluginInstallOptions,
@@ -281,10 +283,7 @@ fn write_state_for_host_arg(
     )
 }
 
-pub(super) fn read_state(
-    host: impl MarketplaceHostIdentity,
-    install_dir: &Path,
-) -> Option<PluginState> {
+pub(super) fn read_state(host: impl MarketplaceHost, install_dir: &Path) -> Option<PluginState> {
     let raw = fs::read_to_string(state_path(host, install_dir)).ok()?;
     let value = serde_json::from_str::<Value>(&raw).ok()?;
     let legacy_host_unregistered = value
@@ -309,7 +308,7 @@ pub(super) fn read_state(
     })
 }
 
-pub(super) fn state_path(host: impl MarketplaceHostIdentity, install_dir: &Path) -> PathBuf {
+pub(super) fn state_path(host: impl MarketplaceHost, install_dir: &Path) -> PathBuf {
     state_path_for_arg(host.install_arg(), install_dir)
 }
 

@@ -41,7 +41,7 @@ use setup::{
 #[cfg(test)]
 use setup::{run_plugin_doctor, run_plugin_setup};
 use state::{
-    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, MarketplaceHostIdentity,
+    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, MarketplaceHost,
     PluginInstallOptions, PluginLayout, PluginState, default_install_dir,
     mark_plugin_setup_installed, read_state, remove_path, state_path, write_state,
     write_state_for_host,
@@ -1459,13 +1459,13 @@ fn mcp_env_var_names(server: &Value) -> Option<Vec<String>> {
         .collect()
 }
 
-fn marketplace_manifest_path(host: impl MarketplaceHostIdentity, root: &Path) -> PathBuf {
+fn marketplace_manifest_path(host: impl MarketplaceHost, root: &Path) -> PathBuf {
     host.marketplace_manifest_relative()
         .iter()
         .fold(root.to_path_buf(), |path, component| path.join(component))
 }
 
-fn plugin_manifest_path(host: impl MarketplaceHostIdentity, root: &Path) -> PathBuf {
+fn plugin_manifest_path(host: impl MarketplaceHost, root: &Path) -> PathBuf {
     host.plugin_manifest_relative()
         .iter()
         .fold(root.to_path_buf(), |path, component| path.join(component))

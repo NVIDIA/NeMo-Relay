@@ -145,7 +145,7 @@ impl CodingAgent {
     }
 }
 
-impl crate::installation::marketplace::state::MarketplaceHostIdentity for CodingAgent {
+impl crate::installation::marketplace::state::MarketplaceHost for CodingAgent {
     fn install_arg(self) -> &'static str {
         self.install_arg()
     }
@@ -203,6 +203,28 @@ impl crate::installation::marketplace::state::MarketplaceHostIdentity for Coding
             generation_token,
         )?;
         Ok(crate::hooks::generated_hooks(self, &command))
+    }
+
+    fn plugin_registration_args(self, plugin_id: &str) -> Vec<String> {
+        match self {
+            Self::Codex => vec!["plugin".into(), "add".into(), plugin_id.into()],
+            Self::ClaudeCode => vec![
+                "plugin".into(),
+                "install".into(),
+                plugin_id.into(),
+                "--scope".into(),
+                "user".into(),
+            ],
+            Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
+        }
+    }
+
+    fn plugin_removal_args(self, plugin_name: &str, plugin_id: &str) -> Vec<String> {
+        match self {
+            Self::Codex => vec!["plugin".into(), "remove".into(), plugin_id.into()],
+            Self::ClaudeCode => vec!["plugin".into(), "uninstall".into(), plugin_name.into()],
+            Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
+        }
     }
 }
 

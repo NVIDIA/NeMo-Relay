@@ -13,11 +13,11 @@ use serde_json::json;
 
 use crate::agents::CodingAgent;
 
-use super::state::{MarketplaceHostIdentity, PluginInstallOptions};
+use super::state::{MarketplaceHost, PluginInstallOptions};
 use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
 
 pub(super) fn run_host_marketplace_registration(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     marketplace_root: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -36,70 +36,34 @@ pub(super) fn run_host_marketplace_registration(
 }
 
 pub(super) fn run_host_plugin_registration(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
-    match host {
-        CodingAgent::Codex => run_command(
-            host.executable(),
-            &[
-                "plugin".into(),
-                "add".into(),
-                format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}"),
-            ],
-            options,
-            runner,
-        ),
-        CodingAgent::ClaudeCode => run_command(
-            host.executable(),
-            &[
-                "plugin".into(),
-                "install".into(),
-                format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}"),
-                "--scope".into(),
-                "user".into(),
-            ],
-            options,
-            runner,
-        ),
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before host registration")
-        }
-    }
+    run_command(
+        host.executable(),
+        &host.plugin_registration_args(&format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}")),
+        options,
+        runner,
+    )
 }
 
 pub(super) fn run_host_plugin_removal(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
-    match host {
-        CodingAgent::Codex => run_command(
-            host.executable(),
-            &[
-                "plugin".into(),
-                "remove".into(),
-                format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}"),
-            ],
-            options,
-            runner,
-        )?,
-        CodingAgent::ClaudeCode => run_command(
-            host.executable(),
-            &["plugin".into(), "uninstall".into(), PLUGIN_NAME.into()],
-            options,
-            runner,
-        )?,
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before host unregistration")
-        }
-    }
+    run_command(
+        host.executable(),
+        &host.plugin_removal_args(PLUGIN_NAME, &format!("{PLUGIN_NAME}@{MARKETPLACE_NAME}")),
+        options,
+        runner,
+    )?;
     Ok(())
 }
 
 pub(super) fn run_host_marketplace_removal(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
@@ -342,7 +306,7 @@ pub(crate) fn validate_relay_mcp(
 }
 
 pub(crate) fn require_host_cli(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
@@ -357,7 +321,7 @@ pub(crate) fn require_host_cli(
 }
 
 pub(crate) fn validate_host_version(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {

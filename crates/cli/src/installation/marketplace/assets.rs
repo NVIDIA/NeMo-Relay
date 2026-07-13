@@ -13,13 +13,11 @@ use crate::installation::generation::{
     write_new_generation_with_token_at, write_staged_generation_with_token,
 };
 
-use super::state::{
-    MarketplaceHostIdentity, PluginInstallOptions, PluginLayout, remove_path, write_json,
-};
+use super::state::{MarketplaceHost, PluginInstallOptions, PluginLayout, remove_path, write_json};
 use super::{MARKETPLACE_NAME, PLUGIN_NAME};
 
 pub(super) fn write_plugin_marketplace(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     relay: &Path,
     options: &PluginInstallOptions,
@@ -36,7 +34,7 @@ pub(super) fn write_plugin_marketplace(
 }
 
 pub(super) fn write_plugin_marketplace_for_generation(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     relay: &Path,
     active_generation_fence: &Path,
@@ -80,16 +78,16 @@ pub(super) fn write_plugin_marketplace_for_generation(
     Ok(())
 }
 
-pub(super) fn marketplace_manifest(host: impl MarketplaceHostIdentity) -> Value {
+pub(super) fn marketplace_manifest(host: impl MarketplaceHost) -> Value {
     host.marketplace_manifest(MARKETPLACE_NAME, PLUGIN_NAME)
 }
 
-pub(super) fn plugin_manifest(host: impl MarketplaceHostIdentity) -> Value {
+pub(super) fn plugin_manifest(host: impl MarketplaceHost) -> Value {
     host.plugin_manifest(PLUGIN_NAME)
 }
 
 pub(super) fn plugin_mcp_config(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     relay: &Path,
     generation_fence: &Path,
     generation_token: &str,
@@ -109,7 +107,7 @@ fn absolute_or_self(path: &Path) -> std::path::PathBuf {
 }
 
 pub(super) fn plugin_hooks(
-    host: impl MarketplaceHostIdentity,
+    host: impl MarketplaceHost,
     relay: &Path,
     generation_fence: &Path,
     generation_token: &str,
