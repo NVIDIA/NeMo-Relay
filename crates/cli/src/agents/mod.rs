@@ -397,8 +397,19 @@ pub(crate) fn prepare_launch(
 }
 
 pub(crate) fn configured(agent: CodingAgent, configs: &crate::configuration::AgentConfigs) -> bool {
-    configs.get(agent).command.is_some()
+    config(agent, configs).command.is_some()
         || matches!(agent, CodingAgent::Hermes) && configs.hermes.hooks_path.is_some()
+}
+
+pub(crate) const fn config(
+    agent: CodingAgent,
+    configs: &crate::configuration::AgentConfigs,
+) -> &crate::configuration::AgentCommandConfig {
+    match agent {
+        CodingAgent::ClaudeCode => &configs.claude,
+        CodingAgent::Codex => &configs.codex,
+        CodingAgent::Hermes => &configs.hermes,
+    }
 }
 
 pub(crate) fn hook_status(

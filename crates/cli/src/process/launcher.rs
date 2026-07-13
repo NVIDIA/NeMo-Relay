@@ -303,7 +303,7 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
 // whitespace splitting because config command values are a convenience fallback; complex shell
 // commands should be passed after `--` by the caller.
 fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<String>> {
-    let command = agents.get(agent).command.as_ref()?;
+    let command = crate::agents::config(agent, agents).command.as_ref()?;
     let argv = crate::process::command_argv(command);
     (!argv.is_empty()).then_some(argv)
 }

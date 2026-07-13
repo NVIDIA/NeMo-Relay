@@ -11,7 +11,6 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
 
-use crate::agents::CodingAgent;
 use crate::plugins::policy::DynamicPluginHostPolicy;
 
 use super::{
@@ -102,16 +101,6 @@ pub(crate) struct AgentCommandConfig {
     pub(crate) command: Option<String>,
     /// Legacy Hermes config-path override retained for existing Relay configuration files.
     pub(crate) hooks_path: Option<PathBuf>,
-}
-
-impl AgentConfigs {
-    pub(crate) const fn get(&self, agent: CodingAgent) -> &AgentCommandConfig {
-        match agent {
-            CodingAgent::ClaudeCode => &self.claude,
-            CodingAgent::Codex => &self.codex,
-            CodingAgent::Hermes => &self.hermes,
-        }
-    }
 }
 
 impl Default for GatewayConfig {

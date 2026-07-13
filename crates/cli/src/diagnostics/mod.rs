@@ -384,7 +384,7 @@ fn agent_command(agent: CodingAgent, agents: &AgentConfigs) -> String {
 }
 
 fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<&String> {
-    agents.get(agent).command.as_ref()
+    crate::agents::config(agent, agents).command.as_ref()
 }
 
 fn agent_configured(agent: CodingAgent, agents: &AgentConfigs) -> bool {

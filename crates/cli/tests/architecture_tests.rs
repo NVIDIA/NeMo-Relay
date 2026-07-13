@@ -122,3 +122,81 @@ fn agent_directories_do_not_import_one_another_or_commands() {
         }
     }
 }
+
+#[test]
+fn retired_horizontal_and_monolithic_modules_do_not_return() {
+    let src = source_root();
+    for path in [
+        "agents/install",
+        "agents/host.rs",
+        "agents/adapters.rs",
+        "agents/alignment.rs",
+        "commands/arguments.rs",
+        "configuration/setup.rs",
+    ] {
+        assert!(!src.join(path).exists(), "retired module returned: {path}");
+    }
+}
+
+#[test]
+fn shared_installation_is_agent_neutral() {
+    let installation = source_root().join("installation");
+    for path in rust_files(&installation) {
+        let source = fs::read_to_string(&path).unwrap();
+        for marker in ["crate::agents", "CodingAgent", "IntegrationHost"] {
+            assert!(
+                !source.contains(marker),
+                "{} contains host-selection marker {marker}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn all_target_is_command_only() {
+    let src = source_root();
+    for path in rust_files(&src) {
+        if path.starts_with(src.join("commands")) {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        for marker in ["IntegrationHost", "InstallTarget", "CodingAgent::All"] {
+            assert!(
+                !source.contains(marker),
+                "{} contains command target marker {marker}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_runtime_subsystems_do_not_dispatch_host_variants() {
+    let src = source_root();
+    for subsystem in [
+        "installation",
+        "process",
+        "configuration",
+        "diagnostics",
+        "gateway",
+        "sessions",
+        "hooks",
+        "filesystem",
+    ] {
+        for path in rust_files(&src.join(subsystem)) {
+            let source = fs::read_to_string(&path).unwrap();
+            for marker in [
+                "CodingAgent::Codex",
+                "CodingAgent::ClaudeCode",
+                "CodingAgent::Hermes",
+            ] {
+                assert!(
+                    !source.contains(marker),
+                    "{} dispatches host variant {marker}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
