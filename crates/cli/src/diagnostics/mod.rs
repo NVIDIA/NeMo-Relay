@@ -11,10 +11,12 @@
 
 mod environment;
 mod model;
+mod probes;
 mod render;
 
 use environment::collect_environment;
 pub(crate) use model::*;
+use probes::*;
 use render::*;
 
 use std::path::{Path, PathBuf};
@@ -1016,72 +1018,6 @@ async fn probe_atof_websocket(
             name: "ATOF endpoint",
             status: Status::Fail,
             details: format!("endpoints[{index}] websocket {url}: timed out"),
-        },
-    }
-}
-
-fn check_directory(name: &'static str, path: &Path) -> Check {
-    match check_dir_writable(path) {
-        Ok(()) => Check {
-            name,
-            status: Status::Pass,
-            details: format!("{} (appears writable)", path.display()),
-        },
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Check {
-            name,
-            status: Status::Warn,
-            details: format!("{}: not present; runtime will create it", path.display()),
-        },
-        Err(err) => Check {
-            name,
-            status: Status::Fail,
-            details: format!("{}: {err}", path.display()),
-        },
-    }
-}
-
-fn check_dir_writable(dir: &Path) -> Result<(), std::io::Error> {
-    let metadata = std::fs::metadata(dir)?;
-    if !metadata.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "path is not a directory",
-        ));
-    }
-    if metadata.permissions().readonly() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "directory is read-only",
-        ));
-    }
-    Ok(())
-}
-
-async fn probe_http_named(name: &'static str, url: &str) -> Check {
-    let client = match reqwest::Client::builder().timeout(NETWORK_TIMEOUT).build() {
-        Ok(c) => c,
-        Err(err) => {
-            return Check {
-                name,
-                status: Status::Fail,
-                details: format!("could not build HTTP client: {err}"),
-            };
-        }
-    };
-    match client.get(url).send().await {
-        Ok(resp) => Check {
-            name,
-            status: if resp.status().is_success() || resp.status().is_redirection() {
-                Status::Pass
-            } else {
-                Status::Warn
-            },
-            details: format!("{} (HTTP {})", url, resp.status().as_u16()),
-        },
-        Err(err) => Check {
-            name,
-            status: Status::Fail,
-            details: format!("{url}: {err}"),
         },
     }
 }
