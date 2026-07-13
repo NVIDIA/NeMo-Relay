@@ -3,7 +3,12 @@
 
 //! Observable header policy and downstream response construction.
 
-use super::*;
+use axum::body::Body;
+use axum::http::{HeaderMap, HeaderName, Response, StatusCode};
+use serde_json::{Map, Value, json};
+
+use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
+use crate::error::CliError;
 
 pub(super) fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
     let mut output = Map::new();

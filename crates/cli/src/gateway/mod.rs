@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod client;
+mod request;
 mod response;
 mod routes;
 
+use request::*;
 use response::*;
 use routes::*;
 
-use std::error::Error;
 use std::sync::{Arc, Mutex};
 
 use async_stream::stream;
@@ -16,7 +17,6 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use futures_util::StreamExt;
-use http_body_util::LengthLimitError;
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
@@ -31,13 +31,13 @@ use nemo_relay::codec::resolve::{
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::FlowError;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::agents::shared::alignment::{self, GatewayRouteKind};
-use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, header_string};
+use crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER;
 use crate::error::CliError;
 use crate::server::AppState;
-use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, LlmGatewayStart, SessionManager};
+use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/gateway_tests.rs"]
@@ -69,138 +69,6 @@ pub(crate) async fn passthrough(
         .prepare_gateway_call(&prepared.headers, build_llm_gateway_start(&prepared))
         .await?;
     run_managed_gateway(state, prepared, prep).await
-}
-
-struct PreparedGatewayRequest {
-    method: Method,
-    headers: HeaderMap,
-    path: String,
-    provider: ProviderRoute,
-    upstream_url: String,
-    body_bytes: Bytes,
-    request_json: Value,
-    streaming: bool,
-    allow_environment_provider_auth: bool,
-}
-
-// Validates the gateway route, buffers the request body exactly once, and derives the metadata used
-// for both upstream forwarding and NeMo Relay LLM start events. Provider JSON parse failures are not
-// request failures because the gateway still forwards raw bytes unchanged.
-async fn prepare_gateway_request(
-    config: &crate::configuration::GatewayConfig,
-    request: Request<Body>,
-    allow_environment_provider_auth: bool,
-) -> Result<PreparedGatewayRequest, CliError> {
-    let (mut parts, body) = request.into_parts();
-    // This proof authorizes Relay's local credential injection only. It must not be observed by
-    // middleware, recorded in ATOF, or forwarded to the model provider.
-    parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
-    let provider = ProviderRoute::from_path(parts.uri.path()).ok_or_else(|| {
-        CliError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
-    })?;
-    let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
-        .await
-        .map_err(passthrough_body_error)?;
-    let request_json = serde_json::from_slice::<Value>(&body_bytes).unwrap_or(Value::Null);
-    let path_and_query = parts
-        .uri
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or(parts.uri.path());
-    let upstream_url = gateway_upstream_url_override(
-        provider,
-        &parts.headers,
-        path_and_query,
-        allow_environment_provider_auth,
-    )
-    .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
-    let streaming = request_json
-        .get("stream")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok(PreparedGatewayRequest {
-        method: parts.method,
-        headers: parts.headers,
-        path: parts.uri.path().to_string(),
-        provider,
-        upstream_url,
-        body_bytes,
-        request_json,
-        streaming,
-        allow_environment_provider_auth,
-    })
-}
-
-fn passthrough_body_error(error: axum::Error) -> CliError {
-    if error.source().is_some_and(|source| {
-        source.is::<LengthLimitError>()
-            || source
-                .source()
-                .is_some_and(|source| source.is::<LengthLimitError>())
-    }) {
-        CliError::PayloadTooLarge(error.to_string())
-    } else {
-        CliError::InvalidPayload(error.to_string())
-    }
-}
-
-// Builds the [`LlmGatewayStart`] payload from a prepared request. Identifier resolution is shared
-// across streaming and non-streaming paths so correlation behavior is consistent for every route.
-// Provider-specific fallbacks are resolved here, before request execution leaves the gateway path,
-// because the later runtime-managed LLM call only sees this normalized start payload.
-fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
-    LlmGatewayStart {
-        // Explicit NeMo Relay headers still win, but alignment can recover agent-native session
-        // signals when available. Applies to Claude Code's session header and Codex's Responses
-        // prompt-cache thread id today.
-        session_id: gateway_session_id(&request.headers, &request.request_json, request.provider),
-        provider: request.provider.name().to_string(),
-        model_name: request
-            .request_json
-            .get("model")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        // Subagent ownership is intentionally header-only at the gateway layer. Body fields can be
-        // provider payload content rather than scope identity, so the session layer handles other
-        // ownership hints.
-        subagent_id: gateway_subagent_id(&request.headers),
-        conversation_id: gateway_identifier(
-            &request.headers,
-            &request.request_json,
-            "x-nemo-relay-conversation-id",
-            &[
-                &["conversation_id"],
-                &["conversationId"],
-                &["conversation", "id"],
-            ],
-        ),
-        generation_id: gateway_identifier(
-            &request.headers,
-            &request.request_json,
-            "x-nemo-relay-generation-id",
-            &[&["generation_id"], &["generationId"], &["generation", "id"]],
-        ),
-        request_id: gateway_identifier(
-            &request.headers,
-            &request.request_json,
-            "x-nemo-relay-request-id",
-            &[
-                &["request_id"],
-                &["requestId"],
-                &["request", "id"],
-                &["metadata", "request_id"],
-            ],
-        )
-        // Preserve a transport request id as a weak fallback for debugging even when the provider
-        // body does not expose an LLM request id.
-        .or_else(|| header_string(&request.headers, "x-request-id")),
-        request: LlmRequest {
-            headers: observable_headers(&request.headers),
-            content: request.request_json.clone(),
-        },
-        streaming: request.streaming,
-        metadata: json!({ "gateway_path": request.path }),
-    }
 }
 
 // Captures upstream HTTP status and response headers from inside the managed `func`. The runtime's
