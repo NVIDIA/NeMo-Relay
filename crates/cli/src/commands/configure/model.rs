@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Testable setup configuration model and file helpers.
+//! Testable setup configuration model and file helpers owned by the configure command.
 
 use std::path::{Path, PathBuf};
 

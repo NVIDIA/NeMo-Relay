@@ -8,6 +8,7 @@ use clap::Args;
 use super::root::AgentArg;
 use crate::error::CliError;
 
+mod model;
 mod wizard;
 
 pub(super) use wizard::run;
@@ -25,7 +26,7 @@ pub(crate) struct ConfigCommand {
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
     let agent = command.agent.map(Into::into);
     if command.reset {
-        crate::configuration::setup::reset(agent)?;
+        model::reset(agent)?;
     } else {
         wizard::run(agent).await?;
     }

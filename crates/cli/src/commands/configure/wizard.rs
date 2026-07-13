@@ -23,8 +23,8 @@ use self::model::{
     home_dir, plugins_edit_command_for_scope, plugins_resume_command, preview_paths,
     read_existing_defaults, save_config,
 };
+use super::model;
 use crate::agents::CodingAgent;
-use crate::configuration::setup as model;
 use crate::error::CliError;
 
 #[cfg(test)]
