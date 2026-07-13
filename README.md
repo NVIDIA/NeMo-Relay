@@ -42,7 +42,7 @@ trajectory file, you have concrete data to inspect, debug, and build on.
 ### Local Agent Trajectory
 
 This walkthrough shows an end-to-end quick success setup. Install the
-`nemo-relay-cli`, turn on local exporters, run Codex, Claude Code, or Hermes
+`nemo-relay-cli`, turn on local exporters, run either Codex or Claude Code
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
@@ -101,7 +101,7 @@ then configure these sections:
 > Run `nemo-relay plugins edit` without `--project` only when you want
 > user-level exporter settings that apply across projects.
 
-#### 3. Run a Coding Agent Through Relay
+#### 3. Run Codex or Claude Code Through Relay
 
 Run the Relay wrapper for the host CLI installed on your machine. For example:
 
@@ -113,10 +113,6 @@ nemo-relay codex -- exec "Summarize this repository."
 nemo-relay claude -- "Summarize this repository."
 ```
 
-```bash
-nemo-relay hermes -- -z "Summarize this repository."
-```
-
 Refer to the full [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for more options.
 
 The transparent wrapper starts a local Relay gateway, injects host-specific hook
@@ -124,15 +120,10 @@ and provider settings for that launched process, then shuts the gateway down
 when the agent exits.
 
 > [!WARNING]
-> `nemo-relay install codex` automatically trusts only the exact hooks owned by
-> `nemo-relay-plugin@nemo-relay-local`. It does not trust unrelated user,
-> project, or plugin hooks. Manual or source-marketplace installs can still
-> require review. Restart an already running Codex app after persistent
-> installation. On Windows, a restrictive host Job Object can keep the shared
-> Relay gateway scoped to the host process lifetime.
-> The Codex Desktop App has additional limitations.
+> If generated hooks are inactive, Codex users must review and activate them
+> before events appear. The Codex Desktop App has additional limitations.
 > Refer to the [Codex CLI guide](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/codex) for the
-> current lifecycle, startup, and troubleshooting details.
+> current hook activation caveat and troubleshooting steps.
 
 #### 4. Verify the Run
 
@@ -296,8 +287,8 @@ coverage.
 | Agent | Observability | Security | Optimization | Notes |
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
-| Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; the supported generated schema does not install `SessionEnd`. |
-| Hermes Agent | Yes | Yes | Partial | User config installs the shared native MCP gateway lifecycle plus exact trusted hooks; gateway-routed or hook-backed LLM observability is supported. |
+| Codex | Yes | Yes | Partial | Hook activation is required; missing session-end behavior limits trajectory finalization and full optimization coverage. |
+| Hermes Agent | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed or hook-backed LLM observability are supported. |
 
 ### Public API Integrations
 

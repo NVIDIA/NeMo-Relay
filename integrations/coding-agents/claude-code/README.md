@@ -5,9 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Plugin
 
-This package contains a native MCP lifecycle client and Claude Code hook entries
-that forward canonical Claude Code hook JSON to `nemo-relay` at
-`/hooks/claude-code`.
+This package contains Claude Code hook entries that forward canonical Claude
+Code hook JSON to `nemo-relay` at `/hooks/claude-code`.
 
 Claude Code is the supported Claude integration target. Claude application,
 Claude web, and Claude desktop sessions are unsupported unless they expose the
@@ -16,9 +15,8 @@ same local hook and gateway controls as Claude Code.
 ## Files
 
 - `.claude-plugin/plugin.json` describes the Claude Code hook package.
-- `.mcp.json` starts the native `nemo-relay mcp` lifecycle client.
 - `hooks/hooks.json` contains hook entries that run
-  `nemo-relay hook-forward claude --forward-only`.
+  `nemo-relay plugin-shim hook claude`.
 
 ## Captured Events
 
@@ -28,11 +26,10 @@ The bundle forwards `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
 `PreCompact`, and `PostCompact` as scope, tool, mark, or private LLM
 correlation events.
 
-The bundle requires Claude Code 2.1.121 or newer. That version provides the
-`alwaysLoad` MCP startup barrier used to make Relay ready before session hooks
-and accepts the complete generated hook schema. Installation fails before
-changing host state when the version is too old, and `nemo-relay doctor`
-reports the required upgrade.
+The bundle requires Claude Code 2.1.116 or newer. Older versions do not have
+`UserPromptExpansion` in their hook-event whitelist and reject the entire
+plugin hook configuration, so no relay hooks load. `nemo-relay doctor` reports
+this condition.
 
 Claude Code observability is turn-oriented. A multi-turn session can produce one
 root `claude-code-turn` span or ATIF trajectory per user turn. That is expected
@@ -53,15 +50,9 @@ nemo-relay run -- claude
 ```
 
 The wrapper starts a per-invocation gateway on a dynamic localhost port,
-creates a temporary Claude plugin directory, and passes it with `--plugin-dir`.
-It also creates a private settings overlay that preserves the caller's first
-explicit `--settings` object and overrides only `ANTHROPIC_BASE_URL` for the
-launched process. Relay removes both temporary artifacts when Claude exits and
-does not rewrite the source settings or user-level plugin state. An enabled
-Relay plugin MCP authenticates, borrows, and monitors the wrapper-owned dynamic
-gateway, and its persistent hooks become no-ops for this process; only the
-temporary hook source delivers lifecycle data after authenticating that
-gateway.
+creates a temporary Claude plugin directory, passes it with `--plugin-dir`, sets
+`ANTHROPIC_BASE_URL` for the launched process, and removes the temporary plugin
+when Claude exits.
 
 Inspect the launch without starting Claude Code:
 
@@ -177,16 +168,7 @@ nemo-relay install claude-code
 
 `nemo-relay install claude-code` writes a local Claude Code marketplace,
 installs `nemo-relay-plugin` at user scope, and enables Claude Code provider
-routing through NeMo Relay. Its plugin MCP process immediately starts or reuses
-the shared native gateway on `127.0.0.1:47632` and heartbeats it while MCP stdio
-remains open. Codex, Claude Code, and configured Hermes MCP clients can share
-that gateway.
-
-The generated MCP entry sets `alwaysLoad: true`. Claude Code therefore waits
-for the MCP connection during startup, while `nemo-relay mcp` starts or reuses
-the gateway immediately when its process launches. The command hook retains a
-same-gateway recovery path for an unexpected runtime outage. The MCP server
-advertises no tools and does not add tool definitions to Claude's context.
+routing through NeMo Relay.
 
 No separate provider-routing command is required when installing through
 `nemo-relay install`.
@@ -199,13 +181,10 @@ Package or unpack the plugin so the plugin root contains:
 ```text
 nemo-relay-plugin/
   .claude-plugin/plugin.json
-  .mcp.json
   hooks/hooks.json
 ```
 
-Persistent mode uses system and user Relay configuration only and starts the
-gateway in the user configuration directory. Use `nemo-relay run --agent
-claude` when project-specific Relay configuration is required.
+The hook shim starts the sidecar lazily if no gateway is already reachable.
 
 Repo marketplace discovery is also supported:
 
@@ -217,11 +196,8 @@ claude plugin install nemo-relay-plugin@nemo-relay --scope user
 
 That path reads `.claude-plugin/marketplace.json` from the repository and
 installs this Claude Code plugin from `integrations/coding-agents/claude-code`.
-The source plugin starts `nemo-relay mcp`; its hooks use the explicit
-`--forward-only` mode to post to that existing gateway without an
-installer-owned generation fence. They cannot launch or recover Relay. Use
-`nemo-relay install claude-code` for complete provider routing and
-generation-fenced upgrades.
+Source hooks invoke `nemo-relay plugin-shim hook claude` directly. Use
+`nemo-relay install claude-code` for the complete provider-routing setup.
 
 Create a local Claude Code marketplace and copy the plugin under that
 marketplace root:
@@ -248,7 +224,7 @@ Create `$MARKETPLACE_ROOT/.claude-plugin/marketplace.json`:
   "plugins": [
     {
       "name": "nemo-relay-plugin",
-      "description": "Run the shared native Relay gateway and capture Claude Code lifecycle events.",
+      "description": "Forward Claude Code lifecycle hooks to a local NeMo Relay sidecar.",
       "source": "./plugins/nemo-relay-plugin",
       "category": "development"
     }
@@ -272,9 +248,8 @@ claude --plugin-dir "$PLUGIN_ROOT"
 ```
 
 Hook commands in the source `hooks/hooks.json` template use
-`nemo-relay hook-forward claude --forward-only`, so source marketplace installs
-rely on the same `nemo-relay` executable available on `PATH` and on their
-`alwaysLoad` MCP entry for gateway startup.
+`nemo-relay plugin-shim hook claude`, so source marketplace installs rely on
+the same `nemo-relay` executable available on `PATH`.
 
 If you set up the marketplace manually for development, use the top-level
 installer commands for provider routing and rollback:
@@ -296,10 +271,8 @@ Start a normal Claude Code session:
 claude
 ```
 
-The installed MCP client starts the Relay sidecar before Claude Code proceeds
-with session startup. The hook forwarding command retains one coordinated
-outage-recovery attempt, and provider traffic is routed through
-`ANTHROPIC_BASE_URL=http://127.0.0.1:47632`.
+The installed hooks start the Relay sidecar lazily, and provider traffic is
+routed through `ANTHROPIC_BASE_URL=http://127.0.0.1:47632`.
 
 To upgrade manually, replace the plugin directory contents with the new package,
 keep the same `MARKETPLACE_ROOT`, update the marketplace, and rerun the
@@ -308,7 +281,7 @@ top-level installer:
 ```bash
 claude plugin marketplace update nemo-relay-local
 claude plugin update nemo-relay-plugin
-nemo-relay install claude-code --force
+nemo-relay install claude-code
 ```
 
 To uninstall, restore Claude Code provider settings, uninstall the plugin, remove

@@ -61,17 +61,16 @@ inherit the persistent `PATH` change. Verify that the command is available:
 nemo-relay --version
 ```
 
-After installation, `nemo-relay` can also install persistent Claude Code,
-Codex, and Hermes Agent integrations:
+After installation, `nemo-relay` can also install persistent Claude Code and
+Codex host plugins:
 
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
-nemo-relay install hermes
 ```
 
-Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
-the persistent integration workflow.
+Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for the host
+plugin workflow.
 
 <Note>
 The installers download the published SHA-256 checksum for the selected release
@@ -231,18 +230,17 @@ configuration and verification steps.
 
 ### Hermes Agent
 
-After installing the NeMo Relay CLI, install and diagnose the Hermes user
-integration:
+Install the latest NeMo Relay Python package in the environment that runs
+Hermes, then enable the bundled Hermes plugin:
 
 ```bash
-nemo-relay install hermes
-nemo-relay doctor --plugin hermes
+pip install nemo-relay
+hermes plugins enable observability/nemo_relay
 ```
 
-Relay adds a native stdio MCP entry and the exact trusted lifecycle hooks that
-share one user-level gateway acquired as soon as the MCP process starts. Refer
-to the [Hermes Agent guide](/nemo-relay-cli/hermes) for provider routing,
-lifecycle, and removal steps.
+The plugin ID is `observability/nemo_relay`. See the
+[Hermes NeMo Relay plugin guide](https://github.com/NousResearch/hermes-agent/tree/main/plugins/observability/nemo_relay)
+for configuration and verification steps.
 
 ### Python Framework Integrations
 

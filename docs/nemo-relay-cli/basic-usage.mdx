@@ -54,12 +54,7 @@ under the active session scope.
 Use the agent shortcuts for no-install local observability. The wrapper starts
 a gateway on a dynamic `127.0.0.1` port, injects the resolved hook and gateway
 configuration into the launched coding agent, and stops the gateway when the
-agent exits. Relay owns the launched wrapper and its descendants as one process
-tree, so a gateway failure cannot leave an agent running without its private
-gateway and hook configuration. Interactive Unix launches transfer foreground
-terminal ownership and preserve Ctrl-C and Ctrl-Z job control. Non-interactive
-Unix launches forward termination signals to the complete agent process tree
-before Relay removes the injected configuration.
+agent exits.
 
 ```bash
 nemo-relay codex
@@ -74,14 +69,6 @@ instead of the built-in shortcut:
 nemo-relay run -- codex
 ```
 
-For Claude Code and Codex, transparent mode leaves the caller's source settings,
-selected profile, and installed plugin state unchanged. A process marker makes
-any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
-persistent hooks exit without forwarding; Codex disables the known Relay plugin
-hook identities in its process-local CLI state. Only the injected wrapper hooks
-deliver events. Hermes gets the same isolation through its process-private
-configuration overlay.
-
 If a launcher or wrapper hides the real agent name, set that wrapper as the
 configured command and pass `--agent`. The same pattern applies to Claude Code,
 Codex, and Hermes:
@@ -95,35 +82,23 @@ command = "my-codex-wrapper"
 nemo-relay run --agent codex
 ```
 
-For Hermes, interactive setup configures only Relay's transparent wrapper.
-Persistent MCP and trusted shell-hook state is owned by
-`nemo-relay install hermes`. Transparent `run --agent hermes` exports the
-dynamic `NEMO_RELAY_GATEWAY_URL` through a process-private `HERMES_HOME`
-overlay; it never rewrites the user's Hermes config.
+Hermes is different from the other transparent modes: `run --agent hermes`
+starts the gateway and exports the dynamic `NEMO_RELAY_GATEWAY_URL`, but Hermes
+shell hooks still need to be installed or otherwise approved in Hermes config.
 
 Use `--dry-run --print` to inspect the generated hook config, gateway
 environment, gateway URL, and final command without launching the agent.
 
-## Persistent Host Integrations
+## Persistent Host Plugins
 
-Use persistent integration installation when Claude Code, Codex, or Hermes
-Agent should load Relay instead of using a wrapper command:
+Use persistent plugin installation when Claude Code or Codex should load NeMo
+Relay through the host's plugin system instead of through a wrapper command:
 
 ```bash
 nemo-relay install claude-code
 nemo-relay install codex
-nemo-relay install hermes
 nemo-relay install all
 ```
-
-Claude Code and Codex use marketplace plugins. Hermes exposes the same stdio
-MCP lifecycle through user configuration.
-
-Hermes, Claude Code, and Codex MCP clients can share the native gateway on
-`127.0.0.1:47632`. Every `nemo-relay mcp` process acquires that gateway as soon
-as it launches. Claude Code uses `alwaysLoad` to wait for the MCP connection;
-Hermes starts discovery asynchronously, so its canonical hook command also
-closes the remaining cold-start race and retries the original payload once.
 
 Plugin installation writes a local marketplace, installs the generated
 `nemo-relay-plugin`, and configures the host-specific hook and provider routing
@@ -137,8 +112,8 @@ nemo-relay doctor --plugin codex
 nemo-relay uninstall codex
 ```
 
-Refer to [Coding Agent Installation](/nemo-relay-cli/plugin-installation) for
-install directories, host-specific behavior, and the shared-sidecar lifecycle.
+Refer to [Plugin Installation](/nemo-relay-cli/plugin-installation) for install
+directories, host-specific behavior, and Codex lazy sidecar constraints.
 
 ## Shared Configuration
 
@@ -331,8 +306,8 @@ Generated hook bundles subscribe to the events needed for that mapping:
 
 | Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
 | --- | --- | --- |
-| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
-| Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
+| Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
+| Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 
 Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks
@@ -341,37 +316,26 @@ map to NeMo Relay LLM start/end events when present. Hermes `pre_llm_call` and
 
 ## Hook Forwarding
 
-Transparent Claude Code and Codex hooks invoke
-`nemo-relay hook-forward <agent>` with the canonical payload on standard input.
-The wrapper-owned hook command embeds its ephemeral gateway URL and is marked
-as transparent so it cannot recover the fixed gateway.
+Hooks generated by the wrapper (Claude/Codex ephemeral, Hermes via
+setup) invoke `nemo-relay hook-forward <agent>` from stdin. Inside the wrapper
+the gateway URL comes from `NEMO_RELAY_GATEWAY_URL` injected on every run;
+outside the wrapper (Hermes standalone, IDE-launched Claude/Codex) the hook
+command falls back to its embedded `--gateway-url`.
 
-Persistent Claude Code, Codex, and Hermes hooks also use
-`nemo-relay hook-forward <agent>`. A persistent generated command identifies
-the fixed gateway and private install-generation fence explicitly, waits for
-and verifies the MCP-owned Relay gateway, then forwards the unchanged payload
-once. Hermes
-setup stores the canonical absolute command and trusts its exact event pairs;
-it does not enable global hook auto-acceptance.
+Hooks installed by Claude Code and Codex plugins use the plugin shim path
+managed by `nemo-relay install`. That path starts or reuses the local plugin
+sidecar before forwarding the hook payload.
 
 `hook-forward` reads the canonical hook payload from standard input, sends it
 to the matching endpoint, and prints the endpoint response. It fails open by
 default so observability outages do not block the coding agent. Add
 `--fail-closed` only when policy requires hook delivery to block the agent.
 
-Available flags:
+Optional flags map to gateway headers:
 
-- `--gateway-url <url>` selects the Relay gateway that receives the payload.
-- `--forward-only` allows source plugins and custom automation to use an
-  existing compatible gateway without an installer-owned generation fence. It
-  verifies the gateway but never launches or recovers Relay. Generated
-  installed hooks use a private generation fence instead.
 - `--session-metadata` sets `x-nemo-relay-session-metadata`.
 - `--profile` sets `x-nemo-relay-config-profile`.
 - `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
-- `--fail-closed` returns a failure when delivery fails or Relay rejects the
-  hook. Without it, forwarding fails open so an observability outage does not
-  block the coding agent.
 
 ## Agent Guides
 
@@ -380,7 +344,7 @@ application-mode caveats.
 
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
-- [Coding Agent Installation](/nemo-relay-cli/plugin-installation)
+- [Plugin Installation](/nemo-relay-cli/plugin-installation)
 - [Hermes Agent](/nemo-relay-cli/hermes)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,
