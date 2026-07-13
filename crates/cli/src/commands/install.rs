@@ -97,7 +97,7 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
         ));
     }
     for agent in agents {
-        crate::installation::marketplace::install(agent, request.clone())?;
+        crate::agents::install_integration(agent, request.clone())?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -120,7 +120,7 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
         ));
     }
     for agent in agents {
-        crate::installation::marketplace::uninstall(agent, request.clone())?;
+        crate::agents::uninstall_integration(agent, request.clone())?;
     }
     Ok(ExitCode::SUCCESS)
 }

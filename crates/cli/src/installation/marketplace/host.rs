@@ -288,7 +288,7 @@ fn parse_json_command_output(command: &str, output: CommandOutput) -> Result<Val
         .map_err(|error| format!("failed to parse `{command}` output as JSON: {error}"))
 }
 
-pub(super) fn require_relay(
+pub(crate) fn require_relay(
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<PathBuf, String> {
@@ -301,7 +301,7 @@ pub(super) fn require_relay(
         .map(crate::agents::portable_executable_path)
 }
 
-pub(super) fn validate_relay_hook_forward(
+pub(crate) fn validate_relay_hook_forward(
     relay: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -321,7 +321,7 @@ pub(super) fn validate_relay_hook_forward(
     }
 }
 
-pub(super) fn validate_relay_mcp(
+pub(crate) fn validate_relay_mcp(
     relay: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -341,7 +341,7 @@ pub(super) fn validate_relay_mcp(
     }
 }
 
-pub(super) fn require_host_cli(
+pub(crate) fn require_host_cli(
     host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -356,7 +356,7 @@ pub(super) fn require_host_cli(
         .ok_or_else(|| format!("required `{cli}` CLI was not found on PATH"))
 }
 
-pub(super) fn validate_host_version(
+pub(crate) fn validate_host_version(
     host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -452,7 +452,7 @@ pub(super) fn format_command(program: &str, args: &[String]) -> String {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct CommandOutput {
+pub(crate) struct CommandOutput {
     pub(super) status: i32,
     pub(super) stdout: String,
     pub(super) stderr: String,
@@ -468,7 +468,7 @@ impl CommandOutput {
     }
 }
 
-pub(super) trait CommandRunner {
+pub(crate) trait CommandRunner {
     fn current_executable(&self) -> Result<PathBuf, String>;
     fn resolve_executable(&self, command: &str) -> Result<Option<PathBuf>, String>;
     fn run(&self, program: &Path, args: &[String]) -> Result<i32, String>;
@@ -476,7 +476,7 @@ pub(super) trait CommandRunner {
     fn run_capture(&self, program: &Path, args: &[String]) -> Result<CommandOutput, String>;
 }
 
-pub(super) struct RealCommandRunner;
+pub(crate) struct RealCommandRunner;
 
 impl CommandRunner for RealCommandRunner {
     fn current_executable(&self) -> Result<PathBuf, String> {

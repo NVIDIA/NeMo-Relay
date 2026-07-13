@@ -16,12 +16,12 @@ use crate::installation::generation::GENERATION_FILE_NAME;
 use super::PLUGIN_NAME;
 
 #[derive(Debug, Clone)]
-pub(super) struct PluginInstallOptions {
-    pub(super) install_dir: PathBuf,
-    pub(super) operation_lock_dir: PathBuf,
-    pub(super) force: bool,
-    pub(super) dry_run: bool,
-    pub(super) skip_doctor: bool,
+pub(crate) struct PluginInstallOptions {
+    pub(crate) install_dir: PathBuf,
+    pub(crate) operation_lock_dir: PathBuf,
+    pub(crate) force: bool,
+    pub(crate) dry_run: bool,
+    pub(crate) skip_doctor: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

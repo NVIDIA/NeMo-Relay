@@ -303,6 +303,30 @@ pub(crate) fn doctor_marketplace_plugin_json(
     }
 }
 
+pub(crate) fn install_integration(
+    agent: CodingAgent,
+    command: crate::installation::InstallRequest,
+) -> Result<std::process::ExitCode, crate::error::CliError> {
+    match agent {
+        CodingAgent::Hermes => hermes::install::install(command),
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            crate::installation::marketplace::install(agent, command)
+        }
+    }
+}
+
+pub(crate) fn uninstall_integration(
+    agent: CodingAgent,
+    command: crate::installation::UninstallRequest,
+) -> Result<std::process::ExitCode, crate::error::CliError> {
+    match agent {
+        CodingAgent::Hermes => hermes::install::uninstall(command),
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            crate::installation::marketplace::uninstall(agent, command)
+        }
+    }
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;

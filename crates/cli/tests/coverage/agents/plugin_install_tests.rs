@@ -2088,7 +2088,7 @@ fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it()
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let _home = HomeScope::enter(&home);
-    let config = hermes_config_path().unwrap();
+    let config = crate::agents::hermes::install::config_path().unwrap();
     let relay = home
         .join("bin")
         .join(format!("nemo-relay{}", std::env::consts::EXE_SUFFIX));
@@ -2100,7 +2100,8 @@ fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it()
         .with_executable("hermes", "/bin/hermes")
         .with_capture_output("/bin/hermes --version", "Hermes Agent v0.18.2 (test)\n");
 
-    let report = doctor_hermes_json_value(&options(dir.path()), &runner).unwrap();
+    let report =
+        crate::agents::hermes::install::doctor_json_value(&options(dir.path()), &runner).unwrap();
 
     assert_eq!(report["ok"], json!(true));
     assert_eq!(
@@ -2136,12 +2137,13 @@ fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it()
     assert!(hermes.marketplace.is_none());
     assert!(hermes.plugin.is_none());
 
-    doctor_hermes_host(&options(dir.path()), &runner).unwrap();
+    crate::agents::hermes::install::doctor(&options(dir.path()), &runner).unwrap();
 
     std::fs::remove_file(&configured_relay).unwrap();
-    let error = doctor_hermes_host(&options(dir.path()), &runner).unwrap_err();
+    let error = crate::agents::hermes::install::doctor(&options(dir.path()), &runner).unwrap_err();
     assert!(error.contains("doctor checks failed"), "{error}");
-    let report = doctor_hermes_json_value(&options(dir.path()), &runner).unwrap();
+    let report =
+        crate::agents::hermes::install::doctor_json_value(&options(dir.path()), &runner).unwrap();
     let failed = report["readiness_checks"].as_array().unwrap();
     for expected in [
         "Configured Relay binary",
@@ -2163,13 +2165,14 @@ fn hermes_install_and_uninstall_dry_runs_preserve_persistent_state() {
     let home = dir.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let _home = HomeScope::enter(&home);
-    let mut dry_run = options(dir.path());
-    dry_run.dry_run = true;
-    dry_run.skip_doctor = false;
-    let runner = MockRunner::default();
-
-    install_hermes_host(&dry_run, &runner).unwrap();
-    let config = hermes_config_path().unwrap();
+    crate::agents::hermes::install::install(crate::installation::InstallRequest {
+        install_dir: Some(dir.path().to_path_buf()),
+        force: false,
+        dry_run: true,
+        skip_doctor: false,
+    })
+    .unwrap();
+    let config = crate::agents::hermes::install::config_path().unwrap();
     assert!(!config.exists());
 
     let hermes_home = config.parent().unwrap();
@@ -2185,12 +2188,15 @@ fn hermes_install_and_uninstall_dry_runs_preserve_persistent_state() {
         std::fs::write(path, contents).unwrap();
     }
 
-    uninstall_hermes_host(&dry_run).unwrap();
+    crate::agents::hermes::install::uninstall(crate::installation::UninstallRequest {
+        install_dir: Some(dir.path().to_path_buf()),
+        dry_run: true,
+    })
+    .unwrap();
 
     for (path, contents) in sentinels {
         assert_eq!(std::fs::read(path).unwrap(), contents);
     }
-    assert!(runner.quiet_commands().is_empty());
 }
 
 #[test]

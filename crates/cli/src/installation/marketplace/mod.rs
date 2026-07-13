@@ -4,9 +4,9 @@
 //! Local marketplace installer for Claude Code and Codex plugins.
 
 mod assets;
-mod host;
+pub(crate) mod host;
 mod setup;
-mod state;
+pub(crate) mod state;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,7 +100,7 @@ impl HostPluginReadiness {
         self.checks.iter().all(|check| check.ok)
     }
 
-    fn push(&mut self, name: impl Into<String>, result: Result<String, String>) {
+    pub(crate) fn push(&mut self, name: impl Into<String>, result: Result<String, String>) {
         match result {
             Ok(details) => self.checks.push(HostPluginReadinessCheck {
                 name: name.into(),
@@ -133,7 +133,8 @@ pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness
         .into_iter()
         .filter(|host| state_path(*host, &install_dir).exists())
         .collect::<Vec<_>>();
-    if hermes_config_path().is_ok_and(|path| crate::agents::hermes::persistent_state_exists(&path))
+    if crate::agents::hermes::install::config_path()
+        .is_ok_and(|path| crate::agents::hermes::persistent_state_exists(&path))
     {
         hosts.push(CodingAgent::Hermes);
     }
@@ -158,9 +159,8 @@ fn spawn_default_host_plugin_readiness(
     install_dir: PathBuf,
 ) -> PendingHostPluginReadiness {
     let state_path = match host {
-        CodingAgent::Hermes => {
-            hermes_config_path().unwrap_or_else(|_| state_path(CodingAgent::Hermes, &install_dir))
-        }
+        CodingAgent::Hermes => crate::agents::hermes::install::config_path()
+            .unwrap_or_else(|_| state_path(CodingAgent::Hermes, &install_dir)),
         _ => state_path(host, &install_dir),
     };
     let worker_state_path = state_path.clone();
@@ -176,9 +176,11 @@ fn spawn_default_host_plugin_readiness(
         let runner = RealCommandRunner;
         let setup_runner = RealPluginSetupRunner;
         let readiness = match host {
-            CodingAgent::Hermes => {
-                collect_hermes_host_readiness(&worker_state_path, &options, &runner)
-            }
+            CodingAgent::Hermes => crate::agents::hermes::install::collect_readiness(
+                &worker_state_path,
+                &options,
+                &runner,
+            ),
             _ => collect_host_plugin_readiness(host, &options, &runner, &setup_runner),
         };
         let _ = sender.send(readiness);
@@ -254,14 +256,7 @@ pub(crate) fn install(host: CodingAgent, command: InstallRequest) -> Result<Exit
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
     };
-    run_for_host(
-        host,
-        &options,
-        |host, options, runner, setup_runner| match host {
-            CodingAgent::Hermes => install_hermes_host(options, runner),
-            _ => install_host(host, options, runner, setup_runner),
-        },
-    )
+    run_for_host(host, &options, install_host)
 }
 
 pub(crate) fn uninstall(
@@ -283,14 +278,7 @@ pub(crate) fn uninstall(
         dry_run: command.dry_run,
         skip_doctor: true,
     };
-    run_for_host(
-        host,
-        &options,
-        |host, options, runner, setup_runner| match host {
-            CodingAgent::Hermes => uninstall_hermes_host(options),
-            _ => uninstall_host(host, options, runner, setup_runner),
-        },
-    )
+    run_for_host(host, &options, uninstall_host)
 }
 
 pub(crate) fn doctor(
@@ -320,7 +308,7 @@ pub(crate) fn doctor(
             host,
             &options,
             |host, options, runner, setup_runner| match host {
-                CodingAgent::Hermes => doctor_hermes_host(options, runner),
+                CodingAgent::Hermes => crate::agents::hermes::install::doctor(options, runner),
                 _ => doctor_host(host, options, runner, setup_runner),
             },
         )?;
@@ -357,7 +345,9 @@ fn doctor_json(
         .iter()
         .copied()
         .map(|host| match host {
-            CodingAgent::Hermes => doctor_hermes_json_value(options, &runner),
+            CodingAgent::Hermes => {
+                crate::agents::hermes::install::doctor_json_value(options, &runner)
+            }
             _ => doctor_host_json_value(host, options, &runner, &setup_runner),
         })
         .collect::<Result<Vec<_>, _>>()
@@ -397,7 +387,7 @@ fn select_available_agents(
                 .map_err(CliError::Install)?
                 .is_some(),
             HostSelectionMode::InstalledState => match candidate {
-                CodingAgent::Hermes => hermes_config_path()
+                CodingAgent::Hermes => crate::agents::hermes::install::config_path()
                     .is_ok_and(|path| crate::agents::hermes::persistent_state_exists(&path)),
                 _ => state_path(candidate, install_dir).exists(),
             },
@@ -434,172 +424,6 @@ pub(crate) fn installed_agents(
         &install_dir,
         &RealCommandRunner,
     )
-}
-
-fn hermes_config_path() -> Result<PathBuf, String> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .map(|home| crate::agents::hermes::user_config_path(&home))
-        .ok_or_else(|| "cannot determine home directory (set HOME or USERPROFILE)".into())
-}
-
-fn install_hermes_host(
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-) -> Result<(), String> {
-    require_host_cli(CodingAgent::Hermes, options, runner)?;
-    host::validate_host_version(CodingAgent::Hermes, options, runner)?;
-    let relay = require_relay(options, runner)?;
-    validate_relay_hook_forward(&relay, options, runner)?;
-    validate_relay_mcp(&relay, options, runner)?;
-    let config = hermes_config_path()?;
-    if options.dry_run {
-        println!("configure Hermes MCP and hooks at {}", config.display());
-        return Ok(());
-    }
-    crate::agents::hermes::install_persistent(&config, &relay)
-        .map_err(|error| error.to_string())?;
-    if !options.skip_doctor {
-        crate::agents::hermes::diagnose_persistent(&config)?;
-    }
-    println!("installed Hermes integration");
-    Ok(())
-}
-
-fn uninstall_hermes_host(options: &PluginInstallOptions) -> Result<(), String> {
-    let config = hermes_config_path()?;
-    if options.dry_run {
-        println!(
-            "remove Relay-owned Hermes MCP and hooks from {}",
-            config.display()
-        );
-        return Ok(());
-    }
-    crate::agents::hermes::uninstall_persistent(&config).map_err(|error| error.to_string())?;
-    println!("uninstalled Hermes integration");
-    Ok(())
-}
-
-fn doctor_hermes_host(
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-) -> Result<(), String> {
-    let report = doctor_hermes_json_value(options, runner)?;
-    for check in report["readiness_checks"]
-        .as_array()
-        .expect("Hermes readiness checks are an array")
-    {
-        println!(
-            "{}: {} ({})",
-            check["name"].as_str().unwrap_or_default(),
-            if check["ok"] == json!(true) {
-                "ok"
-            } else {
-                "failed"
-            },
-            check["details"].as_str().unwrap_or_default()
-        );
-    }
-    (report["ok"] == json!(true)).then_some(()).ok_or_else(|| {
-        format!(
-            "Hermes integration doctor checks failed; remediation: {}",
-            report["remediation"].as_str().unwrap_or_default()
-        )
-    })
-}
-
-fn doctor_hermes_json_value(
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-) -> Result<Value, String> {
-    let config = hermes_config_path()?;
-    let readiness = collect_hermes_host_readiness(&config, options, runner);
-    Ok(json!({
-        "ok": readiness.ok(),
-        "host": readiness.host,
-        "remediation": readiness.remediation,
-        "config": config,
-        "readiness_checks": readiness.checks
-    }))
-}
-
-fn collect_hermes_host_readiness(
-    config: &Path,
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-) -> HostPluginReadiness {
-    let mut readiness = HostPluginReadiness {
-        host: CodingAgent::Hermes.install_arg().into(),
-        remediation: format!(
-            "nemo-relay install {} --force",
-            CodingAgent::Hermes.install_arg()
-        ),
-        state_path: config.to_path_buf(),
-        marketplace: None,
-        plugin: None,
-        checks: Vec::new(),
-        relay: None,
-        host_plugin_registered: None,
-        host_marketplace_registered: None,
-        plugin_setup: None,
-    };
-
-    let host_cli = require_host_cli(CodingAgent::Hermes, options, runner);
-    readiness.push(
-        "Host CLI",
-        host_cli
-            .as_ref()
-            .map(|_| "hermes is available".into())
-            .map_err(Clone::clone),
-    );
-    let version = host::validate_host_version(CodingAgent::Hermes, options, runner);
-    if version.is_err() {
-        readiness.remediation = format!(
-            "upgrade to {}, then run `nemo-relay install {} --force`",
-            CodingAgent::Hermes.version_requirement(),
-            CodingAgent::Hermes.install_arg()
-        );
-    }
-    readiness.push(
-        "Hermes Agent version",
-        version.map(|_| format!("{} is installed", CodingAgent::Hermes.version_requirement())),
-    );
-
-    let relay = crate::agents::hermes::configured_relay_executable(config);
-    readiness.push(
-        "Configured Relay binary",
-        relay
-            .as_ref()
-            .map(|path| format!("found at {}", path.display()))
-            .map_err(Clone::clone),
-    );
-    match relay {
-        Ok(relay) => {
-            readiness.relay = Some(relay.clone());
-            readiness.push(
-                "Relay hook support",
-                validate_relay_hook_forward(&relay, options, runner)
-                    .map(|_| "hook-forward is supported".into()),
-            );
-            readiness.push(
-                "Relay MCP support",
-                validate_relay_mcp(&relay, options, runner)
-                    .map(|_| "native mcp subcommand is supported".into()),
-            );
-        }
-        Err(error) => {
-            let unavailable = || format!("cannot verify configured Relay capabilities: {error}");
-            readiness.push("Relay hook support", Err(unavailable()));
-            readiness.push("Relay MCP support", Err(unavailable()));
-        }
-    }
-
-    readiness.push(
-        "Hermes MCP, hooks, and trust",
-        crate::agents::hermes::diagnose_persistent(config),
-    );
-    readiness
 }
 
 fn install_host(
