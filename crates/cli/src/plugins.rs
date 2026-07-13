@@ -860,6 +860,24 @@ where
         }
         return Ok(());
     }
+    if field.kind == EditorFieldKind::TaggedUnion {
+        let tagged_union = field.tagged_union.ok_or_else(|| {
+            CliError::Config(format!("{} does not describe its variants", field.name))
+        })?;
+        let default = section_field_default(section, *field);
+        let mut value = current.or_else(|| default.clone()).unwrap_or(Value::Null);
+        let original = value.clone();
+        edit_tagged_union_value(
+            theme,
+            &format!("{}.{}", section.name, field.name),
+            &mut value,
+            tagged_union,
+        )?;
+        if value != original {
+            set_section_field(config, section, field.name, value)?;
+        }
+        return Ok(());
+    }
     let actions = [
         MenuItem::new("Set value"),
         MenuItem::new(shortcut_label(
@@ -1091,20 +1109,8 @@ fn new_editor_item(
     theme: &ColorfulTheme,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<Value, CliError> {
-    if tagged_union_discriminator(item).is_some() {
-        let variant = Select::with_theme(theme)
-            .with_prompt("Item type")
-            .items(
-                &item
-                    .variants
-                    .iter()
-                    .map(|variant| variant.label)
-                    .collect::<Vec<_>>(),
-            )
-            .default(0)
-            .interact()
-            .map_err(editor_error)?;
-        return Ok((item.variants[variant].default)());
+    if let Some(tagged_union) = item.tagged_union {
+        return new_tagged_union_value(theme, tagged_union);
     }
     Ok(item.default.map(|default| default()).unwrap_or(Value::Null))
 }
@@ -1115,18 +1121,8 @@ fn edit_editor_item(
     value: &mut Value,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<(), CliError> {
-    if let Some(discriminator) = tagged_union_discriminator(item) {
-        let tag = value
-            .get(discriminator)
-            .and_then(Value::as_str)
-            .ok_or_else(|| CliError::Config("tagged list item has no discriminator".into()))?;
-        let variant = item
-            .variants
-            .iter()
-            .find(|variant| variant.tag == tag)
-            .ok_or_else(|| CliError::Config(format!("unknown list item type {tag:?}")))?;
-        edit_value_section(theme, prompt, value, (variant.schema)(), None)?;
-        return Ok(());
+    if let Some(tagged_union) = item.tagged_union {
+        return edit_tagged_union_value(theme, prompt, value, tagged_union);
     }
 
     match item.kind {
@@ -1156,6 +1152,7 @@ fn edit_editor_item(
                 nested_schema: None,
                 nested_default: None,
                 list_item: None,
+                tagged_union: None,
             };
             *value = prompt_value(theme, &field, Some(value))?;
         }
@@ -1167,9 +1164,9 @@ fn editor_item_label(
     value: &Value,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> String {
-    if let Some(discriminator) = tagged_union_discriminator(item) {
+    if let Some(tagged_union) = item.tagged_union {
         return value
-            .get(discriminator)
+            .get(tagged_union.discriminator)
             .and_then(Value::as_str)
             .unwrap_or("invalid")
             .to_string();
@@ -1177,12 +1174,48 @@ fn editor_item_label(
     display_value(value)
 }
 
-fn tagged_union_discriminator(
-    item: &nemo_relay::config_editor::EditorListItemSpec,
-) -> Option<&'static str> {
-    (!item.variants.is_empty())
-        .then_some(item.discriminator)
-        .flatten()
+fn new_tagged_union_value(
+    theme: &ColorfulTheme,
+    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+) -> Result<Value, CliError> {
+    if tagged_union.variants.is_empty() {
+        return Err(CliError::Config("tagged union has no variants".into()));
+    }
+    let variant = Select::with_theme(theme)
+        .with_prompt("Item type")
+        .items(
+            &tagged_union
+                .variants
+                .iter()
+                .map(|variant| variant.label)
+                .collect::<Vec<_>>(),
+        )
+        .default(0)
+        .interact()
+        .map_err(editor_error)?;
+    Ok((tagged_union.variants[variant].default)())
+}
+
+fn edit_tagged_union_value(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+) -> Result<(), CliError> {
+    if !value.is_object() {
+        *value = new_tagged_union_value(theme, tagged_union)?;
+    }
+    let tag = value
+        .get(tagged_union.discriminator)
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliError::Config("tagged union has no discriminator value".into()))?;
+    let variant = tagged_union
+        .variants
+        .iter()
+        .find(|variant| variant.tag == tag)
+        .ok_or_else(|| CliError::Config(format!("unknown tagged union type {tag:?}")))?;
+    edit_value_section(theme, prompt, value, (variant.schema)(), None)?;
+    Ok(())
 }
 
 fn collection_shortcut_value(
@@ -1239,6 +1272,22 @@ where
             .unwrap_or_else(|| json!({}));
         if edit_string_map_value(theme, field.name, &mut entries, default)? {
             set_struct_field(config, field.name, entries)?;
+        }
+        return Ok(());
+    }
+
+    if field.kind == EditorFieldKind::TaggedUnion {
+        let tagged_union = field.tagged_union.ok_or_else(|| {
+            CliError::Config(format!("{} does not describe its variants", field.name))
+        })?;
+        let default = default_config_field_value::<T>(field).or_else(|| field.default_value());
+        let mut value = config_field_value(config, field.name)?
+            .or_else(|| default.clone())
+            .unwrap_or(Value::Null);
+        let original = value.clone();
+        edit_tagged_union_value(theme, field.name, &mut value, tagged_union)?;
+        if value != original {
+            set_struct_field(config, field.name, value)?;
         }
         return Ok(());
     }
@@ -1511,6 +1560,27 @@ fn edit_value_field(
         return Ok(());
     }
 
+    if field.kind == EditorFieldKind::TaggedUnion {
+        let tagged_union = field.tagged_union.ok_or_else(|| {
+            CliError::Config(format!("{} does not describe its variants", field.name))
+        })?;
+        let field_default = value_field_default(default, field);
+        let mut tagged_value = value_field_value(value, field.name)
+            .or_else(|| field_default.clone())
+            .unwrap_or(Value::Null);
+        let original = tagged_value.clone();
+        edit_tagged_union_value(
+            theme,
+            &format!("{prompt}.{}", field.name),
+            &mut tagged_value,
+            tagged_union,
+        )?;
+        if tagged_value != original {
+            set_value_field(value, field.name, tagged_value);
+        }
+        return Ok(());
+    }
+
     let current = value_field_value(value, field.name);
     let actions = [
         MenuItem::new("Set value"),
@@ -1738,7 +1808,7 @@ fn prompt_value(
             "{} is a nested section and cannot be edited as a scalar",
             field.name
         ))),
-        EditorFieldKind::List => Err(CliError::Config(format!(
+        EditorFieldKind::List | EditorFieldKind::TaggedUnion => Err(CliError::Config(format!(
             "{} is a structured value and cannot be edited as a scalar",
             field.name
         ))),

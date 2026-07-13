@@ -7,7 +7,7 @@ use crate::config::{
     user_plugin_config_path,
 };
 use nemo_relay::config_editor::{
-    EditorConfig, EditorListItemSpec, EditorSchema, EditorVariantSpec,
+    EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
 };
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
@@ -1168,6 +1168,7 @@ fn optional_section_without_default(name: &'static str) -> EditorFieldSpec {
         nested_schema: None,
         nested_default: None,
         list_item: None,
+        tagged_union: None,
     }
 }
 
@@ -1181,6 +1182,7 @@ fn depth_root_schema() -> &'static EditorSchema {
         nested_schema: Some(depth_middle_schema),
         nested_default: None,
         list_item: None,
+        tagged_union: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1196,6 +1198,7 @@ fn depth_middle_schema() -> &'static EditorSchema {
         nested_schema: Some(depth_leaf_schema),
         nested_default: None,
         list_item: None,
+        tagged_union: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1211,6 +1214,7 @@ fn depth_leaf_schema() -> &'static EditorSchema {
         nested_schema: None,
         nested_default: None,
         list_item: None,
+        tagged_union: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -2264,6 +2268,7 @@ fn parse_float_value_rejects_non_finite_numbers() {
         nested_schema: None,
         nested_default: None,
         list_item: None,
+        tagged_union: None,
     };
 
     assert_eq!(parse_float_value(&field, "0.75").unwrap(), json!(0.75));
@@ -2294,18 +2299,40 @@ static TAGGED_LIST_ITEM_VARIANTS: [EditorVariantSpec; 1] = [EditorVariantSpec {
     default: tagged_list_item_default,
 }];
 
+static TAGGED_UNION: EditorTaggedUnionSpec = EditorTaggedUnionSpec {
+    discriminator: "kind",
+    variants: &TAGGED_LIST_ITEM_VARIANTS,
+};
+
 static TAGGED_LIST_ITEM: EditorListItemSpec = EditorListItemSpec {
     kind: EditorFieldKind::Section,
     schema: None,
     default: None,
-    discriminator: Some("kind"),
-    variants: &TAGGED_LIST_ITEM_VARIANTS,
+    tagged_union: Some(&TAGGED_UNION),
     list_item: None,
 };
 
+#[derive(Default, serde::Serialize)]
+struct TaggedUnionHarness {
+    backend: Value,
+}
+
+nemo_relay::editor_config! {
+    impl TaggedUnionHarness {
+        backend => { label: "Backend", kind: TaggedUnion, tagged_union: &TAGGED_UNION },
+    }
+}
+
 #[test]
-fn tagged_list_items_use_list_metadata_instead_of_a_field_kind() {
-    assert_eq!(tagged_union_discriminator(&TAGGED_LIST_ITEM), Some("kind"));
+fn tagged_unions_support_list_items_and_top_level_fields() {
+    let field = TaggedUnionHarness::editor_schema()
+        .field("backend")
+        .unwrap();
+    assert_eq!(field.kind, EditorFieldKind::TaggedUnion);
+    assert_eq!(
+        field.tagged_union.map(|metadata| metadata.discriminator),
+        Some("kind")
+    );
     assert_eq!(
         editor_item_label(&json!({ "kind": "example" }), &TAGGED_LIST_ITEM),
         "example"
