@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::agents::CodingAgent;
 use crate::filesystem::{LockAttempt, try_lock_exclusive};
-use crate::installation::IntegrationHost;
 
 pub(super) const DEFAULT_OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
@@ -21,7 +21,7 @@ pub(super) struct PluginOperationLock {
 
 impl PluginOperationLock {
     pub(super) fn acquire(
-        host: IntegrationHost,
+        host: CodingAgent,
         global_lock_dir: &Path,
         install_dir: &Path,
         timeout: Duration,
@@ -37,7 +37,7 @@ impl PluginOperationLock {
 }
 
 fn acquire_lock_file(
-    host: IntegrationHost,
+    host: CodingAgent,
     directory: &Path,
     deadline: Instant,
     scope: &str,
@@ -87,15 +87,15 @@ fn acquire_lock_file(
     }
 }
 
-pub(super) fn operation_lock_path(host: IntegrationHost, install_dir: &Path) -> PathBuf {
+pub(super) fn operation_lock_path(host: CodingAgent, install_dir: &Path) -> PathBuf {
     install_dir.join(format!(".nemo-relay-{}-operation.lock", host_name(host)))
 }
 
-fn host_name(host: IntegrationHost) -> &'static str {
+fn host_name(host: CodingAgent) -> &'static str {
     match host {
-        IntegrationHost::Codex => "codex",
-        IntegrationHost::ClaudeCode => "claude-code",
-        IntegrationHost::Hermes | IntegrationHost::All => {
+        CodingAgent::Codex => "codex",
+        CodingAgent::ClaudeCode => "claude-code",
+        CodingAgent::Hermes => {
             unreachable!("all is expanded before operation locking")
         }
     }

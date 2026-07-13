@@ -16,7 +16,7 @@ struct GenerationAwareRunner {
 impl PluginSetupRunner for DefaultsOnlyRunner {
     fn setup(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -25,7 +25,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn uninstall(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -34,7 +34,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn doctor(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -43,7 +43,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn doctor_json(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<Value, String> {
@@ -54,7 +54,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 impl PluginSetupRunner for GenerationAwareRunner {
     fn setup(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -63,7 +63,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn setup_with_generation(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
         generation_token: Option<&str>,
@@ -76,7 +76,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn uninstall(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -85,7 +85,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn doctor(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -94,7 +94,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn doctor_with_generation(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
         generation_token: Option<&str>,
@@ -107,7 +107,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn doctor_json(
         &self,
-        _host: IntegrationHost,
+        _host: CodingAgent,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<Value, String> {
@@ -119,7 +119,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 fn setup_runner_defaults_are_explicit_no_ops() {
     let runner = DefaultsOnlyRunner;
 
-    assert!(runner.snapshot(IntegrationHost::Codex).unwrap().is_none());
+    assert!(runner.snapshot(CodingAgent::Codex).unwrap().is_none());
     runner.restore_snapshot(&PluginSetupSnapshot::Mock).unwrap();
     runner.refresh_gateway().unwrap();
 }
@@ -127,7 +127,7 @@ fn setup_runner_defaults_are_explicit_no_ops() {
 #[test]
 fn setup_and_doctor_receive_the_installer_verified_generation() {
     let dir = tempfile::tempdir().unwrap();
-    let layout = PluginLayout::new(IntegrationHost::Codex, dir.path());
+    let layout = PluginLayout::new(CodingAgent::Codex, dir.path());
     let options = PluginInstallOptions {
         install_dir: dir.path().to_owned(),
         operation_lock_dir: dir.path().join("locks"),
@@ -138,7 +138,7 @@ fn setup_and_doctor_receive_the_installer_verified_generation() {
     let runner = GenerationAwareRunner::default();
 
     run_plugin_setup_with_generation(
-        IntegrationHost::Codex,
+        CodingAgent::Codex,
         &layout,
         &options,
         &runner,
@@ -146,7 +146,7 @@ fn setup_and_doctor_receive_the_installer_verified_generation() {
     )
     .unwrap();
     run_plugin_doctor_with_generation(
-        IntegrationHost::Codex,
+        CodingAgent::Codex,
         &layout.plugin_root,
         &options,
         &runner,
@@ -161,41 +161,9 @@ fn setup_and_doctor_receive_the_installer_verified_generation() {
 }
 
 #[test]
-fn setup_descriptions_reject_unexpanded_hosts_and_unknown_actions() {
+fn setup_descriptions_reject_unknown_actions() {
     assert!(
-        std::panic::catch_unwind(|| setup_action_description(IntegrationHost::All, "configure"))
+        std::panic::catch_unwind(|| setup_action_description(CodingAgent::Codex, "unknown"))
             .is_err()
-    );
-    assert!(
-        std::panic::catch_unwind(|| setup_action_description(IntegrationHost::Codex, "unknown"))
-            .is_err()
-    );
-
-    let runner = RealPluginSetupRunner;
-    let root = Path::new("unused");
-    assert!(std::panic::catch_unwind(|| runner.snapshot(IntegrationHost::All)).is_err());
-    assert!(
-        std::panic::catch_unwind(|| runner.setup(IntegrationHost::All, DEFAULT_GATEWAY_URL, root))
-            .is_err()
-    );
-    assert!(
-        std::panic::catch_unwind(|| runner.uninstall(
-            IntegrationHost::All,
-            DEFAULT_GATEWAY_URL,
-            root
-        ))
-        .is_err()
-    );
-    assert!(
-        std::panic::catch_unwind(|| runner.doctor(IntegrationHost::All, DEFAULT_GATEWAY_URL, root))
-            .is_err()
-    );
-    assert!(
-        std::panic::catch_unwind(|| runner.doctor_json(
-            IntegrationHost::All,
-            DEFAULT_GATEWAY_URL,
-            root
-        ))
-        .is_err()
     );
 }

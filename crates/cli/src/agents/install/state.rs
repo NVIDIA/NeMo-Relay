@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::installation::IntegrationHost;
+use crate::agents::CodingAgent;
 use crate::installation::generation::GENERATION_FILE_NAME;
 
 use super::PLUGIN_NAME;
@@ -44,7 +44,7 @@ impl HostRegistrationProgress {
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginLayout {
-    pub(super) host: IntegrationHost,
+    pub(super) host: CodingAgent,
     pub(super) marketplace_root: PathBuf,
     pub(super) marketplace_manifest: PathBuf,
     pub(super) plugin_root: PathBuf,
@@ -57,32 +57,34 @@ pub(super) struct PluginLayout {
 }
 
 impl PluginLayout {
-    pub(super) fn new(host: IntegrationHost, install_dir: &Path) -> Self {
-        let marketplace_root = install_dir.join(format!("{}-marketplace", host.as_arg()));
+    pub(super) fn new(host: CodingAgent, install_dir: &Path) -> Self {
+        let marketplace_root = install_dir.join(format!("{}-marketplace", host.install_arg()));
         let marketplace_manifest = match host {
-            IntegrationHost::Codex => marketplace_root
+            CodingAgent::Codex => marketplace_root
                 .join(".agents")
                 .join("plugins")
                 .join("marketplace.json"),
-            IntegrationHost::ClaudeCode => marketplace_root
+            CodingAgent::ClaudeCode => marketplace_root
                 .join(".claude-plugin")
                 .join("marketplace.json"),
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before layout resolution")
             }
         };
         let plugin_root = marketplace_root.join("plugins").join(PLUGIN_NAME);
         let plugin_manifest = match host {
-            IntegrationHost::Codex => plugin_root.join(".codex-plugin").join("plugin.json"),
-            IntegrationHost::ClaudeCode => plugin_root.join(".claude-plugin").join("plugin.json"),
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::Codex => plugin_root.join(".codex-plugin").join("plugin.json"),
+            CodingAgent::ClaudeCode => plugin_root.join(".claude-plugin").join("plugin.json"),
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before layout resolution")
             }
         };
         let mcp_config = plugin_root.join(".mcp.json");
         let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
-        let generation_lock =
-            install_dir.join(format!(".nemo-relay-{}-mcp-generation.lock", host.as_arg()));
+        let generation_lock = install_dir.join(format!(
+            ".nemo-relay-{}-mcp-generation.lock",
+            host.install_arg()
+        ));
         let hooks_path = plugin_root.join("hooks").join("hooks.json");
         let state_path = state_path(host, install_dir);
         Self {
@@ -219,7 +221,7 @@ pub(super) fn write_state(
 }
 
 pub(super) fn mark_plugin_setup_installed(
-    host: IntegrationHost,
+    host: CodingAgent,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
@@ -235,7 +237,7 @@ pub(super) fn mark_plugin_setup_installed(
 }
 
 pub(super) fn write_state_for_host(
-    host: IntegrationHost,
+    host: CodingAgent,
     state: &PluginState,
     install_dir: &Path,
     options: &PluginInstallOptions,
@@ -248,7 +250,7 @@ pub(super) fn write_state_for_host(
     write_json(
         &path,
         &json!({
-            "host": host.as_arg(),
+            "host": host.install_arg(),
             "marketplaceRoot": state.marketplace_root,
             "pluginRoot": state.plugin_root,
             "hostUnregistered": state.host_plugin_removed && state.host_marketplace_removed,
@@ -259,7 +261,7 @@ pub(super) fn write_state_for_host(
     )
 }
 
-pub(super) fn read_state(host: IntegrationHost, install_dir: &Path) -> Option<PluginState> {
+pub(super) fn read_state(host: CodingAgent, install_dir: &Path) -> Option<PluginState> {
     let raw = fs::read_to_string(state_path(host, install_dir)).ok()?;
     let value = serde_json::from_str::<Value>(&raw).ok()?;
     let legacy_host_unregistered = value
@@ -284,8 +286,8 @@ pub(super) fn read_state(host: IntegrationHost, install_dir: &Path) -> Option<Pl
     })
 }
 
-pub(super) fn state_path(host: IntegrationHost, install_dir: &Path) -> PathBuf {
-    install_dir.join(format!("{}.json", host.as_arg()))
+pub(super) fn state_path(host: CodingAgent, install_dir: &Path) -> PathBuf {
+    install_dir.join(format!("{}.json", host.install_arg()))
 }
 
 pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {

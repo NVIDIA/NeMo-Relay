@@ -6,12 +6,13 @@ use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
 
+use crate::agents::CodingAgent;
 use crate::error::CliError;
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct InstallCommand {
     #[arg(value_enum)]
-    pub(crate) host: IntegrationHost,
+    pub(crate) host: InstallTarget,
     #[arg(long)]
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
@@ -25,7 +26,7 @@ pub(crate) struct InstallCommand {
 #[derive(Debug, Clone, Args)]
 pub(crate) struct UninstallCommand {
     #[arg(value_enum)]
-    pub(crate) host: IntegrationHost,
+    pub(crate) host: InstallTarget,
     #[arg(long)]
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
@@ -34,7 +35,7 @@ pub(crate) struct UninstallCommand {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 #[value(rename_all = "kebab-case")]
-pub(crate) enum IntegrationHost {
+pub(crate) enum InstallTarget {
     Codex,
     #[value(name = "claude-code", alias = "claude")]
     ClaudeCode,
@@ -42,21 +43,28 @@ pub(crate) enum IntegrationHost {
     All,
 }
 
-impl From<IntegrationHost> for crate::installation::IntegrationHost {
-    fn from(value: IntegrationHost) -> Self {
-        match value {
-            IntegrationHost::Codex => Self::Codex,
-            IntegrationHost::ClaudeCode => Self::ClaudeCode,
-            IntegrationHost::Hermes => Self::Hermes,
-            IntegrationHost::All => Self::All,
+impl InstallTarget {
+    pub(crate) fn agents(self) -> Vec<CodingAgent> {
+        match self {
+            Self::Codex => vec![CodingAgent::Codex],
+            Self::ClaudeCode => vec![CodingAgent::ClaudeCode],
+            Self::Hermes => vec![CodingAgent::Hermes],
+            Self::All => vec![
+                CodingAgent::Codex,
+                CodingAgent::ClaudeCode,
+                CodingAgent::Hermes,
+            ],
         }
+    }
+
+    pub(crate) const fn is_all(self) -> bool {
+        matches!(self, Self::All)
     }
 }
 
 impl InstallCommand {
     pub(crate) fn into_runtime(self) -> crate::installation::InstallRequest {
         crate::installation::InstallRequest {
-            host: self.host.into(),
             install_dir: self.install_dir,
             force: self.force,
             dry_run: self.dry_run,
@@ -68,7 +76,6 @@ impl InstallCommand {
 impl UninstallCommand {
     pub(crate) fn into_runtime(self) -> crate::installation::UninstallRequest {
         crate::installation::UninstallRequest {
-            host: self.host.into(),
             install_dir: self.install_dir,
             dry_run: self.dry_run,
         }
@@ -76,9 +83,41 @@ impl UninstallCommand {
 }
 
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
-    crate::agents::install::install(command.into_runtime())
+    let target = command.host;
+    let request = command.into_runtime();
+    let candidates = target.agents();
+    let agents = if target.is_all() {
+        crate::agents::install::detected_install_agents(&candidates)?
+    } else {
+        candidates
+    };
+    if agents.is_empty() {
+        return Err(CliError::Install(
+            "no supported Claude Code, Codex, or Hermes host CLI was detected".into(),
+        ));
+    }
+    for agent in agents {
+        crate::agents::install::install(agent, request.clone())?;
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
-    crate::agents::install::uninstall(command.into_runtime())
+    let target = command.host;
+    let request = command.into_runtime();
+    let candidates = target.agents();
+    let agents = if target.is_all() {
+        crate::agents::install::installed_agents(&candidates, request.install_dir.as_deref())?
+    } else {
+        candidates
+    };
+    if agents.is_empty() {
+        return Err(CliError::Install(
+            "no installed Claude Code, Codex, or Hermes integration state was found".into(),
+        ));
+    }
+    for agent in agents {
+        crate::agents::install::uninstall(agent, request.clone())?;
+    }
+    Ok(ExitCode::SUCCESS)
 }

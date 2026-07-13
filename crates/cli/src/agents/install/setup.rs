@@ -4,8 +4,7 @@
 //! Host setup, restore, and doctor delegation.
 
 use crate::agents as host;
-use crate::configuration::CodingAgent;
-use crate::installation::IntegrationHost;
+use crate::agents::CodingAgent;
 use serde_json::Value;
 use std::path::Path;
 
@@ -15,7 +14,7 @@ use super::state::PluginLayout;
 
 #[cfg(test)]
 pub(super) fn run_plugin_setup(
-    host: IntegrationHost,
+    host: CodingAgent,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -24,7 +23,7 @@ pub(super) fn run_plugin_setup(
 }
 
 pub(super) fn run_plugin_setup_with_generation(
-    host: IntegrationHost,
+    host: CodingAgent,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -43,7 +42,7 @@ pub(super) fn run_plugin_setup_with_generation(
 }
 
 pub(super) fn run_plugin_uninstall(
-    host: IntegrationHost,
+    host: CodingAgent,
     plugin_root: &Path,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -57,7 +56,7 @@ pub(super) fn run_plugin_uninstall(
 
 #[cfg(test)]
 pub(super) fn run_plugin_doctor(
-    host: IntegrationHost,
+    host: CodingAgent,
     plugin_root: &Path,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -66,7 +65,7 @@ pub(super) fn run_plugin_doctor(
 }
 
 pub(super) fn run_plugin_doctor_with_generation(
-    host: IntegrationHost,
+    host: CodingAgent,
     plugin_root: &Path,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -80,34 +79,33 @@ pub(super) fn run_plugin_doctor_with_generation(
 }
 
 pub(super) fn run_plugin_doctor_json(
-    host: IntegrationHost,
+    host: CodingAgent,
     plugin_root: &Path,
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<Value, String> {
     setup_runner.doctor_json(host, DEFAULT_GATEWAY_URL, plugin_root)
 }
 
-pub(super) fn setup_action_description(host: IntegrationHost, action: &str) -> String {
+pub(super) fn setup_action_description(host: CodingAgent, action: &str) -> String {
     match (host, action) {
-        (IntegrationHost::Codex, "configure") => {
+        (CodingAgent::Codex, "configure") => {
             "configure Codex provider and trust plugin-owned hooks".into()
         }
-        (IntegrationHost::Codex, "restore") => "remove Codex provider and plugin hook trust".into(),
-        (IntegrationHost::Codex, "doctor") => "check Codex provider and plugin-owned hooks".into(),
-        (IntegrationHost::ClaudeCode, "configure") => {
+        (CodingAgent::Codex, "restore") => "remove Codex provider and plugin hook trust".into(),
+        (CodingAgent::Codex, "doctor") => "check Codex provider and plugin-owned hooks".into(),
+        (CodingAgent::ClaudeCode, "configure") => {
             "enable Claude Code provider routing through NeMo Relay".into()
         }
-        (IntegrationHost::ClaudeCode, "restore") => {
+        (CodingAgent::ClaudeCode, "restore") => {
             "restore Claude Code provider routing from NeMo Relay backup".into()
         }
-        (IntegrationHost::ClaudeCode, "doctor") => "check Claude Code provider routing".into(),
-        (IntegrationHost::All, _) => unreachable!("all is expanded before plugin setup"),
+        (CodingAgent::ClaudeCode, "doctor") => "check Claude Code provider routing".into(),
         (_, _) => unreachable!("unsupported setup action"),
     }
 }
 
 pub(super) trait PluginSetupRunner {
-    fn snapshot(&self, _host: IntegrationHost) -> Result<Option<PluginSetupSnapshot>, String> {
+    fn snapshot(&self, _host: CodingAgent) -> Result<Option<PluginSetupSnapshot>, String> {
         Ok(None)
     }
 
@@ -119,15 +117,11 @@ pub(super) trait PluginSetupRunner {
         Ok(())
     }
 
-    fn setup(
-        &self,
-        host: IntegrationHost,
-        gateway_url: &str,
-        plugin_root: &Path,
-    ) -> Result<(), String>;
+    fn setup(&self, host: CodingAgent, gateway_url: &str, plugin_root: &Path)
+    -> Result<(), String>;
     fn setup_with_generation(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
         _generation_token: Option<&str>,
@@ -136,19 +130,19 @@ pub(super) trait PluginSetupRunner {
     }
     fn uninstall(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String>;
     fn doctor(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String>;
     fn doctor_with_generation(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
         _generation_token: Option<&str>,
@@ -157,7 +151,7 @@ pub(super) trait PluginSetupRunner {
     }
     fn doctor_json(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<Value, String>;
@@ -173,15 +167,15 @@ pub(super) enum PluginSetupSnapshot {
 }
 
 impl PluginSetupRunner for RealPluginSetupRunner {
-    fn snapshot(&self, host: IntegrationHost) -> Result<Option<PluginSetupSnapshot>, String> {
+    fn snapshot(&self, host: CodingAgent) -> Result<Option<PluginSetupSnapshot>, String> {
         match host {
-            IntegrationHost::Codex => host::snapshot_codex_setup()
+            CodingAgent::Codex => host::snapshot_codex_setup()
                 .map(PluginSetupSnapshot::Codex)
                 .map(Some),
-            IntegrationHost::ClaudeCode => host::snapshot_claude_setup()
+            CodingAgent::ClaudeCode => host::snapshot_claude_setup()
                 .map(PluginSetupSnapshot::Claude)
                 .map(Some),
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before plugin setup")
             }
         }
@@ -202,7 +196,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn setup(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
@@ -211,19 +205,19 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn setup_with_generation(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
         generation_token: Option<&str>,
     ) -> Result<(), String> {
         match host {
-            IntegrationHost::Codex => host::install_codex_plugin_with_generation(
+            CodingAgent::Codex => host::install_codex_plugin_with_generation(
                 gateway_url,
                 plugin_root,
                 generation_token,
             ),
-            IntegrationHost::ClaudeCode => host::enable_claude_provider(gateway_url),
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::ClaudeCode => host::enable_claude_provider(gateway_url),
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before plugin setup")
             }
         }
@@ -231,14 +225,14 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn uninstall(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
         match host {
-            IntegrationHost::Codex => host::uninstall_codex_plugin(gateway_url, plugin_root),
-            IntegrationHost::ClaudeCode => host::restore_claude_provider(gateway_url),
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::Codex => host::uninstall_codex_plugin(gateway_url, plugin_root),
+            CodingAgent::ClaudeCode => host::restore_claude_provider(gateway_url),
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before plugin uninstall")
             }
         }
@@ -246,7 +240,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn doctor(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
@@ -255,22 +249,22 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn doctor_with_generation(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
         generation_token: Option<&str>,
     ) -> Result<(), String> {
         match host {
-            IntegrationHost::Codex => host::doctor_plugin_with_generation(
+            CodingAgent::Codex => host::doctor_plugin_with_generation(
                 CodingAgent::Codex,
                 gateway_url,
                 plugin_root,
                 generation_token,
             ),
-            IntegrationHost::ClaudeCode => {
+            CodingAgent::ClaudeCode => {
                 host::doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root)
             }
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before plugin doctor")
             }
         }
@@ -278,18 +272,18 @@ impl PluginSetupRunner for RealPluginSetupRunner {
 
     fn doctor_json(
         &self,
-        host: IntegrationHost,
+        host: CodingAgent,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<Value, String> {
         match host {
-            IntegrationHost::Codex => {
+            CodingAgent::Codex => {
                 host::doctor_plugin_json(CodingAgent::Codex, gateway_url, plugin_root)
             }
-            IntegrationHost::ClaudeCode => {
+            CodingAgent::ClaudeCode => {
                 host::doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
             }
-            IntegrationHost::Hermes | IntegrationHost::All => {
+            CodingAgent::Hermes => {
                 unreachable!("all is expanded before plugin doctor")
             }
         }

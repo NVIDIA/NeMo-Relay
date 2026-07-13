@@ -11,19 +11,19 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-use crate::installation::IntegrationHost;
+use crate::agents::CodingAgent;
 
 use super::state::PluginInstallOptions;
 use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
 
 pub(super) fn run_host_marketplace_registration(
-    host: IntegrationHost,
+    host: CodingAgent,
     marketplace_root: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     run_command(
-        host.executable().expect("concrete plugin host"),
+        host.executable(),
         &[
             "plugin".into(),
             "marketplace".into(),
@@ -36,13 +36,13 @@ pub(super) fn run_host_marketplace_registration(
 }
 
 pub(super) fn run_host_plugin_registration(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     match host {
-        IntegrationHost::Codex => run_command(
-            host.executable().expect("concrete plugin host"),
+        CodingAgent::Codex => run_command(
+            host.executable(),
             &[
                 "plugin".into(),
                 "add".into(),
@@ -51,8 +51,8 @@ pub(super) fn run_host_plugin_registration(
             options,
             runner,
         ),
-        IntegrationHost::ClaudeCode => run_command(
-            host.executable().expect("concrete plugin host"),
+        CodingAgent::ClaudeCode => run_command(
+            host.executable(),
             &[
                 "plugin".into(),
                 "install".into(),
@@ -63,20 +63,20 @@ pub(super) fn run_host_plugin_registration(
             options,
             runner,
         ),
-        IntegrationHost::Hermes | IntegrationHost::All => {
+        CodingAgent::Hermes => {
             unreachable!("all is expanded before host registration")
         }
     }
 }
 
 pub(super) fn run_host_plugin_removal(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     match host {
-        IntegrationHost::Codex => run_command(
-            host.executable().expect("concrete plugin host"),
+        CodingAgent::Codex => run_command(
+            host.executable(),
             &[
                 "plugin".into(),
                 "remove".into(),
@@ -85,13 +85,13 @@ pub(super) fn run_host_plugin_removal(
             options,
             runner,
         )?,
-        IntegrationHost::ClaudeCode => run_command(
-            host.executable().expect("concrete plugin host"),
+        CodingAgent::ClaudeCode => run_command(
+            host.executable(),
             &["plugin".into(), "uninstall".into(), PLUGIN_NAME.into()],
             options,
             runner,
         )?,
-        IntegrationHost::Hermes | IntegrationHost::All => {
+        CodingAgent::Hermes => {
             unreachable!("all is expanded before host unregistration")
         }
     }
@@ -99,12 +99,12 @@ pub(super) fn run_host_plugin_removal(
 }
 
 pub(super) fn run_host_marketplace_removal(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     run_command(
-        host.executable().expect("concrete plugin host"),
+        host.executable(),
         &[
             "plugin".into(),
             "marketplace".into(),
@@ -139,7 +139,7 @@ impl HostRegistrationReport {
 
 #[cfg(test)]
 pub(super) fn validate_host_registration(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
@@ -156,14 +156,14 @@ pub(super) fn validate_host_registration(
         }
         Err(format!(
             "{} plugin host registration is incomplete: missing {}",
-            host.executable().expect("concrete plugin host"),
+            host.executable(),
             missing.join(", ")
         ))
     }
 }
 
 pub(super) fn host_registration_report(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
@@ -175,15 +175,15 @@ pub(super) fn host_registration_report(
     }
     require_host_cli(host, options, runner)?;
     Ok(match host {
-        IntegrationHost::ClaudeCode => HostRegistrationReport {
+        CodingAgent::ClaudeCode => HostRegistrationReport {
             host_plugin_registered: claude_plugin_registered(options, runner)?,
             host_marketplace_registered: claude_marketplace_registered(options, runner)?,
         },
-        IntegrationHost::Codex => HostRegistrationReport {
+        CodingAgent::Codex => HostRegistrationReport {
             host_plugin_registered: codex_plugin_registered(options, runner)?,
             host_marketplace_registered: codex_marketplace_registered(options, runner)?,
         },
-        IntegrationHost::Hermes | IntegrationHost::All => {
+        CodingAgent::Hermes => {
             unreachable!("all is expanded before host registration checks")
         }
     })
@@ -342,16 +342,14 @@ pub(super) fn validate_relay_mcp(
 }
 
 pub(super) fn require_host_cli(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     if options.dry_run {
         return Ok(());
     }
-    let cli = host
-        .executable()
-        .expect("all is expanded before CLI validation");
+    let cli = host.executable();
     runner
         .resolve_executable(cli)?
         .map(|_| ())
@@ -359,16 +357,14 @@ pub(super) fn require_host_cli(
 }
 
 pub(super) fn validate_host_version(
-    host: IntegrationHost,
+    host: CodingAgent,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     if options.dry_run {
         return Ok(());
     }
-    let agent = host
-        .agent()
-        .expect("all is expanded before host version validation");
+    let agent = host;
     let output = run_capture_command(agent.executable(), &["--version".into()], options, runner)?;
     agent.validate_version_output(&output.stdout).map(|_| ())
 }
