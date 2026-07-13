@@ -23,7 +23,7 @@ pub(crate) enum ConfigScope {
 }
 
 impl ConfigScope {
-    pub(super) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Project => "project   ./.nemo-relay/config.toml          (recommended)",
             Self::Global => "global    ~/.config/nemo-relay/config.toml",
@@ -37,7 +37,7 @@ impl ConfigScope {
 /// `Project` and `Both` configure the project `plugins.toml`; `Global` configures the user
 /// `plugins.toml`. Returns the existing `PluginsEditRequest` so the in-process editor behaves
 /// exactly like the equivalent `nemo-relay plugins edit` invocation.
-pub(super) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditRequest {
+pub(crate) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditRequest {
     let scope = match scope {
         ConfigScope::Project | ConfigScope::Both => ConfigurationScope::Project,
         ConfigScope::Global => ConfigurationScope::User,
@@ -46,7 +46,7 @@ pub(super) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditR
 }
 
 /// Returns the exact command a user runs to resume plugin setup after skipping the continuation.
-pub(super) fn plugins_resume_command(scope: ConfigScope) -> &'static str {
+pub(crate) fn plugins_resume_command(scope: ConfigScope) -> &'static str {
     match scope {
         ConfigScope::Project | ConfigScope::Both => "nemo-relay plugins edit --project",
         ConfigScope::Global => "nemo-relay plugins edit",
@@ -97,7 +97,7 @@ pub(crate) fn build_config(answers: &SetupAnswers) -> DocumentMut {
     doc
 }
 
-pub(super) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
+pub(crate) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
     if answers.agents.is_empty() {
         return None;
     }
@@ -150,7 +150,7 @@ pub(crate) fn save_config(
 // Resolves the global nemo-relay config directory. Prefers `$XDG_CONFIG_HOME/nemo-relay` (matches
 // `config::user_config_dir`), falling back to `<home>/.config/nemo-relay`. Tests that pass a
 // tempdir for `home` get hermetic paths unless they set XDG_CONFIG_HOME explicitly.
-pub(super) fn global_config_dir(home: &Path) -> PathBuf {
+pub(crate) fn global_config_dir(home: &Path) -> PathBuf {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
         return PathBuf::from(base).join("nemo-relay");
     }
@@ -160,7 +160,7 @@ pub(super) fn global_config_dir(home: &Path) -> PathBuf {
 // Writes the wizard-built `doc` to `path`. When `merge_scope` is `Some(agent)` and the file
 // already exists, preserves any `[agents.<other>]` blocks while replacing the shared sections
 // and the target agent's block. When `merge_scope` is `None`, just overwrites the file.
-pub(super) fn write_or_merge(
+pub(crate) fn write_or_merge(
     path: &Path,
     doc: &DocumentMut,
     merge_scope: Option<CodingAgent>,
@@ -188,7 +188,7 @@ pub(super) fn write_or_merge(
 
 // Replaces the single `[agents.<agent>]` block in `dst` with the one from `src`. If `src` does
 // not contain that block, the existing entry in `dst` is left as-is.
-pub(super) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent_key: &str) {
+pub(crate) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent_key: &str) {
     let Some(src_agent) = src
         .get("agents")
         .and_then(|item| item.as_table())
@@ -273,13 +273,13 @@ fn reset_project_config(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
 /// Pre-filled wizard defaults read from an existing `config.toml`. When the file is missing or
 /// unparseable the defaults are all-empty and the wizard behaves like a first-run setup.
 #[derive(Debug, Clone, Default)]
-pub(super) struct Defaults {
-    pub(super) scope: Option<ConfigScope>,
-    pub(super) agents: Vec<CodingAgent>,
+pub(crate) struct Defaults {
+    pub(crate) scope: Option<ConfigScope>,
+    pub(crate) agents: Vec<CodingAgent>,
 }
 
 impl Defaults {
-    pub(super) fn has_any(&self) -> bool {
+    pub(crate) fn has_any(&self) -> bool {
         self.scope.is_some() || !self.agents.is_empty()
     }
 }
@@ -287,7 +287,7 @@ impl Defaults {
 /// Reads the highest-precedence existing config file and derives wizard defaults from it.
 /// Workspace config wins over global; if both exist, scope defaults to `Both`. Missing or
 /// malformed files yield `None` (the wizard then behaves as if no config existed).
-pub(super) fn read_existing_defaults() -> Option<Defaults> {
+pub(crate) fn read_existing_defaults() -> Option<Defaults> {
     let cwd = std::env::current_dir().ok()?;
     let home = home_dir();
 
@@ -321,7 +321,7 @@ pub(super) fn read_existing_defaults() -> Option<Defaults> {
     })
 }
 
-pub(super) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
+pub(crate) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
     let Some(table) = doc.get("agents").and_then(|i| i.as_table()) else {
         return Vec::new();
     };
@@ -340,11 +340,11 @@ pub(super) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
     found
 }
 
-pub(super) fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'static str) {
+pub(crate) fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'static str) {
     (agent.as_arg(), agent.executable())
 }
 
-pub(super) fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
+pub(crate) fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
         paths.push(cwd.join(".nemo-relay").join("config.toml"));
@@ -355,7 +355,7 @@ pub(super) fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<
     paths
 }
 
-pub(super) fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)

@@ -79,7 +79,7 @@ pub(super) async fn easy_path(
         |path| !path.exists(),
     );
     if needs_setup {
-        crate::configuration::wizard::run(Some(agent)).await?;
+        super::configure::run(Some(agent)).await?;
     }
     let runtime = crate::process::RunOverrides {
         agent: Some(agent),

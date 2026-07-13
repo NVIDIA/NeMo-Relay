@@ -122,7 +122,7 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     } else if runtime_configuration::any_config_file_exists() {
         runtime_diagnostics::run_doctor(None, false).await
     } else {
-        runtime_configuration::wizard::run(None).await?;
+        configure::run(None).await?;
         Ok(ExitCode::SUCCESS)
     }
 }

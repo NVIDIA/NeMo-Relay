@@ -18,21 +18,17 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, MultiSelect, Select};
 use toml_edit::DocumentMut;
 
-use crate::configuration::CodingAgent;
-use crate::error::CliError;
-
-#[path = "wizard_model.rs"]
-mod model;
-
-pub(crate) use self::model::reset;
 use self::model::{
     ConfigScope, SetupAnswers, agent_key_and_command, build_config, detect_installed_agents,
     home_dir, plugins_edit_command_for_scope, plugins_resume_command, preview_paths,
     read_existing_defaults, save_config,
 };
+use crate::agents::CodingAgent;
+use crate::configuration::setup as model;
+use crate::error::CliError;
 
 #[cfg(test)]
-use self::model::{Defaults, global_config_dir, read_agents_from_doc, write_or_merge};
+use self::model::{Defaults, global_config_dir, read_agents_from_doc, reset, write_or_merge};
 
 #[cfg(test)]
 use self::model::detect_installed_agents_in;
@@ -327,5 +323,5 @@ fn setup_error(err: dialoguer::Error) -> CliError {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/shared/setup_tests.rs"]
+#[path = "../../../tests/coverage/shared/setup_tests.rs"]
 mod tests;

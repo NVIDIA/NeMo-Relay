@@ -8,6 +8,10 @@ use clap::Args;
 use super::root::AgentArg;
 use crate::error::CliError;
 
+mod wizard;
+
+pub(super) use wizard::run;
+
 #[derive(Debug, Clone, Args)]
 pub(crate) struct ConfigCommand {
     #[arg(value_enum)]
@@ -21,9 +25,9 @@ pub(crate) struct ConfigCommand {
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
     let agent = command.agent.map(Into::into);
     if command.reset {
-        crate::configuration::wizard::reset(agent)?;
+        crate::configuration::setup::reset(agent)?;
     } else {
-        crate::configuration::wizard::run(agent).await?;
+        wizard::run(agent).await?;
     }
     Ok(ExitCode::SUCCESS)
 }
