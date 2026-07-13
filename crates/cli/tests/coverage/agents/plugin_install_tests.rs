@@ -77,19 +77,21 @@ fn windows_verbatim_relay_paths_are_normalized_for_mcp_config() {
 #[test]
 fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
     let dir = tempdir().unwrap();
-    let pending = spawn_default_host_plugin_readiness(CodingAgent::Codex, dir.path().to_path_buf());
-    let readiness = receive_host_plugin_readiness(pending, Duration::from_secs(5));
+    let readiness = collect_marketplace_readiness(
+        CodingAgent::Codex,
+        &options(dir.path()),
+        &MockRunner::default(),
+    );
     assert_eq!(readiness.host, "codex");
     assert!(!readiness.checks.is_empty());
 
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     drop(sender);
-    let readiness = receive_host_plugin_readiness(
-        PendingHostPluginReadiness {
-            host: CodingAgent::ClaudeCode,
-            state_path: dir.path().join("claude-state.json"),
-            receiver,
-        },
+    let readiness = crate::agents::receive_integration_readiness_for_test(
+        CodingAgent::ClaudeCode,
+        dir.path().join("claude-state.json"),
+        receiver,
+        dir.path(),
         Duration::from_secs(1),
     );
     assert!(!readiness.ok());
@@ -99,10 +101,14 @@ fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
             .contains("collector stopped unexpectedly")
     );
 
-    let hermes = failed_host_plugin_readiness(
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    drop(sender);
+    let hermes = crate::agents::receive_integration_readiness_for_test(
         CodingAgent::Hermes,
         dir.path().join("config.yaml"),
-        "fixture failure",
+        receiver,
+        dir.path(),
+        Duration::from_secs(1),
     );
     assert!(hermes.marketplace.is_none());
     assert!(hermes.plugin.is_none());
@@ -2061,7 +2067,7 @@ fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it()
         );
     }
 
-    let readiness = collect_default_host_plugin_readiness();
+    let readiness = crate::agents::collect_default_integration_readiness();
     let hermes = readiness
         .iter()
         .find(|readiness| readiness.host == "hermes")
@@ -4930,15 +4936,14 @@ fn doctor_json_preserves_unknown_host_registration_state() {
 #[test]
 fn timed_out_host_plugin_readiness_is_actionable() {
     let state_path = PathBuf::from("/tmp/nemo-relay/codex.json");
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     let _sender = sender;
 
-    let report = receive_host_plugin_readiness(
-        PendingHostPluginReadiness {
-            host: CodingAgent::Codex,
-            state_path: state_path.clone(),
-            receiver,
-        },
+    let report = crate::agents::receive_integration_readiness_for_test(
+        CodingAgent::Codex,
+        state_path.clone(),
+        receiver,
+        Path::new("/tmp/nemo-relay"),
         Duration::ZERO,
     );
 

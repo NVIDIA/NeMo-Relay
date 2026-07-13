@@ -14,13 +14,11 @@ pub(crate) use spec::{MarketplaceHost, PluginSetupSnapshot};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc::{self, Receiver};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::agents::CodingAgent;
 use crate::error::CliError;
 use crate::installation::generation::{
     GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration,
@@ -53,7 +51,6 @@ pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
 pub(super) const RELAY_COMMAND: &str = "nemo-relay";
-const DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn default_operation_lock_dir() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
@@ -119,128 +116,25 @@ impl HostPluginReadiness {
     }
 }
 
-struct PendingHostPluginReadiness {
-    host: CodingAgent,
-    state_path: PathBuf,
-    receiver: Receiver<HostPluginReadiness>,
+pub(crate) fn marketplace_state_path(host: impl MarketplaceHost, install_dir: &Path) -> PathBuf {
+    state_path(host, install_dir)
 }
 
-/// Collects default-location persistent-integration readiness without printing or mutating state.
-///
-/// Only hosts with a persisted install-state record are included. This keeps ordinary
-/// transparent-run users from failing the top-level doctor merely because they have not opted
-/// into a persistent coding-agent integration.
-pub(crate) fn collect_default_host_plugin_readiness() -> Vec<HostPluginReadiness> {
-    let install_dir = default_install_dir().canonicalize_or_self();
-    let mut hosts = [CodingAgent::Codex, CodingAgent::ClaudeCode]
-        .into_iter()
-        .filter(|host| state_path(*host, &install_dir).exists())
-        .collect::<Vec<_>>();
-    if crate::agents::hermes::install::config_path()
-        .is_ok_and(|path| crate::agents::hermes::persistent_state_exists(&path))
-    {
-        hosts.push(CodingAgent::Hermes);
-    }
-    let pending = hosts
-        .into_iter()
-        .map(|host| spawn_default_host_plugin_readiness(host, install_dir.clone()))
-        .collect::<Vec<_>>();
-    let deadline = Instant::now() + DEFAULT_HOST_PLUGIN_READINESS_TIMEOUT;
-    pending
-        .into_iter()
-        .map(|pending| {
-            receive_host_plugin_readiness(
-                pending,
-                deadline.saturating_duration_since(Instant::now()),
-            )
-        })
-        .collect()
+pub(crate) fn marketplace_install_roots(
+    host: impl MarketplaceHost,
+    install_dir: &Path,
+) -> (PathBuf, PathBuf) {
+    let layout = PluginLayout::new(host, install_dir);
+    (layout.marketplace_root, layout.plugin_root)
 }
 
-fn spawn_default_host_plugin_readiness(
-    host: CodingAgent,
-    install_dir: PathBuf,
-) -> PendingHostPluginReadiness {
-    let state_path = match host {
-        CodingAgent::Hermes => crate::agents::hermes::install::config_path()
-            .unwrap_or_else(|_| state_path(CodingAgent::Hermes, &install_dir)),
-        _ => state_path(host, &install_dir),
-    };
-    let worker_state_path = state_path.clone();
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let options = PluginInstallOptions {
-            install_dir,
-            operation_lock_dir: PathBuf::new(),
-            force: false,
-            dry_run: false,
-            skip_doctor: true,
-        };
-        let runner = RealCommandRunner;
-        let setup_runner = HostPluginSetupRunner::new(host);
-        let readiness = match host {
-            CodingAgent::Hermes => crate::agents::hermes::install::collect_readiness(
-                &worker_state_path,
-                &options,
-                &runner,
-            ),
-            _ => collect_host_plugin_readiness(host, &options, &runner, &setup_runner),
-        };
-        let _ = sender.send(readiness);
-    });
-    PendingHostPluginReadiness {
-        host,
-        state_path,
-        receiver,
-    }
-}
-
-fn receive_host_plugin_readiness(
-    pending: PendingHostPluginReadiness,
-    timeout: Duration,
+pub(crate) fn collect_marketplace_readiness(
+    host: impl MarketplaceHost,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
 ) -> HostPluginReadiness {
-    match pending.receiver.recv_timeout(timeout) {
-        Ok(readiness) => readiness,
-        Err(mpsc::RecvTimeoutError::Timeout) => failed_host_plugin_readiness(
-            pending.host,
-            pending.state_path,
-            "timed out while collecting persistent-integration readiness",
-        ),
-        Err(mpsc::RecvTimeoutError::Disconnected) => failed_host_plugin_readiness(
-            pending.host,
-            pending.state_path,
-            "persistent-integration readiness collector stopped unexpectedly",
-        ),
-    }
-}
-
-fn failed_host_plugin_readiness(
-    host: CodingAgent,
-    state_path: PathBuf,
-    details: impl Into<String>,
-) -> HostPluginReadiness {
-    let (marketplace, plugin) = match host {
-        CodingAgent::Hermes => (None, None),
-        _ => {
-            let layout =
-                PluginLayout::new(host, state_path.parent().unwrap_or_else(|| Path::new(".")));
-            (Some(layout.marketplace_root), Some(layout.plugin_root))
-        }
-    };
-    let mut readiness = HostPluginReadiness {
-        host: host.install_arg().to_string(),
-        remediation: format!("nemo-relay install {} --force", host.install_arg()),
-        state_path,
-        marketplace,
-        plugin,
-        checks: Vec::new(),
-        relay: None,
-        host_plugin_registered: None,
-        host_marketplace_registered: None,
-        plugin_setup: None,
-    };
-    readiness.push("Host readiness", Err(details.into()));
-    readiness
+    let setup_runner = HostPluginSetupRunner::new(host);
+    collect_host_plugin_readiness(host, options, runner, &setup_runner)
 }
 
 pub(crate) fn install(

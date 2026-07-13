@@ -574,6 +574,149 @@ pub(crate) fn doctor_integration_report(
     }
 }
 
+struct PendingIntegrationReadiness {
+    agent: CodingAgent,
+    state_path: PathBuf,
+    receiver: std::sync::mpsc::Receiver<crate::installation::marketplace::HostPluginReadiness>,
+}
+
+pub(crate) fn collect_default_integration_readiness()
+-> Vec<crate::installation::marketplace::HostPluginReadiness> {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    let install_dir = crate::installation::marketplace::default_marketplace_install_dir();
+    let agents = installed_integrations(&CodingAgent::ALL, Some(&install_dir));
+    let pending = agents
+        .into_iter()
+        .map(|agent| spawn_integration_readiness(agent, install_dir.clone()))
+        .collect::<Vec<_>>();
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    pending
+        .into_iter()
+        .map(|pending| {
+            receive_integration_readiness(
+                pending,
+                deadline.saturating_duration_since(std::time::Instant::now()),
+                &install_dir,
+            )
+        })
+        .collect()
+}
+
+fn receive_integration_readiness(
+    pending: PendingIntegrationReadiness,
+    timeout: std::time::Duration,
+    install_dir: &Path,
+) -> crate::installation::marketplace::HostPluginReadiness {
+    match pending.receiver.recv_timeout(timeout) {
+        Ok(readiness) => readiness,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => failed_integration_readiness(
+            pending.agent,
+            pending.state_path,
+            install_dir,
+            "timed out while collecting persistent-integration readiness",
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => failed_integration_readiness(
+            pending.agent,
+            pending.state_path,
+            install_dir,
+            "persistent-integration readiness collector stopped unexpectedly",
+        ),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn receive_integration_readiness_for_test(
+    agent: CodingAgent,
+    state_path: PathBuf,
+    receiver: std::sync::mpsc::Receiver<crate::installation::marketplace::HostPluginReadiness>,
+    install_dir: &Path,
+    timeout: std::time::Duration,
+) -> crate::installation::marketplace::HostPluginReadiness {
+    receive_integration_readiness(
+        PendingIntegrationReadiness {
+            agent,
+            state_path,
+            receiver,
+        },
+        timeout,
+        install_dir,
+    )
+}
+
+fn spawn_integration_readiness(
+    agent: CodingAgent,
+    install_dir: PathBuf,
+) -> PendingIntegrationReadiness {
+    let state_path = match agent {
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            crate::installation::marketplace::marketplace_state_path(agent, &install_dir)
+        }
+        CodingAgent::Hermes => {
+            hermes::install::config_path().unwrap_or_else(|_| install_dir.join("hermes.json"))
+        }
+    };
+    let worker_state_path = state_path.clone();
+    let worker_install_dir = install_dir.clone();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let options = crate::installation::marketplace::state::PluginInstallOptions {
+            install_dir: worker_install_dir,
+            operation_lock_dir: PathBuf::new(),
+            force: false,
+            dry_run: false,
+            skip_doctor: true,
+        };
+        let runner = crate::installation::marketplace::host::RealCommandRunner;
+        let readiness = match agent {
+            CodingAgent::Codex | CodingAgent::ClaudeCode => {
+                crate::installation::marketplace::collect_marketplace_readiness(
+                    agent, &options, &runner,
+                )
+            }
+            CodingAgent::Hermes => {
+                hermes::install::collect_readiness(&worker_state_path, &options, &runner)
+            }
+        };
+        let _ = sender.send(readiness);
+    });
+    PendingIntegrationReadiness {
+        agent,
+        state_path,
+        receiver,
+    }
+}
+
+fn failed_integration_readiness(
+    agent: CodingAgent,
+    state_path: PathBuf,
+    install_dir: &Path,
+    details: &str,
+) -> crate::installation::marketplace::HostPluginReadiness {
+    let (marketplace, plugin) = match agent {
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            let (marketplace, plugin) =
+                crate::installation::marketplace::marketplace_install_roots(agent, install_dir);
+            (Some(marketplace), Some(plugin))
+        }
+        CodingAgent::Hermes => (None, None),
+    };
+    let mut readiness = crate::installation::marketplace::HostPluginReadiness {
+        host: agent.install_arg().to_string(),
+        remediation: format!("nemo-relay install {} --force", agent.install_arg()),
+        state_path,
+        marketplace,
+        plugin,
+        checks: Vec::new(),
+        relay: None,
+        host_plugin_registered: None,
+        host_marketplace_registered: None,
+        plugin_setup: None,
+    };
+    readiness.push("Host readiness", Err(details.to_string()));
+    readiness
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;
@@ -581,7 +724,7 @@ pub(crate) use shared::host::shell_quote_arg_for_platform;
 #[cfg(test)]
 pub(crate) use shared::host::strip_windows_verbatim_prefix;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 

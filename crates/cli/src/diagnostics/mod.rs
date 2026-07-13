@@ -104,7 +104,7 @@ pub(crate) async fn collect_report(
             &plugin_diagnostics,
         ),
         agents: collect_agents(target_agent, &resolved).await,
-        host_plugins: crate::installation::marketplace::collect_default_host_plugin_readiness(),
+        host_plugins: crate::agents::collect_default_integration_readiness(),
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
     })
