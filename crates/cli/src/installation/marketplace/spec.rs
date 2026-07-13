@@ -10,11 +10,32 @@ use serde_json::Value;
 use super::host::{CommandRunner, HostRegistrationReport};
 use super::state::PluginInstallOptions;
 
+pub(crate) enum PluginSetupSnapshot {
+    Callback(Box<dyn Fn() -> Result<(), String>>),
+    #[cfg(test)]
+    Mock,
+}
+
+impl PluginSetupSnapshot {
+    pub(crate) fn new(restore: impl Fn() -> Result<(), String> + 'static) -> Self {
+        Self::Callback(Box::new(restore))
+    }
+
+    pub(crate) fn restore(&self) -> Result<(), String> {
+        match self {
+            Self::Callback(restore) => restore(),
+            #[cfg(test)]
+            Self::Mock => Ok(()),
+        }
+    }
+}
+
 pub(crate) trait MarketplaceHost: Copy {
     fn install_arg(self) -> &'static str;
     fn label(self) -> &'static str;
     fn executable(self) -> &'static str;
     fn validate_version_output(self, output: &str) -> Result<(), String>;
+    fn version_requirement(self) -> String;
     fn marketplace_manifest_relative(self) -> &'static [&'static str];
     fn plugin_manifest_relative(self) -> &'static [&'static str];
     fn marketplace_manifest(self, marketplace: &str, plugin: &str) -> Value;
@@ -44,4 +65,20 @@ pub(crate) trait MarketplaceHost: Copy {
         plugin_manifest: &Path,
         generation_fence: &Path,
     ) -> bool;
+    fn setup_action_description(self, action: &str) -> String;
+    fn snapshot_setup(self) -> Result<Option<PluginSetupSnapshot>, String>;
+    fn setup_plugin(
+        self,
+        gateway_url: &str,
+        plugin_root: &Path,
+        generation_token: Option<&str>,
+    ) -> Result<(), String>;
+    fn uninstall_plugin(self, gateway_url: &str, plugin_root: &Path) -> Result<(), String>;
+    fn doctor_plugin(
+        self,
+        gateway_url: &str,
+        plugin_root: &Path,
+        generation_token: Option<&str>,
+    ) -> Result<(), String>;
+    fn doctor_plugin_json(self, gateway_url: &str, plugin_root: &Path) -> Result<Value, String>;
 }

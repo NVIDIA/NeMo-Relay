@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::cell::RefCell;
 
 use super::*;
+use crate::agents::CodingAgent;
 
 struct DefaultsOnlyRunner;
 
@@ -16,7 +17,7 @@ struct GenerationAwareRunner {
 impl PluginSetupRunner for DefaultsOnlyRunner {
     fn setup(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -25,7 +26,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn uninstall(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -34,7 +35,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn doctor(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -43,7 +44,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 
     fn doctor_json(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<Value, String> {
@@ -54,7 +55,7 @@ impl PluginSetupRunner for DefaultsOnlyRunner {
 impl PluginSetupRunner for GenerationAwareRunner {
     fn setup(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -63,7 +64,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn setup_with_generation(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
         generation_token: Option<&str>,
@@ -76,7 +77,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn uninstall(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -85,7 +86,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn doctor(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -94,7 +95,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn doctor_with_generation(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
         generation_token: Option<&str>,
@@ -107,7 +108,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 
     fn doctor_json(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<Value, String> {
@@ -119,7 +120,7 @@ impl PluginSetupRunner for GenerationAwareRunner {
 fn setup_runner_defaults_are_explicit_no_ops() {
     let runner = DefaultsOnlyRunner;
 
-    assert!(runner.snapshot(CodingAgent::Codex).unwrap().is_none());
+    assert!(runner.snapshot("codex").unwrap().is_none());
     runner.restore_snapshot(&PluginSetupSnapshot::Mock).unwrap();
     runner.refresh_gateway().unwrap();
 }
@@ -162,8 +163,6 @@ fn setup_and_doctor_receive_the_installer_verified_generation() {
 
 #[test]
 fn setup_descriptions_reject_unknown_actions() {
-    assert!(
-        std::panic::catch_unwind(|| setup_action_description(CodingAgent::Codex, "unknown"))
-            .is_err()
-    );
+    let runner = HostPluginSetupRunner::new(CodingAgent::Codex);
+    assert!(std::panic::catch_unwind(|| runner.action_description("unknown")).is_err());
 }

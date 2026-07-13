@@ -9,7 +9,7 @@ mod setup;
 mod spec;
 pub(crate) mod state;
 
-pub(crate) use spec::MarketplaceHost;
+pub(crate) use spec::{MarketplaceHost, PluginSetupSnapshot};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ use host::{
     run_host_plugin_removal, validate_relay_hook_forward, validate_relay_mcp,
 };
 use setup::{
-    PluginSetupRunner, PluginSetupSnapshot, RealPluginSetupRunner, run_plugin_doctor_json,
+    HostPluginSetupRunner, PluginSetupRunner, run_plugin_doctor_json,
     run_plugin_doctor_with_generation, run_plugin_setup_with_generation, run_plugin_uninstall,
 };
 #[cfg(test)]
@@ -177,7 +177,7 @@ fn spawn_default_host_plugin_readiness(
             skip_doctor: true,
         };
         let runner = RealCommandRunner;
-        let setup_runner = RealPluginSetupRunner;
+        let setup_runner = HostPluginSetupRunner::new(host);
         let readiness = match host {
             CodingAgent::Hermes => crate::agents::hermes::install::collect_readiness(
                 &worker_state_path,
@@ -243,7 +243,10 @@ fn failed_host_plugin_readiness(
     readiness
 }
 
-pub(crate) fn install(host: CodingAgent, command: InstallRequest) -> Result<ExitCode, CliError> {
+pub(crate) fn install(
+    host: impl MarketplaceHost,
+    command: InstallRequest,
+) -> Result<ExitCode, CliError> {
     let operation_lock_dir = if command.dry_run {
         PathBuf::new()
     } else {
@@ -263,7 +266,7 @@ pub(crate) fn install(host: CodingAgent, command: InstallRequest) -> Result<Exit
 }
 
 pub(crate) fn uninstall(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     command: UninstallRequest,
 ) -> Result<ExitCode, CliError> {
     let operation_lock_dir = if command.dry_run {
@@ -319,21 +322,22 @@ pub(crate) fn doctor(
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_for_host<F>(
-    host: CodingAgent,
+fn run_for_host<H, F>(
+    host: H,
     options: &PluginInstallOptions,
     mut action: F,
 ) -> Result<ExitCode, CliError>
 where
+    H: MarketplaceHost,
     F: FnMut(
-        CodingAgent,
+        H,
         &PluginInstallOptions,
         &dyn CommandRunner,
         &dyn PluginSetupRunner,
     ) -> Result<(), String>,
 {
     let runner = RealCommandRunner;
-    let setup_runner = RealPluginSetupRunner;
+    let setup_runner = HostPluginSetupRunner::new(host);
     action(host, options, &runner, &setup_runner).map_err(CliError::Install)?;
     Ok(ExitCode::SUCCESS)
 }
@@ -343,7 +347,6 @@ fn doctor_json(
     options: &PluginInstallOptions,
 ) -> Result<ExitCode, CliError> {
     let runner = RealCommandRunner;
-    let setup_runner = RealPluginSetupRunner;
     let reports = hosts
         .iter()
         .copied()
@@ -351,7 +354,10 @@ fn doctor_json(
             CodingAgent::Hermes => {
                 crate::agents::hermes::install::doctor_json_value(options, &runner)
             }
-            _ => doctor_host_json_value(host, options, &runner, &setup_runner),
+            _ => {
+                let setup_runner = HostPluginSetupRunner::new(host);
+                doctor_host_json_value(host, options, &runner, &setup_runner)
+            }
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(CliError::Install)?;
@@ -430,7 +436,7 @@ pub(crate) fn installed_agents(
 }
 
 fn install_host(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -445,7 +451,7 @@ fn install_host(
 }
 
 fn install_host_with_operation_timeout(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -465,7 +471,7 @@ fn install_host_with_operation_timeout(
 }
 
 fn install_host_locked(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -781,7 +787,7 @@ fn install_host_locked(
 }
 
 fn uninstall_host(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -796,7 +802,7 @@ fn uninstall_host(
 }
 
 fn uninstall_host_with_operation_timeout(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -816,7 +822,7 @@ fn uninstall_host_with_operation_timeout(
 }
 
 fn uninstall_host_locked(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -877,7 +883,7 @@ fn uninstall_host_locked(
 }
 
 fn retire_installed_generation(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     plugin_root: &Path,
     expected_generation_lock: &Path,
     local_install_exists: bool,
@@ -912,7 +918,7 @@ fn retire_installed_generation(
 }
 
 fn retire_replacement_before_rollback(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     setup_runner: &dyn PluginSetupRunner,
@@ -1025,7 +1031,7 @@ fn legacy_plugin_without_mcp(
 }
 
 fn uninstall_host_with_setup_override(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -1063,7 +1069,7 @@ fn uninstall_host_with_setup_override(
 }
 
 fn doctor_host(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -1091,7 +1097,7 @@ fn doctor_host(
 }
 
 fn doctor_host_json_value(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -1118,7 +1124,7 @@ fn doctor_host_json_value(
 }
 
 fn collect_host_plugin_readiness(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
     setup_runner: &dyn PluginSetupRunner,
@@ -1483,7 +1489,7 @@ struct ReplacementGenerationLock {
 }
 
 fn acquire_replacement_generation_lock(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     marker_path: &Path,
     expected_generation_lock: &Path,
     remove_lock_if_unreferenced: bool,
@@ -1587,7 +1593,7 @@ struct PluginInstallPreflight {
 }
 
 fn prepare_plugin_install(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -1753,7 +1759,7 @@ fn generation_lock_is_absent(path: &Path) -> bool {
 }
 
 fn stage_plugin_marketplace(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     relay: &Path,
     target: &PluginLayout,
     initialize_generation_lock: bool,
@@ -1775,7 +1781,7 @@ fn stage_plugin_marketplace(
 }
 
 fn stage_plugin_marketplace_at(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     relay: &Path,
     target: &PluginLayout,
     initialize_generation_lock: bool,
@@ -1808,7 +1814,7 @@ fn stage_plugin_marketplace_at(
 }
 
 fn begin_force_replacement(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     preflight: PluginInstallPreflight,
     options: &PluginInstallOptions,
@@ -1827,7 +1833,7 @@ fn begin_force_replacement(
         previous_install_exists: _,
         generation_retirement,
     } = preflight;
-    let setup_snapshot = setup_runner.snapshot(host)?;
+    let setup_snapshot = setup_runner.snapshot(host.install_arg())?;
     let backup_parent = previous_marketplace_root
         .parent()
         .unwrap_or(&options.install_dir);
@@ -1873,12 +1879,7 @@ fn begin_force_replacement(
     cleanup_state.host_marketplace_removed = !marketplace_registered;
     let result = (|| {
         if cleanup_state.plugin_setup_installed {
-            run_plugin_uninstall(
-                host,
-                &cleanup_state.plugin_root,
-                options,
-                setup_runner,
-            )?;
+            run_plugin_uninstall(host, &cleanup_state.plugin_root, options, setup_runner)?;
             cleanup_state.plugin_setup_installed = false;
         }
         run_host_unregistration(
@@ -1950,7 +1951,7 @@ fn begin_force_replacement(
 }
 
 fn restore_force_replacement_after_error<T>(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     snapshot: &mut ForceInstallSnapshot,
     options: &PluginInstallOptions,
@@ -1967,7 +1968,7 @@ fn restore_force_replacement_after_error<T>(
 }
 
 fn restore_force_replacement(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     snapshot: &mut ForceInstallSnapshot,
     options: &PluginInstallOptions,
@@ -2094,7 +2095,7 @@ fn restore_force_replacement(
 }
 
 fn force_cleanup_existing_install(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -2118,7 +2119,7 @@ fn force_cleanup_existing_install(
 }
 
 fn rollback_install(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     layout: &PluginLayout,
     registration: HostRegistrationProgress,
     setup_installed: bool,
@@ -2147,7 +2148,7 @@ fn rollback_install(
 }
 
 fn run_host_unregistration(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     state: &mut PluginState,
     install_dir: &Path,
     options: &PluginInstallOptions,
@@ -2183,8 +2184,6 @@ fn with_schema(mut value: Value) -> Value {
 
 #[cfg(test)]
 use assets::*;
-#[cfg(test)]
-use setup::setup_action_description;
 #[cfg(test)]
 use state::*;
 

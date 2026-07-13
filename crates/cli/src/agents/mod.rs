@@ -162,6 +162,10 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         self.validate_version_output(output).map(|_| ())
     }
 
+    fn version_requirement(self) -> String {
+        self.version_requirement()
+    }
+
     fn marketplace_manifest_relative(self) -> &'static [&'static str] {
         match self {
             Self::Codex => &[".agents", "plugins", "marketplace.json"],
@@ -284,6 +288,55 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::Hermes => unreachable!("Hermes does not use marketplace installs"),
         }
     }
+
+    fn setup_action_description(self, action: &str) -> String {
+        setup_action_description(self, action)
+    }
+
+    fn snapshot_setup(
+        self,
+    ) -> Result<Option<crate::installation::marketplace::PluginSetupSnapshot>, String> {
+        let snapshot = snapshot_setup(self)?;
+        Ok(Some(
+            crate::installation::marketplace::PluginSetupSnapshot::new(move || {
+                restore_setup_snapshot(&snapshot)
+            }),
+        ))
+    }
+
+    fn setup_plugin(
+        self,
+        gateway_url: &str,
+        plugin_root: &std::path::Path,
+        generation_token: Option<&str>,
+    ) -> Result<(), String> {
+        setup_marketplace_plugin(self, gateway_url, plugin_root, generation_token)
+    }
+
+    fn uninstall_plugin(
+        self,
+        gateway_url: &str,
+        plugin_root: &std::path::Path,
+    ) -> Result<(), String> {
+        uninstall_marketplace_plugin(self, gateway_url, plugin_root)
+    }
+
+    fn doctor_plugin(
+        self,
+        gateway_url: &str,
+        plugin_root: &std::path::Path,
+        generation_token: Option<&str>,
+    ) -> Result<(), String> {
+        doctor_marketplace_plugin(self, gateway_url, plugin_root, generation_token)
+    }
+
+    fn doctor_plugin_json(
+        self,
+        gateway_url: &str,
+        plugin_root: &std::path::Path,
+    ) -> Result<serde_json::Value, String> {
+        doctor_marketplace_plugin_json(self, gateway_url, plugin_root)
+    }
 }
 
 pub(crate) fn marketplace_manifest(
@@ -346,8 +399,6 @@ pub(crate) fn prepare_launch(
 pub(crate) enum SetupSnapshot {
     Codex(CodexSetupSnapshot),
     Claude(ClaudeSetupSnapshot),
-    #[cfg(test)]
-    Mock,
 }
 
 pub(crate) fn setup_action_description(agent: CodingAgent, action: &str) -> String {
@@ -380,8 +431,6 @@ pub(crate) fn restore_setup_snapshot(snapshot: &SetupSnapshot) -> Result<(), Str
     match snapshot {
         SetupSnapshot::Codex(snapshot) => restore_codex_setup(snapshot),
         SetupSnapshot::Claude(snapshot) => restore_claude_setup(snapshot),
-        #[cfg(test)]
-        SetupSnapshot::Mock => Ok(()),
     }
 }
 

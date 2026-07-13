@@ -713,7 +713,7 @@ struct FailStateWriteAfterRefresh {
 }
 
 impl PluginSetupRunner for FailStateWriteAfterRefresh {
-    fn snapshot(&self, _host: CodingAgent) -> Result<Option<PluginSetupSnapshot>, String> {
+    fn snapshot(&self, _host_arg: &str) -> Result<Option<PluginSetupSnapshot>, String> {
         Ok(Some(PluginSetupSnapshot::Mock))
     }
 
@@ -730,7 +730,7 @@ impl PluginSetupRunner for FailStateWriteAfterRefresh {
 
     fn setup(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -739,7 +739,7 @@ impl PluginSetupRunner for FailStateWriteAfterRefresh {
 
     fn uninstall(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -748,7 +748,7 @@ impl PluginSetupRunner for FailStateWriteAfterRefresh {
 
     fn doctor(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -757,7 +757,7 @@ impl PluginSetupRunner for FailStateWriteAfterRefresh {
 
     fn doctor_json(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<serde_json::Value, String> {
@@ -766,7 +766,7 @@ impl PluginSetupRunner for FailStateWriteAfterRefresh {
 }
 
 impl PluginSetupRunner for BlockingRefreshFailure {
-    fn snapshot(&self, _host: CodingAgent) -> Result<Option<PluginSetupSnapshot>, String> {
+    fn snapshot(&self, _host_arg: &str) -> Result<Option<PluginSetupSnapshot>, String> {
         Ok(Some(PluginSetupSnapshot::Mock))
     }
 
@@ -782,7 +782,7 @@ impl PluginSetupRunner for BlockingRefreshFailure {
 
     fn setup(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -791,7 +791,7 @@ impl PluginSetupRunner for BlockingRefreshFailure {
 
     fn uninstall(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -800,7 +800,7 @@ impl PluginSetupRunner for BlockingRefreshFailure {
 
     fn doctor(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
@@ -809,7 +809,7 @@ impl PluginSetupRunner for BlockingRefreshFailure {
 
     fn doctor_json(
         &self,
-        _host: CodingAgent,
+        _host_arg: &str,
         _gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<serde_json::Value, String> {
@@ -828,8 +828,8 @@ impl MockSetupRunner {
 }
 
 impl PluginSetupRunner for MockSetupRunner {
-    fn snapshot(&self, host: CodingAgent) -> Result<Option<PluginSetupSnapshot>, String> {
-        self.record(format!("snapshot {}", host.install_arg()))?;
+    fn snapshot(&self, host_arg: &str) -> Result<Option<PluginSetupSnapshot>, String> {
+        self.record(format!("snapshot {host_arg}"))?;
         Ok(Some(PluginSetupSnapshot::Mock))
     }
 
@@ -841,43 +841,33 @@ impl PluginSetupRunner for MockSetupRunner {
         self.record("refresh gateway".into())
     }
 
-    fn setup(
-        &self,
-        host: CodingAgent,
-        gateway_url: &str,
-        _plugin_root: &Path,
-    ) -> Result<(), String> {
-        self.record(format!("setup {} {gateway_url}", host.install_arg()))
+    fn setup(&self, host_arg: &str, gateway_url: &str, _plugin_root: &Path) -> Result<(), String> {
+        self.record(format!("setup {host_arg} {gateway_url}"))
     }
 
     fn uninstall(
         &self,
-        host: CodingAgent,
+        host_arg: &str,
         gateway_url: &str,
         _plugin_root: &Path,
     ) -> Result<(), String> {
-        self.record(format!("uninstall {} {gateway_url}", host.install_arg()))
+        self.record(format!("uninstall {host_arg} {gateway_url}"))
     }
 
-    fn doctor(
-        &self,
-        host: CodingAgent,
-        gateway_url: &str,
-        _plugin_root: &Path,
-    ) -> Result<(), String> {
-        self.record(format!("doctor {} {gateway_url}", host.install_arg()))
+    fn doctor(&self, host_arg: &str, gateway_url: &str, _plugin_root: &Path) -> Result<(), String> {
+        self.record(format!("doctor {host_arg} {gateway_url}"))
     }
 
     fn doctor_json(
         &self,
-        host: CodingAgent,
+        host_arg: &str,
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<serde_json::Value, String> {
         self.doctor_roots
             .borrow_mut()
             .push(plugin_root.to_path_buf());
-        self.record(format!("doctor-json {} {gateway_url}", host.install_arg()))?;
+        self.record(format!("doctor-json {host_arg} {gateway_url}"))?;
         Ok(json!({
             "ok": true,
             "checks": {}
@@ -1655,53 +1645,53 @@ fn plugin_setup_delegates_and_dry_run_skips_runner_calls() {
 fn real_plugin_setup_runner_uses_temp_home_for_claude_paths() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
-    let runner = RealPluginSetupRunner;
+    let runner = HostPluginSetupRunner::new(CodingAgent::ClaudeCode);
     let plugin_root = dir.path().join("plugin");
 
     runner
-        .setup(CodingAgent::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+        .setup("claude-code", DEFAULT_GATEWAY_URL, &plugin_root)
         .unwrap();
     assert!(
         runner
-            .doctor(CodingAgent::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+            .doctor("claude-code", DEFAULT_GATEWAY_URL, &plugin_root)
             .is_ok()
     );
     let claude_report = runner
-        .doctor_json(CodingAgent::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+        .doctor_json("claude-code", DEFAULT_GATEWAY_URL, &plugin_root)
         .unwrap();
     assert_eq!(
         claude_report["checks"]["claude_provider_routing"],
         json!(true)
     );
     runner
-        .uninstall(CodingAgent::ClaudeCode, DEFAULT_GATEWAY_URL, &plugin_root)
+        .uninstall("claude-code", DEFAULT_GATEWAY_URL, &plugin_root)
         .unwrap();
 }
 
 #[test]
 fn setup_action_descriptions_cover_supported_hosts_and_actions() {
     assert_eq!(
-        setup_action_description(CodingAgent::Codex, "configure"),
+        CodingAgent::Codex.setup_action_description("configure"),
         "configure Codex provider and trust plugin-owned hooks"
     );
     assert_eq!(
-        setup_action_description(CodingAgent::Codex, "restore"),
+        CodingAgent::Codex.setup_action_description("restore"),
         "remove Codex provider and plugin hook trust"
     );
     assert_eq!(
-        setup_action_description(CodingAgent::Codex, "doctor"),
+        CodingAgent::Codex.setup_action_description("doctor"),
         "check Codex provider and plugin-owned hooks"
     );
     assert_eq!(
-        setup_action_description(CodingAgent::ClaudeCode, "configure"),
+        CodingAgent::ClaudeCode.setup_action_description("configure"),
         "enable Claude Code provider routing through NeMo Relay"
     );
     assert_eq!(
-        setup_action_description(CodingAgent::ClaudeCode, "restore"),
+        CodingAgent::ClaudeCode.setup_action_description("restore"),
         "restore Claude Code provider routing from NeMo Relay backup"
     );
     assert_eq!(
-        setup_action_description(CodingAgent::ClaudeCode, "doctor"),
+        CodingAgent::ClaudeCode.setup_action_description("doctor"),
         "check Claude Code provider routing"
     );
 }
