@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::configuration::CodingAgent;
-use crate::configuration::{PluginsEditCommand, PluginsScopeArgs};
+use crate::configuration::{ConfigurationScope, PluginsEditRequest};
 use crate::error::CliError;
 
 /// Where the setup saves its output.
@@ -35,22 +35,22 @@ impl ConfigScope {
 /// Maps the base setup scope to the plugin editor target for the guided continuation.
 ///
 /// `Project` and `Both` configure the project `plugins.toml`; `Global` configures the user
-/// `plugins.toml`. Returns the existing `PluginsEditCommand` so the in-process editor behaves
+/// `plugins.toml`. Returns the existing `PluginsEditRequest` so the in-process editor behaves
 /// exactly like the equivalent `nemo-relay plugins edit` invocation.
-pub(super) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditCommand {
+pub(super) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditRequest {
     let scope = match scope {
-        ConfigScope::Project | ConfigScope::Both => PluginsScopeArgs {
+        ConfigScope::Project | ConfigScope::Both => ConfigurationScope {
             user: false,
             project: true,
             global: false,
         },
-        ConfigScope::Global => PluginsScopeArgs {
+        ConfigScope::Global => ConfigurationScope {
             user: true,
             project: false,
             global: false,
         },
     };
-    PluginsEditCommand { scope }
+    PluginsEditRequest { scope }
 }
 
 /// Returns the exact command a user runs to resume plugin setup after skipping the continuation.

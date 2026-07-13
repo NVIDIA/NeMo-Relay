@@ -34,30 +34,30 @@ fn catalog() -> PricingCatalog {
 #[test]
 fn pricing_helpers_cover_scopes_components_sources_and_usage() {
     assert_eq!(
-        target_pricing_scope(&PricingScopeArgs::default()).unwrap(),
+        target_pricing_scope(&ConfigurationScope::default()).unwrap(),
         TargetScope::User
     );
     assert_eq!(
-        target_pricing_scope(&PricingScopeArgs {
+        target_pricing_scope(&ConfigurationScope {
             project: true,
-            ..PricingScopeArgs::default()
+            ..ConfigurationScope::default()
         })
         .unwrap(),
         TargetScope::Project
     );
     assert_eq!(
-        target_pricing_scope(&PricingScopeArgs {
+        target_pricing_scope(&ConfigurationScope {
             global: true,
-            ..PricingScopeArgs::default()
+            ..ConfigurationScope::default()
         })
         .unwrap(),
         TargetScope::Global
     );
     assert!(
-        target_pricing_scope(&PricingScopeArgs {
+        target_pricing_scope(&ConfigurationScope {
             user: true,
             project: true,
-            ..PricingScopeArgs::default()
+            ..ConfigurationScope::default()
         })
         .unwrap_err()
         .to_string()

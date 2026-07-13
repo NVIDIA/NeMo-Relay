@@ -16,7 +16,6 @@ use dialoguer::{Input, Select};
 use nemo_relay::config_editor::{EditorFieldKind, EditorFieldSpec};
 use serde_json::{Value, json};
 
-use crate::configuration::PluginsEditCommand;
 use crate::error::CliError;
 
 pub(crate) mod config_io;
@@ -26,6 +25,9 @@ pub(crate) mod lifecycle;
 pub(crate) mod policy;
 pub(crate) mod pricing;
 pub(crate) mod schema;
+mod types;
+
+pub(crate) use types::*;
 
 use self::config_io::*;
 use self::dynamic_editor::*;
@@ -100,7 +102,7 @@ fn print_save_success(path: &Path) {
     );
 }
 
-pub(crate) fn edit(command: PluginsEditCommand) -> Result<(), CliError> {
+pub(crate) fn edit(command: PluginsEditRequest) -> Result<(), CliError> {
     ensure_tty()?;
     let scope = target_scope(&command.scope)?;
     let path = target_path(scope)?;

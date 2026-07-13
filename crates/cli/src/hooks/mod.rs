@@ -6,6 +6,7 @@
 mod encoding;
 mod merging;
 mod response;
+mod types;
 
 #[cfg(test)]
 pub(crate) use encoding::{
@@ -17,6 +18,7 @@ pub(crate) use encoding::{
 };
 pub(crate) use merging::merge_hooks;
 use response::*;
+pub(crate) use types::{GatewayMode, HookForwardRequest};
 
 use std::io::Read;
 use std::path::Path;
@@ -28,9 +30,7 @@ use futures_util::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
-use crate::configuration::{
-    CodingAgent, GATEWAY_URL_ENV, GatewayMode, HookForwardRequest, TRANSPARENT_RUN_ENV,
-};
+use crate::configuration::{CodingAgent, GATEWAY_URL_ENV, TRANSPARENT_RUN_ENV};
 use crate::error::CliError;
 use crate::installation::generation::InstallGeneration;
 

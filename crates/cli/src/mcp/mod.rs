@@ -14,9 +14,9 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use crate::configuration::GatewayOverrides;
 use crate::error::CliError;
 use crate::installation::generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
+use crate::server::GatewayOverrides;
 
 pub(crate) const SERVER_NAME: &str = "nemo-relay";
 const LAUNCH_ARGS: &[&str] = &["mcp"];

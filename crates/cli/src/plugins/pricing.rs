@@ -13,15 +13,15 @@ use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 use serde_json::Value;
 
 use crate::configuration::{
-    GatewayOverrides, PricingAddSourceCommand, PricingInitCommand, PricingResolveCommand,
-    PricingScopeArgs, PricingValidateCommand, resolve_server_config,
+    ConfigurationScope, GatewayOverrides, PricingAddSourceRequest, PricingInitRequest,
+    PricingResolveRequest, PricingValidateRequest, resolve_server_config,
 };
 use crate::error::CliError;
 use crate::plugins::config_io::{PluginConfigDocument, TargetScope, target_path, validate_config};
 
 const PRICING_PLUGIN_KIND: &str = "pricing";
 
-pub(crate) fn validate(command: PricingValidateCommand) -> Result<(), CliError> {
+pub(crate) fn validate(command: PricingValidateRequest) -> Result<(), CliError> {
     let catalog = read_pricing_catalog(&command.path)?;
     let entries = catalog.entries.len();
     println!(
@@ -32,7 +32,7 @@ pub(crate) fn validate(command: PricingValidateCommand) -> Result<(), CliError> 
     Ok(())
 }
 
-pub(crate) fn init(command: PricingInitCommand) -> Result<(), CliError> {
+pub(crate) fn init(command: PricingInitRequest) -> Result<(), CliError> {
     let scope = target_pricing_scope(&command.scope)?;
     let path = target_path(scope)?;
     update_plugin_config_document(&path, |plugin_config| {
@@ -46,7 +46,7 @@ pub(crate) fn init(command: PricingInitCommand) -> Result<(), CliError> {
     Ok(())
 }
 
-pub(crate) fn add_source(command: PricingAddSourceCommand) -> Result<(), CliError> {
+pub(crate) fn add_source(command: PricingAddSourceRequest) -> Result<(), CliError> {
     let source_path = std::fs::canonicalize(&command.path).map_err(|source| {
         CliError::Config(format!(
             "could not canonicalize model pricing catalog '{}': {source}",
@@ -90,7 +90,7 @@ fn update_plugin_config_document(
     document.write()
 }
 
-pub(crate) fn resolve(command: PricingResolveCommand) -> Result<(), CliError> {
+pub(crate) fn resolve(command: PricingResolveRequest) -> Result<(), CliError> {
     let sources = pricing_catalog_sources_from_current_config()?;
     if sources.is_empty() {
         return Err(CliError::Config(
@@ -217,7 +217,7 @@ fn resolve_pricing(
     })
 }
 
-fn target_pricing_scope(scope: &PricingScopeArgs) -> Result<TargetScope, CliError> {
+fn target_pricing_scope(scope: &ConfigurationScope) -> Result<TargetScope, CliError> {
     let selected = [scope.user, scope.project, scope.global]
         .into_iter()
         .filter(|selected| *selected)

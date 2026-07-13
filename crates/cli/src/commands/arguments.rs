@@ -28,8 +28,8 @@ impl From<AgentArg> for CodingAgent {
 }
 
 impl ServerArgs {
-    pub(crate) fn to_runtime(&self) -> crate::configuration::GatewayOverrides {
-        crate::configuration::GatewayOverrides {
+    pub(crate) fn to_runtime(&self) -> crate::server::GatewayOverrides {
+        crate::server::GatewayOverrides {
             config: self.config.clone(),
             bind: self.bind,
             openai_base_url: self.openai_base_url.clone(),
@@ -43,8 +43,8 @@ impl ServerArgs {
 }
 
 impl RunCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::RunOverrides {
-        crate::configuration::RunOverrides {
+    pub(crate) fn into_runtime(self) -> crate::process::RunOverrides {
+        crate::process::RunOverrides {
             agent: self.agent.map(Into::into),
             config: self.config,
             openai_base_url: self.openai_base_url,
@@ -59,8 +59,8 @@ impl RunCommand {
 }
 
 impl HookForwardCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::HookForwardRequest {
-        crate::configuration::HookForwardRequest {
+    pub(crate) fn into_runtime(self) -> crate::hooks::HookForwardRequest {
+        crate::hooks::HookForwardRequest {
             agent: self.agent.into(),
             gateway_url: self.gateway_url,
             generation_file: self.generation_file,
@@ -619,7 +619,7 @@ impl UninstallCommand {
     }
 }
 
-impl From<PluginsScopeArgs> for crate::configuration::PluginsScopeArgs {
+impl From<PluginsScopeArgs> for crate::plugins::ConfigurationScope {
     fn from(value: PluginsScopeArgs) -> Self {
         Self {
             user: value.user,
@@ -630,61 +630,61 @@ impl From<PluginsScopeArgs> for crate::configuration::PluginsScopeArgs {
 }
 
 impl PluginsEditCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsEditCommand {
-        crate::configuration::PluginsEditCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsEditRequest {
+        crate::plugins::PluginsEditRequest {
             scope: self.scope.into(),
         }
     }
 }
 impl PluginsAddCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsAddCommand {
-        crate::configuration::PluginsAddCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsAddRequest {
+        crate::plugins::PluginsAddRequest {
             scope: self.scope.into(),
             path: self.path,
         }
     }
 }
 impl PluginsValidateCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsValidateCommand {
-        crate::configuration::PluginsValidateCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsValidateRequest {
+        crate::plugins::PluginsValidateRequest {
             target: self.target,
             json: self.json,
         }
     }
 }
 impl PluginsListCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsListCommand {
-        crate::configuration::PluginsListCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsListRequest {
+        crate::plugins::PluginsListRequest {
             all: self.all,
             json: self.json,
         }
     }
 }
 impl PluginsInspectCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsInspectCommand {
-        crate::configuration::PluginsInspectCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsInspectRequest {
+        crate::plugins::PluginsInspectRequest {
             id: self.id,
             json: self.json,
         }
     }
 }
 impl PluginsEnableCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsEnableCommand {
-        crate::configuration::PluginsEnableCommand { id: self.id }
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsEnableRequest {
+        crate::plugins::PluginsEnableRequest { id: self.id }
     }
 }
 impl PluginsDisableCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsDisableCommand {
-        crate::configuration::PluginsDisableCommand { id: self.id }
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsDisableRequest {
+        crate::plugins::PluginsDisableRequest { id: self.id }
     }
 }
 impl PluginsRemoveCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PluginsRemoveCommand {
-        crate::configuration::PluginsRemoveCommand { id: self.id }
+    pub(crate) fn into_runtime(self) -> crate::plugins::PluginsRemoveRequest {
+        crate::plugins::PluginsRemoveRequest { id: self.id }
     }
 }
 
-impl From<PricingScopeArgs> for crate::configuration::PricingScopeArgs {
+impl From<PricingScopeArgs> for crate::plugins::ConfigurationScope {
     fn from(value: PricingScopeArgs) -> Self {
         Self {
             user: value.user,
@@ -694,20 +694,20 @@ impl From<PricingScopeArgs> for crate::configuration::PricingScopeArgs {
     }
 }
 impl PricingValidateCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PricingValidateCommand {
-        crate::configuration::PricingValidateCommand { path: self.path }
+    pub(crate) fn into_runtime(self) -> crate::plugins::PricingValidateRequest {
+        crate::plugins::PricingValidateRequest { path: self.path }
     }
 }
 impl PricingInitCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PricingInitCommand {
-        crate::configuration::PricingInitCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PricingInitRequest {
+        crate::plugins::PricingInitRequest {
             scope: self.scope.into(),
         }
     }
 }
 impl PricingAddSourceCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PricingAddSourceCommand {
-        crate::configuration::PricingAddSourceCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PricingAddSourceRequest {
+        crate::plugins::PricingAddSourceRequest {
             scope: self.scope.into(),
             path: self.path,
             append: self.append,
@@ -715,8 +715,8 @@ impl PricingAddSourceCommand {
     }
 }
 impl PricingResolveCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::PricingResolveCommand {
-        crate::configuration::PricingResolveCommand {
+    pub(crate) fn into_runtime(self) -> crate::plugins::PricingResolveRequest {
+        crate::plugins::PricingResolveRequest {
             model: self.model,
             provider: self.provider,
             prompt_tokens: self.prompt_tokens,
@@ -735,7 +735,7 @@ pub(crate) enum GatewayModeArg {
     Required,
 }
 
-impl From<GatewayModeArg> for crate::configuration::GatewayMode {
+impl From<GatewayModeArg> for crate::hooks::GatewayMode {
     fn from(value: GatewayModeArg) -> Self {
         match value {
             GatewayModeArg::HookOnly => Self::HookOnly,

@@ -33,6 +33,14 @@ use crate::plugins::lifecycle::{
     dynamic_plugin_runtime_closure_digest, enforce_required_dynamic_plugin_startup,
 };
 use crate::plugins::policy::DynamicPluginHostPolicy;
+pub(crate) use crate::plugins::{
+    ConfigurationScope, PluginsAddRequest, PluginsDisableRequest, PluginsEditRequest,
+    PluginsEnableRequest, PluginsInspectRequest, PluginsListRequest, PluginsRemoveRequest,
+    PluginsValidateRequest, PricingAddSourceRequest, PricingInitRequest, PricingResolveRequest,
+    PricingValidateRequest,
+};
+pub(crate) use crate::process::RunOverrides;
+pub(crate) use crate::server::GatewayOverrides;
 
 pub(crate) const BOOTSTRAP_FINGERPRINT_ENV: &str = "NEMO_RELAY_BOOTSTRAP_FINGERPRINT";
 pub(crate) const PLUGIN_IDLE_TIMEOUT_ENV: &str = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
@@ -45,68 +53,6 @@ pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
 pub(crate) const TRANSPARENT_RUN_ENV: &str = "NEMO_RELAY_TRANSPARENT_RUN";
-
-/// Agent-neutral gateway configuration overrides supplied by any process entrypoint.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct GatewayOverrides {
-    pub(crate) config: Option<PathBuf>,
-    pub(crate) bind: Option<SocketAddr>,
-    pub(crate) openai_base_url: Option<String>,
-    pub(crate) anthropic_base_url: Option<String>,
-    pub(crate) plugin_config_path: Option<PathBuf>,
-    pub(crate) ready_file: Option<PathBuf>,
-    pub(crate) max_hook_payload_bytes: Option<usize>,
-    pub(crate) max_passthrough_body_bytes: Option<usize>,
-}
-
-impl GatewayOverrides {
-    pub(crate) fn requested_daemon_mode(&self) -> bool {
-        self.bind.is_some()
-            || self.openai_base_url.is_some()
-            || self.anthropic_base_url.is_some()
-            || self.plugin_config_path.is_some()
-            || self.ready_file.is_some()
-            || self.max_hook_payload_bytes.is_some()
-            || self.max_passthrough_body_bytes.is_some()
-            || self.config.is_some()
-    }
-}
-
-/// Runtime input for transparent agent execution, independent of Clap.
-#[derive(Debug, Clone)]
-pub(crate) struct RunOverrides {
-    pub(crate) agent: Option<CodingAgent>,
-    pub(crate) config: Option<PathBuf>,
-    pub(crate) openai_base_url: Option<String>,
-    pub(crate) anthropic_base_url: Option<String>,
-    pub(crate) session_metadata: Option<String>,
-    pub(crate) plugin_config_path: Option<PathBuf>,
-    pub(crate) dry_run: bool,
-    pub(crate) print: bool,
-    pub(crate) command: Vec<String>,
-}
-
-/// Runtime hook-forward request, independent of command-line parsing.
-#[derive(Debug, Clone)]
-pub(crate) struct HookForwardRequest {
-    pub(crate) agent: CodingAgent,
-    pub(crate) gateway_url: Option<String>,
-    pub(crate) generation_file: Option<PathBuf>,
-    pub(crate) generation_token: Option<String>,
-    pub(crate) forward_only: bool,
-    pub(crate) transparent_run: bool,
-    pub(crate) profile: Option<String>,
-    pub(crate) session_metadata: Option<String>,
-    pub(crate) gateway_mode: Option<GatewayMode>,
-    pub(crate) fail_closed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GatewayMode {
-    HookOnly,
-    Passthrough,
-    Required,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum IntegrationHost {
@@ -162,82 +108,6 @@ pub(crate) struct UninstallRequest {
     pub(crate) host: IntegrationHost,
     pub(crate) install_dir: Option<PathBuf>,
     pub(crate) dry_run: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PluginsScopeArgs {
-    pub(crate) user: bool,
-    pub(crate) project: bool,
-    pub(crate) global: bool,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PluginsEditCommand {
-    pub(crate) scope: PluginsScopeArgs,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PluginsAddCommand {
-    pub(crate) scope: PluginsScopeArgs,
-    pub(crate) path: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PluginsValidateCommand {
-    pub(crate) target: String,
-    pub(crate) json: bool,
-}
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PluginsListCommand {
-    pub(crate) all: bool,
-    pub(crate) json: bool,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PluginsInspectCommand {
-    pub(crate) id: String,
-    pub(crate) json: bool,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PluginsEnableCommand {
-    pub(crate) id: String,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PluginsDisableCommand {
-    pub(crate) id: String,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PluginsRemoveCommand {
-    pub(crate) id: String,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PricingScopeArgs {
-    pub(crate) user: bool,
-    pub(crate) project: bool,
-    pub(crate) global: bool,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingValidateCommand {
-    pub(crate) path: PathBuf,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingInitCommand {
-    pub(crate) scope: PricingScopeArgs,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingAddSourceCommand {
-    pub(crate) scope: PricingScopeArgs,
-    pub(crate) path: PathBuf,
-    pub(crate) append: bool,
-}
-#[derive(Debug, Clone)]
-pub(crate) struct PricingResolveCommand {
-    pub(crate) model: String,
-    pub(crate) provider: Option<String>,
-    pub(crate) prompt_tokens: Option<u64>,
-    pub(crate) completion_tokens: Option<u64>,
-    pub(crate) cache_read_tokens: Option<u64>,
-    pub(crate) cache_write_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1899,18 +1769,6 @@ pub(crate) fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
 
 fn header_json(headers: &HeaderMap, name: &str) -> Option<Value> {
     header_string(headers, name).and_then(|raw| serde_json::from_str(&raw).ok())
-}
-
-impl GatewayMode {
-    // Returns the installed hook-forward spelling for gateway mode headers. Keeping this separate
-    // from debug output prevents enum formatting changes from affecting persisted hook commands.
-    pub(crate) const fn as_arg(self) -> &'static str {
-        match self {
-            Self::HookOnly => "hook-only",
-            Self::Passthrough => "passthrough",
-            Self::Required => "required",
-        }
-    }
 }
 
 #[cfg(test)]

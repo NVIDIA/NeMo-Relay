@@ -9,9 +9,9 @@ use std::{
 
 use super::*;
 use crate::configuration::{
-    GatewayOverrides, PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand,
-    PluginsInspectCommand, PluginsListCommand, PluginsRemoveCommand, PluginsScopeArgs,
-    PluginsValidateCommand,
+    ConfigurationScope, GatewayOverrides, PluginsAddRequest, PluginsDisableRequest,
+    PluginsEnableRequest, PluginsInspectRequest, PluginsListRequest, PluginsRemoveRequest,
+    PluginsValidateRequest,
 };
 use crate::error::PluginLifecycleFailureKind;
 use base64::Engine;
@@ -616,10 +616,10 @@ fn tracked_native_plugin_example_satisfies_default_trust_policy() {
     materialize_native_example_manifest(&plugin_dir);
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -646,10 +646,10 @@ fn tracked_native_plugin_example_rejects_tampered_artifact() {
     std::fs::write(artifact_path, b"tampered native plugin example fixture").unwrap();
 
     let error = add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -1753,14 +1753,14 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir.clone(),
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -1792,10 +1792,10 @@ fn add_rejects_unreadable_declared_config_schema() {
     std::fs::remove_file(plugin_dir.join("config.schema.json")).unwrap();
 
     let error = add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -1826,7 +1826,7 @@ fn validate_path_rejects_invalid_declared_config_schema() {
     );
 
     let error = validate(
-        PluginsValidateCommand {
+        PluginsValidateRequest {
             target: plugin_dir.to_string_lossy().into_owned(),
             json: false,
         },
@@ -1857,10 +1857,10 @@ fn validate_id_checks_resolved_host_config_against_declared_schema() {
     );
     let server = GatewayOverrides::default();
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -1879,7 +1879,7 @@ port = "not-an-integer"
     std::fs::write(&plugins_toml, rendered).unwrap();
 
     let error = validate(
-        PluginsValidateCommand {
+        PluginsValidateRequest {
             target: "acme.schema-config".into(),
             json: false,
         },
@@ -1904,10 +1904,10 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     let server = GatewayOverrides::default();
 
     add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir.clone(),
         },
@@ -1999,7 +1999,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
             .any(|arg| arg == "-e" || arg == "--editable")
     );
     enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.python".into(),
         },
         &server,
@@ -2013,7 +2013,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     let stale_marker = environment_path.join("stale-marker");
     std::fs::write(&stale_marker, b"stale").unwrap();
     remove(
-        PluginsRemoveCommand {
+        PluginsRemoveRequest {
             id: "acme.python".into(),
         },
         &server,
@@ -2028,10 +2028,10 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     assert_eq!(removed.record.source.environment_ref, None);
 
     add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2054,10 +2054,10 @@ fn add_rolls_back_python_environment_when_installation_fails() {
     let runner = FakePythonEnvironmentRunner::failing_install();
 
     let error = add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2097,10 +2097,10 @@ fn enable_rejects_missing_managed_python_environment() {
     let runner = FakePythonEnvironmentRunner::default();
     let server = GatewayOverrides::default();
     add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2120,7 +2120,7 @@ fn enable_rejects_missing_managed_python_environment() {
     std::fs::remove_dir_all(&environment_ref).unwrap();
 
     let error = enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.python-missing".into(),
         },
         &server,
@@ -2156,10 +2156,10 @@ fn enable_rejects_python_environment_outside_managed_location() {
     let runner = FakePythonEnvironmentRunner::default();
     let server = GatewayOverrides::default();
     add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2188,7 +2188,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
     scope.save().unwrap();
 
     let error = enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.python-outside".into(),
         },
         &server,
@@ -2229,10 +2229,10 @@ fn add_requires_manifest_root_for_python_workers() {
     let runner = FakePythonEnvironmentRunner::default();
 
     let error = add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2271,10 +2271,10 @@ fn add_rejects_python_entrypoint_module_that_is_not_integrity_checked_artifact()
     let runner = FakePythonEnvironmentRunner::default();
 
     let error = add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2377,10 +2377,10 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     let runner = FakePythonEnvironmentRunner::default();
     let server = GatewayOverrides::default();
     add_with_environment_runner(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2415,7 +2415,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     scope.save().unwrap();
 
     let error = remove(
-        PluginsRemoveCommand {
+        PluginsRemoveRequest {
             id: "acme.python-retry".into(),
         },
         &server,
@@ -2446,7 +2446,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     scope.save().unwrap();
 
     remove(
-        PluginsRemoveCommand {
+        PluginsRemoveRequest {
             id: "acme.python-retry".into(),
         },
         &server,
@@ -2471,13 +2471,13 @@ fn active_dynamic_plugin_components_project_enabled_native_records_only() {
     let plugin_dir = temp.path().join("plugins").join("native");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_native_dynamic_manifest(&plugin_dir, "acme.native");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2490,7 +2490,7 @@ fn active_dynamic_plugin_components_project_enabled_native_records_only() {
     assert!(inactive.is_empty());
 
     enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.native".into(),
         },
         &server,
@@ -2518,13 +2518,13 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
     let plugin_dir = temp.path().join("plugins").join("worker");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2532,7 +2532,7 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
     )
     .unwrap();
     enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.worker".into(),
         },
         &server,
@@ -2561,13 +2561,13 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
     let plugin_dir = temp.path().join("plugins").join("worker");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2575,7 +2575,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
     )
     .unwrap();
     enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.worker".into(),
         },
         &server,
@@ -2616,26 +2616,26 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir.clone(),
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap();
 
     let error = add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2660,10 +2660,10 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
     };
 
     let error = add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2694,14 +2694,14 @@ allowed = false
     .unwrap();
 
     let error = add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap_err();
 
@@ -2768,14 +2768,14 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -2840,14 +2840,14 @@ fn validate_renders_summary_for_path_and_id_targets() {
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.guardrail");
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -2892,22 +2892,22 @@ fn validate_renders_summary_for_path_and_id_targets() {
     assert!(id_summary.contains("desired.enabled: false"));
 
     let missing_validate = validate(
-        PluginsValidateCommand {
+        PluginsValidateRequest {
             target: "missing.plugin".into(),
             json: false,
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
     assert!(missing_validate.contains("not registered"));
 
     let missing_inspect = inspect(
-        PluginsInspectCommand {
+        PluginsInspectRequest {
             id: "missing.plugin".into(),
             json: false,
         },
-        &crate::configuration::GatewayOverrides::default(),
+        &crate::server::GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2915,8 +2915,8 @@ fn validate_renders_summary_for_path_and_id_targets() {
 
     assert_eq!(
         list(
-            PluginsListCommand::default(),
-            &crate::configuration::GatewayOverrides::default()
+            PluginsListRequest::default(),
+            &crate::server::GatewayOverrides::default()
         )
         .unwrap(),
         ()
@@ -2931,13 +2931,13 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -2946,7 +2946,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     .unwrap();
 
     enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -2961,7 +2961,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     assert!(enabled.record.spec.enabled);
 
     disable(
-        PluginsDisableCommand {
+        PluginsDisableRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -2975,7 +2975,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     assert!(!disabled.record.spec.enabled);
 
     remove(
-        PluginsRemoveCommand {
+        PluginsRemoveRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -3000,7 +3000,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     assert!(all_list.contains("tombstoned"));
 
     let error = enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -3034,8 +3034,8 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     };
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs::default(),
+        PluginsAddRequest {
+            scope: ConfigurationScope::default(),
             path: plugin_dir,
         },
         &server,
@@ -3142,7 +3142,7 @@ fn manually_configured_python_worker_cannot_enable_without_lifecycle_add() {
     assert!(summary.contains("runtime environment is unavailable"));
 
     let error = enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.python-direct".into(),
         },
         &GatewayOverrides::default(),
@@ -3245,10 +3245,10 @@ fn hydrate_persists_updated_policy_and_error_state() {
     write_dynamic_manifest(&plugin_dir, "acme.persist-blocked");
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir.clone(),
         },
@@ -3517,13 +3517,13 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.enable-blocked");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -3546,7 +3546,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
     .unwrap();
 
     let error = enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.enable-blocked".into(),
         },
         &server,
@@ -3598,13 +3598,13 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir.clone(),
         },
@@ -3613,7 +3613,7 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
     .unwrap();
 
     enable(
-        PluginsEnableCommand {
+        PluginsEnableRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -3623,7 +3623,7 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
     std::fs::remove_file(plugin_dir.join("relay-plugin.toml")).unwrap();
 
     disable(
-        PluginsDisableCommand {
+        PluginsDisableRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -3647,13 +3647,13 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.validate-blocked");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -3678,7 +3678,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
     .unwrap();
 
     validate(
-        PluginsValidateCommand {
+        PluginsValidateRequest {
             target: "acme.validate-blocked".into(),
             json: false,
         },
@@ -3790,13 +3790,13 @@ fn add_can_revive_tombstoned_records() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.revive");
-    let server = crate::configuration::GatewayOverrides::default();
+    let server = crate::server::GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir.clone(),
         },
@@ -3805,7 +3805,7 @@ fn add_can_revive_tombstoned_records() {
     .unwrap();
 
     remove(
-        PluginsRemoveCommand {
+        PluginsRemoveRequest {
             id: "acme.revive".into(),
         },
         &server,
@@ -3813,10 +3813,10 @@ fn add_can_revive_tombstoned_records() {
     .unwrap();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -3844,10 +3844,10 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
     let server = GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -3978,10 +3978,10 @@ fn remove_tolerates_unreadable_non_target_manifest_entries() {
     let server = GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -4001,7 +4001,7 @@ fn remove_tolerates_unreadable_non_target_manifest_entries() {
     .unwrap();
 
     remove(
-        PluginsRemoveCommand {
+        PluginsRemoveRequest {
             id: "acme.guardrail".into(),
         },
         &server,
@@ -4105,10 +4105,10 @@ fn inspect_redacts_host_config_values() {
     let server = GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },
@@ -4185,10 +4185,10 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
     let server = GatewayOverrides::default();
 
     add(
-        PluginsAddCommand {
-            scope: PluginsScopeArgs {
+        PluginsAddRequest {
+            scope: ConfigurationScope {
                 project: true,
-                ..PluginsScopeArgs::default()
+                ..ConfigurationScope::default()
             },
             path: plugin_dir,
         },

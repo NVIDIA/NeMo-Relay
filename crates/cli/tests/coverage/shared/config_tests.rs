@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;
 use nemo_relay::plugin::dynamic::{

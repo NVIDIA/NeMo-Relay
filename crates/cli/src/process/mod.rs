@@ -5,6 +5,9 @@
 
 pub(crate) mod detached;
 pub(crate) mod launcher;
+mod types;
+
+pub(crate) use types::RunOverrides;
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};

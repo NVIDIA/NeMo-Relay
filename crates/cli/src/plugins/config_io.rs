@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::configuration::{
-    PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
+    ConfigurationScope, global_plugin_config_path, project_plugin_config_path,
     user_plugin_config_path,
 };
 use crate::error::CliError;
@@ -269,7 +269,7 @@ fn json_to_toml(value: Value) -> Result<toml::Value, CliError> {
     })
 }
 
-pub(crate) fn target_scope(command: &PluginsScopeArgs) -> Result<TargetScope, CliError> {
+pub(crate) fn target_scope(command: &ConfigurationScope) -> Result<TargetScope, CliError> {
     let selected = [command.user, command.project, command.global]
         .into_iter()
         .filter(|selected| *selected)

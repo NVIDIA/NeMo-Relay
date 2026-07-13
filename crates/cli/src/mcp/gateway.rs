@@ -7,9 +7,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::bootstrap::{GatewayEndpoint, GatewaySpec};
-use crate::configuration::GatewayOverrides;
 use crate::error::CliError;
 use crate::installation::generation::{ActiveGenerationGuard, InstallGeneration};
+use crate::server::GatewayOverrides;
 
 const UNHEALTHY_CONFIRMATIONS: u8 = 3;
 const UNHEALTHY_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(50);
