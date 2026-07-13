@@ -66,13 +66,13 @@ use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginDeregistrationOutcome, PluginError,
-    PluginRegistrationContext, deregister_plugin_registration_checked, register_plugin_tracked,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
+    deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
-    DynamicPluginTeardownOutcome, WorkerRuntime,
+    DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
 };
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
@@ -135,30 +135,7 @@ impl WorkerPluginActivation {
     pub fn clear(self) {}
 
     pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
-        let mut outcome = DynamicPluginTeardownOutcome::success();
-        let plugin_registrations = std::mem::take(&mut self.plugin_registrations);
-        for (plugin_kind, registration_id) in plugin_registrations.into_iter().rev() {
-            match deregister_plugin_registration_checked(&plugin_kind, registration_id) {
-                Ok(PluginDeregistrationOutcome::Removed) => {}
-                Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
-                    format!(
-                        "worker plugin kind '{plugin_kind}' was not registered during teardown"
-                    ),
-                    true,
-                ),
-                Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
-                    format!(
-                        "worker plugin kind '{plugin_kind}' was replaced during teardown and was left registered"
-                    ),
-                    true,
-                ),
-                Err(error) => outcome.record_error(
-                    format!("failed to deregister worker plugin kind '{plugin_kind}': {error}"),
-                    false,
-                ),
-            }
-        }
-        outcome
+        deregister_tracked_registrations_checked(&mut self.plugin_registrations, "worker")
     }
 
     pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {

@@ -12,6 +12,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
+use crate::plugin::{PluginDeregistrationOutcome, deregister_plugin_registration_checked};
+
 /// Canonical identifier for one dynamic plugin record.
 pub type DynamicPluginId = String;
 
@@ -55,6 +57,37 @@ impl DynamicPluginTeardownOutcome {
         self.errors.extend(other.errors);
         self.safe_to_unload &= other.safe_to_unload;
     }
+}
+
+pub(super) fn deregister_tracked_registrations_checked(
+    registrations: &mut Vec<(String, u64)>,
+    plugin_type: &str,
+) -> DynamicPluginTeardownOutcome {
+    let mut outcome = DynamicPluginTeardownOutcome::success();
+    for (plugin_kind, registration_id) in std::mem::take(registrations).into_iter().rev() {
+        match deregister_plugin_registration_checked(&plugin_kind, registration_id) {
+            Ok(PluginDeregistrationOutcome::Removed) => {}
+            Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
+                format!(
+                    "{plugin_type} plugin kind '{plugin_kind}' was not registered during teardown"
+                ),
+                true,
+            ),
+            Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
+                format!(
+                    "{plugin_type} plugin kind '{plugin_kind}' was replaced during teardown and was left registered"
+                ),
+                true,
+            ),
+            Err(error) => outcome.record_error(
+                format!(
+                    "failed to deregister {plugin_type} plugin kind '{plugin_kind}': {error}"
+                ),
+                false,
+            ),
+        }
+    }
+    outcome
 }
 
 /// Plugin execution lane.
