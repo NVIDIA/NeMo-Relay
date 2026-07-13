@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod install;
+
 use std::process::ExitCode;
 
 use clap::CommandFactory;
@@ -10,7 +12,7 @@ use crate::error::CliError;
 
 pub(super) fn execute(command: CompletionsCommand) -> Result<ExitCode, CliError> {
     if command.install {
-        let path = crate::completions_install::install(command.shell)?;
+        let path = install::install(command.shell)?;
         println!("✓ Installed completions: {}", path.display());
     } else {
         generate_to(command.shell, &mut std::io::stdout())?;

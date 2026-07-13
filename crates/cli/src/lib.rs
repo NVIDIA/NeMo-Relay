@@ -7,7 +7,6 @@ mod agents;
 mod banner;
 mod bootstrap;
 mod commands;
-mod completions_install;
 mod configuration;
 mod diagnostics;
 mod error;

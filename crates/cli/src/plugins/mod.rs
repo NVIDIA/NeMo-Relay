@@ -1379,5 +1379,5 @@ fn editor_error(err: dialoguer::Error) -> CliError {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/plugins_tests.rs"]
+#[path = "../../tests/coverage/shared/plugins_tests.rs"]
 mod tests;
