@@ -3,57 +3,15 @@
 
 //! Small, platform-aware filesystem primitives shared by CLI subsystems.
 
+mod locks;
+
+pub(crate) use locks::{LockAttempt, try_lock_exclusive, try_lock_shared, unlock_file};
+
 use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{self, Write};
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-
-use fs2::FileExt;
-
-/// Result of one nonblocking advisory-file-lock attempt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LockAttempt {
-    Acquired,
-    Contended,
-}
-
-/// Attempt an exclusive advisory lock without waiting.
-pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<LockAttempt> {
-    normalize_lock_attempt(FileExt::try_lock_exclusive(file))
-}
-
-/// Attempt a shared advisory lock without waiting.
-pub(crate) fn try_lock_shared(file: &File) -> io::Result<LockAttempt> {
-    normalize_lock_attempt(FileExt::try_lock_shared(file))
-}
-
-/// Release an advisory lock acquired through the helpers above.
-pub(crate) fn unlock_file(file: &File) -> io::Result<()> {
-    FileExt::unlock(file)
-}
-
-fn normalize_lock_attempt(result: io::Result<()>) -> io::Result<LockAttempt> {
-    match result {
-        Ok(()) => Ok(LockAttempt::Acquired),
-        Err(error) if lock_is_contended(&error) => Ok(LockAttempt::Contended),
-        Err(error) => Err(error),
-    }
-}
-
-fn lock_is_contended(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::WouldBlock {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_LOCK_VIOLATION as i32)
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
 
 /// Atomically replace `path` with `bytes`, creating its parent directory when needed.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
