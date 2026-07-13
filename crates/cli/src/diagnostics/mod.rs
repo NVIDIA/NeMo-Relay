@@ -388,8 +388,7 @@ fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option
 }
 
 fn agent_configured(agent: CodingAgent, agents: &AgentConfigs) -> bool {
-    configured_agent_command(agent, agents).is_some()
-        || (matches!(agent, CodingAgent::Hermes) && agents.hermes.hooks_path.is_some())
+    crate::agents::configured(agent, agents)
 }
 
 fn configured_agent_names(agents: &AgentConfigs) -> Vec<String> {
@@ -419,25 +418,9 @@ fn combine_status(base: Status, hook: Status, readiness_required: bool) -> Statu
 }
 
 fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
-    match agent {
-        CodingAgent::ClaudeCode | CodingAgent::Codex => {
-            (Status::Pass, "hooks: injected during run".into())
-        }
-        CodingAgent::Hermes => match agents.hermes.hooks_path.as_deref() {
-            Some(path) => match crate::agents::hermes::diagnose_persistent(path) {
-                Ok(details) => (Status::Pass, details),
-                Err(error) => (
-                    Status::Fail,
-                    format!(
-                        "persistent MCP/hooks: {error}; run `nemo-relay install hermes --force`"
-                    ),
-                ),
-            },
-            None => (
-                Status::Pass,
-                "hooks: injected through an isolated HERMES_HOME during run".into(),
-            ),
-        },
+    match crate::agents::hook_status(agent, agents) {
+        Ok(details) => (Status::Pass, details),
+        Err(details) => (Status::Fail, details),
     }
 }
 

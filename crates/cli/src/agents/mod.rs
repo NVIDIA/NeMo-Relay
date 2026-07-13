@@ -396,6 +396,22 @@ pub(crate) fn prepare_launch(
     }
 }
 
+pub(crate) fn configured(agent: CodingAgent, configs: &crate::configuration::AgentConfigs) -> bool {
+    configs.get(agent).command.is_some()
+        || matches!(agent, CodingAgent::Hermes) && configs.hermes.hooks_path.is_some()
+}
+
+pub(crate) fn hook_status(
+    agent: CodingAgent,
+    configs: &crate::configuration::AgentConfigs,
+) -> Result<String, String> {
+    match agent {
+        CodingAgent::Codex => codex::doctor::hook_status(),
+        CodingAgent::ClaudeCode => claude::doctor::hook_status(),
+        CodingAgent::Hermes => hermes::doctor::hook_status(configs.hermes.hooks_path.as_deref()),
+    }
+}
+
 pub(crate) enum SetupSnapshot {
     Codex(CodexSetupSnapshot),
     Claude(ClaudeSetupSnapshot),

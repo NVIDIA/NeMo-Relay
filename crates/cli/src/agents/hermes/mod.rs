@@ -41,6 +41,7 @@ pub(super) fn parse_version(raw: &str) -> Option<Version> {
 }
 
 mod config;
+pub(crate) mod doctor;
 mod files;
 pub(crate) mod install;
 mod integration;

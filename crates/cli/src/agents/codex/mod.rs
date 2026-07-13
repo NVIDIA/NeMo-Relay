@@ -7,6 +7,7 @@ use super::AgentDescriptor;
 
 pub(super) mod app_server;
 pub(super) mod assets;
+pub(crate) mod doctor;
 pub(super) mod host;
 pub(crate) mod install;
 pub(crate) mod launch;
