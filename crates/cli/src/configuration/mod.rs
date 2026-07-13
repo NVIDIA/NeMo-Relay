@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub(crate) mod setup;
+mod types;
+
+pub(crate) use types::*;
 
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,9 +21,8 @@ use nemo_relay::plugin::dynamic::{
 use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hmac};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
-use strum::{Display, IntoStaticStr};
 
 pub(crate) use crate::agents::CodingAgent;
 use crate::error::CliError;
@@ -44,106 +45,6 @@ pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
 pub(crate) const TRANSPARENT_RUN_ENV: &str = "NEMO_RELAY_TRANSPARENT_RUN";
-
-#[derive(Debug, Clone)]
-pub(crate) struct GatewayConfig {
-    pub(crate) bind: SocketAddr,
-    pub(crate) openai_base_url: String,
-    pub(crate) anthropic_base_url: String,
-    pub(crate) metadata: Option<Value>,
-    pub(crate) plugin_config: Option<Value>,
-    pub(crate) max_hook_payload_bytes: usize,
-    pub(crate) max_passthrough_body_bytes: usize,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct SessionConfig {
-    pub(crate) metadata: Option<Value>,
-    pub(crate) plugin_config: Option<Value>,
-    pub(crate) profile: Option<String>,
-    pub(crate) gateway_mode: Option<String>,
-}
-
-impl GatewayConfig {
-    // Resolves per-session settings from hook/gateway headers with process config as fallback.
-    // Header JSON fields are parsed opportunistically; invalid JSON is treated as absent here
-    // because install and hook-forward validate generated header values before sending them.
-    pub(crate) fn session_config_from_headers(&self, headers: &HeaderMap) -> SessionConfig {
-        let metadata =
-            header_json(headers, "x-nemo-relay-session-metadata").or_else(|| self.metadata.clone());
-        let plugin_config = header_json(headers, "x-nemo-relay-plugin-config")
-            .or_else(|| self.plugin_config.clone());
-        let profile = header_string(headers, "x-nemo-relay-config-profile");
-        let gateway_mode = header_string(headers, "x-nemo-relay-gateway-mode");
-        SessionConfig {
-            metadata,
-            plugin_config,
-            profile,
-            gateway_mode,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ResolvedConfig {
-    pub(crate) gateway: GatewayConfig,
-    pub(crate) agents: AgentConfigs,
-    pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
-    pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
-    pub(crate) bootstrap_fingerprint: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedDynamicPluginConfig {
-    pub(crate) plugin_id: String,
-    pub(crate) manifest_ref: String,
-    pub(crate) config: Map<String, Value>,
-    pub(crate) has_explicit_config: bool,
-    pub(crate) source: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Display, IntoStaticStr)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub(crate) enum DynamicPluginHostConfigStatus {
-    Absent,
-    Present,
-}
-
-impl ResolvedDynamicPluginConfig {
-    pub(crate) fn host_config_status(&self) -> DynamicPluginHostConfigStatus {
-        if self.has_explicit_config {
-            DynamicPluginHostConfigStatus::Present
-        } else {
-            DynamicPluginHostConfigStatus::Absent
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct AgentConfigs {
-    pub(crate) claude: AgentCommandConfig,
-    pub(crate) codex: AgentCommandConfig,
-    pub(crate) hermes: AgentCommandConfig,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct AgentCommandConfig {
-    pub(crate) command: Option<String>,
-    /// Legacy Hermes config-path override retained for existing Relay configuration files.
-    /// New setup flows do not write it; persistent Hermes state belongs to `install hermes`.
-    pub(crate) hooks_path: Option<PathBuf>,
-}
-
-impl AgentConfigs {
-    pub(crate) const fn get(&self, agent: CodingAgent) -> &AgentCommandConfig {
-        match agent {
-            CodingAgent::ClaudeCode => &self.claude,
-            CodingAgent::Codex => &self.codex,
-            CodingAgent::Hermes => &self.hermes,
-        }
-    }
-}
 
 // TOML file shape grouped by user intent. Sections map 1:1 onto fields already present on
 // `GatewayConfig` / `AgentConfigs`; plugin configuration lives in `plugins.toml`.
@@ -180,25 +81,6 @@ struct FileAgentsConfig {
 struct FileAgentCommandConfig {
     command: Option<String>,
     hooks_path: Option<PathBuf>,
-}
-
-impl Default for GatewayConfig {
-    // Supplies conservative local gateway defaults: bind only to loopback, route OpenAI and
-    // Anthropic requests to their public bases, and leave plugins disabled until config,
-    // environment, or headers explicitly opt in.
-    fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:4040"
-                .parse()
-                .expect("valid default bind address"),
-            openai_base_url: "https://api.openai.com/v1".into(),
-            anthropic_base_url: "https://api.anthropic.com".into(),
-            metadata: None,
-            plugin_config: None,
-            max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
-            max_passthrough_body_bytes: DEFAULT_MAX_PASSTHROUGH_BODY_BYTES,
-        }
-    }
 }
 
 /// Resolves server-mode configuration from shared config files plus server CLI/environment overrides.
