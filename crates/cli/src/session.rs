@@ -23,6 +23,7 @@ use nemo_relay::api::tool::{
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 
+use crate::adapters::{SKILL_LOAD_SOURCE_KEY, SKILL_LOAD_SOURCE_PROMPT_EXPANSION};
 use crate::alignment::{
     self, GatewayManagementPolicy, PendingSubagentStart, SessionAlias, SessionAlignmentState,
     insert_optional, json_string_at, json_value_at, merge_metadata,
@@ -950,7 +951,19 @@ impl Session {
                     NormalizedEvent::PromptSubmitted(event) => self.start_turn(event).await,
                     NormalizedEvent::Compaction(event) => self.mark("compaction", event),
                     NormalizedEvent::Notification(event) => self.mark("notification", event),
-                    NormalizedEvent::HookMark(event) => self.mark("hook_mark", event),
+                    NormalizedEvent::HookMark(event) => {
+                        let name = if event
+                            .metadata
+                            .get(SKILL_LOAD_SOURCE_KEY)
+                            .and_then(Value::as_str)
+                            == Some(SKILL_LOAD_SOURCE_PROMPT_EXPANSION)
+                        {
+                            "skill.load.inferred"
+                        } else {
+                            "hook_mark"
+                        };
+                        self.mark(name, event)
+                    }
                 }
             })
             .await

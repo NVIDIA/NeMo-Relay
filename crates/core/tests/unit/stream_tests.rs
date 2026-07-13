@@ -4,6 +4,7 @@
 //! Unit tests for stream in the NeMo Relay core crate.
 
 use super::*;
+use crate::codec::response::{FinishReason, Usage};
 use serde_json::json;
 
 fn assert_no_top_level_fields(data: &Json, fields: &[&str]) {
@@ -14,6 +15,26 @@ fn assert_no_top_level_fields(data: &Json, fields: &[&str]) {
             "unexpected top-level field {field}"
         );
     }
+}
+
+#[test]
+fn partial_stream_usage_is_not_treated_as_authoritative_without_terminal_evidence() {
+    let partial = AnnotatedLlmResponse {
+        usage: Some(Usage {
+            prompt_tokens: Some(10),
+            completion_tokens: Some(2),
+            total_tokens: Some(12),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+    assert!(!has_authoritative_final_usage(Some(&partial)));
+
+    let terminal = AnnotatedLlmResponse {
+        finish_reason: Some(FinishReason::Complete),
+        ..partial
+    };
+    assert!(has_authoritative_final_usage(Some(&terminal)));
 }
 
 #[test]

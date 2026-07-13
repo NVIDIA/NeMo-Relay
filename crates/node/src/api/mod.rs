@@ -30,7 +30,9 @@ use tokio_stream::StreamExt;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    EventSanitizeFn, LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
@@ -65,10 +67,13 @@ use crate::callable;
 use crate::convert::{
     callback_json, clear_last_callback_error as clear_recorded_callback_error,
     get_last_callback_error as get_recorded_callback_error, opt_json, parse_timestamp_micros,
-    to_napi_err,
+    record_callback_error, to_napi_err,
 };
 use crate::stream::LlmStream;
-use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
+use crate::types::{
+    EventSanitizeFields, LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle,
+    event_sanitize_fields_from_js,
+};
 
 #[napi::module_init]
 fn init() {
@@ -421,6 +426,40 @@ fn json_callback_tsfn(
     Ok(tsfn)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn add_plugin_event_sanitizer(
+    env: &Env,
+    context: &mut JsObject,
+    property: &str,
+    namespace_prefix: String,
+    registrations: Arc<StdMutex<Vec<PluginRegistration>>>,
+    register: fn(&str, i32, EventSanitizeFn) -> FlowResult<()>,
+    deregister: fn(&str) -> FlowResult<bool>,
+    label: &'static str,
+) -> napi::Result<()> {
+    let function = env.create_function_from_closure(property, move |ctx| {
+        let name = format!("{}{}", namespace_prefix, ctx.get::<String>(0)?);
+        let priority = ctx.get::<i32>(1)?;
+        let callback = ctx.get::<JsFunction>(2)?;
+        register(&name, priority, node_event_sanitize_fn(ctx.env, &callback)?)
+            .map_err(to_napi_err)?;
+        let name_clone = name.clone();
+        registrations.lock().unwrap().push(PluginRegistration::new(
+            "plugin",
+            name_clone.clone(),
+            Box::new(move || {
+                deregister(&name_clone).map(|_| ()).map_err(|error| {
+                    PluginError::RegistrationFailed(format!(
+                        "{label} deregistration failed: {error}"
+                    ))
+                })
+            }),
+        ));
+        ctx.env.get_undefined()
+    })?;
+    context.set_named_property(property, function)
+}
+
 fn build_plugin_context(
     env: &Env,
     namespace_prefix: String,
@@ -463,6 +502,37 @@ fn build_plugin_context(
         },
     )?;
     context.set_named_property("registerSubscriber", register_subscriber)?;
+
+    add_plugin_event_sanitizer(
+        env,
+        &mut context,
+        "registerMarkSanitizeGuardrail",
+        namespace_prefix.clone(),
+        registrations.clone(),
+        core_registry_api::register_mark_sanitize_guardrail,
+        core_registry_api::deregister_mark_sanitize_guardrail,
+        "mark sanitize guardrail",
+    )?;
+    add_plugin_event_sanitizer(
+        env,
+        &mut context,
+        "registerScopeSanitizeStartGuardrail",
+        namespace_prefix.clone(),
+        registrations.clone(),
+        core_registry_api::register_scope_sanitize_start_guardrail,
+        core_registry_api::deregister_scope_sanitize_start_guardrail,
+        "scope start sanitize guardrail",
+    )?;
+    add_plugin_event_sanitizer(
+        env,
+        &mut context,
+        "registerScopeSanitizeEndGuardrail",
+        namespace_prefix.clone(),
+        registrations.clone(),
+        core_registry_api::register_scope_sanitize_end_guardrail,
+        core_registry_api::deregister_scope_sanitize_end_guardrail,
+        "scope end sanitize guardrail",
+    )?;
 
     let tool_sanitize_request_regs = registrations.clone();
     let tool_sanitize_request_namespace = namespace_prefix.clone();
@@ -1021,6 +1091,104 @@ impl PersistentJsFunction {
         // environment stored on this struct.
         unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
+
+    fn call_event_sanitize(
+        &self,
+        event: Json,
+        fields: EventSanitizeFields,
+    ) -> napi::Result<EventSanitizeFields> {
+        let mut value = ptr::null_mut();
+        // SAFETY: `self.reference` is a live N-API reference created in
+        // `self.env`, and `value` is writable storage for the borrowed
+        // function value.
+        let status =
+            unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
+        if status != napi::sys::Status::napi_ok {
+            return Err(napi::Error::from_reason(
+                "failed to borrow event sanitizer function",
+            ));
+        }
+        // SAFETY: `value` was resolved from this struct's function reference,
+        // so it is a live function value in `self.env` for this call.
+        let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
+        // SAFETY: `Json::to_napi_value` created this event value in `self.env`,
+        // so wrapping it as `JsUnknown` is valid for the immediate callback.
+        let event = unsafe {
+            JsUnknown::from_raw_unchecked(self.env, Json::to_napi_value(self.env, event)?)
+        };
+        // SAFETY: `EventSanitizeFields::to_napi_value` created this fields
+        // value in `self.env`, so wrapping it as `JsUnknown` is valid for the
+        // immediate callback.
+        let fields = unsafe {
+            JsUnknown::from_raw_unchecked(
+                self.env,
+                EventSanitizeFields::to_napi_value(self.env, fields)?,
+            )
+        };
+        let returned = func.call(None, &[event, fields])?;
+        event_sanitize_fields_from_js(returned)
+    }
+}
+
+fn core_event_fields(
+    fields: EventSanitizeFields,
+) -> Option<nemo_relay::api::event::EventSanitizeFields> {
+    Some(nemo_relay::api::event::EventSanitizeFields {
+        data: fields.data,
+        category_profile: fields
+            .category_profile
+            .map(serde_json::from_value)
+            .transpose()
+            .ok()?,
+        metadata: fields.metadata,
+    })
+}
+
+fn js_event_fields(fields: &nemo_relay::api::event::EventSanitizeFields) -> EventSanitizeFields {
+    EventSanitizeFields {
+        data: fields.data.clone(),
+        category_profile: fields
+            .category_profile
+            .as_ref()
+            .and_then(|value| serde_json::to_value(value).ok()),
+        metadata: fields.metadata.clone(),
+    }
+}
+
+fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
+    let direct = Arc::new(PersistentJsFunction::new(env, func)?);
+    let register_thread = std::thread::current().id();
+    let mut tsfn = func.create_threadsafe_function(
+        0,
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(Json, Json)>| {
+            Ok(vec![ctx.value.0, ctx.value.1])
+        },
+    )?;
+    tsfn.unref(env)?;
+    let background = callable::wrap_js_event_sanitize_fn(tsfn);
+    Ok(Arc::new(move |event, fields| {
+        if std::thread::current().id() == register_thread {
+            let event_json = match event.try_to_json_value() {
+                Ok(event_json) => event_json,
+                Err(error) => {
+                    record_callback_error(format!(
+                        "nemo_relay: failed to serialize JS event sanitizer context: {error}"
+                    ));
+                    return fields;
+                }
+            };
+            let sanitized = direct
+                .call_event_sanitize(event_json, js_event_fields(&fields))
+                .ok()
+                .and_then(core_event_fields);
+            if sanitized.is_none() {
+                record_callback_error("nemo_relay: JS event sanitizer callback failed".to_string());
+            }
+            sanitized.unwrap_or(fields)
+        } else {
+            background(event, fields)
+        }
+    }))
 }
 
 impl Drop for PersistentJsFunction {
@@ -2000,6 +2168,48 @@ pub fn llm_stream_call_execute(
 // Tool guardrail registrations
 // ---------------------------------------------------------------------------
 
+macro_rules! napi_event_guardrail_api {
+    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+        #[napi]
+        pub fn $register_name(
+            env: Env,
+            name: String,
+            priority: i32,
+            #[napi(
+                ts_arg_type = "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields"
+            )]
+            guardrail: JsFunction,
+        ) -> Result<()> {
+            $core_register(&name, priority, node_event_sanitize_fn(&env, &guardrail)?)
+                .map_err(to_napi_err)
+        }
+
+        #[napi]
+        pub fn $deregister_name(name: String) -> Result<bool> {
+            $core_deregister(&name).map_err(to_napi_err)
+        }
+    };
+}
+
+napi_event_guardrail_api!(
+    register_mark_sanitize_guardrail,
+    deregister_mark_sanitize_guardrail,
+    core_registry_api::register_mark_sanitize_guardrail,
+    core_registry_api::deregister_mark_sanitize_guardrail
+);
+napi_event_guardrail_api!(
+    register_scope_sanitize_start_guardrail,
+    deregister_scope_sanitize_start_guardrail,
+    core_registry_api::register_scope_sanitize_start_guardrail,
+    core_registry_api::deregister_scope_sanitize_start_guardrail
+);
+napi_event_guardrail_api!(
+    register_scope_sanitize_end_guardrail,
+    deregister_scope_sanitize_end_guardrail,
+    core_registry_api::register_scope_sanitize_end_guardrail,
+    core_registry_api::deregister_scope_sanitize_end_guardrail
+);
+
 macro_rules! napi_guardrail_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
      $(#[doc = $dereg_doc:expr_2021])* $deregister_name:ident,
@@ -2263,7 +2473,7 @@ pub fn register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }"
     )]
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
@@ -2408,6 +2618,58 @@ pub fn flush_subscribers() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Scope-local guardrail registrations — Tool
 // ---------------------------------------------------------------------------
+
+macro_rules! napi_scope_event_guardrail_api {
+    ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+        #[napi]
+        pub fn $register_name(
+            env: Env,
+            scope_uuid: String,
+            name: String,
+            priority: i32,
+            #[napi(
+                ts_arg_type = "(event: Json, fields: EventSanitizeFields) => EventSanitizeFields"
+            )]
+            guardrail: JsFunction,
+        ) -> Result<()> {
+            let uuid = uuid::Uuid::parse_str(&scope_uuid)
+                .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+            $core_register(
+                &uuid,
+                &name,
+                priority,
+                node_event_sanitize_fn(&env, &guardrail)?,
+            )
+            .map_err(to_napi_err)
+        }
+
+        #[napi]
+        pub fn $deregister_name(scope_uuid: String, name: String) -> Result<bool> {
+            let uuid = uuid::Uuid::parse_str(&scope_uuid)
+                .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+            $core_deregister(&uuid, &name).map_err(to_napi_err)
+        }
+    };
+}
+
+napi_scope_event_guardrail_api!(
+    scope_register_mark_sanitize_guardrail,
+    scope_deregister_mark_sanitize_guardrail,
+    core_registry_api::scope_register_mark_sanitize_guardrail,
+    core_registry_api::scope_deregister_mark_sanitize_guardrail
+);
+napi_scope_event_guardrail_api!(
+    scope_register_scope_sanitize_start_guardrail,
+    scope_deregister_scope_sanitize_start_guardrail,
+    core_registry_api::scope_register_scope_sanitize_start_guardrail,
+    core_registry_api::scope_deregister_scope_sanitize_start_guardrail
+);
+napi_scope_event_guardrail_api!(
+    scope_register_scope_sanitize_end_guardrail,
+    scope_deregister_scope_sanitize_end_guardrail,
+    core_registry_api::scope_register_scope_sanitize_end_guardrail,
+    core_registry_api::scope_deregister_scope_sanitize_end_guardrail
+);
 
 macro_rules! napi_scope_guardrail_tool_api {
     ($(#[doc = $reg_doc:expr_2021])* $register_name:ident,
@@ -2739,7 +3001,7 @@ pub fn scope_register_llm_request_intercept(
     priority: i32,
     break_chain: bool,
     #[napi(
-        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }"
+        ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }"
     )]
     callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
 ) -> Result<()> {
@@ -2955,7 +3217,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
 #[napi(
-    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
 )]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
@@ -2971,6 +3233,7 @@ pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<J
                                 "request": r.request,
                                 "annotated": r.annotated_request,
                                 "pendingMarks": callable::js_pending_marks(r.pending_marks),
+                                "optimizationContributions": r.optimization_contributions,
                             })
                         })
                         .map_err(to_napi_err)

@@ -15,17 +15,21 @@ use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use nemo_relay::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
-use nemo_relay::api::event::{CategoryProfile, Event, EventCategory, PendingMarkSpec};
+use nemo_relay::api::event::{
+    CategoryProfile, Event, EventCategory, EventSanitizeFields as CoreEventSanitizeFields,
+    PendingMarkSpec,
+};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -33,7 +37,7 @@ use nemo_relay::error::{FlowError, Result};
 
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
-use crate::types::JsEvent;
+use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_js};
 
 /// JavaScript-facing pending mark DTO.
 #[derive(Debug, Deserialize, Serialize)]
@@ -255,7 +259,7 @@ pub fn wrap_js_tool_exec_fn(
 ///
 /// The JS callback receives a single JSON object
 /// `{ name: string, request: LlmRequest, annotated: AnnotatedLlmRequest | null }`
-/// and must return `{ request, annotated?, pendingMarks? }`.
+/// and must return `{ request, annotated?, pendingMarks?, optimizationContributions? }`.
 /// When `annotated` is non-null, request content is read-only and provider-body
 /// edits must be made through the returned annotation; headers remain writable.
 pub fn wrap_js_llm_request_intercept_fn(
@@ -302,6 +306,8 @@ pub fn wrap_js_llm_request_intercept_fn(
                 annotated: Option<AnnotatedLlmRequest>,
                 #[serde(default)]
                 pending_marks: Vec<JsPendingMarkSpec>,
+                #[serde(default)]
+                optimization_contributions: Vec<LlmOptimizationContribution>,
             }
             let outcome: JsOutcome = serde_json::from_value(result).map_err(|e| {
                 FlowError::Internal(format!("invalid JS LLM request intercept outcome: {e}"))
@@ -310,6 +316,7 @@ pub fn wrap_js_llm_request_intercept_fn(
                 request: outcome.request,
                 annotated_request: outcome.annotated,
                 pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
+                optimization_contributions: outcome.optimization_contributions,
             })
         },
     )
@@ -507,6 +514,74 @@ pub fn wrap_js_event_subscriber(
                 "nemo_relay: failed to queue JS event subscriber callback: {status:?}"
             ));
         }
+    })
+}
+
+/// Wrap a JS event sanitizer: ``(event, fields) => fields``.
+pub fn wrap_js_event_sanitize_fn(
+    func: ThreadsafeFunction<(Json, Json), ErrorStrategy::Fatal>,
+) -> EventSanitizeFn {
+    let func = Arc::new(func);
+    Arc::new(move |event: &Event, fields: CoreEventSanitizeFields| {
+        let event_json = match JsEvent::try_from_event(event) {
+            Ok(event) => event.into_json(),
+            Err(error) => {
+                record_callback_error(format!(
+                    "nemo_relay: failed to serialize JS event sanitizer context: {error}"
+                ));
+                return fields.clone();
+            }
+        };
+        let js_fields = EventSanitizeFields {
+            data: fields.data.clone(),
+            category_profile: fields
+                .category_profile
+                .as_ref()
+                .and_then(|value| serde_json::to_value(value).ok()),
+            metadata: fields.metadata.clone(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let status = func.call_with_return_value(
+            (
+                event_json,
+                serde_json::to_value(js_fields).unwrap_or(Json::Null),
+            ),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |value: napi::JsUnknown| {
+                let _ = tx.send(event_sanitize_fields_from_js(value));
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            record_callback_error(format!(
+                "nemo_relay: failed to queue JS event sanitizer callback: {status:?}"
+            ));
+            return fields.clone();
+        }
+        rx.recv()
+            .map_err(|error| {
+                record_callback_error(format!(
+                    "nemo_relay: JS event sanitizer callback failed: {error}"
+                ));
+            })
+            .ok()
+            .and_then(|result| result.ok())
+            .and_then(|result| {
+                let category_profile = result
+                    .category_profile
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .ok()?;
+                Some(CoreEventSanitizeFields {
+                    data: result.data,
+                    category_profile,
+                    metadata: result.metadata,
+                })
+            })
+            .unwrap_or_else(|| {
+                record_callback_error("nemo_relay: invalid JS event sanitizer result".to_string());
+                fields.clone()
+            })
     })
 }
 

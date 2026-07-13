@@ -3,20 +3,21 @@
 
 use super::{
     Arc, CStr, ConfigDiagnostic, DiagnosticLevel, FfiPluginContext, Future,
-    NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb,
-    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb,
-    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayStatus,
-    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
-    PluginConfig, PluginError, PluginRegistrationContext, active_plugin_report, c_char,
-    c_str_to_json, c_str_to_string, clear_last_error, clear_plugin_configuration,
-    deregister_plugin, initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
-    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
-    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_subscriber,
-    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
-    wrap_llm_response_fn, wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn,
-    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
-    wrap_tool_sanitize_fn,
+    NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb,
+    NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb,
+    NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb,
+    NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
+    NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError, PluginRegistrationContext,
+    active_plugin_report, c_char, c_str_to_json, c_str_to_string, clear_last_error,
+    clear_plugin_configuration, deregister_plugin, initialize_plugins, json_to_c_string,
+    last_error_message, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
+    register_plugin, set_last_error, status_from_plugin_error, tokio_runtime,
+    validate_plugin_config, wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
+    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
+    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
+    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
+use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 struct FfiHostedPluginUserData {
@@ -363,6 +364,89 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_subscriber(
     match unsafe { &mut *((*ctx).0) }.register_subscriber(&name, wrapped) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+unsafe fn plugin_register_event_sanitizer(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayEventSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+    surface: Surface,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let callback = wrap_event_sanitize_fn(cb, user_data, free_fn);
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let name = match c_str_to_string(name) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    let context = unsafe { &mut *((*ctx).0) };
+    let result = match surface {
+        Surface::Mark => context.register_mark_sanitize_guardrail(&name, priority, callback),
+        Surface::Start => {
+            context.register_scope_sanitize_start_guardrail(&name, priority, callback)
+        }
+        Surface::End => context.register_scope_sanitize_end_guardrail(&name, priority, callback),
+    };
+    result
+        .map(|()| NemoRelayStatus::Ok)
+        .unwrap_or_else(|error| status_from_plugin_error(&error))
+}
+
+/// Register a mark event sanitizer into a plugin context.
+/// # Safety
+/// Pointers must remain valid for the documented call lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_mark_sanitize_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayEventSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    unsafe {
+        plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, Surface::Mark)
+    }
+}
+
+/// Register a scope-start event sanitizer into a plugin context.
+/// # Safety
+/// Pointers must remain valid for the documented call lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_scope_sanitize_start_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayEventSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    unsafe {
+        plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, Surface::Start)
+    }
+}
+
+/// Register a scope-end event sanitizer into a plugin context.
+/// # Safety
+/// Pointers must remain valid for the documented call lifetime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_scope_sanitize_end_guardrail(
+    ctx: *mut FfiPluginContext,
+    name: *const c_char,
+    priority: i32,
+    cb: NemoRelayEventSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    unsafe {
+        plugin_register_event_sanitizer(ctx, name, priority, cb, user_data, free_fn, Surface::End)
     }
 }
 

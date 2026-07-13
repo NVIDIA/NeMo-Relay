@@ -120,6 +120,9 @@ fn plugin_context_registers_all_runtime_hooks_and_drains_registrations() {
 def subscriber(event):
     return None
 
+def event_sanitize(event, fields):
+    return fields
+
 def tool_fn(name, value):
     return value
 
@@ -161,6 +164,27 @@ async def tool_execution_intercept(name, value, next):
             .register_subscriber(
                 "subscriber",
                 helpers.getattr("subscriber").unwrap().unbind(),
+            )
+            .unwrap();
+        context
+            .register_mark_sanitize_guardrail(
+                "mark_sanitize",
+                1,
+                helpers.getattr("event_sanitize").unwrap().unbind(),
+            )
+            .unwrap();
+        context
+            .register_scope_sanitize_start_guardrail(
+                "scope_start_sanitize",
+                1,
+                helpers.getattr("event_sanitize").unwrap().unbind(),
+            )
+            .unwrap();
+        context
+            .register_scope_sanitize_end_guardrail(
+                "scope_end_sanitize",
+                1,
+                helpers.getattr("event_sanitize").unwrap().unbind(),
             )
             .unwrap();
         context
@@ -250,7 +274,7 @@ async def tool_execution_intercept(name, value, next):
             .unwrap();
 
         let registrations = context.drain_registrations().unwrap();
-        assert_eq!(registrations.len(), 12);
+        assert_eq!(registrations.len(), 15);
         assert!(
             registrations
                 .iter()
@@ -258,6 +282,9 @@ async def tool_execution_intercept(name, value, next):
         );
 
         assert!(deregister_subscriber("demo.subscriber").unwrap());
+        assert!(deregister_mark_sanitize_guardrail("demo.mark_sanitize").unwrap());
+        assert!(deregister_scope_sanitize_start_guardrail("demo.scope_start_sanitize").unwrap());
+        assert!(deregister_scope_sanitize_end_guardrail("demo.scope_end_sanitize").unwrap());
         assert!(deregister_tool_sanitize_request_guardrail("demo.tool_sanitize_request").unwrap());
         assert!(
             deregister_tool_sanitize_response_guardrail("demo.tool_sanitize_response").unwrap()

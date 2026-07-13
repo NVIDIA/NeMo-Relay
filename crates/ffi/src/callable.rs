@@ -23,14 +23,14 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
+    ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
@@ -139,6 +139,14 @@ pub type NemoRelayLlmExecInterceptCb = unsafe extern "C" fn(
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
 pub type NemoRelayEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
+
+/// Callback for mark and scope event sanitizers.
+/// The returned JSON string transfers to Relay and is freed exactly once.
+pub type NemoRelayEventSanitizeCb = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    event: *const FfiEvent,
+    fields_json: *const c_char,
+) -> *mut c_char;
 
 /// Callback for Codec decode: translates an opaque `FfiLLMRequest` into
 /// an `AnnotatedLLMRequest` JSON string. Returns a heap-allocated C string
@@ -823,6 +831,24 @@ pub fn wrap_event_subscriber(
     Arc::new(move |event: &Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
+    })
+}
+
+/// Wrap a C event sanitizer callback into a Rust closure.
+pub fn wrap_event_sanitize_fn(
+    cb: NemoRelayEventSanitizeCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> EventSanitizeFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |event: &Event, fields: EventSanitizeFields| {
+        let ffi_event = FfiEvent(event.clone());
+        let fields_json = json_to_c_string(&serde_json::to_value(&fields).unwrap_or(Json::Null));
+        let result_ptr = unsafe { cb(ud.ptr, &ffi_event, fields_json) };
+        unsafe { nemo_relay_string_free_internal(fields_json) };
+        let result = serde_json::from_value(ptr_to_json(result_ptr)).unwrap_or(fields);
+        unsafe { nemo_relay_string_free_internal(result_ptr) };
+        result
     })
 }
 

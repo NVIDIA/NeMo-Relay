@@ -53,6 +53,8 @@ pub(crate) const FORCE_ANNOTATED_RESPONSE_TOOL_CALLS_SERIALIZATION_ERROR: u64 = 
 pub(crate) const FORCE_ANNOTATED_RESPONSE_USAGE_SERIALIZATION_ERROR: u64 = 1 << 8;
 #[cfg(test)]
 pub(crate) const FORCE_ANNOTATED_RESPONSE_API_SPECIFIC_SERIALIZATION_ERROR: u64 = 1 << 9;
+#[cfg(test)]
+pub(crate) const FORCE_ANNOTATED_RESPONSE_OPTIMIZATION_SUMMARY_SERIALIZATION_ERROR: u64 = 1 << 10;
 
 #[cfg(test)]
 pub(crate) fn set_forced_serialization_mask_for_tests(mask: u64) {

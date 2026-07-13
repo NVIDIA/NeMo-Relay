@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const lib = require('../index.js');
@@ -821,6 +822,12 @@ describe('LLM intercepts', () => {
   });
 
   it('standalone request intercepts helper applies intercept chain', async () => {
+    const contributionFixture = JSON.parse(
+      readFileSync(
+        new URL('../../types/tests/fixtures/llm_optimization_contribution_v1.json', import.meta.url),
+        'utf8',
+      ),
+    );
     registerLlmRequestIntercept('node_llm_req_helper', 10, false, ({ request, annotated }) => {
       request.content.helper = true;
       return {
@@ -834,6 +841,7 @@ describe('LLM intercepts', () => {
           },
           { name: 'request.second', metadata: { source: 'node' } },
         ],
+        optimizationContributions: [contributionFixture],
       };
     });
 
@@ -856,7 +864,15 @@ describe('LLM intercepts', () => {
         metadata: { source: 'node' },
       },
     ]);
+    assert.deepEqual(result.optimizationContributions, [contributionFixture]);
     deregisterLlmRequestIntercept('node_llm_req_helper');
+  });
+
+  it('generated request-intercept declarations preserve the open optimization kind', () => {
+    const declarations = readFileSync(new URL('../index.d.ts', import.meta.url), 'utf8');
+    const openKind = "kind: 'input_compression' | 'model_routing' | (string & {})";
+
+    assert.equal(declarations.split(openKind).length - 1, 3);
   });
 
   it('standalone conditional execution helper throws on rejection', async () => {

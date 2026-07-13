@@ -908,6 +908,151 @@ fn push_annotated_response_attributes(
     if let Some(tool_calls) = response.tool_calls.as_deref() {
         push_response_tool_calls(attributes, 0, tool_calls);
     }
+    if let Some(summary) = response.optimization_summary.as_ref() {
+        push_optimization_attributes(attributes, summary);
+    }
+}
+
+fn push_optimization_attributes(
+    attributes: &mut Vec<KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    let string_fields = [
+        (
+            "nemo_relay.llm.optimization.baseline_model",
+            summary
+                .baseline_model
+                .as_ref()
+                .map(|model| model.model.clone()),
+        ),
+        (
+            "nemo_relay.llm.optimization.effective_model",
+            summary
+                .effective_model
+                .as_ref()
+                .map(|model| model.model.clone()),
+        ),
+        (
+            "nemo_relay.llm.optimization.currency",
+            summary.currency.clone(),
+        ),
+    ];
+    for (key, value) in string_fields {
+        if let Some(value) = value {
+            attributes.push(KeyValue::new(key, value));
+        }
+    }
+    if let Some(tokens) = summary.tokens_saved.prompt_tokens {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.prompt_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.total_tokens {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.total_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+    if let Some(cost) = summary.baseline_cost.as_ref() {
+        if let Some(total) = cost.total_or_component_sum() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.baseline_cost",
+                total,
+            ));
+        }
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.baseline_cost_currency",
+            cost.currency.clone(),
+        ));
+        if let Some(source) = cost.pricing_source.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.baseline_pricing_source",
+                source.clone(),
+            ));
+        }
+        if let Some(as_of) = cost.pricing_as_of.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.baseline_pricing_as_of",
+                as_of.clone(),
+            ));
+        }
+    }
+    if let Some(cost) = summary.actual_cost.as_ref() {
+        if let Some(total) = cost.total_or_component_sum() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.actual_cost",
+                total,
+            ));
+        }
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.actual_cost_currency",
+            cost.currency.clone(),
+        ));
+        if let Some(source) = cost.pricing_source.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.actual_pricing_source",
+                source.clone(),
+            ));
+        }
+        if let Some(as_of) = cost.pricing_as_of.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.actual_pricing_as_of",
+                as_of.clone(),
+            ));
+        }
+    }
+    if let Some(saved) = summary.estimated_cost_saved {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.estimated_cost_saved",
+            saved,
+        ));
+        if let Some(currency) = summary.currency.as_ref() {
+            attributes.push(KeyValue::new(
+                "nemo_relay.llm.optimization.estimated_cost_saved_currency",
+                currency.clone(),
+            ));
+        }
+    }
+    attributes.push(KeyValue::new(
+        "nemo_relay.llm.optimization.status",
+        match summary.status {
+            crate::codec::optimization::LlmOptimizationSummaryStatus::Complete => "complete",
+            crate::codec::optimization::LlmOptimizationSummaryStatus::Partial => "partial",
+        },
+    ));
+    if let Some(source) = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_source.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_source.as_ref())
+        })
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_source",
+            source.clone(),
+        ));
+    }
+    if let Some(as_of) = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_as_of.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_as_of.as_ref())
+        })
+    {
+        attributes.push(KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_as_of",
+            as_of.clone(),
+        ));
+    }
 }
 
 fn push_annotated_input_messages(attributes: &mut Vec<KeyValue>, messages: &[Message]) {

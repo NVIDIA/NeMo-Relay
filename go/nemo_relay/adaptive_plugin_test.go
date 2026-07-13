@@ -6,6 +6,7 @@ package nemo_relay
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -38,6 +39,24 @@ func decorateJSONPayload(payloadJSON json.RawMessage, key string, value any) (js
 func registerLifecycleGuardrails(ctx *PluginContext) error {
 	if err := ctx.RegisterSubscriber("subscriber", func(event Event) {
 		_ = event
+	}); err != nil {
+		return err
+	}
+	if err := ctx.RegisterMarkSanitizeGuardrail("mark_sanitize", 7, func(_ Event, fields EventSanitizeFields) EventSanitizeFields {
+		fields.Data = json.RawMessage(`{"plugin":true}`)
+		return fields
+	}); err != nil {
+		return err
+	}
+	if err := ctx.RegisterScopeSanitizeStartGuardrail("scope_start_sanitize", 7, func(_ Event, fields EventSanitizeFields) EventSanitizeFields {
+		fields.Metadata = json.RawMessage(`{"plugin_phase":"start"}`)
+		return fields
+	}); err != nil {
+		return err
+	}
+	if err := ctx.RegisterScopeSanitizeEndGuardrail("scope_end_sanitize", 7, func(_ Event, fields EventSanitizeFields) EventSanitizeFields {
+		fields.Metadata = json.RawMessage(`{"plugin_phase":"end"}`)
+		return fields
 	}); err != nil {
 		return err
 	}
@@ -352,6 +371,56 @@ func TestTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	assertGuardrailError(t, ToolConditionalExecution("blocked-tool", json.RawMessage(`{}`)), "guardrail rejected: blocked tool")
 	assertGuardrailError(t, LlmConditionalExecution(json.RawMessage(`{"headers":{"blocked":true},"content":{"messages":[]}}`)), "guardrail rejected: blocked llm")
 	assertStreamPluginPayload(t, streamPluginKind)
+
+	var mu sync.Mutex
+	var pluginEvents []Event
+	if err := RegisterSubscriber("go-plugin-event-sanitize-test", func(event Event) {
+		mu.Lock()
+		pluginEvents = append(pluginEvents, event)
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber("go-plugin-event-sanitize-test")
+	if err := EmitEvent("plugin-mark", WithEventData(json.RawMessage(`{"raw":true}`))); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+	handle, err := PushScope("plugin-generic-scope", ScopeTypeCustom)
+	if err != nil {
+		t.Fatalf("PushScope failed: %v", err)
+	}
+	if err := PopScope(handle); err != nil {
+		t.Fatalf("PopScope failed: %v", err)
+	}
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf("ClearPluginConfiguration failed: %v", err)
+	}
+	if err := EmitEvent("plugin-mark-after-clear", WithEventData(json.RawMessage(`{"raw":true}`))); err != nil {
+		t.Fatalf("EmitEvent failed: %v", err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf("FlushSubscribers failed: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var phases []string
+	for _, event := range pluginEvents {
+		switch event.Name() {
+		case "plugin-mark":
+			if string(event.Data()) != `{"plugin":true}` {
+				t.Fatalf("plugin mark sanitizer did not run: %s", event.Data())
+			}
+		case "plugin-mark-after-clear":
+			if string(event.Data()) != `{"raw":true}` {
+				t.Fatalf("plugin mark sanitizer was not rolled back: %s", event.Data())
+			}
+		case "plugin-generic-scope":
+			phases = append(phases, string(event.Metadata()))
+		}
+	}
+	if len(phases) != 2 || phases[0] != `{"plugin_phase":"start"}` || phases[1] != `{"plugin_phase":"end"}` {
+		t.Fatalf("unexpected plugin scope sanitizer phases: %v", phases)
+	}
 }
 
 func TestPluginHelperConstructorsAndRegistryListing(t *testing.T) {
@@ -423,6 +492,15 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 	}{
 		{"subscriber", func() error {
 			return closed.RegisterSubscriber("subscriber", func(event Event) { _ = event })
+		}},
+		{"mark sanitizer", func() error {
+			return closed.RegisterMarkSanitizeGuardrail("mark", 1, func(_ Event, fields EventSanitizeFields) EventSanitizeFields { return fields })
+		}},
+		{"scope start sanitizer", func() error {
+			return closed.RegisterScopeSanitizeStartGuardrail("scope_start", 1, func(_ Event, fields EventSanitizeFields) EventSanitizeFields { return fields })
+		}},
+		{"scope end sanitizer", func() error {
+			return closed.RegisterScopeSanitizeEndGuardrail("scope_end", 1, func(_ Event, fields EventSanitizeFields) EventSanitizeFields { return fields })
 		}},
 		{"tool sanitize request", func() error {
 			return closed.RegisterToolSanitizeRequestGuardrail("tool_sanitize_request", 1, func(name string, args json.RawMessage) json.RawMessage { return args })

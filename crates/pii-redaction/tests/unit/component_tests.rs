@@ -5,13 +5,18 @@
 #![allow(clippy::await_holding_lock)]
 
 use super::*;
-use crate::api::event::Event;
+use crate::api::event::{
+    BaseEvent, CategoryProfile, Event, EventSanitizeFields, MarkEvent, ScopeCategory,
+};
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, llm_call, llm_call_execute,
 };
 use crate::api::runtime::{
     LlmExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
     set_thread_scope_stack,
+};
+use crate::api::scope::{
+    EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
@@ -23,7 +28,13 @@ use crate::plugin::{
     ensure_builtin_plugins_registered, initialize_plugins, list_plugin_kinds,
     validate_plugin_config,
 };
+use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
+use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
+use nemo_relay::observability::openinference::OpenInferenceSubscriber;
+use nemo_relay::observability::otel::OpenTelemetrySubscriber;
+use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider};
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -110,6 +121,86 @@ fn builtin_backend_config_default_matches_documented_action_default() {
 }
 
 #[test]
+fn pii_redaction_defaults_enable_mark_sanitization() {
+    let config = PiiRedactionConfig::default();
+    assert!(config.mark);
+}
+
+#[test]
+fn event_sanitizer_transforms_data_category_profile_and_metadata_independently() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some("person@example\\.com".into()),
+            replacement: Some("[REDACTED]".into()),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let callback = crate::builtin::event_sanitize_callback(backend);
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("mark").build(),
+        None,
+        None,
+    ));
+    let sanitized = callback(
+        &event,
+        EventSanitizeFields {
+            data: Some(json!({"email": "person@example.com"})),
+            category_profile: Some(
+                CategoryProfile::builder()
+                    .subtype("person@example.com")
+                    .build(),
+            ),
+            metadata: Some(json!({"owner": "person@example.com"})),
+        },
+    );
+    assert_eq!(sanitized.data.unwrap()["email"], "[REDACTED]");
+    assert_eq!(
+        sanitized.category_profile.unwrap().subtype.as_deref(),
+        Some("[REDACTED]")
+    );
+    assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
+}
+
+#[test]
+fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".into(),
+            pattern: Some("person@example\\.com".into()),
+            replacement: Some("[REDACTED]".into()),
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let callback = crate::builtin::event_sanitize_callback(backend);
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("mark").build(),
+        None,
+        None,
+    ));
+    let sanitized = callback(
+        &event,
+        EventSanitizeFields {
+            data: None,
+            category_profile: Some(CategoryProfile {
+                extra: BTreeMap::from([(
+                    "annotated_request".to_string(),
+                    json!("invalid annotation"),
+                )]),
+                ..CategoryProfile::default()
+            }),
+            metadata: None,
+        },
+    );
+
+    assert!(sanitized.category_profile.is_none());
+}
+
+#[test]
 fn validate_rejects_config_with_no_enabled_surfaces() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -122,6 +213,7 @@ fn validate_rejects_config_with_no_enabled_surfaces() {
         },
         "input": false,
         "output": false,
+        "mark": false,
         "tool_input": false,
         "tool_output": false,
     })));
@@ -372,6 +464,239 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
 }
 
 #[test]
+fn builtin_backend_sanitizes_mark_and_generic_scope_observability_fields() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": true,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "person@example\\.com",
+            "replacement": "[REDACTED]"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-event-fields");
+    event(
+        EmitMarkEventParams::builder()
+            .name("sensitive-mark")
+            .data(json!({"email": "person@example.com"}))
+            .metadata(json!({"owner": "person@example.com"}))
+            .build(),
+    )
+    .unwrap();
+    let scope = push_scope(
+        PushScopeParams::builder()
+            .name("sensitive-scope")
+            .scope_type(ScopeType::Custom)
+            .input(json!({"email": "person@example.com"}))
+            .metadata(json!({"owner": "person@example.com"}))
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .output(json!({"email": "person@example.com"}))
+            .metadata(json!({"reviewer": "person@example.com"}))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let mark = captured
+        .iter()
+        .find(|event| event.name() == "sensitive-mark")
+        .unwrap();
+    assert_eq!(mark.data().unwrap()["email"], "[REDACTED]");
+    assert_eq!(mark.metadata().unwrap()["owner"], "[REDACTED]");
+    let start = captured
+        .iter()
+        .find(|event| {
+            event.name() == "sensitive-scope"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    assert_eq!(start.data().unwrap()["email"], "[REDACTED]");
+    assert_eq!(start.metadata().unwrap()["owner"], "[REDACTED]");
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "sensitive-scope" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(end.data().unwrap()["email"], "[REDACTED]");
+    assert_eq!(end.metadata().unwrap()["owner"], "[REDACTED]");
+    assert_eq!(end.metadata().unwrap()["reviewer"], "[REDACTED]");
+
+    deregister_subscriber("pii-redaction-event-fields").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn mark_false_preserves_mark_fields() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": true,
+        "output": false,
+        "mark": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "person@example\\.com",
+            "replacement": "[REDACTED]"
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-mark-opt-out");
+    event(
+        EmitMarkEventParams::builder()
+            .name("raw-mark")
+            .data(json!({"email": "person@example.com"}))
+            .build(),
+    )
+    .unwrap();
+    let captured = captured_events_snapshot(&events);
+    assert_eq!(captured[0].data().unwrap()["email"], "person@example.com");
+
+    deregister_subscriber("pii-redaction-mark-opt-out").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn sanitized_pii_never_reaches_subscribers_or_exporters() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "openai_chat",
+        "input": true,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "redact",
+            "detector": "email"
+        }
+    }))))
+    .unwrap();
+
+    let captured = capture_events("pii-regression-subscriber");
+    let output = tempfile::tempdir().unwrap();
+    let atof = AtofExporter::new(
+        AtofExporterConfig::new()
+            .with_output_directory(output.path())
+            .with_filename("events.jsonl"),
+    )
+    .unwrap();
+    atof.register("pii-regression-atof").unwrap();
+    let atif = AtifExporter::new(
+        "pii-regression".into(),
+        AtifAgentInfo {
+            name: "test-agent".into(),
+            version: "1".into(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    );
+    register_subscriber("pii-regression-atif", atif.subscriber()).unwrap();
+
+    let otel_exporter = InMemorySpanExporterBuilder::new().build();
+    let otel_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(otel_exporter.clone())
+        .build();
+    let otel = OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "pii-regression");
+    otel.register("pii-regression-otel").unwrap();
+
+    let openinference_exporter = InMemorySpanExporterBuilder::new().build();
+    let openinference_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(openinference_exporter.clone())
+        .build();
+    let openinference =
+        OpenInferenceSubscriber::from_tracer_provider(openinference_provider, "pii-regression");
+    openinference
+        .register("pii-regression-openinference")
+        .unwrap();
+
+    let raw_pii = "person@example.com";
+    let agent = push_scope(
+        PushScopeParams::builder()
+            .name("hermes-agent")
+            .scope_type(ScopeType::Agent)
+            .input(json!({"prompt": raw_pii}))
+            .metadata(json!({"session_owner": raw_pii}))
+            .build(),
+    )
+    .unwrap();
+    event(
+        EmitMarkEventParams::builder()
+            .name("hermes.checkpoint")
+            .data(json!({"email": raw_pii}))
+            .metadata(json!({"reviewer": raw_pii}))
+            .build(),
+    )
+    .unwrap();
+    pop_scope(
+        PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .output(json!({"answer": raw_pii}))
+            .metadata(json!({"approver": raw_pii}))
+            .build(),
+    )
+    .unwrap();
+
+    atof.force_flush().unwrap();
+    let trajectory = atif.export().unwrap();
+    otel.force_flush().unwrap();
+    openinference.force_flush().unwrap();
+
+    let subscriber_json = serde_json::to_string(&captured_events_snapshot(&captured)).unwrap();
+    let atof_json = std::fs::read_to_string(atof.path()).unwrap();
+    let atif_json = serde_json::to_string(&trajectory).unwrap();
+    let otel_debug = format!("{:?}", otel_exporter.get_finished_spans().unwrap());
+    let openinference_debug = format!("{:?}", openinference_exporter.get_finished_spans().unwrap());
+    for (surface, output) in [
+        ("subscriber", subscriber_json),
+        ("ATOF", atof_json),
+        ("ATIF", atif_json),
+        ("OpenTelemetry", otel_debug),
+        ("OpenInference", openinference_debug),
+    ] {
+        assert!(
+            !output.contains(raw_pii),
+            "raw PII leaked through {surface}: {output}"
+        );
+    }
+
+    deregister_subscriber("pii-regression-subscriber").unwrap();
+    atof.deregister("pii-regression-atof").unwrap();
+    deregister_subscriber("pii-regression-atif").unwrap();
+    otel.deregister("pii-regression-otel").unwrap();
+    openinference
+        .deregister("pii-regression-openinference")
+        .unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
 fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -388,7 +713,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
             "action": "regex_replace",
             "pattern": "sk-[A-Za-z0-9_-]+",
             "replacement": "[REDACTED]",
-            "target_paths": ["/api_key", "/nested/token", "/result/secret"]
+            "target_paths": ["/api_key", "/nested/token", "/result/secret", "/owner", "/reviewer"]
         }
     }))))
     .unwrap();
@@ -404,6 +729,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
                     "note": "leave me"
                 }
             }))
+            .metadata(json!({"owner": "sk-universal-metadata"}))
             .build(),
     )
     .unwrap();
@@ -416,6 +742,7 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
                     "public": "ok"
                 }
             }))
+            .metadata(json!({"reviewer": "sk-universal-metadata"}))
             .build(),
     )
     .unwrap();
@@ -440,6 +767,14 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
                 "public": "ok"
             }
         }))
+    );
+    assert_eq!(
+        captured_events[0].metadata().unwrap()["owner"],
+        "sk-universal-metadata"
+    );
+    assert_eq!(
+        captured_events[1].metadata().unwrap()["reviewer"],
+        "sk-universal-metadata"
     );
 
     deregister_subscriber("pii-redaction-tool-events").unwrap();
@@ -2022,7 +2357,7 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
             "action": "regex_replace",
             "pattern": "sk-[A-Za-z0-9_-]+",
             "replacement": "[REDACTED]",
-            "target_paths": ["/messages/0/content", "/messages/1/content"]
+            "target_paths": ["/messages/0/content", "/messages/1/content", "/audit_owner"]
         }
     }))))
     .unwrap();
@@ -2044,6 +2379,7 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
         LlmCallParams::builder()
             .name("openai")
             .request(&request)
+            .metadata(json!({"audit_owner": "sk-universal-metadata"}))
             .build(),
     )
     .unwrap();
@@ -2063,6 +2399,10 @@ fn builtin_backend_sanitizes_llm_start_payload_via_codec_and_reencodes_provider_
                 "temperature": 0.2
             }
         }))
+    );
+    assert_eq!(
+        captured_events[0].metadata().unwrap()["audit_owner"],
+        "sk-universal-metadata"
     );
 
     deregister_subscriber("pii-redaction-llm-events").unwrap();
@@ -2086,7 +2426,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
             "action": "regex_replace",
             "pattern": "sk-[A-Za-z0-9_-]+",
             "replacement": "[REDACTED]",
-            "target_paths": ["/choices/0/message/content"]
+            "target_paths": ["/choices/0/message/content", "/audit_owner"]
         }
     })))
     .await
@@ -2129,6 +2469,7 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
             .request(request)
             .func(noop_openai_chat_exec_fn(response.clone()))
             .response_codec(response_codec)
+            .metadata(json!({"audit_owner": "sk-universal-metadata"}))
             .build(),
     )
     .await
@@ -2166,6 +2507,10 @@ async fn builtin_backend_sanitizes_llm_end_payload_and_response_codec_decodes_sa
         .expect("annotated_response should be present");
     assert_eq!(annotated.response_text(), Some("[REDACTED]"));
     assert_eq!(annotated.model.as_deref(), Some("gpt-4o-mini"));
+    assert_eq!(
+        captured_events[1].metadata().unwrap()["audit_owner"],
+        "sk-universal-metadata"
+    );
 
     deregister_subscriber("pii-redaction-llm-end-events").unwrap();
     clear_plugin_configuration().unwrap();

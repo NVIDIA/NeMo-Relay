@@ -296,6 +296,7 @@ fn typed_editor_model_contains_pii_redaction_options() {
         &["builtin", "local_model"]
     );
     assert_eq!(schema.field("codec").unwrap().kind, EditorFieldKind::Enum);
+    assert_eq!(schema.field("mark").unwrap().kind, EditorFieldKind::Boolean);
     assert_eq!(
         schema.field("tool_output").unwrap().kind,
         EditorFieldKind::Boolean

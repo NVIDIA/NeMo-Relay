@@ -522,6 +522,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
                 tool_calls: None,
                 finish_reason: None,
                 usage: None,
+                optimization_summary: None,
                 api_specific: None,
                 extra,
             }))

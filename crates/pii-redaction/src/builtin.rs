@@ -9,11 +9,14 @@ use serde::de::DeserializeOwned;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 
+use nemo_relay::api::event::{CategoryProfile, Event};
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::{LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn};
-use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
-use nemo_relay::codec::openai_chat::OpenAIChatCodec;
-use nemo_relay::codec::openai_responses::OpenAIResponsesCodec;
+use nemo_relay::api::runtime::{
+    EventSanitizeFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn,
+};
+use nemo_relay::codec::resolve::{
+    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
+};
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::plugin::{PluginError, Result as PluginResult};
 
@@ -25,7 +28,8 @@ use super::overlay::BuiltinCodecName;
 pub(super) struct CompiledBuiltinBackend {
     action: BuiltinAction,
     target_paths: Arc<Vec<String>>,
-    codec: Option<Arc<dyn BuiltinRequestResponseCodec>>,
+    request_codec: Option<Arc<dyn LlmCodec>>,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
     codec_name: Option<BuiltinCodecName>,
 }
 
@@ -61,10 +65,6 @@ enum BuiltinMaskStrategy {
         mask_char: Arc<String>,
     },
 }
-
-trait BuiltinRequestResponseCodec: LlmCodec + LlmResponseCodec + Send + Sync {}
-
-impl<T> BuiltinRequestResponseCodec for T where T: LlmCodec + LlmResponseCodec + Send + Sync {}
 
 impl CompiledBuiltinBackend {
     pub(super) fn new(
@@ -114,14 +114,19 @@ impl CompiledBuiltinBackend {
             }
         };
 
+        let surface = match codec_name.as_deref() {
+            Some(name) => Some(ProviderSurface::from_codec_name(name).ok_or_else(|| {
+                PluginError::InvalidConfig(format!("unsupported codec '{name}'"))
+            })?),
+            None => None,
+        };
+
         Ok(Self {
             action,
             target_paths: Arc::new(config.target_paths),
-            codec_name: codec_name.as_deref().and_then(BuiltinCodecName::parse),
-            codec: codec_name
-                .as_deref()
-                .map(instantiate_builtin_codec)
-                .transpose()?,
+            request_codec: surface.map(build_request_codec),
+            response_codec: surface.map(build_response_codec),
+            codec_name: surface.map(BuiltinCodecName::from_provider_surface),
         })
     }
 
@@ -237,14 +242,14 @@ impl CompiledBuiltinBackend {
     }
 
     fn sanitize_request_with_codec(&self, request: &LlmRequest) -> Option<LlmRequest> {
-        let codec = self.codec.as_ref()?;
+        let codec = self.request_codec.as_ref()?;
         let annotated = codec.decode(request).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
         codec.encode(&sanitized_annotated, request).ok()
     }
 
     fn sanitize_response_with_codec(&self, payload: Json) -> Option<Json> {
-        let codec = self.codec.as_ref()?;
+        let codec = self.response_codec.as_ref()?;
         let codec_name = self.codec_name?;
         let annotated = codec.decode_response(&payload).ok()?;
         let sanitized_annotated = sanitize_serializable_with_backend(self, annotated).ok()?;
@@ -254,6 +259,29 @@ impl CompiledBuiltinBackend {
 
 pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSanitizeFn {
     Arc::new(move |_name: &str, payload: Json| backend.sanitize_json_preorder_dfs(payload))
+}
+
+pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventSanitizeFn {
+    Arc::new(move |event, mut fields| {
+        if matches!(event, Event::Scope(_))
+            && event
+                .category()
+                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"))
+        {
+            return fields;
+        }
+
+        fields.data = fields
+            .data
+            .map(|data| backend.sanitize_json_preorder_dfs(data));
+        fields.metadata = fields
+            .metadata
+            .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
+        fields.category_profile = fields.category_profile.and_then(|profile| {
+            sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
+        });
+        fields
+    })
 }
 
 pub(super) fn llm_sanitize_request_callback(
@@ -393,22 +421,6 @@ fn compile_builtin_matcher(
         ))
     })?;
     Ok(Some(Arc::new(pattern)))
-}
-
-fn instantiate_builtin_codec(
-    codec_name: &str,
-) -> PluginResult<Arc<dyn BuiltinRequestResponseCodec>> {
-    let codec: Arc<dyn BuiltinRequestResponseCodec> = match codec_name {
-        "openai_chat" => Arc::new(OpenAIChatCodec),
-        "openai_responses" => Arc::new(OpenAIResponsesCodec),
-        "anthropic_messages" => Arc::new(AnthropicMessagesCodec),
-        other => {
-            return Err(PluginError::InvalidConfig(format!(
-                "unsupported codec '{other}'"
-            )));
-        }
-    };
-    Ok(codec)
 }
 
 fn sanitize_serializable_with_backend<T>(

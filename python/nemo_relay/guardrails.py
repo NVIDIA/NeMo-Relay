@@ -21,6 +21,7 @@ Example::
 """
 
 from nemo_relay import (
+    EventSanitizeGuardrail,
     LlmConditionalExecutionGuardrail,
     LlmSanitizeRequestGuardrail,
     LlmSanitizeResponseGuardrail,
@@ -35,6 +36,13 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     deregister_llm_sanitize_response_guardrail as _native_deregister_llm_sanitize_response,
+)
+from nemo_relay._native import deregister_mark_sanitize_guardrail as _native_deregister_mark_sanitize
+from nemo_relay._native import (
+    deregister_scope_sanitize_end_guardrail as _native_deregister_scope_sanitize_end,
+)
+from nemo_relay._native import (
+    deregister_scope_sanitize_start_guardrail as _native_deregister_scope_sanitize_start,
 )
 from nemo_relay._native import (
     deregister_tool_conditional_execution_guardrail as _native_deregister_tool_conditional_execution,
@@ -54,6 +62,13 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     register_llm_sanitize_response_guardrail as _native_register_llm_sanitize_response,
 )
+from nemo_relay._native import register_mark_sanitize_guardrail as _native_register_mark_sanitize
+from nemo_relay._native import (
+    register_scope_sanitize_end_guardrail as _native_register_scope_sanitize_end,
+)
+from nemo_relay._native import (
+    register_scope_sanitize_start_guardrail as _native_register_scope_sanitize_start,
+)
 from nemo_relay._native import (
     register_tool_conditional_execution_guardrail as _native_register_tool_conditional_execution,
 )
@@ -63,6 +78,41 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     register_tool_sanitize_response_guardrail as _native_register_tool_sanitize_response,
 )
+
+# ---------------------------------------------------------------------------
+# Mark and scope event guardrails
+# ---------------------------------------------------------------------------
+
+
+def register_mark_sanitize(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None:
+    """Register a sanitizer for mark event observability fields."""
+    return _native_register_mark_sanitize(name, priority, guardrail)
+
+
+def deregister_mark_sanitize(name: str) -> bool:
+    """Remove a global mark event sanitizer by name."""
+    return _native_deregister_mark_sanitize(name)
+
+
+def register_scope_sanitize_start(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None:
+    """Register a sanitizer for every scope start event category."""
+    return _native_register_scope_sanitize_start(name, priority, guardrail)
+
+
+def deregister_scope_sanitize_start(name: str) -> bool:
+    """Remove a global scope-start event sanitizer by name."""
+    return _native_deregister_scope_sanitize_start(name)
+
+
+def register_scope_sanitize_end(name: str, priority: int, guardrail: EventSanitizeGuardrail) -> None:
+    """Register a sanitizer for every scope end event category."""
+    return _native_register_scope_sanitize_end(name, priority, guardrail)
+
+
+def deregister_scope_sanitize_end(name: str) -> bool:
+    """Remove a global scope-end event sanitizer by name."""
+    return _native_deregister_scope_sanitize_end(name)
+
 
 # ---------------------------------------------------------------------------
 # Tool guardrails
@@ -312,6 +362,12 @@ def deregister_llm_conditional_execution(name: str) -> bool:
 
 
 __all__ = [
+    "register_mark_sanitize",
+    "deregister_mark_sanitize",
+    "register_scope_sanitize_start",
+    "deregister_scope_sanitize_start",
+    "register_scope_sanitize_end",
+    "deregister_scope_sanitize_end",
     "register_tool_sanitize_request",
     "deregister_tool_sanitize_request",
     "register_tool_sanitize_response",

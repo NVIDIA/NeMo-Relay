@@ -27,6 +27,7 @@ from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
     DiagnosticLevel,
     Json,
+    LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
     PendingMarkSpec,
     PluginContext,
@@ -62,6 +63,96 @@ from nemo_relay_plugin._api import (  # noqa: E402
 
 ACTIVATION_ID = "act"
 AUTH_TOKEN = "token"
+
+
+@pytest.fixture(name="optimization_contribution_fixture")
+def optimization_contribution_fixture_fixture() -> Json:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "crates"
+        / "types"
+        / "tests"
+        / "fixtures"
+        / "llm_optimization_contribution_v1.json"
+    )
+    return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json):
+    fixture = optimization_contribution_fixture
+    contribution = LlmOptimizationContribution.from_json(fixture)
+
+    outcome = LlmRequestInterceptOutcome(
+        request={"headers": {}, "content": {"model": "test"}},
+        optimization_contributions=[contribution],
+    ).to_json()
+
+    assert outcome["optimization_contributions"] == [fixture]
+    assert contribution.kind == fixture["kind"]
+    assert contribution.kind not in {
+        LlmOptimizationContribution.INPUT_COMPRESSION,
+        LlmOptimizationContribution.MODEL_ROUTING,
+    }
+    assert contribution.extra["future_top_level_field"] == fixture["future_top_level_field"]
+    assert (
+        LlmRequestInterceptOutcome(request={"headers": {}, "content": {}}).to_json()["optimization_contributions"] == []
+    )
+
+
+def test_optimization_contribution_requires_schema_for_payload():
+    with pytest.raises(WorkerSdkError, match="payload_schema"):
+        LlmOptimizationContribution.from_json(
+            {"producer": "test", "kind": "custom", "applied": True, "payload": {"value": 1}}
+        )
+    with pytest.raises(WorkerSdkError, match="producer must be a string"):
+        LlmOptimizationContribution.from_json({"producer": 1, "kind": "custom"})
+
+
+def test_optimization_contribution_omitted_applied_defaults_consistently():
+    direct = LlmOptimizationContribution(producer="test", kind="custom")
+    decoded = LlmOptimizationContribution.from_json({"producer": "test", "kind": "custom"})
+
+    assert direct.applied is False
+    assert decoded.applied is False
+    assert direct.to_json()["applied"] is False
+    assert decoded.to_json()["applied"] is False
+
+
+def test_optimization_contribution_preserves_future_quality_strings():
+    fixture = {
+        "producer": "test",
+        "kind": "custom",
+        "token_impact": {"quality": "provider_observed_v2"},
+    }
+
+    contribution = LlmOptimizationContribution.from_json(fixture)
+
+    assert contribution.token_impact is not None
+    assert contribution.token_impact.quality == "provider_observed_v2"
+    assert contribution.to_json() == {**fixture, "applied": False}
+
+
+def test_optimization_contribution_drops_known_fields_from_extra():
+    contribution = LlmOptimizationContribution(
+        producer="test",
+        kind="custom",
+        extra={
+            "id": "stale-id",
+            "sequence": 99,
+            "model_transition": {"baseline": {"model_id": "stale"}},
+            "token_impact": {"quality": "stale"},
+            "payload_schema": {"name": "stale", "version": "1"},
+            "payload": {"stale": True},
+            "future_field": "preserved",
+        },
+    )
+
+    assert contribution.to_json() == {
+        "producer": "test",
+        "kind": "custom",
+        "applied": False,
+        "future_field": "preserved",
+    }
 
 
 class GrpcAbort(Exception):
@@ -184,6 +275,15 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def subscriber(event: Json) -> None:
             await ctx.runtime.emit_mark("tests.subscriber", event)
 
+        async def mark_sanitize(event: Json, fields: Json) -> Json:
+            return {**fields, "data": {"sanitized": f"mark:{event['name']}"}, "metadata": None}
+
+        async def scope_start_sanitize(event: Json, fields: Json) -> Json:
+            return {**fields, "data": {"sanitized": f"scope-start:{event['name']}"}, "metadata": None}
+
+        async def scope_end_sanitize(event: Json, fields: Json) -> Json:
+            return {**fields, "data": {"sanitized": f"scope-end:{event['name']}"}, "metadata": None}
+
         def tool_sanitize(name: str, value: Json) -> Json:
             return _tag(value, f"sanitize_{name}")
 
@@ -229,6 +329,9 @@ class AllSurfacesPlugin(WorkerPlugin):
                 yield _tag(chunk, "llm_stream_execution")
 
         ctx.register_subscriber("subscriber", subscriber)
+        ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
+        ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
+        ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
         ctx.register_tool_sanitize_request_guardrail("tool_sanitize", tool_sanitize, priority=1)
         ctx.register_tool_sanitize_response_guardrail("tool_sanitize", tool_sanitize, priority=2)
         ctx.register_tool_conditional_execution_guardrail("tool_conditional", tool_block, priority=3)
@@ -270,6 +373,9 @@ def test_generated_proto_matches_worker_contract():
     assert pb.SUBSCRIBER == 1
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    assert pb.MARK_SANITIZE_GUARDRAIL == 30
+    assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
+    assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
     assert pb.CUSTOM == 10
 
 
@@ -308,6 +414,9 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     ]
     assert registrations == [
         ("subscriber", pb.SUBSCRIBER, 0, False),
+        ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
+        ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
+        ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
         ("tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL, 1, False),
         ("tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL, 2, False),
         ("tool_conditional", pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL, 3, False),
@@ -588,6 +697,52 @@ def test_plugin_context_rejects_duplicate_names_on_the_same_surface():
     assert registrations.count(("duplicate", pb.TOOL_REQUEST_INTERCEPT)) == 1
     assert ("shared", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL) in registrations
     assert ("shared", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL) in registrations
+
+
+@pytest.mark.parametrize(
+    "surface",
+    [
+        pb.MARK_SANITIZE_GUARDRAIL,
+        pb.SCOPE_SANITIZE_START_GUARDRAIL,
+        pb.SCOPE_SANITIZE_END_GUARDRAIL,
+    ],
+)
+async def test_event_sanitizer_surfaces_receive_context_and_return_all_fields(
+    service: _WorkerService, surface: int
+) -> None:
+    await _register(service)
+    registration = {
+        pb.MARK_SANITIZE_GUARDRAIL: "event_sanitize",
+        pb.SCOPE_SANITIZE_START_GUARDRAIL: "event_sanitize",
+        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope_end_sanitize",
+    }[surface]
+    sanitizer = {
+        pb.MARK_SANITIZE_GUARDRAIL: "mark",
+        pb.SCOPE_SANITIZE_START_GUARDRAIL: "scope-start",
+        pb.SCOPE_SANITIZE_END_GUARDRAIL: "scope-end",
+    }[surface]
+    response = await service.Invoke(
+        _invoke_request(
+            registration,
+            surface,
+            event=_json_envelope(
+                EVENT_SCHEMA,
+                {
+                    "kind": "mark" if surface == pb.MARK_SANITIZE_GUARDRAIL else "scope",
+                    "name": "worker-event",
+                    "data": {"secret": True},
+                    "category_profile": {"subtype": "test"},
+                    "metadata": {"secret": True},
+                },
+            ),
+        ),
+        AbortContext(),
+    )
+    assert _envelope_value(response.json.value) == {
+        "data": {"sanitized": f"{sanitizer}:worker-event"},
+        "category_profile": {"subtype": "test"},
+        "metadata": None,
+    }
 
 
 async def test_validate_accepts_missing_config_and_dict_diagnostics():
@@ -1209,6 +1364,45 @@ async def test_llm_request_intercept_can_return_request_without_annotation():
     assert outcome["request"]["content"]["request_only"]
     assert outcome["annotated_request"] is None
     assert outcome["pending_marks"] == []
+
+
+async def test_llm_request_intercept_preserves_optimization_contribution_worker_envelope(
+    optimization_contribution_fixture: Json,
+):
+    fixture = optimization_contribution_fixture
+
+    class OptimizationPlugin(WorkerPlugin):
+        plugin_id = "tests.optimization_contribution"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def llm_request(name: str, request: Json, annotated: Json | None) -> LlmRequestInterceptOutcome:
+                del name
+                return LlmRequestInterceptOutcome(
+                    request=request,
+                    annotated_request=annotated,
+                    optimization_contributions=[LlmOptimizationContribution.from_json(fixture)],
+                )
+
+            ctx.register_llm_request_intercept("optimization", llm_request)
+
+    service = _service(OptimizationPlugin(), RecordingHostStub())
+    await _register(service)
+    response = await service.Invoke(
+        _invoke_request(
+            "optimization",
+            pb.LLM_REQUEST_INTERCEPT,
+            llm=_llm_payload(request={"content": {"prompt": "hello"}}),
+        ),
+        AbortContext(),
+    )
+
+    assert response.WhichOneof("result") == "llm_request"
+    assert response.llm_request.outcome.schema == LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA
+    outcome = _envelope_value(response.llm_request.outcome)
+    assert outcome["optimization_contributions"] == [fixture]
+    assert outcome["optimization_contributions"][0]["future_top_level_field"] == {"preserved": True}
 
 
 async def test_stream_invoke_success_and_failures(service: _WorkerService, host_stub: RecordingHostStub):
@@ -2323,6 +2517,9 @@ def _llm_stream_next(runtime: PluginRuntime, request: Json) -> AsyncIterator[Jso
 def _all_expected_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.MARK_SANITIZE_GUARDRAIL,
+        pb.SCOPE_SANITIZE_START_GUARDRAIL,
+        pb.SCOPE_SANITIZE_END_GUARDRAIL,
         pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
         pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
         pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,

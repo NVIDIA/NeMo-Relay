@@ -9,12 +9,14 @@ use std::sync::Arc;
 use serde_json::{Map, json};
 
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::optimization::{LlmOptimizationRecorder, MAX_LLM_OPTIMIZATION_CONTRIBUTION_BYTES};
 use crate::api::registry::{deregister_llm_request_intercept, register_llm_request_intercept};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use crate::api::scope::ScopeType;
 use crate::api::scope::{pop_scope, push_scope};
+use crate::codec::optimization::LlmOptimizationContribution;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use crate::codec::traits::LlmCodec;
 use crate::error::Result;
@@ -79,6 +81,8 @@ fn reset_global() {
     set_thread_scope_stack(create_scope_stack());
     let _ = deregister_llm_request_intercept("shared-none");
     let _ = deregister_llm_request_intercept("shared-codec");
+    let _ = deregister_llm_request_intercept("shared-contribution-oversized");
+    let _ = deregister_llm_request_intercept("shared-contribution-accepted");
 }
 
 #[test]
@@ -162,7 +166,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     )
     .unwrap();
 
-    let (request_without_codec, annotated_without_codec, pending_marks_without_codec) =
+    let (request_without_codec, annotated_without_codec, pending_marks_without_codec, _) =
         run_request_intercepts_with_codec(
             "shared",
             LlmRequest {
@@ -199,7 +203,7 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     .unwrap();
 
     let codec: Arc<dyn LlmCodec> = Arc::new(SharedTestCodec);
-    let (request_with_codec, annotated_with_codec, pending_marks_with_codec) =
+    let (request_with_codec, annotated_with_codec, pending_marks_with_codec, _) =
         run_request_intercepts_with_codec(
             "shared",
             LlmRequest {
@@ -231,6 +235,73 @@ fn test_run_request_intercepts_with_codec_none_and_codec_paths() {
     assert!(pending_marks_with_codec.is_empty());
 
     deregister_llm_request_intercept("shared-codec").unwrap();
+    reset_global();
+}
+
+#[test]
+fn managed_request_chain_records_contributions_incrementally_while_standalone_retains_them() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+
+    register_llm_request_intercept(
+        "shared-contribution-accepted",
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Ok(
+                LlmRequestInterceptOutcome::new(request, annotated).with_optimization_contribution(
+                    LlmOptimizationContribution::new("accepted", "custom"),
+                ),
+            )
+        }),
+    )
+    .unwrap();
+    register_llm_request_intercept(
+        "shared-contribution-oversized",
+        2,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Ok(
+                LlmRequestInterceptOutcome::new(request, annotated).with_optimization_contribution(
+                    LlmOptimizationContribution::new(
+                        "x".repeat(MAX_LLM_OPTIMIZATION_CONTRIBUTION_BYTES),
+                        "custom",
+                    ),
+                ),
+            )
+        }),
+    )
+    .unwrap();
+
+    let standalone = run_request_intercepts_with_codec(
+        "shared",
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(standalone.3.len(), 2);
+    assert!(standalone.3.iter().all(|item| item.sequence.is_none()));
+
+    let recorder = LlmOptimizationRecorder::default();
+    let managed = run_request_intercepts_with_codec_and_recorder(
+        "shared",
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "hello"}),
+        },
+        None,
+        &recorder,
+    )
+    .unwrap();
+    assert!(managed.3.is_empty());
+    let recorded = recorder.unemitted();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].producer, "accepted");
+    assert_eq!(recorded[0].sequence, Some(0));
+
     reset_global();
 }
 
@@ -269,7 +340,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     )
     .unwrap();
 
-    let (request, _, _) = run_request_intercepts_with_codec(
+    let (request, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),
@@ -296,7 +367,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
             .build(),
     )
     .unwrap();
-    let (request_with_codec, _, _) = run_request_intercepts_with_codec(
+    let (request_with_codec, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),
@@ -333,7 +404,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
     )
     .unwrap();
 
-    let (request, _, _) = run_request_intercepts_with_codec(
+    let (request, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),
@@ -375,7 +446,7 @@ fn test_run_request_intercepts_injects_dynamo_agent_lineage() {
             .build(),
     )
     .unwrap();
-    let (request, _, _) = run_request_intercepts_with_codec(
+    let (request, _, _, _) = run_request_intercepts_with_codec(
         "openai.responses",
         LlmRequest {
             headers: Map::new(),

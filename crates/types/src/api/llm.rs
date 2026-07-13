@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Json;
 use crate::api::event::PendingMarkSpec;
+use crate::codec::optimization::LlmOptimizationContribution;
 use crate::codec::request::AnnotatedLlmRequest;
 
 bitflags! {
@@ -48,6 +49,9 @@ pub struct LlmRequestInterceptOutcome {
     /// Ordered marks to emit after Relay creates and starts the LLM scope.
     #[serde(default)]
     pub pending_marks: Vec<PendingMarkSpec>,
+    /// Ordered plugin-neutral optimization evidence for this LLM call.
+    #[serde(default)]
+    pub optimization_contributions: Vec<LlmOptimizationContribution>,
 }
 
 impl LlmRequestInterceptOutcome {
@@ -57,6 +61,7 @@ impl LlmRequestInterceptOutcome {
             request,
             annotated_request,
             pending_marks: Vec::new(),
+            optimization_contributions: Vec::new(),
         }
     }
 
@@ -64,6 +69,16 @@ impl LlmRequestInterceptOutcome {
     #[must_use]
     pub fn with_pending_mark(mut self, mark: PendingMarkSpec) -> Self {
         self.pending_marks.push(mark);
+        self
+    }
+
+    /// Append one optimization contribution while preserving interceptor order.
+    #[must_use]
+    pub fn with_optimization_contribution(
+        mut self,
+        contribution: LlmOptimizationContribution,
+    ) -> Self {
+        self.optimization_contributions.push(contribution);
         self
     }
 }

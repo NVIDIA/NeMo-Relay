@@ -48,6 +48,10 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
     },
     decode_request: |request| OpenAIResponsesCodec.decode(request),
     decode_response: |raw| OpenAIResponsesCodec.decode_response(raw),
+    codec_name: "openai_responses",
+    request_codec: || std::sync::Arc::new(OpenAIResponsesCodec),
+    response_codec: || std::sync::Arc::new(OpenAIResponsesCodec),
+    streaming_codec: || Box::new(OpenAIResponsesStreamingCodec::new()),
 };
 
 // ---------------------------------------------------------------------------
@@ -544,6 +548,7 @@ impl LlmResponseCodec for OpenAIResponsesCodec {
             tool_calls,
             finish_reason,
             usage,
+            optimization_summary: None,
             api_specific,
             extra: raw.extra,
         })

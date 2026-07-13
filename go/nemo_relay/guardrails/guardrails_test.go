@@ -249,6 +249,22 @@ func runScopeLocalLLMGuardrailShorthandChecks(t *testing.T, scopeUUID string) {
 }
 
 func TestGuardrailShorthandsGlobal(t *testing.T) {
+	eventFn := func(_ nemo_relay.Event, fields nemo_relay.EventSanitizeFields) nemo_relay.EventSanitizeFields {
+		return fields
+	}
+	if err := guardrails.RegisterMarkSanitize("guardrails_mark", 0, eventFn); err != nil {
+		t.Fatal(err)
+	}
+	if err := guardrails.RegisterScopeSanitizeStart("guardrails_start", 0, eventFn); err != nil {
+		t.Fatal(err)
+	}
+	if err := guardrails.RegisterScopeSanitizeEnd("guardrails_end", 0, eventFn); err != nil {
+		t.Fatal(err)
+	}
+	defer guardrails.DeregisterMarkSanitize("guardrails_mark")
+	defer guardrails.DeregisterScopeSanitizeStart("guardrails_start")
+	defer guardrails.DeregisterScopeSanitizeEnd("guardrails_end")
+	_ = nemo_relay.EmitEvent("guardrails-mark")
 	toolEventOutput, cleanupTool := captureEndEventOutput(t, "guardrails_tool_events", "guardrails_tool")
 	defer cleanupTool()
 	runGlobalToolGuardrailShorthandChecks(t, toolEventOutput)
@@ -273,6 +289,22 @@ func TestGuardrailShorthandsScopeLocal(t *testing.T) {
 		defer nemo_relay.PopScope(handle)
 
 		scopeUUID := handle.UUID()
+		eventFn := func(_ nemo_relay.Event, fields nemo_relay.EventSanitizeFields) nemo_relay.EventSanitizeFields {
+			return fields
+		}
+		if err := guardrails.ScopeRegisterMarkSanitize(scopeUUID, "guardrails_scope_mark", 0, eventFn); err != nil {
+			t.Fatal(err)
+		}
+		if err := guardrails.ScopeRegisterScopeSanitizeStart(scopeUUID, "guardrails_scope_start", 0, eventFn); err != nil {
+			t.Fatal(err)
+		}
+		if err := guardrails.ScopeRegisterScopeSanitizeEnd(scopeUUID, "guardrails_scope_end", 0, eventFn); err != nil {
+			t.Fatal(err)
+		}
+		defer guardrails.ScopeDeregisterMarkSanitize(scopeUUID, "guardrails_scope_mark")
+		defer guardrails.ScopeDeregisterScopeSanitizeStart(scopeUUID, "guardrails_scope_start")
+		defer guardrails.ScopeDeregisterScopeSanitizeEnd(scopeUUID, "guardrails_scope_end")
+		_ = nemo_relay.EmitEvent("guardrails-scope-mark")
 		runScopeLocalToolGuardrailShorthandChecks(t, scopeUUID)
 		runScopeLocalLLMGuardrailShorthandChecks(t, scopeUUID)
 	})

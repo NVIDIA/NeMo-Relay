@@ -38,6 +38,15 @@ from nemo_relay._native import (
     scope_deregister_llm_stream_execution_intercept as _deregister_llm_stream_execution,
 )
 from nemo_relay._native import (
+    scope_deregister_mark_sanitize_guardrail as _deregister_mark_sanitize,
+)
+from nemo_relay._native import (
+    scope_deregister_scope_sanitize_end_guardrail as _deregister_scope_sanitize_end,
+)
+from nemo_relay._native import (
+    scope_deregister_scope_sanitize_start_guardrail as _deregister_scope_sanitize_start,
+)
+from nemo_relay._native import (
     scope_deregister_subscriber as _deregister_subscriber,
 )
 from nemo_relay._native import (
@@ -74,6 +83,15 @@ from nemo_relay._native import (
     scope_register_llm_stream_execution_intercept as _register_llm_stream_execution,
 )
 from nemo_relay._native import (
+    scope_register_mark_sanitize_guardrail as _register_mark_sanitize,
+)
+from nemo_relay._native import (
+    scope_register_scope_sanitize_end_guardrail as _register_scope_sanitize_end,
+)
+from nemo_relay._native import (
+    scope_register_scope_sanitize_start_guardrail as _register_scope_sanitize_start,
+)
+from nemo_relay._native import (
     scope_register_subscriber as _register_subscriber,
 )
 from nemo_relay._native import (
@@ -91,6 +109,41 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     scope_register_tool_sanitize_response_guardrail as _register_tool_sanitize_response,
 )
+
+# ---------------------------------------------------------------------------
+# Mark and scope event guardrails (scope-local)
+# ---------------------------------------------------------------------------
+
+
+def register_mark_sanitize(scope_handle, name, priority, guardrail):
+    """Register a scope-local mark event sanitizer."""
+    return _register_mark_sanitize(scope_handle.uuid, name, priority, guardrail)
+
+
+def deregister_mark_sanitize(scope_handle, name):
+    """Remove a scope-local mark event sanitizer."""
+    return _deregister_mark_sanitize(scope_handle.uuid, name)
+
+
+def register_scope_sanitize_start(scope_handle, name, priority, guardrail):
+    """Register a scope-local sanitizer for scope start events."""
+    return _register_scope_sanitize_start(scope_handle.uuid, name, priority, guardrail)
+
+
+def deregister_scope_sanitize_start(scope_handle, name):
+    """Remove a scope-local scope-start event sanitizer."""
+    return _deregister_scope_sanitize_start(scope_handle.uuid, name)
+
+
+def register_scope_sanitize_end(scope_handle, name, priority, guardrail):
+    """Register a scope-local sanitizer for scope end events."""
+    return _register_scope_sanitize_end(scope_handle.uuid, name, priority, guardrail)
+
+
+def deregister_scope_sanitize_end(scope_handle, name):
+    """Remove a scope-local scope-end event sanitizer."""
+    return _deregister_scope_sanitize_end(scope_handle.uuid, name)
+
 
 # ---------------------------------------------------------------------------
 # Tool guardrails (scope-local)
@@ -607,6 +660,13 @@ def deregister_subscriber(scope_handle, name):
 
 
 __all__ = [
+    # Mark and scope event guardrails
+    "register_mark_sanitize",
+    "deregister_mark_sanitize",
+    "register_scope_sanitize_start",
+    "deregister_scope_sanitize_start",
+    "register_scope_sanitize_end",
+    "deregister_scope_sanitize_end",
     # Tool guardrails
     "register_tool_sanitize_request",
     "deregister_tool_sanitize_request",

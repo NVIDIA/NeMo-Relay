@@ -390,3 +390,173 @@ fn hint_does_not_classify_non_object_or_keyless() {
         None
     );
 }
+
+// ---------------------------------------------------------------------------
+// Provider-codec factory (name<->surface mapping + codec construction)
+// ---------------------------------------------------------------------------
+
+const ALL_SURFACES: [ProviderSurface; 3] = [
+    ProviderSurface::OpenAIChat,
+    ProviderSurface::OpenAIResponses,
+    ProviderSurface::AnthropicMessages,
+];
+
+#[test]
+fn codec_name_round_trips_for_every_surface() {
+    for surface in ALL_SURFACES {
+        assert_eq!(
+            ProviderSurface::from_codec_name(surface.codec_name()),
+            Some(surface),
+            "codec_name/from_codec_name must round-trip for {surface:?}",
+        );
+    }
+}
+
+#[test]
+fn codec_name_uses_canonical_spellings() {
+    assert_eq!(ProviderSurface::OpenAIChat.codec_name(), "openai_chat");
+    assert_eq!(
+        ProviderSurface::OpenAIResponses.codec_name(),
+        "openai_responses"
+    );
+    assert_eq!(
+        ProviderSurface::AnthropicMessages.codec_name(),
+        "anthropic_messages"
+    );
+}
+
+#[test]
+fn from_codec_name_is_none_for_unknown_names() {
+    assert_eq!(ProviderSurface::from_codec_name("gemini"), None);
+    assert_eq!(ProviderSurface::from_codec_name(""), None);
+    assert_eq!(ProviderSurface::from_codec_name("OpenAIChat"), None);
+}
+
+#[test]
+fn supported_codec_names_track_the_builtin_registry() {
+    assert_eq!(
+        supported_codec_names(),
+        vec!["openai_responses", "anthropic_messages", "openai_chat"]
+    );
+    let from_registry: Vec<_> = BUILTIN_PROVIDER_SURFACES
+        .iter()
+        .map(|descriptor| descriptor.codec_name)
+        .collect();
+    assert_eq!(supported_codec_names(), from_registry);
+}
+
+#[test]
+fn request_codec_decodes_each_surface() {
+    let chat = req(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}]
+    }));
+    assert!(
+        !request_codec(ProviderSurface::OpenAIChat)
+            .decode(&chat)
+            .expect("chat request decodes")
+            .messages
+            .is_empty()
+    );
+
+    let anthropic = req(json!({
+        "model": "claude-3-5-sonnet",
+        "system": "be terse",
+        "messages": [{"role": "user", "content": "hi"}]
+    }));
+    assert!(
+        !request_codec(ProviderSurface::AnthropicMessages)
+            .decode(&anthropic)
+            .expect("anthropic request decodes")
+            .messages
+            .is_empty()
+    );
+
+    let responses = req(json!({"model": "gpt-4o", "input": "hi"}));
+    assert!(
+        !request_codec(ProviderSurface::OpenAIResponses)
+            .decode(&responses)
+            .expect("responses request decodes")
+            .messages
+            .is_empty()
+    );
+}
+
+#[test]
+fn response_codec_decodes_each_surface() {
+    let chat = json!({
+        "choices": [{
+            "message": {"role": "assistant", "content": "hello"},
+            "finish_reason": "stop"
+        }]
+    });
+    assert_eq!(
+        response_codec(ProviderSurface::OpenAIChat)
+            .decode_response(&chat)
+            .expect("chat response decodes")
+            .response_text(),
+        Some("hello")
+    );
+
+    let anthropic = json!({
+        "type": "message",
+        "content": [{"type": "text", "text": "hey"}],
+        "stop_reason": "end_turn"
+    });
+    assert_eq!(
+        response_codec(ProviderSurface::AnthropicMessages)
+            .decode_response(&anthropic)
+            .expect("anthropic response decodes")
+            .response_text(),
+        Some("hey")
+    );
+
+    let responses = json!({"output": [], "output_text": "yo"});
+    assert_eq!(
+        response_codec(ProviderSurface::OpenAIResponses)
+            .decode_response(&responses)
+            .expect("responses response decodes")
+            .response_text(),
+        Some("yo")
+    );
+}
+
+#[test]
+fn streaming_codec_round_trips_through_its_response_codec() {
+    let codec = streaming_codec(ProviderSurface::OpenAIChat);
+    let mut collect = codec.collector();
+    collect(json!({
+        "id": "chatcmpl-1", "object": "chat.completion.chunk", "model": "gpt-4o",
+        "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]
+    }))
+    .unwrap();
+    for part in ["Hello, ", "world", "."] {
+        collect(json!({
+            "id": "chatcmpl-1", "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": {"content": part}, "finish_reason": null}]
+        }))
+        .unwrap();
+    }
+    collect(json!({
+        "id": "chatcmpl-1", "object": "chat.completion.chunk",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+    }))
+    .unwrap();
+
+    let assembled = codec.finalizer()();
+    let decoded = response_codec(ProviderSurface::OpenAIChat)
+        .decode_response(&assembled)
+        .expect("assembled stream decodes");
+    assert_eq!(decoded.response_text(), Some("Hello, world."));
+}
+
+#[test]
+fn streaming_codec_constructs_a_usable_codec_for_every_surface() {
+    for surface in ALL_SURFACES {
+        let assembled = streaming_codec(surface).finalizer()();
+        assert!(
+            assembled.is_object(),
+            "{surface:?} streaming codec finalizes to a JSON object",
+        );
+    }
+}

@@ -134,6 +134,7 @@ class PiiRedactionConfig:
     output: bool = True
     tool_input: bool = True
     tool_output: bool = True
+    mark: bool = True
     priority: int = 100
     codec: Literal["openai_chat", "openai_responses", "anthropic_messages"] | str | None = None
     builtin: BuiltinConfig | None = None
@@ -150,6 +151,7 @@ class PiiRedactionConfig:
                 "output": self.output,
                 "tool_input": self.tool_input,
                 "tool_output": self.tool_output,
+                "mark": self.mark,
                 "priority": self.priority,
                 "codec": self.codec,
                 "builtin": self.builtin,
