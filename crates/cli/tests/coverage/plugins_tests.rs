@@ -2257,6 +2257,61 @@ fn display_helpers_render_scalars_json_and_defaults() {
     );
 }
 
+fn collection_section_default() -> Value {
+    json!({ "list": ["default"], "map": { "key": "value" } })
+}
+
+#[test]
+fn collection_summaries_preserve_defaults_and_show_invalid_shapes() {
+    let section = EditorFieldSpec {
+        name: "section",
+        label: "Section",
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: Some(collection_section_default),
+        list_item: None,
+        tagged_union: None,
+    };
+    let list = EditorFieldSpec {
+        name: "list",
+        label: "List",
+        kind: EditorFieldKind::List,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    };
+    let map = EditorFieldSpec {
+        name: "map",
+        label: "Map",
+        kind: EditorFieldKind::StringMap,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    };
+
+    assert_eq!(
+        display_field_value(section, list, &json!(["default"])),
+        "1 item (default)"
+    );
+    assert_eq!(display_field_value(section, list, &json!("wrong")), "wrong");
+    assert_eq!(
+        display_field_value(section, map, &json!({ "key": "value" })),
+        "1 entry (default)"
+    );
+    assert_eq!(
+        display_field_value(section, map, &json!(["wrong"])),
+        r#"["wrong"]"#
+    );
+}
+
 #[test]
 fn parse_float_value_rejects_non_finite_numbers() {
     let field = EditorFieldSpec {
@@ -2292,12 +2347,24 @@ fn tagged_list_item_default() -> Value {
     json!({ "kind": "example" })
 }
 
-static TAGGED_LIST_ITEM_VARIANTS: [EditorVariantSpec; 1] = [EditorVariantSpec {
-    label: "Example",
-    tag: "example",
-    schema: tagged_list_item_schema,
-    default: tagged_list_item_default,
-}];
+fn other_tagged_list_item_default() -> Value {
+    json!({ "kind": "other" })
+}
+
+static TAGGED_LIST_ITEM_VARIANTS: [EditorVariantSpec; 2] = [
+    EditorVariantSpec {
+        label: "Example",
+        tag: "example",
+        schema: tagged_list_item_schema,
+        default: tagged_list_item_default,
+    },
+    EditorVariantSpec {
+        label: "Other",
+        tag: "other",
+        schema: tagged_list_item_schema,
+        default: other_tagged_list_item_default,
+    },
+];
 
 static TAGGED_UNION: EditorTaggedUnionSpec = EditorTaggedUnionSpec {
     discriminator: "kind",
@@ -2312,7 +2379,7 @@ static TAGGED_LIST_ITEM: EditorListItemSpec = EditorListItemSpec {
     list_item: None,
 };
 
-#[derive(Default, serde::Serialize)]
+#[derive(Default, serde::Deserialize, serde::Serialize)]
 struct TaggedUnionHarness {
     backend: Value,
 }
@@ -2337,6 +2404,29 @@ fn tagged_unions_support_list_items_and_top_level_fields() {
         editor_item_label(&json!({ "kind": "example" }), &TAGGED_LIST_ITEM),
         "example"
     );
+}
+
+#[test]
+fn tagged_union_fields_support_variant_changes_and_reset() {
+    assert_eq!(
+        tagged_union_variant_value(&TAGGED_UNION, 1).unwrap(),
+        json!({ "kind": "other" })
+    );
+    assert!(
+        tagged_union_variant_value(&TAGGED_UNION, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("tagged union variant does not exist")
+    );
+
+    let field = TaggedUnionHarness::editor_schema()
+        .field("backend")
+        .unwrap();
+    let mut config = TaggedUnionHarness {
+        backend: json!({ "kind": "other" }),
+    };
+    reset_config_field(&mut config, field).unwrap();
+    assert_eq!(config.backend, Value::Null);
 }
 
 #[test]

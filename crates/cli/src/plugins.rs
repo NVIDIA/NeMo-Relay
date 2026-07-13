@@ -865,16 +865,18 @@ where
             CliError::Config(format!("{} does not describe its variants", field.name))
         })?;
         let default = section_field_default(section, *field);
-        let mut value = current.or_else(|| default.clone()).unwrap_or(Value::Null);
-        let original = value.clone();
-        edit_tagged_union_value(
+        match edit_tagged_union_field(
             theme,
             &format!("{}.{}", section.name, field.name),
-            &mut value,
+            current,
+            default,
             tagged_union,
-        )?;
-        if value != original {
-            set_section_field(config, section, field.name, value)?;
+        )? {
+            TaggedUnionFieldEdit::Set(value) => {
+                set_section_field(config, section, field.name, value)?;
+            }
+            TaggedUnionFieldEdit::Reset => remove_section_field(config, section, field.name)?,
+            TaggedUnionFieldEdit::Unchanged => {}
         }
         return Ok(());
     }
@@ -1133,7 +1135,7 @@ fn edit_editor_item(
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<(), CliError> {
     if let Some(tagged_union) = item.tagged_union {
-        return edit_tagged_union_value(theme, prompt, value, tagged_union);
+        return edit_tagged_union_payload(theme, prompt, value, tagged_union);
     }
 
     match item.kind {
@@ -1185,6 +1187,17 @@ fn editor_item_label(
     display_value(value)
 }
 
+fn tagged_union_variant_value(
+    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+    selected: usize,
+) -> Result<Value, CliError> {
+    tagged_union
+        .variants
+        .get(selected)
+        .map(|variant| (variant.default)())
+        .ok_or_else(|| CliError::Config("tagged union variant does not exist".into()))
+}
+
 fn new_tagged_union_value(
     theme: &ColorfulTheme,
     tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
@@ -1193,7 +1206,7 @@ fn new_tagged_union_value(
         return Err(CliError::Config("tagged union has no variants".into()));
     }
     let variant = Select::with_theme(theme)
-        .with_prompt("Item type")
+        .with_prompt("Variant type")
         .items(
             &tagged_union
                 .variants
@@ -1204,10 +1217,10 @@ fn new_tagged_union_value(
         .default(0)
         .interact()
         .map_err(editor_error)?;
-    Ok((tagged_union.variants[variant].default)())
+    tagged_union_variant_value(tagged_union, variant)
 }
 
-fn edit_tagged_union_value(
+fn edit_tagged_union_payload(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
@@ -1227,6 +1240,64 @@ fn edit_tagged_union_value(
         .ok_or_else(|| CliError::Config(format!("unknown tagged union type {tag:?}")))?;
     edit_value_section(theme, prompt, value, (variant.schema)(), None)?;
     Ok(())
+}
+
+#[derive(Debug, PartialEq)]
+enum TaggedUnionFieldEdit {
+    Set(Value),
+    Reset,
+    Unchanged,
+}
+
+fn edit_tagged_union_field(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    current: Option<Value>,
+    default: Option<Value>,
+    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+) -> Result<TaggedUnionFieldEdit, CliError> {
+    let baseline = current.or(default).unwrap_or(Value::Null);
+    let mut value = baseline.clone();
+    loop {
+        let actions = [
+            MenuItem::new("Edit fields"),
+            MenuItem::new("Change variant"),
+            MenuItem::new(shortcut_label(
+                "Reset to default/none",
+                "r, Backspace, Delete",
+            )),
+            MenuItem::new(shortcut_label("Back", "q")),
+        ];
+        match prompt_menu(
+            theme,
+            &format!("{prompt}, current {}", display_value(&value)),
+            &actions,
+            0,
+        )? {
+            MenuResponse::Selected(0) => {
+                edit_tagged_union_payload(theme, prompt, &mut value, tagged_union)?;
+            }
+            MenuResponse::Selected(1) => {
+                value = new_tagged_union_value(theme, tagged_union)?;
+                edit_tagged_union_payload(theme, prompt, &mut value, tagged_union)?;
+            }
+            MenuResponse::Selected(2)
+            | MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
+                return Ok(TaggedUnionFieldEdit::Reset);
+            }
+            MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
+            MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+                println!("  Preview and save are available from the main plugins.toml menu.");
+            }
+            MenuResponse::Cancel | MenuResponse::Selected(_) => {
+                return Ok(if value == baseline {
+                    TaggedUnionFieldEdit::Unchanged
+                } else {
+                    TaggedUnionFieldEdit::Set(value)
+                });
+            }
+        }
+    }
 }
 
 fn collection_shortcut_value(
@@ -1292,13 +1363,16 @@ where
             CliError::Config(format!("{} does not describe its variants", field.name))
         })?;
         let default = default_config_field_value::<T>(field).or_else(|| field.default_value());
-        let mut value = config_field_value(config, field.name)?
-            .or_else(|| default.clone())
-            .unwrap_or(Value::Null);
-        let original = value.clone();
-        edit_tagged_union_value(theme, field.name, &mut value, tagged_union)?;
-        if value != original {
-            set_struct_field(config, field.name, value)?;
+        match edit_tagged_union_field(
+            theme,
+            field.name,
+            config_field_value(config, field.name)?,
+            default,
+            tagged_union,
+        )? {
+            TaggedUnionFieldEdit::Set(value) => set_struct_field(config, field.name, value)?,
+            TaggedUnionFieldEdit::Reset => reset_config_field(config, field)?,
+            TaggedUnionFieldEdit::Unchanged => {}
         }
         return Ok(());
     }
@@ -1576,18 +1650,18 @@ fn edit_value_field(
             CliError::Config(format!("{} does not describe its variants", field.name))
         })?;
         let field_default = value_field_default(default, field);
-        let mut tagged_value = value_field_value(value, field.name)
-            .or_else(|| field_default.clone())
-            .unwrap_or(Value::Null);
-        let original = tagged_value.clone();
-        edit_tagged_union_value(
+        match edit_tagged_union_field(
             theme,
             &format!("{prompt}.{}", field.name),
-            &mut tagged_value,
+            value_field_value(value, field.name),
+            field_default.clone(),
             tagged_union,
-        )?;
-        if tagged_value != original {
-            set_value_field(value, field.name, tagged_value);
+        )? {
+            TaggedUnionFieldEdit::Set(tagged_value) => {
+                set_value_field(value, field.name, tagged_value);
+            }
+            TaggedUnionFieldEdit::Reset => reset_value_field(value, field, default),
+            TaggedUnionFieldEdit::Unchanged => {}
         }
         return Ok(());
     }
