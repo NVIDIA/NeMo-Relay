@@ -31,8 +31,10 @@ use crate::agents::shared::alignment::{
 use crate::configuration::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
 mod correlation;
+mod types;
 
 use correlation::*;
+pub(crate) use types::*;
 
 use crate::events::{
     AgentKind, LlmEvent, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
@@ -52,64 +54,6 @@ pub(crate) struct SessionManager {
     // only orchestrates when promotion is safe.
     alignment: Arc<Mutex<SessionAlignmentState>>,
     default_config: GatewayConfig,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LlmGatewayStart {
-    pub(crate) session_id: Option<String>,
-    pub(crate) provider: String,
-    pub(crate) model_name: Option<String>,
-    pub(crate) subagent_id: Option<String>,
-    pub(crate) conversation_id: Option<String>,
-    pub(crate) generation_id: Option<String>,
-    pub(crate) request_id: Option<String>,
-    pub(crate) request: LlmRequest,
-    pub(crate) streaming: bool,
-    pub(crate) metadata: Value,
-}
-
-/// Legacy active-LLM record kept for tests that exercise the manual `llm_call` /
-/// `llm_call_end` correlation path. Production gateway traffic now uses managed execution via
-/// [`SessionManager::prepare_gateway_call`].
-#[cfg(test)]
-#[derive(Debug, Clone)]
-pub(crate) struct ActiveLlm {
-    stack: ScopeStackHandle,
-    handle: LlmHandle,
-    session_id: String,
-    owner_subagent_id: Option<String>,
-}
-
-/// Inputs prepared by [`SessionManager::prepare_gateway_call`] for invoking the
-/// runtime's managed LLM execution pipeline outside the session lock.
-///
-/// The session lock is released after the prep is built, so the gateway can run
-/// the upstream HTTP work without blocking unrelated session activity. The
-/// preserved `scope_stack` is what restores the turn/subagent scope context
-/// the call was opened against when the runtime emits start/end events.
-pub(crate) struct GatewayCallPrep {
-    pub(crate) scope_stack: ScopeStackHandle,
-    pub(crate) session_id: String,
-    pub(crate) provider_name: String,
-    pub(crate) request: LlmRequest,
-    pub(crate) parent: Option<ScopeHandle>,
-    pub(crate) attributes: LlmAttributes,
-    pub(crate) metadata: Value,
-    pub(crate) model_name: Option<String>,
-    pub(crate) owner_subagent_id: Option<String>,
-    pub(crate) bypass_managed_pipeline: bool,
-    pub(crate) session_finish: GatewaySessionFinish,
-}
-
-/// Cleanup policy for the session selected by one gateway request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GatewaySessionFinish {
-    /// Keep an explicit, correlated, or sole active session for later lifecycle events.
-    Retain,
-    /// Remove a startup-probe session when it never opened observable scopes.
-    PruneIfEmpty,
-    /// Close an isolated synthetic session as soon as its only gateway call completes.
-    Close,
 }
 
 struct Session {
