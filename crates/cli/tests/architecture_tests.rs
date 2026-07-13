@@ -60,6 +60,44 @@ fn shared_services_do_not_depend_on_commands() {
 }
 
 #[test]
+fn clap_syntax_is_owned_exclusively_by_commands() {
+    let src = source_root();
+    for path in rust_files(&src) {
+        if path.starts_with(src.join("commands")) {
+            continue;
+        }
+        let source = fs::read_to_string(&path).unwrap();
+        for marker in [
+            "use clap::",
+            "clap::Parser",
+            "#[arg(",
+            "#[command(",
+            "#[value(",
+        ] {
+            assert!(
+                !source.contains(marker),
+                "{} contains command syntax marker {marker}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn tests_are_not_embedded_in_the_source_tree() {
+    let src = source_root();
+    for path in rust_files(&src) {
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains("#[cfg(test)]\nmod tests {")
+                && !source.contains("#[cfg(test)]\r\nmod tests {"),
+            "inline test module found under src: {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn agent_directories_do_not_import_one_another_or_commands() {
     let agents = source_root().join("agents");
     for (agent, forbidden) in [
