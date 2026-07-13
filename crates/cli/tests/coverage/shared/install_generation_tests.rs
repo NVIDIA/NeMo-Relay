@@ -25,6 +25,27 @@ fn plugin_retirement_rejects_an_external_lock_outside_its_layout() {
     assert!(unrelated_lock.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn plugin_retirement_accepts_an_equivalent_symlinked_external_lock_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let canonical = dir.path().join("canonical");
+    let selected = dir.path().join("selected");
+    std::fs::create_dir_all(&canonical).unwrap();
+    symlink(&canonical, &selected).unwrap();
+    let marker = selected.join("plugin").join(GENERATION_FILE_NAME);
+    let selected_lock = selected.join("generation.lock");
+    let canonical_lock = canonical.join("generation.lock");
+    write_new_generation_with_token_at(&marker, &canonical_lock).unwrap();
+
+    let mut retirement = GenerationRetirement::acquire_for_plugin(&marker, &selected_lock)
+        .unwrap()
+        .expect("generation exists");
+    retirement.restore_after_rollback().unwrap();
+}
+
 #[test]
 fn generation_markers_have_one_canonical_encoding() {
     let lock_path = PathBuf::from("generation.lock");

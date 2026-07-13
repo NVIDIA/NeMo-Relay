@@ -2796,6 +2796,30 @@ fn force_install_rejects_persisted_roots_outside_selected_layout() {
     assert_no_force_replacement_residue(&relocated_dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn persisted_roots_accept_an_equivalent_symlinked_install_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let canonical = dir.path().join("canonical");
+    let selected = dir.path().join("selected");
+    std::fs::create_dir_all(&canonical).unwrap();
+    symlink(&canonical, &selected).unwrap();
+    let selected_layout = PluginLayout::new(CodingAgent::Codex, &selected);
+    std::fs::create_dir_all(&selected_layout.plugin_root).unwrap();
+    let canonical_layout = PluginLayout::new(CodingAgent::Codex, &canonical);
+    let state = PluginState {
+        marketplace_root: canonical_layout.marketplace_root,
+        plugin_root: canonical_layout.plugin_root,
+        host_plugin_removed: false,
+        host_marketplace_removed: false,
+        plugin_setup_installed: true,
+    };
+
+    selected_layout.validate_persisted_state(&state).unwrap();
+}
+
 #[test]
 fn uninstall_rejects_persisted_roots_outside_selected_layout() {
     let dir = tempdir().unwrap();

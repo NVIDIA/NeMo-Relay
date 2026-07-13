@@ -88,7 +88,8 @@ impl PluginLayout {
     }
 
     pub(super) fn validate_persisted_state(&self, state: &PluginState) -> Result<(), String> {
-        if state.marketplace_root != self.marketplace_root || state.plugin_root != self.plugin_root
+        if !same_selected_path(&state.marketplace_root, &self.marketplace_root)
+            || !same_selected_path(&state.plugin_root, &self.plugin_root)
         {
             return Err(format!(
                 "refusing persisted {} plugin state outside the selected install layout {}",
@@ -124,6 +125,15 @@ impl PluginLayout {
         }
         Ok(())
     }
+}
+
+fn same_selected_path(persisted: &Path, selected: &Path) -> bool {
+    persisted == selected
+        || persisted
+            .canonicalize()
+            .ok()
+            .zip(selected.canonicalize().ok())
+            .is_some_and(|(persisted, selected)| persisted == selected)
 }
 
 #[derive(Debug, Clone)]

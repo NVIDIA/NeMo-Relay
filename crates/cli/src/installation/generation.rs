@@ -399,7 +399,7 @@ impl GenerationRetirement {
         let lock_path = observed.lock_path().to_owned();
         if let Some(allowed) = allowed_external_lock
             && !is_legacy_sibling_lock(path, &lock_path)?
-            && absolute_lock_path(allowed)? != absolute_lock_path(&lock_path)?
+            && !same_lock_path(allowed, &lock_path)?
         {
             return Err(format!(
                 "MCP install generation {} references an external lock outside its plugin layout",
@@ -828,7 +828,20 @@ fn generation_lock_path(path: &Path) -> PathBuf {
 }
 
 fn is_legacy_sibling_lock(marker_path: &Path, lock_path: &Path) -> Result<bool, String> {
-    Ok(absolute_lock_path(&generation_lock_path(marker_path))? == absolute_lock_path(lock_path)?)
+    same_lock_path(&generation_lock_path(marker_path), lock_path)
+}
+
+fn same_lock_path(left: &Path, right: &Path) -> Result<bool, String> {
+    let left = absolute_lock_path(left)?;
+    let right = absolute_lock_path(right)?;
+    if left == right {
+        return Ok(true);
+    }
+    Ok(left
+        .canonicalize()
+        .ok()
+        .zip(right.canonicalize().ok())
+        .is_some_and(|(left, right)| left == right))
 }
 
 #[cfg(test)]

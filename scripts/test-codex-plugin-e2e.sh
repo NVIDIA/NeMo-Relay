@@ -32,6 +32,16 @@ if matches:
 PY
 }
 
+read_sidecar_pid() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    print(json.load(source)["pid"])
+PY
+}
+
 cleanup() {
     codex_pgids=("")
     for pgid_file in "$work"/codex-*.pgid; do
@@ -59,9 +69,9 @@ cleanup() {
         kill "$provider_pid" 2>/dev/null || true
         wait "$provider_pid" 2>/dev/null || true
     fi
-    pid_file="$(find_sidecar_file 'sidecar-*.pid')"
+    pid_file="$(find_sidecar_file 'sidecar-*.owner.json')"
     if [[ -n "$pid_file" && -f "$pid_file" ]]; then
-        sidecar_pid="$(cat "$pid_file" 2>/dev/null || true)"
+        sidecar_pid="$(read_sidecar_pid "$pid_file" 2>/dev/null || true)"
         if [[ "$sidecar_pid" =~ ^[0-9]+$ ]]; then
             kill "$sidecar_pid" 2>/dev/null || true
             for _ in $(seq 1 50); do
@@ -508,9 +518,9 @@ if ! wait_for_mcp_initialize "$holder_stdout" "$holder_pid"; then
     cat "$holder_stderr" >&2
     exit 1
 fi
-old_sidecar_pid_file="$(find_sidecar_file 'sidecar-*.pid')"
+old_sidecar_pid_file="$(find_sidecar_file 'sidecar-*.owner.json')"
 [[ -s "$old_sidecar_pid_file" ]]
-old_sidecar_pid="$(cat "$old_sidecar_pid_file")"
+old_sidecar_pid="$(read_sidecar_pid "$old_sidecar_pid_file")"
 kill -0 "$old_sidecar_pid"
 exec 9>&-
 if ! wait_for_process_exit "$holder_pid"; then
@@ -545,10 +555,10 @@ replacement_stdout="$work/mcp-replacement.stdout"
 replacement_stderr="$work/mcp-replacement.stderr"
 run_mcp_once "$replacement_stdout" "$replacement_stderr" 3
 grep -q '"serverInfo"' "$replacement_stdout"
-replacement_pid_file="$(find_sidecar_file 'sidecar-*.pid')"
+replacement_pid_file="$(find_sidecar_file 'sidecar-*.owner.json')"
 replacement_owner_file="$(find_sidecar_file 'sidecar-*.owner.json')"
 [[ -s "$replacement_pid_file" && -s "$replacement_owner_file" ]]
-replacement_pid="$(cat "$replacement_pid_file")"
+replacement_pid="$(read_sidecar_pid "$replacement_pid_file")"
 [[ "$replacement_pid" != "$old_sidecar_pid" ]]
 kill -0 "$replacement_pid"
 stop_owned_sidecar "$replacement_owner_file"
@@ -593,16 +603,16 @@ while time.monotonic() < deadline:
 raise SystemExit("concurrent Codex requests did not reach the provider within 25 seconds")
 PY
 [[ "$(cat "$provider_barrier/arrivals")" -eq 2 ]]
-sidecar_pid_file="$(find_sidecar_file 'sidecar-*.pid')"
+sidecar_pid_file="$(find_sidecar_file 'sidecar-*.owner.json')"
 [[ -s "$sidecar_pid_file" ]]
-shared_sidecar_pid="$(cat "$sidecar_pid_file")"
+shared_sidecar_pid="$(read_sidecar_pid "$sidecar_pid_file")"
 [[ "$shared_sidecar_pid" =~ ^[0-9]+$ ]]
 kill -0 "$shared_sidecar_pid"
 touch "$provider_barrier/release"
 wait "$first_pid"
 wait "$second_pid"
 background_pids=("")
-[[ "$(cat "$sidecar_pid_file")" == "$shared_sidecar_pid" ]]
+[[ "$(read_sidecar_pid "$sidecar_pid_file")" == "$shared_sidecar_pid" ]]
 kill -0 "$shared_sidecar_pid"
 python3 - <<'PY'
 import socket
