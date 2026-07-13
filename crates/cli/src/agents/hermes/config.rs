@@ -270,7 +270,7 @@ fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, Cl
 
 fn legacy_command_uses_relay(command: &str, relay: &Path) -> bool {
     let relay = relay.to_string_lossy();
-    let quoted = crate::agents::host::shell_quote_arg_for_platform(&relay, cfg!(windows));
+    let quoted = crate::agents::shell_quote_arg_for_platform(&relay, cfg!(windows));
     [relay.as_ref(), quoted.as_str()].into_iter().any(|prefix| {
         command.strip_prefix(prefix).is_some_and(|arguments| {
             [" hook-forward hermes", " plugin-shim hook hermes"]

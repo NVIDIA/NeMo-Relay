@@ -19,16 +19,16 @@ use crate::hooks::generated_hooks;
 #[cfg(test)]
 use crate::hooks::merge_hooks;
 
-use super::codex_app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
-use super::shared::{
+use super::app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
+use crate::agents::shared::host::{
     FileSnapshot, atomic_write, atomic_write_private, backup, backup_path, current_exe,
     ensure_table, home_dir, portable_executable_path, read_json_object, remove_backup,
     restore_file_snapshot, shell_quote, shell_quote_arg_for_platform, snapshot_optional_file,
     write_json,
 };
 
-pub(super) const CODEX_PLUGIN_ID: &str = RELAY_PLUGIN_ID;
-pub(super) const CODEX_PLUGIN_HOOK_KEY_PREFIX: &str =
+pub(crate) const CODEX_PLUGIN_ID: &str = RELAY_PLUGIN_ID;
+pub(crate) const CODEX_PLUGIN_HOOK_KEY_PREFIX: &str =
     "nemo-relay-plugin@nemo-relay-local:hooks/hooks.json:";
 
 pub(crate) struct CodexSetupSnapshot {
@@ -81,14 +81,14 @@ pub(crate) fn restore_codex_setup(snapshot: &CodexSetupSnapshot) -> Result<(), S
 }
 
 #[cfg(test)]
-pub(super) fn install_codex(
+pub(crate) fn install_codex(
     gateway_url: &str,
     plugin_hooks_path: &Path,
 ) -> Result<ExitCode, String> {
     install_codex_with_generation(gateway_url, plugin_hooks_path, None)
 }
 
-pub(super) fn install_codex_with_generation(
+pub(crate) fn install_codex_with_generation(
     gateway_url: &str,
     plugin_hooks_path: &Path,
     generation_token: Option<&str>,
@@ -106,7 +106,7 @@ pub(super) fn install_codex_with_generation(
     )
 }
 
-pub(super) fn install_codex_with_trust<F>(
+pub(crate) fn install_codex_with_trust<F>(
     gateway_url: &str,
     expected_command: &str,
     trust_hooks: F,
@@ -141,7 +141,7 @@ where
     Ok(ExitCode::SUCCESS)
 }
 
-pub(super) fn uninstall_codex(
+pub(crate) fn uninstall_codex(
     installed_gateway_url: &str,
     _plugin_hooks_path: &Path,
 ) -> Result<ExitCode, String> {
@@ -149,7 +149,7 @@ pub(super) fn uninstall_codex(
     uninstall_codex_with_client(installed_gateway_url, Some(&mut client))
 }
 
-pub(super) fn uninstall_codex_with_client(
+pub(crate) fn uninstall_codex_with_client(
     installed_gateway_url: &str,
     client: Option<&mut dyn CodexHooksClient>,
 ) -> Result<ExitCode, String> {
@@ -182,7 +182,7 @@ pub(super) fn uninstall_codex_with_client(
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct CodexHookTrustReport {
+pub(crate) struct CodexHookTrustReport {
     trusted: Vec<String>,
     untrusted: Vec<String>,
     modified: Vec<String>,
@@ -192,7 +192,7 @@ pub(super) struct CodexHookTrustReport {
 }
 
 impl CodexHookTrustReport {
-    pub(super) fn ready(&self) -> bool {
+    pub(crate) fn ready(&self) -> bool {
         self.untrusted.is_empty()
             && self.modified.is_empty()
             && self.disabled.is_empty()
@@ -201,7 +201,7 @@ impl CodexHookTrustReport {
             && !self.trusted.is_empty()
     }
 
-    pub(super) fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "trusted": self.trusted,
             "untrusted": self.untrusted,
@@ -212,7 +212,7 @@ impl CodexHookTrustReport {
         })
     }
 
-    pub(super) fn summary(&self) -> String {
+    pub(crate) fn summary(&self) -> String {
         format!(
             "untrusted={}, modified={}, disabled={}, missing required={}, duplicate required={}",
             self.untrusted.len(),
@@ -224,7 +224,7 @@ impl CodexHookTrustReport {
     }
 }
 
-pub(super) fn empty_codex_hook_trust_report() -> CodexHookTrustReport {
+pub(crate) fn empty_codex_hook_trust_report() -> CodexHookTrustReport {
     CodexHookTrustReport {
         missing_required: CodingAgent::Codex
             .hook_events()
@@ -235,13 +235,13 @@ pub(super) fn empty_codex_hook_trust_report() -> CodexHookTrustReport {
     }
 }
 
-pub(super) fn codex_hook_trust_report(
+pub(crate) fn codex_hook_trust_report(
     plugin_hooks_path: &Path,
 ) -> Result<CodexHookTrustReport, String> {
     codex_hook_trust_report_with_generation(plugin_hooks_path, None)
 }
 
-pub(super) fn codex_hook_trust_report_with_generation(
+pub(crate) fn codex_hook_trust_report_with_generation(
     plugin_hooks_path: &Path,
     generation_token: Option<&str>,
 ) -> Result<CodexHookTrustReport, String> {
@@ -253,7 +253,7 @@ pub(super) fn codex_hook_trust_report_with_generation(
     codex_hook_trust_report_with_client(&mut client, &home, &expected_command)
 }
 
-pub(super) fn codex_hook_trust_report_with_client(
+pub(crate) fn codex_hook_trust_report_with_client(
     client: &mut dyn CodexHooksClient,
     cwd: &Path,
     expected_command: &str,
@@ -262,7 +262,7 @@ pub(super) fn codex_hook_trust_report_with_client(
     Ok(codex_hook_trust_report_for(&hooks))
 }
 
-pub(super) fn auto_trust_codex_hooks(
+pub(crate) fn auto_trust_codex_hooks(
     client: &mut dyn CodexHooksClient,
     cwd: &Path,
     config_path: &Path,
@@ -410,7 +410,7 @@ fn clear_and_verify_hook_trust(
     }
 }
 
-pub(super) fn configured_hook_trust_keys(config_path: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn configured_hook_trust_keys(config_path: &Path) -> Result<BTreeSet<String>, String> {
     let raw = read_optional_text(config_path)?;
     let config = toml::from_str::<toml::Value>(&raw)
         .map_err(|error| format!("invalid TOML in {}: {error}", config_path.display()))?;
@@ -568,7 +568,7 @@ fn restore_hook_trust_after_failure(
 }
 
 #[cfg(test)]
-pub(super) fn expected_plugin_hook_command(plugin_hooks_path: &Path) -> Result<String, String> {
+pub(crate) fn expected_plugin_hook_command(plugin_hooks_path: &Path) -> Result<String, String> {
     expected_plugin_hook_command_with_token(plugin_hooks_path, None)
 }
 
@@ -626,7 +626,7 @@ fn validate_plugin_hooks(path: &Path, expected_command: &str) -> Result<(), Stri
     }
 }
 
-pub(super) fn codex_hook_trust_report_for(hooks: &[CodexHookMetadata]) -> CodexHookTrustReport {
+pub(crate) fn codex_hook_trust_report_for(hooks: &[CodexHookMetadata]) -> CodexHookTrustReport {
     let mut report = CodexHookTrustReport::default();
     for hook in hooks {
         match hook.trust_status.as_str() {
@@ -708,14 +708,14 @@ fn restore_codex_install_snapshots(snapshots: &[FileSnapshot]) -> Result<(), Str
     }
 }
 
-pub(super) fn prepare_codex_config(path: &Path) -> Result<(), String> {
+pub(crate) fn prepare_codex_config(path: &Path) -> Result<(), String> {
     let raw = read_optional_text(path)?;
     raw.parse::<DocumentMut>()
         .map(|_| ())
         .map_err(|error| format!("invalid TOML in {}: {error}", path.display()))
 }
 
-pub(super) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(), String> {
+pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(), String> {
     let challenge = BootstrapChallengeKey::load().map_err(|error| error.to_string())?;
     let client_token = challenge.client_token();
     let raw = read_optional_text(path)?;
@@ -1087,7 +1087,7 @@ fn codex_provider_has_only_generated_fields(doc: &DocumentMut) -> bool {
     })
 }
 
-pub(super) fn codex_provider_header<'a>(doc: &'a DocumentMut, name: &str) -> Option<&'a TomlValue> {
+pub(crate) fn codex_provider_header<'a>(doc: &'a DocumentMut, name: &str) -> Option<&'a TomlValue> {
     let headers = doc
         .get("model_providers")
         .and_then(Item::as_table)
@@ -1105,7 +1105,7 @@ pub(super) fn codex_provider_header<'a>(doc: &'a DocumentMut, name: &str) -> Opt
         })
 }
 
-pub(super) fn read_optional_text(path: &Path) -> Result<String, String> {
+pub(crate) fn read_optional_text(path: &Path) -> Result<String, String> {
     match fs::read_to_string(path) {
         Ok(raw) => Ok(raw),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
@@ -1113,7 +1113,7 @@ pub(super) fn read_optional_text(path: &Path) -> Result<String, String> {
     }
 }
 
-pub(super) fn uninstall_codex_config(
+pub(crate) fn uninstall_codex_config(
     path: &Path,
     gateway_url: &str,
     preserve_hooks: bool,
@@ -1205,7 +1205,7 @@ fn remove_codex_config_without_backup(
     }
 }
 
-pub(super) fn remove_legacy_codex_hooks(path: &Path) -> Result<(), String> {
+pub(crate) fn remove_legacy_codex_hooks(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
     }
@@ -1221,7 +1221,7 @@ pub(super) fn remove_legacy_codex_hooks(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(test)]
-pub(super) fn install_codex_hooks(path: &Path, gateway_url: &str) -> Result<(), String> {
+pub(crate) fn install_codex_hooks(path: &Path, gateway_url: &str) -> Result<(), String> {
     let relay = current_exe()?;
     let command = codex_hook_command(gateway_url);
     let generated = generated_hooks(CodingAgent::Codex, &command);
@@ -1245,7 +1245,7 @@ pub(super) fn install_codex_hooks(path: &Path, gateway_url: &str) -> Result<(), 
     atomic_write(path, &output)
 }
 
-pub(super) fn uninstall_codex_hooks(path: &Path, _gateway_url: &str) -> Result<bool, String> {
+pub(crate) fn uninstall_codex_hooks(path: &Path, _gateway_url: &str) -> Result<bool, String> {
     if !path.exists() {
         return Ok(false);
     }
@@ -1257,7 +1257,7 @@ pub(super) fn uninstall_codex_hooks(path: &Path, _gateway_url: &str) -> Result<b
     Ok(has_remaining_hooks)
 }
 
-pub(super) fn remove_managed_codex_hook_groups(
+pub(crate) fn remove_managed_codex_hook_groups(
     value: &mut Value,
     relay: &Path,
     keep_gateway_url: Option<&str>,
@@ -1330,7 +1330,7 @@ fn legacy_relay_hook_command(command: &str) -> bool {
 }
 
 #[cfg(test)]
-pub(super) fn hook_config_contains_generated_groups(existing: &Value, generated: &Value) -> bool {
+pub(crate) fn hook_config_contains_generated_groups(existing: &Value, generated: &Value) -> bool {
     let Some(generated_hooks) = generated.get("hooks").and_then(Value::as_object) else {
         return false;
     };
@@ -1344,7 +1344,7 @@ pub(super) fn hook_config_contains_generated_groups(existing: &Value, generated:
 }
 
 #[cfg(test)]
-pub(super) fn generated_event_contains_group(config: &Value, event: &str, group: &Value) -> bool {
+pub(crate) fn generated_event_contains_group(config: &Value, event: &str, group: &Value) -> bool {
     config
         .get("hooks")
         .and_then(Value::as_object)
@@ -1353,7 +1353,7 @@ pub(super) fn generated_event_contains_group(config: &Value, event: &str, group:
         .is_some_and(|groups| groups.iter().any(|existing| existing == group))
 }
 
-pub(super) fn hook_config_has_hook_groups(config: &Value) -> bool {
+pub(crate) fn hook_config_has_hook_groups(config: &Value) -> bool {
     config
         .get("hooks")
         .and_then(Value::as_object)
@@ -1364,7 +1364,7 @@ pub(super) fn hook_config_has_hook_groups(config: &Value) -> bool {
         })
 }
 
-pub(super) fn codex_config_doc_has_managed_install(doc: &DocumentMut, gateway_url: &str) -> bool {
+pub(crate) fn codex_config_doc_has_managed_install(doc: &DocumentMut, gateway_url: &str) -> bool {
     doc.get("model_provider")
         .and_then(Item::as_value)
         .and_then(|value| value.as_str())
@@ -1374,7 +1374,7 @@ pub(super) fn codex_config_doc_has_managed_install(doc: &DocumentMut, gateway_ur
 }
 
 #[cfg(test)]
-pub(super) fn codex_provider_gateway_url(path: &Path) -> Option<String> {
+pub(crate) fn codex_provider_gateway_url(path: &Path) -> Option<String> {
     let raw = fs::read_to_string(path).ok()?;
     let doc = raw.parse::<DocumentMut>().ok()?;
     doc.get("model_providers")
@@ -1387,7 +1387,7 @@ pub(super) fn codex_provider_gateway_url(path: &Path) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(super) fn restore_top_level_item(doc: &mut DocumentMut, backup: &DocumentMut, key: &str) {
+pub(crate) fn restore_top_level_item(doc: &mut DocumentMut, backup: &DocumentMut, key: &str) {
     if let Some(item) = backup.as_table().get(key).cloned() {
         doc.as_table_mut().insert(key, item);
     } else {
@@ -1395,7 +1395,7 @@ pub(super) fn restore_top_level_item(doc: &mut DocumentMut, backup: &DocumentMut
     }
 }
 
-pub(super) fn restore_top_level_item_if_str(
+pub(crate) fn restore_top_level_item_if_str(
     doc: &mut DocumentMut,
     backup: &DocumentMut,
     key: &str,
@@ -1413,7 +1413,7 @@ fn top_level_item_is_str(doc: &DocumentMut, key: &str, expected: &str) -> bool {
         == Some(expected)
 }
 
-pub(super) fn restore_table_item(
+pub(crate) fn restore_table_item(
     doc: &mut DocumentMut,
     backup: &DocumentMut,
     table: &str,
@@ -1431,7 +1431,7 @@ pub(super) fn restore_table_item(
     }
 }
 
-pub(super) fn restore_table_item_if_bool(
+pub(crate) fn restore_table_item_if_bool(
     doc: &mut DocumentMut,
     backup: &DocumentMut,
     table: &str,
@@ -1449,7 +1449,7 @@ pub(super) fn restore_table_item_if_bool(
     }
 }
 
-pub(super) fn codex_provider_item_is_managed(doc: &DocumentMut, gateway_url: &str) -> bool {
+pub(crate) fn codex_provider_item_is_managed(doc: &DocumentMut, gateway_url: &str) -> bool {
     doc.get("model_providers")
         .and_then(Item::as_table)
         .and_then(|providers| providers.get("nemo-relay-openai"))
@@ -1457,7 +1457,7 @@ pub(super) fn codex_provider_item_is_managed(doc: &DocumentMut, gateway_url: &st
         .is_some_and(|provider| codex_provider_table_is_managed_for_gateway(provider, gateway_url))
 }
 
-pub(super) fn codex_provider_table_is_managed_for_gateway(
+pub(crate) fn codex_provider_table_is_managed_for_gateway(
     provider: &Table,
     gateway_url: &str,
 ) -> bool {
@@ -1488,7 +1488,7 @@ pub(super) fn codex_provider_table_is_managed_for_gateway(
             == Some(false)
 }
 
-pub(super) fn feature_hooks_enabled(doc: &DocumentMut) -> Option<bool> {
+pub(crate) fn feature_hooks_enabled(doc: &DocumentMut) -> Option<bool> {
     doc.get("features")
         .and_then(Item::as_table)
         .and_then(|table| table.get("hooks"))
@@ -1496,7 +1496,7 @@ pub(super) fn feature_hooks_enabled(doc: &DocumentMut) -> Option<bool> {
         .and_then(|value| value.as_bool())
 }
 
-pub(super) fn remove_empty_table(doc: &mut DocumentMut, key: &str) {
+pub(crate) fn remove_empty_table(doc: &mut DocumentMut, key: &str) {
     let is_empty = doc
         .get(key)
         .and_then(Item::as_table)
@@ -1506,7 +1506,7 @@ pub(super) fn remove_empty_table(doc: &mut DocumentMut, key: &str) {
     }
 }
 
-pub(super) fn remove_table_item_if_bool(
+pub(crate) fn remove_table_item_if_bool(
     doc: &mut DocumentMut,
     table: &str,
     key: &str,
@@ -1524,7 +1524,7 @@ pub(super) fn remove_table_item_if_bool(
     }
 }
 
-pub(super) fn codex_provider_installed(gateway_url: &str) -> bool {
+pub(crate) fn codex_provider_installed(gateway_url: &str) -> bool {
     let Ok(path) = codex_home_dir().map(|home| home.join("config.toml")) else {
         return false;
     };
@@ -1541,7 +1541,7 @@ pub(super) fn codex_provider_installed(gateway_url: &str) -> bool {
         && codex_provider_client_token(&doc).is_some_and(|token| key.verify_client_token(token))
 }
 
-pub(super) fn codex_provider_client_token(doc: &DocumentMut) -> Option<&str> {
+pub(crate) fn codex_provider_client_token(doc: &DocumentMut) -> Option<&str> {
     doc.get("model_providers")
         .and_then(Item::as_table)
         .and_then(|providers| providers.get("nemo-relay-openai"))
@@ -1552,11 +1552,11 @@ pub(super) fn codex_provider_client_token(doc: &DocumentMut) -> Option<&str> {
         .and_then(TomlValue::as_str)
 }
 
-pub(super) fn codex_hooks_installed(path: &Path) -> Result<bool, String> {
+pub(crate) fn codex_hooks_installed(path: &Path) -> Result<bool, String> {
     codex_hooks_installed_with_generation(path, None)
 }
 
-pub(super) fn codex_hooks_installed_with_generation(
+pub(crate) fn codex_hooks_installed_with_generation(
     path: &Path,
     generation_token: Option<&str>,
 ) -> Result<bool, String> {
@@ -1568,21 +1568,21 @@ pub(super) fn codex_hooks_installed_with_generation(
     Ok(value == generated)
 }
 
-pub(super) fn codex_home_dir() -> Result<PathBuf, String> {
+pub(crate) fn codex_home_dir() -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("CODEX_HOME").filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(path));
     }
     Ok(home_dir()?.join(".codex"))
 }
 
-pub(super) fn codex_hook_command(gateway_url: &str) -> String {
+pub(crate) fn codex_hook_command(gateway_url: &str) -> String {
     format!(
         "nemo-relay hook-forward codex --gateway-url {}",
         shell_quote_arg_for_platform(gateway_url, cfg!(windows))
     )
 }
 
-pub(super) fn codex_plugin_hook_command(
+pub(crate) fn codex_plugin_hook_command(
     relay: &Path,
     generation: &Path,
     generation_token: &str,
@@ -1596,7 +1596,7 @@ pub(super) fn codex_plugin_hook_command(
 }
 
 #[cfg(test)]
-pub(super) fn codex_plugin_hook_command_for_platform(
+pub(crate) fn codex_plugin_hook_command_for_platform(
     relay: &Path,
     generation: &Path,
     generation_token: &str,
@@ -1611,10 +1611,10 @@ pub(super) fn codex_plugin_hook_command_for_platform(
     )
 }
 
-pub(super) fn legacy_codex_hook_command(relay: &Path) -> String {
+pub(crate) fn legacy_codex_hook_command(relay: &Path) -> String {
     format!("{} plugin-shim hook codex", shell_quote(relay))
 }
 
-pub(super) fn legacy_named_codex_hook_command() -> &'static str {
+pub(crate) fn legacy_named_codex_hook_command() -> &'static str {
     "nemo-relay plugin-shim hook codex"
 }

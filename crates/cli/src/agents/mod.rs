@@ -6,7 +6,6 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod hermes;
-pub(crate) mod host;
 pub(crate) mod install;
 pub(crate) mod shared;
 
@@ -146,6 +145,217 @@ impl CodingAgent {
         }
     }
 }
+
+pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
+pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
+pub(crate) use shared::host::portable_executable_path;
+pub(crate) use shared::host::shell_quote_arg_for_platform;
+#[cfg(test)]
+pub(crate) use shared::host::strip_windows_verbatim_prefix;
+
+use std::path::Path;
+
+use serde_json::{Value, json};
+
+use claude::host::claude_settings_base_url;
+use codex::host::{
+    codex_hook_trust_report, codex_hook_trust_report_with_generation, codex_hooks_installed,
+    codex_hooks_installed_with_generation, codex_provider_installed, empty_codex_hook_trust_report,
+    install_codex_with_generation, uninstall_codex,
+};
+use shared::host::{current_exe, healthz, print_check, print_info};
+
+#[cfg(test)]
+pub(super) use crate::bootstrap::DEFAULT_URL;
+
+pub(crate) fn install_codex_plugin_with_generation(
+    gateway_url: &str,
+    plugin_root: &Path,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
+    install_codex_with_generation(
+        gateway_url,
+        &plugin_root.join("hooks").join("hooks.json"),
+        generation_token,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn stop_plugin_gateway() -> Result<(), String> {
+    crate::bootstrap::state::stop_owned_and_reset(crate::bootstrap::DEFAULT_URL)
+}
+
+pub(crate) fn uninstall_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Result<(), String> {
+    uninstall_codex(gateway_url, &plugin_root.join("hooks").join("hooks.json")).map(|_| ())
+}
+
+pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
+    claude::host::enable_claude_provider(gateway_url)
+}
+
+pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
+    claude::host::restore_claude_provider(gateway_url)
+}
+
+pub(crate) fn doctor_plugin(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+) -> Result<(), String> {
+    doctor_plugin_with_generation(agent, gateway_url, plugin_root, None)
+}
+
+pub(crate) fn doctor_plugin_with_generation(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
+    if doctor_ok(
+        agent,
+        gateway_url,
+        Some(&plugin_root.join("hooks").join("hooks.json")),
+        generation_token,
+    )? {
+        Ok(())
+    } else {
+        Err(format!("{} plugin doctor checks failed", agent.as_arg()))
+    }
+}
+
+pub(crate) fn doctor_plugin_json(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+) -> Result<Value, String> {
+    let plugin_binary = current_exe().ok().is_some_and(|path| path.exists());
+    let sidecar_running = healthz(gateway_url);
+    let (checks, ok, codex_trust) = match agent {
+        CodingAgent::ClaudeCode => {
+            let provider = claude_settings_base_url().as_deref() == Some(gateway_url);
+            (
+                json!({
+                    "plugin_binary": plugin_binary,
+                    "sidecar_running": sidecar_running,
+                    "claude_provider_routing": provider
+                }),
+                plugin_binary && provider,
+                None,
+            )
+        }
+        CodingAgent::Codex => {
+            let plugin_hooks_path = plugin_root.join("hooks").join("hooks.json");
+            let provider = codex_provider_installed(gateway_url);
+            let hooks = codex_hooks_installed(&plugin_hooks_path)?;
+            let trust = if hooks {
+                codex_hook_trust_report(&plugin_hooks_path)?
+            } else {
+                empty_codex_hook_trust_report()
+            };
+            let hooks_trusted = trust.ready();
+            (
+                json!({
+                    "plugin_binary": plugin_binary,
+                    "sidecar_running": sidecar_running,
+                    "codex_provider_alias": provider,
+                    "codex_hooks": hooks,
+                    "codex_hooks_trusted": hooks_trusted
+                }),
+                plugin_binary && provider && hooks && hooks_trusted,
+                Some(trust),
+            )
+        }
+        other => {
+            return Err(format!(
+                "plugin doctor supports claude and codex, got {}",
+                other.as_arg()
+            ));
+        }
+    };
+    let mut report = json!({
+        "ok": ok,
+        "sidecar_health": if sidecar_running {
+            "running"
+        } else {
+            "not_running_mcp_start"
+        },
+        "checks": checks
+    });
+    if let Some(trust) = codex_trust {
+        report["codex_hook_trust"] = trust.to_json();
+    }
+    Ok(report)
+}
+
+fn doctor_ok(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_hooks_path: Option<&Path>,
+    generation_token: Option<&str>,
+) -> Result<bool, String> {
+    let mut ok = true;
+    ok &= print_check(
+        "plugin binary",
+        current_exe().ok().is_some_and(|path| path.exists()),
+    );
+    if healthz(gateway_url) {
+        print_info("sidecar health", "running");
+    } else {
+        print_info(
+            "sidecar health",
+            "not running; the plugin MCP starts it when the host launches",
+        );
+    }
+    match agent {
+        CodingAgent::ClaudeCode => {
+            ok &= print_check(
+                "claude provider routing",
+                claude_settings_base_url().as_deref() == Some(gateway_url),
+            );
+        }
+        CodingAgent::Codex => {
+            let plugin_hooks_path = plugin_hooks_path
+                .ok_or_else(|| "Codex plugin hooks path is required for doctor".to_string())?;
+            let provider = codex_provider_installed(gateway_url);
+            let hooks = codex_hooks_installed_with_generation(plugin_hooks_path, generation_token)?;
+            ok &= print_check("codex provider alias", provider);
+            ok &= print_check("codex hooks", hooks);
+            let trust = if hooks {
+                codex_hook_trust_report_with_generation(plugin_hooks_path, generation_token)?
+            } else {
+                empty_codex_hook_trust_report()
+            };
+            ok &= print_check("codex hooks trusted and enabled", trust.ready());
+            if !trust.ready() {
+                print_info("codex hook trust", &trust.summary());
+            }
+        }
+        other => {
+            return Err(format!(
+                "plugin doctor supports claude and codex, got {}",
+                other.as_arg()
+            ));
+        }
+    }
+    Ok(ok)
+}
+
+#[cfg(test)]
+use crate::bootstrap::*;
+#[cfg(test)]
+use crate::hooks::generated_hooks;
+#[cfg(test)]
+use claude::host::*;
+#[cfg(test)]
+use codex::app_server::*;
+#[cfg(test)]
+use codex::host::*;
+#[cfg(test)]
+use shared::host::*;
+
+#[cfg(test)]
+#[path = "../../tests/coverage/agents/plugin_host_tests.rs"]
+mod host_tests;
 
 #[cfg(test)]
 #[path = "../../tests/coverage/agents/coding_agent_tests.rs"]

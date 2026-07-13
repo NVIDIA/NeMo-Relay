@@ -10,13 +10,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table};
 
-pub(super) use crate::bootstrap::current_exe;
-pub(super) use crate::filesystem::{
+pub(crate) use crate::bootstrap::current_exe;
+pub(crate) use crate::filesystem::{
     atomic_write, atomic_write_private, atomic_write_with_permissions,
 };
 #[cfg(windows)]
 use crate::filesystem::{atomic_write_with_windows_dacl, read_windows_dacl};
-pub(super) use crate::gateway::client::healthz;
+pub(crate) use crate::gateway::client::healthz;
 
 pub(crate) fn shell_quote(path: &Path) -> String {
     shell_quote_for_platform(path, cfg!(windows))
@@ -73,14 +73,14 @@ fn cmd_quote_arg(raw: &str) -> String {
     }
 }
 
-pub(super) fn ensure_table<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut Table {
+pub(crate) fn ensure_table<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut Table {
     if !doc.as_table().contains_key(name) || !doc[name].is_table() {
         doc[name] = Item::Table(Table::new());
     }
     doc[name].as_table_mut().expect("table was just inserted")
 }
 
-pub(super) fn read_json_object(path: &Path) -> Result<Value, String> {
+pub(crate) fn read_json_object(path: &Path) -> Result<Value, String> {
     if !path.exists() {
         return Ok(json!({}));
     }
@@ -95,13 +95,13 @@ pub(super) fn read_json_object(path: &Path) -> Result<Value, String> {
     }
 }
 
-pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {
+pub(crate) fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     atomic_write(path, &bytes)
 }
 
-pub(super) fn backup(path: &Path) -> Result<(), String> {
+pub(crate) fn backup(path: &Path) -> Result<(), String> {
     let backup = backup_path(path);
     if backup.exists() {
         return Ok(());
@@ -118,7 +118,7 @@ pub(super) fn backup(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn remove_backup(path: &Path) -> Result<(), String> {
+pub(crate) fn remove_backup(path: &Path) -> Result<(), String> {
     let backup = backup_path(path);
     match fs::remove_file(&backup) {
         Ok(()) => Ok(()),
@@ -127,7 +127,7 @@ pub(super) fn remove_backup(path: &Path) -> Result<(), String> {
     }
 }
 
-pub(super) fn backup_path(path: &Path) -> PathBuf {
+pub(crate) fn backup_path(path: &Path) -> PathBuf {
     let mut extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -141,23 +141,23 @@ pub(super) fn backup_path(path: &Path) -> PathBuf {
     path.with_extension(extension)
 }
 
-pub(super) fn home_dir() -> Result<PathBuf, String> {
+pub(crate) fn home_dir() -> Result<PathBuf, String> {
     env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .ok_or_else(|| "cannot determine home directory (set HOME or USERPROFILE)".into())
 }
 
-pub(super) fn print_check(label: &str, ok: bool) -> bool {
+pub(crate) fn print_check(label: &str, ok: bool) -> bool {
     println!("{} {label}", if ok { "ok" } else { "missing" });
     ok
 }
 
-pub(super) fn print_info(label: &str, message: &str) {
+pub(crate) fn print_info(label: &str, message: &str) {
     println!("info {label}: {message}");
 }
 
-pub(super) struct FileSnapshot {
+pub(crate) struct FileSnapshot {
     path: PathBuf,
     bytes: Option<Vec<u8>>,
     permissions: Option<fs::Permissions>,
@@ -165,7 +165,7 @@ pub(super) struct FileSnapshot {
     dacl: Option<Vec<u8>>,
 }
 
-pub(super) fn snapshot_optional_file(path: &Path) -> Result<FileSnapshot, String> {
+pub(crate) fn snapshot_optional_file(path: &Path) -> Result<FileSnapshot, String> {
     match fs::read(path) {
         Ok(bytes) => Ok(FileSnapshot {
             path: path.to_path_buf(),
@@ -190,7 +190,7 @@ pub(super) fn snapshot_optional_file(path: &Path) -> Result<FileSnapshot, String
     }
 }
 
-pub(super) fn restore_file_snapshot(snapshot: &FileSnapshot) -> Result<(), String> {
+pub(crate) fn restore_file_snapshot(snapshot: &FileSnapshot) -> Result<(), String> {
     if let Some(bytes) = snapshot.bytes.as_deref() {
         #[cfg(windows)]
         if let Some(dacl) = snapshot.dacl.as_deref() {

@@ -124,7 +124,7 @@ pub(super) fn hook_command_for_platform(
 pub(super) fn posix_hook_command(relay: &Path, arguments: &[String]) -> String {
     std::iter::once(relay.display().to_string())
         .chain(arguments.iter().cloned())
-        .map(|argument| crate::agents::host::shell_quote_arg_for_platform(&argument, false))
+        .map(|argument| crate::agents::shell_quote_arg_for_platform(&argument, false))
         .collect::<Vec<_>>()
         .join(" ")
 }

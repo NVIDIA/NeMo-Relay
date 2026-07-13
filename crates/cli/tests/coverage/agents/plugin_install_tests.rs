@@ -20,7 +20,7 @@ use super::host::{
     validate_relay_mcp,
 };
 use super::*;
-use crate::agents::host::strip_windows_verbatim_prefix;
+use crate::agents::strip_windows_verbatim_prefix;
 use crate::configuration::CodingAgent;
 
 const OPERATION_LOCK_HELPER_DIR_ENV: &str = "NEMO_RELAY_TEST_OPERATION_LOCK_DIR";

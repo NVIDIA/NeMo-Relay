@@ -1189,7 +1189,7 @@ fn push_status_border(
 fn transparent_hook_executable() -> PathBuf {
     std::env::current_exe()
         .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::agents::host::portable_executable_path)
+        .map(crate::agents::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"))
 }
 
@@ -1296,7 +1296,7 @@ fn populate_hermes_overlay(
     };
     let relay = std::env::current_exe()
         .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::agents::host::portable_executable_path)
+        .map(crate::agents::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"));
     let contents = crate::agents::hermes::transparent_config(&existing, &relay, gateway_url)?;
     std::fs::write(overlay.join("config.yaml"), contents)?;

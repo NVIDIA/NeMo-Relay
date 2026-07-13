@@ -17,28 +17,28 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct CodexHookMetadata {
-    pub(super) key: String,
-    pub(super) event_name: String,
-    pub(super) handler_type: String,
-    pub(super) command: Option<String>,
-    pub(super) source_path: String,
-    pub(super) source: String,
+pub(crate) struct CodexHookMetadata {
+    pub(crate) key: String,
+    pub(crate) event_name: String,
+    pub(crate) handler_type: String,
+    pub(crate) command: Option<String>,
+    pub(crate) source_path: String,
+    pub(crate) source: String,
     #[serde(default)]
-    pub(super) plugin_id: Option<String>,
-    pub(super) enabled: bool,
-    pub(super) current_hash: String,
-    pub(super) trust_status: String,
+    pub(crate) plugin_id: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) current_hash: String,
+    pub(crate) trust_status: String,
 }
 
-pub(super) trait CodexHooksClient {
+pub(crate) trait CodexHooksClient {
     fn list_hooks(&mut self, cwd: &Path) -> Result<Vec<CodexHookMetadata>, String>;
     fn trust_hooks(&mut self, hooks: &[CodexHookMetadata]) -> Result<(), String>;
     fn clear_hook_trust(&mut self, keys: &[String]) -> Result<(), String>;
     fn restore_hook_trust(&mut self, state: &[(String, Option<Value>)]) -> Result<(), String>;
 }
 
-pub(super) struct CodexAppServerClient {
+pub(crate) struct CodexAppServerClient {
     child: Child,
     stdin: ChildStdin,
     messages: Receiver<Result<Value, String>>,
@@ -46,7 +46,7 @@ pub(super) struct CodexAppServerClient {
 }
 
 impl CodexAppServerClient {
-    pub(super) fn start() -> Result<Self, String> {
+    pub(crate) fn start() -> Result<Self, String> {
         let mut command = codex_app_server_command();
         let mut child = command
             .stdin(Stdio::piped())
@@ -220,7 +220,7 @@ impl Drop for CodexAppServerClient {
     }
 }
 
-pub(super) fn hook_state_key_path(key: &str) -> String {
+pub(crate) fn hook_state_key_path(key: &str) -> String {
     let quoted = serde_json::to_string(key).expect("serializing a string cannot fail");
     format!("hooks.state.{quoted}")
 }

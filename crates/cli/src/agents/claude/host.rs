@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::shared::{
+use crate::agents::shared::host::{
     FileSnapshot, backup, backup_path, home_dir, read_json_object, remove_backup,
     restore_file_snapshot, snapshot_optional_file, write_json,
 };
@@ -39,7 +39,7 @@ pub(crate) fn restore_claude_setup(snapshot: &ClaudeSetupSnapshot) -> Result<(),
     }
 }
 
-pub(super) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
+pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
     let path = claude_settings_path()?;
     let mut settings = read_json_object(&path)?;
     if settings.get("env").is_some_and(|env| !env.is_object()) {
@@ -66,7 +66,7 @@ pub(super) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
+pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
     let path = claude_settings_path()?;
     let backup = backup_path(&path);
     if !backup.exists() {
@@ -96,7 +96,7 @@ pub(super) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn json_env_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn json_env_string<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value
         .get("env")
         .and_then(Value::as_object)
@@ -104,7 +104,7 @@ pub(super) fn json_env_string<'a>(value: &'a Value, key: &str) -> Option<&'a str
         .and_then(Value::as_str)
 }
 
-pub(super) fn remove_json_env_string(value: &mut Value, key: &str) -> Result<bool, String> {
+pub(crate) fn remove_json_env_string(value: &mut Value, key: &str) -> Result<bool, String> {
     let Some(object) = value.as_object_mut() else {
         return Err("Claude settings must be a JSON object".into());
     };
@@ -121,7 +121,7 @@ pub(super) fn remove_json_env_string(value: &mut Value, key: &str) -> Result<boo
     Ok(removed)
 }
 
-pub(super) fn restore_json_env_value(
+pub(crate) fn restore_json_env_value(
     value: &mut Value,
     backup: &Value,
     key: &str,
@@ -146,7 +146,7 @@ pub(super) fn restore_json_env_value(
     Ok(())
 }
 
-pub(super) fn backup_claude_settings(path: &Path, replace_existing: bool) -> Result<(), String> {
+pub(crate) fn backup_claude_settings(path: &Path, replace_existing: bool) -> Result<(), String> {
     let backup_file = backup_path(path);
     if backup_file.exists() && !replace_existing {
         return Ok(());
@@ -171,11 +171,11 @@ pub(super) fn backup_claude_settings(path: &Path, replace_existing: bool) -> Res
     }
 }
 
-pub(super) fn claude_settings_path() -> Result<PathBuf, String> {
+pub(crate) fn claude_settings_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".claude").join("settings.json"))
 }
 
-pub(super) fn claude_settings_base_url() -> Option<String> {
+pub(crate) fn claude_settings_base_url() -> Option<String> {
     let path = claude_settings_path().ok()?;
     let value = read_json_object(&path).ok()?;
     value

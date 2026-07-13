@@ -3,7 +3,7 @@
 
 //! Host setup, restore, and doctor delegation.
 
-use crate::agents::host;
+use crate::agents as host;
 use crate::configuration::{CodingAgent, IntegrationHost};
 use serde_json::Value;
 use std::path::Path;

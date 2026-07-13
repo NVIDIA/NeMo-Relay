@@ -5,6 +5,9 @@ use semver::Version;
 
 use super::AgentDescriptor;
 
+pub(super) mod app_server;
+pub(super) mod host;
+
 pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     argument: "codex",
     install_argument: "codex",

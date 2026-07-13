@@ -499,7 +499,7 @@ pub(super) fn relay_binary() -> Result<PathBuf, String> {
     current_exe()
 }
 
-pub(super) fn current_exe() -> Result<PathBuf, String> {
+pub(crate) fn current_exe() -> Result<PathBuf, String> {
     env::current_exe().map_err(|error| format!("failed to resolve current executable: {error}"))
 }
 

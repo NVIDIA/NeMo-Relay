@@ -41,7 +41,7 @@ pub(crate) fn user_config_path(default_home: &Path) -> PathBuf {
 
 pub(crate) fn install_persistent(config: &Path, relay: &Path) -> Result<Vec<PathBuf>, CliError> {
     let relay = relay.canonicalize().unwrap_or_else(|_| relay.to_path_buf());
-    let relay = crate::agents::host::portable_executable_path(relay);
+    let relay = crate::agents::portable_executable_path(relay);
     if !relay_is_executable(&relay) {
         return Err(CliError::Install(format!(
             "nemo-relay executable is missing or not executable at {}",
@@ -104,7 +104,7 @@ fn retire_generation_before_gateway_stop(
             .invalidate_for_replacement()
             .map_err(CliError::Install)?;
     }
-    if let Err(error) = crate::agents::host::stop_plugin_gateway() {
+    if let Err(error) = crate::agents::stop_plugin_gateway() {
         if let Some(retirement) = retirement.as_mut()
             && let Err(restore_error) = retirement.restore_after_rollback()
         {
