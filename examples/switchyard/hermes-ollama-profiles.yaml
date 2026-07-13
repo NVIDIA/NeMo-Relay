@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+targets:
+  ollama-weak:
+    model: llama3.2:latest
+    format: openai
+    base_url: http://127.0.0.1:11434/v1
+  ollama-strong:
+    model: qwen3.6:35b
+    format: openai
+    base_url: http://127.0.0.1:11434/v1
+
+profiles:
+  hermes-ollama-stage-router:
+    type: stage_router
+    capable: ollama-strong
+    efficient: ollama-weak
+    fallback_target_on_evict: ollama-strong
+    picker: efficient_first
+    # Force the classifier path for ordinary prompts so this smoke demonstrates
+    # request-complexity routing rather than relying on incidental tool signals.
+    confidence_threshold: 1.0
+    # Each fixed trajectory transition is driven by the latest canonical tool
+    # result so older critical signals do not leak into the simple follow-up.
+    signal_recent_window: 1
+    classifier:
+      # Keep classification small and deterministic; qwen3.6:35b remains the
+      # capable backend selected for the complex trajectory turn.
+      model: llama3.2:latest
+      api_key: ${OLLAMA_CLASSIFIER_API_KEY}
+      base_url: http://127.0.0.1:11434/v1
+      timeout_secs: 120.0
+      recent_turn_window: 1
+      max_tokens: 128
+      system_prompt: >-
+        Select exactly one model tier for the latest user request. Return only
+        JSON in the form {"tier":"efficient"} or {"tier":"capable"}. Choose efficient
+        for arithmetic, extraction, formatting, concise factual responses, or
+        other direct low-risk work. Choose capable for architecture, concurrency,
+        debugging, multi-step reasoning, subtle correctness constraints, or
+        requests requiring a defensible technical analysis. In the supplied
+        State line, severity at least 1.0 always means capable; tests_passed=true
+        with severity 0.0 means efficient. Classify the latest state even when earlier
+        conversation turns were more complex.

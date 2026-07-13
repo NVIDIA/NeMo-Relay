@@ -354,9 +354,12 @@ impl PreparedRun {
             CodingAgent::Codex => run.prepare_codex(gateway_url),
             CodingAgent::Hermes => {
                 if dry_run {
-                    run.prepare_hermes_dry(resolved.agents.hermes.hooks_path.as_deref())?;
+                    run.prepare_hermes_dry(
+                        gateway_url,
+                        resolved.agents.hermes.hooks_path.as_deref(),
+                    )?;
                 } else {
-                    run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref())?;
+                    run.prepare_hermes(gateway_url, resolved.agents.hermes.hooks_path.as_deref())?;
                 }
             }
         }
@@ -468,10 +471,18 @@ impl PreparedRun {
     // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. For
     // transparent runs, temporarily merge gateway hook-forward entries into the configured Hermes
     // hook file, then restore it after the child exits.
-    fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
+    fn prepare_hermes(
+        &mut self,
+        gateway_url: &str,
+        hooks_path: Option<&std::path::Path>,
+    ) -> Result<(), CliError> {
         let path = hermes_hooks_path(hooks_path)?;
         let (had_original, backup_path) = backup_existing_hermes_hooks(&path)?;
-        write_merged_hermes_hooks(&path)?;
+        write_merged_hermes_config(&path, gateway_url)?;
+        self.env.push((
+            "OPENAI_BASE_URL".into(),
+            hermes_openai_base_url(gateway_url),
+        ));
         self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
         self.notes.push(format!(
             "temporarily merged NeMo Relay hooks into {}",
@@ -487,8 +498,16 @@ impl PreparedRun {
 
     // Records the Hermes hook file that would be patched during a real run without touching the
     // filesystem, preserving dry-run as an inspection-only operation.
-    fn prepare_hermes_dry(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
+    fn prepare_hermes_dry(
+        &mut self,
+        gateway_url: &str,
+        hooks_path: Option<&std::path::Path>,
+    ) -> Result<(), CliError> {
         let path = hermes_hooks_path(hooks_path)?;
+        self.env.push((
+            "OPENAI_BASE_URL".into(),
+            hermes_openai_base_url(gateway_url),
+        ));
         self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
         self.notes.push(format!(
             "would temporarily merge NeMo Relay hooks into {}",
@@ -892,9 +911,14 @@ fn backup_existing_hermes_hooks(path: &Path) -> Result<(bool, Option<PathBuf>), 
     Ok((true, Some(backup)))
 }
 
+fn hermes_openai_base_url(gateway_url: &str) -> String {
+    format!("{}/v1", gateway_url.trim_end_matches('/'))
+}
+
 // Creates the Hermes config parent directory when needed, merges generated gateway hooks with any
-// existing YAML config, and writes the patched YAML used for this transparent run.
-fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
+// existing YAML config, and temporarily selects Relay as Hermes's custom OpenAI-compatible
+// provider. The caller restores the complete original config after the transparent run.
+fn write_merged_hermes_config(path: &Path, gateway_url: &str) -> Result<(), CliError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -910,7 +934,41 @@ fn write_merged_hermes_hooks(path: &Path) -> Result<(), CliError> {
             &hook_forward_command(&transparent_hook_executable(), CodingAgent::Hermes),
         ),
     )?;
-    std::fs::write(path, contents)?;
+    let mut document = serde_yaml::from_str::<serde_yaml::Value>(&contents).map_err(|error| {
+        CliError::Launch(format!("could not parse merged Hermes config: {error}"))
+    })?;
+    let root = document.as_mapping_mut().ok_or_else(|| {
+        CliError::Launch("merged Hermes config must be a YAML mapping".to_string())
+    })?;
+    let model_key = serde_yaml::Value::String("model".into());
+    let mut model = match root.remove(&model_key) {
+        Some(serde_yaml::Value::Mapping(model)) => model,
+        Some(serde_yaml::Value::String(default)) => serde_yaml::Mapping::from_iter([(
+            serde_yaml::Value::String("default".into()),
+            serde_yaml::Value::String(default),
+        )]),
+        Some(serde_yaml::Value::Null) | None => serde_yaml::Mapping::new(),
+        Some(_) => {
+            return Err(CliError::Launch(
+                "Hermes model config must be a string or mapping".into(),
+            ));
+        }
+    };
+    model.insert(
+        serde_yaml::Value::String("provider".into()),
+        serde_yaml::Value::String("custom".into()),
+    );
+    model.insert(
+        serde_yaml::Value::String("base_url".into()),
+        serde_yaml::Value::String(hermes_openai_base_url(gateway_url)),
+    );
+    root.insert(model_key, serde_yaml::Value::Mapping(model));
+    std::fs::write(
+        path,
+        serde_yaml::to_string(&document).map_err(|error| {
+            CliError::Launch(format!("could not render Hermes config: {error}"))
+        })?,
+    )?;
     Ok(())
 }
 

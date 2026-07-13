@@ -619,6 +619,10 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             url: "ws://127.0.0.1:47632/events".into(),
             transport: "websocket".into(),
             headers: headers.clone(),
+            header_env: std::collections::HashMap::from([(
+                "x-api-key".into(),
+                "SWITCHYARD_API_KEY".into(),
+            )]),
             timeout_millis: 123,
             field_name_policy: "replace_dots".into(),
         },
@@ -631,6 +635,10 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
         crate::observability::atof::AtofEndpointTransport::Websocket
     );
     assert_eq!(config.headers, headers);
+    assert_eq!(
+        config.header_env.get("x-api-key").map(String::as_str),
+        Some("SWITCHYARD_API_KEY")
+    );
     assert_eq!(config.timeout_millis, 123);
     assert_eq!(
         config.field_name_policy,
@@ -643,6 +651,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             url: "http://127.0.0.1:47632/events".into(),
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
+            header_env: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "preserve".into(),
         },
@@ -656,6 +665,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             url: "http://127.0.0.1:47632/events".into(),
             transport: "http_post".into(),
             headers: std::collections::HashMap::new(),
+            header_env: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "bogus".into(),
         },

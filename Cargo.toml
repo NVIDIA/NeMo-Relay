@@ -10,6 +10,7 @@ members = [
     "crates/worker",
     "crates/adaptive",
     "crates/pii-redaction",
+    "crates/switchyard",
     "crates/cli",
     # Language Bindings
     "crates/python",
@@ -33,6 +34,8 @@ nemo-relay-worker-proto = { version = "0.6.0", path = "crates/worker-proto" }
 nemo-relay-worker = { version = "0.6.0", path = "crates/worker" }
 nemo-relay-adaptive = { version = "0.6.0", path = "crates/adaptive" }
 nemo-relay-pii-redaction = { version = "0.6.0", path = "crates/pii-redaction" }
+nemo-relay-switchyard = { version = "0.6.0", path = "crates/switchyard" }
+switchyard-translation = { git = "https://github.com/NVIDIA-NeMo/Switchyard.git", rev = "8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8" }
 nemo-relay-ffi = { version = "0.6.0", path = "crates/ffi" }
 nemo-relay-cli = { version = "0.6.0", path = "crates/cli" }
 opentelemetry = { version = "0.31", default-features = false }

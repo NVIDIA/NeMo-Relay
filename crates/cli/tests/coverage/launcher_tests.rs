@@ -607,6 +607,11 @@ fn prepares_hermes_hook_environment() {
             .env
             .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
     );
+    assert!(
+        prepared
+            .env
+            .contains(&("OPENAI_BASE_URL".into(), "http://127.0.0.1:1234/v1".into()))
+    );
     assert_eq!(
         prepared
             .hermes_restore
@@ -616,11 +621,21 @@ fn prepares_hermes_hook_environment() {
     );
     let hooks = std::fs::read_to_string(&hooks_path).unwrap();
     assert!(hooks.contains("hook-forward hermes"));
+    assert!(hooks.contains("provider: custom"));
+    assert!(hooks.contains("base_url: http://127.0.0.1:1234/v1"));
     assert!(prepared.notes[0].contains("temporarily merged"));
 
     prepared.restore().unwrap();
     assert!(!hooks_path.exists());
     std::env::set_current_dir(previous).unwrap();
+}
+
+#[test]
+fn hermes_openai_base_url_normalizes_trailing_slashes() {
+    assert_eq!(
+        hermes_openai_base_url("http://127.0.0.1:1234///"),
+        "http://127.0.0.1:1234/v1"
+    );
 }
 
 #[test]
@@ -654,6 +669,11 @@ fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
         prepared
             .env
             .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
+    );
+    assert!(
+        prepared
+            .env
+            .contains(&("OPENAI_BASE_URL".into(), "http://127.0.0.1:1234/v1".into()))
     );
     assert!(!hook_path.exists());
 }
