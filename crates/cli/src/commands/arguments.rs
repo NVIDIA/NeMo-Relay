@@ -621,10 +621,12 @@ impl UninstallCommand {
 
 impl From<PluginsScopeArgs> for crate::plugins::ConfigurationScope {
     fn from(value: PluginsScopeArgs) -> Self {
-        Self {
-            user: value.user,
-            project: value.project,
-            global: value.global,
+        match (value.user, value.project, value.global) {
+            (false, false, false) => Self::Default,
+            (true, false, false) => Self::User,
+            (false, true, false) => Self::Project,
+            (false, false, true) => Self::Global,
+            _ => Self::Invalid,
         }
     }
 }
@@ -686,10 +688,12 @@ impl PluginsRemoveCommand {
 
 impl From<PricingScopeArgs> for crate::plugins::ConfigurationScope {
     fn from(value: PricingScopeArgs) -> Self {
-        Self {
-            user: value.user,
-            project: value.project,
-            global: value.global,
+        match (value.user, value.project, value.global) {
+            (false, false, false) => Self::Default,
+            (true, false, false) => Self::User,
+            (false, true, false) => Self::Project,
+            (false, false, true) => Self::Global,
+            _ => Self::Invalid,
         }
     }
 }

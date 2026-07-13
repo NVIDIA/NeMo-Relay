@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::configuration::CodingAgent;
-use crate::configuration::{ConfigurationScope, PluginsEditRequest};
 use crate::error::CliError;
+use crate::plugins::{ConfigurationScope, PluginsEditRequest};
 
 /// Where the setup saves its output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,16 +39,8 @@ impl ConfigScope {
 /// exactly like the equivalent `nemo-relay plugins edit` invocation.
 pub(super) fn plugins_edit_command_for_scope(scope: ConfigScope) -> PluginsEditRequest {
     let scope = match scope {
-        ConfigScope::Project | ConfigScope::Both => ConfigurationScope {
-            user: false,
-            project: true,
-            global: false,
-        },
-        ConfigScope::Global => ConfigurationScope {
-            user: true,
-            project: false,
-            global: false,
-        },
+        ConfigScope::Project | ConfigScope::Both => ConfigurationScope::Project,
+        ConfigScope::Global => ConfigurationScope::User,
     };
     PluginsEditRequest { scope }
 }

@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::configuration::{
-    ConfigurationScope, global_plugin_config_path, project_plugin_config_path,
-    user_plugin_config_path,
+    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
 };
+use crate::plugins::ConfigurationScope;
 use nemo_relay::config_editor::{EditorConfig, EditorSchema};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
@@ -154,29 +154,17 @@ fn target_scope_defaults_to_user_and_rejects_conflicts() {
         TargetScope::User
     );
     assert_eq!(
-        target_scope(&ConfigurationScope {
-            project: true,
-            ..ConfigurationScope::default()
-        })
-        .unwrap(),
+        target_scope(&ConfigurationScope::Project).unwrap(),
         TargetScope::Project
     );
     assert_eq!(
-        target_scope(&ConfigurationScope {
-            global: true,
-            ..ConfigurationScope::default()
-        })
-        .unwrap(),
+        target_scope(&ConfigurationScope::Global).unwrap(),
         TargetScope::Global
     );
 
-    let error = target_scope(&ConfigurationScope {
-        user: true,
-        project: true,
-        ..ConfigurationScope::default()
-    })
-    .unwrap_err()
-    .to_string();
+    let error = target_scope(&ConfigurationScope::Invalid)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("choose only one"), "error was: {error}");
 }
 

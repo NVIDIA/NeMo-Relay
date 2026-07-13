@@ -38,30 +38,18 @@ fn pricing_helpers_cover_scopes_components_sources_and_usage() {
         TargetScope::User
     );
     assert_eq!(
-        target_pricing_scope(&ConfigurationScope {
-            project: true,
-            ..ConfigurationScope::default()
-        })
-        .unwrap(),
+        target_pricing_scope(&ConfigurationScope::Project).unwrap(),
         TargetScope::Project
     );
     assert_eq!(
-        target_pricing_scope(&ConfigurationScope {
-            global: true,
-            ..ConfigurationScope::default()
-        })
-        .unwrap(),
+        target_pricing_scope(&ConfigurationScope::Global).unwrap(),
         TargetScope::Global
     );
     assert!(
-        target_pricing_scope(&ConfigurationScope {
-            user: true,
-            project: true,
-            ..ConfigurationScope::default()
-        })
-        .unwrap_err()
-        .to_string()
-        .contains("choose only one")
+        target_pricing_scope(&ConfigurationScope::Invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("choose only one")
     );
 
     let mut plugin_config = PluginConfig::default();

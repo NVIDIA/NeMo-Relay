@@ -4,10 +4,15 @@
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct ConfigurationScope {
-    pub(crate) user: bool,
-    pub(crate) project: bool,
-    pub(crate) global: bool,
+pub(crate) enum ConfigurationScope {
+    /// No explicit scope flag was supplied. Runtime behavior defaults to the user scope.
+    #[default]
+    Default,
+    User,
+    Project,
+    Global,
+    /// More than one mutually exclusive command scope was supplied.
+    Invalid,
 }
 
 #[derive(Debug, Clone, Default)]

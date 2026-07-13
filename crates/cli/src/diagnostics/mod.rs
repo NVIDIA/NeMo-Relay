@@ -30,11 +30,11 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
 use crate::configuration::{
-    AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, GatewayOverrides,
-    ResolvedConfig, default_plugin_config_paths, effective_plugin_toml_sources,
-    resolve_server_config,
+    AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
+    default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
 use crate::error::CliError;
+use crate::server::GatewayOverrides;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
 const PRICING_PLUGIN_KIND: &str = "pricing";

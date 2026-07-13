@@ -8,12 +8,12 @@ use std::{
 };
 
 use super::*;
-use crate::configuration::{
-    ConfigurationScope, GatewayOverrides, PluginsAddRequest, PluginsDisableRequest,
-    PluginsEnableRequest, PluginsInspectRequest, PluginsListRequest, PluginsRemoveRequest,
-    PluginsValidateRequest,
-};
 use crate::error::PluginLifecycleFailureKind;
+use crate::plugins::{
+    ConfigurationScope, PluginsAddRequest, PluginsDisableRequest, PluginsEnableRequest,
+    PluginsInspectRequest, PluginsListRequest, PluginsRemoveRequest, PluginsValidateRequest,
+};
+use crate::server::GatewayOverrides;
 use base64::Engine;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginFailurePhase, WorkerPluginLoadSpec, load_worker_plugins,
@@ -617,10 +617,7 @@ fn tracked_native_plugin_example_satisfies_default_trust_policy() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -647,10 +644,7 @@ fn tracked_native_plugin_example_rejects_tampered_artifact() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -1754,10 +1748,7 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir.clone(),
         },
         &crate::server::GatewayOverrides::default(),
@@ -1793,10 +1784,7 @@ fn add_rejects_unreadable_declared_config_schema() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -1858,10 +1846,7 @@ fn validate_id_checks_resolved_host_config_against_declared_schema() {
     let server = GatewayOverrides::default();
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -1905,10 +1890,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
 
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir.clone(),
         },
         &server,
@@ -2029,10 +2011,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
 
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2055,10 +2034,7 @@ fn add_rolls_back_python_environment_when_installation_fails() {
 
     let error = add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -2098,10 +2074,7 @@ fn enable_rejects_missing_managed_python_environment() {
     let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2157,10 +2130,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
     let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2230,10 +2200,7 @@ fn add_requires_manifest_root_for_python_workers() {
 
     let error = add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -2272,10 +2239,7 @@ fn add_rejects_python_entrypoint_module_that_is_not_integrity_checked_artifact()
 
     let error = add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -2378,10 +2342,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2475,10 +2436,7 @@ fn active_dynamic_plugin_components_project_enabled_native_records_only() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2522,10 +2480,7 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2565,10 +2520,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2617,10 +2569,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir.clone(),
         },
         &crate::server::GatewayOverrides::default(),
@@ -2629,10 +2578,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2661,10 +2607,7 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -2695,10 +2638,7 @@ allowed = false
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2769,10 +2709,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2841,10 +2778,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2935,10 +2869,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -3246,10 +3177,7 @@ fn hydrate_persists_updated_policy_and_error_state() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir.clone(),
         },
         &GatewayOverrides::default(),
@@ -3521,10 +3449,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -3602,10 +3527,7 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir.clone(),
         },
         &server,
@@ -3651,10 +3573,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -3794,10 +3713,7 @@ fn add_can_revive_tombstoned_records() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir.clone(),
         },
         &server,
@@ -3814,10 +3730,7 @@ fn add_can_revive_tombstoned_records() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -3845,10 +3758,7 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -3979,10 +3889,7 @@ fn remove_tolerates_unreadable_non_target_manifest_entries() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -4106,10 +4013,7 @@ fn inspect_redacts_host_config_values() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,
@@ -4186,10 +4090,7 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope {
-                project: true,
-                ..ConfigurationScope::default()
-            },
+            scope: ConfigurationScope::Project,
             path: plugin_dir,
         },
         &server,

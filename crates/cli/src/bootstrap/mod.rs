@@ -17,13 +17,14 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::configuration::{GatewayOverrides, resolve_persistent_server_config};
+use crate::configuration::resolve_persistent_server_config;
 use crate::error::CliError;
 use crate::gateway::client::{
     self as gateway_client, RelayHealth, VerifiedHttpError, VerifiedHttpResponse, loopback_bind,
     probe_with_instance as probe_relay_health_with_instance,
 };
 use crate::process::detached;
+use crate::server::GatewayOverrides;
 #[cfg(test)]
 pub(crate) use detached::{
     WINDOWS_CREATE_BREAKAWAY_FROM_JOB, WINDOWS_CREATE_NEW_PROCESS_GROUP, WINDOWS_CREATE_NO_WINDOW,

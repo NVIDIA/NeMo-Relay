@@ -13,10 +13,10 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::configuration::{
-    ConfigurationScope, global_plugin_config_path, project_plugin_config_path,
-    user_plugin_config_path,
+    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
 };
 use crate::error::CliError;
+use crate::plugins::ConfigurationScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TargetScope {
@@ -270,21 +270,13 @@ fn json_to_toml(value: Value) -> Result<toml::Value, CliError> {
 }
 
 pub(crate) fn target_scope(command: &ConfigurationScope) -> Result<TargetScope, CliError> {
-    let selected = [command.user, command.project, command.global]
-        .into_iter()
-        .filter(|selected| *selected)
-        .count();
-    if selected > 1 {
-        return Err(CliError::Config(
+    match command {
+        ConfigurationScope::Default | ConfigurationScope::User => Ok(TargetScope::User),
+        ConfigurationScope::Project => Ok(TargetScope::Project),
+        ConfigurationScope::Global => Ok(TargetScope::Global),
+        ConfigurationScope::Invalid => Err(CliError::Config(
             "choose only one of --user, --project, or --global".into(),
-        ));
-    }
-    if command.project {
-        Ok(TargetScope::Project)
-    } else if command.global {
-        Ok(TargetScope::Global)
-    } else {
-        Ok(TargetScope::User)
+        )),
     }
 }
 

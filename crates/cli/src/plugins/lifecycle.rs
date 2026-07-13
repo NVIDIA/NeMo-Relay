@@ -18,20 +18,23 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::configuration::{
-    GatewayOverrides, MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, PluginsAddRequest, PluginsDisableRequest,
-    PluginsEnableRequest, PluginsInspectRequest, PluginsListRequest, PluginsRemoveRequest,
-    PluginsValidateRequest, ResolvedConfig, ResolvedDynamicPluginConfig,
+    MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, ResolvedConfig, ResolvedDynamicPluginConfig,
     load_bounded_dynamic_plugin_manifest_bytes, read_bounded_regular_file, resolve_plugins_config,
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::plugins::policy::{
     EvaluatedDynamicPluginHostPolicy, evaluate_dynamic_plugin_host_policy,
 };
+use crate::server::GatewayOverrides;
 
 use super::config_io::{
     append_dynamic_plugin_reference, remove_dynamic_plugin_reference, target_scope,
 };
 use super::schema::PluginConfigSchema;
+use super::{
+    PluginsAddRequest, PluginsDisableRequest, PluginsEnableRequest, PluginsInspectRequest,
+    PluginsListRequest, PluginsRemoveRequest, PluginsValidateRequest,
+};
 
 mod environment;
 mod render;
@@ -2135,7 +2138,7 @@ fn ensure_scope(
 }
 
 fn scope_flags_selected(scope: &crate::plugins::ConfigurationScope) -> bool {
-    scope.user || scope.project || scope.global
+    !matches!(scope, crate::plugins::ConfigurationScope::Default)
 }
 
 fn restore_plugins_toml(path: &std::path::Path, original: Option<&[u8]>) -> Result<(), CliError> {

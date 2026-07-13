@@ -12,9 +12,12 @@ use nemo_relay::codec::response::Usage;
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 use serde_json::Value;
 
-use crate::configuration::{
-    ConfigurationScope, GatewayOverrides, PricingAddSourceRequest, PricingInitRequest,
-    PricingResolveRequest, PricingValidateRequest, resolve_server_config,
+use crate::configuration::resolve_server_config;
+use crate::server::GatewayOverrides;
+
+use super::{
+    ConfigurationScope, PricingAddSourceRequest, PricingInitRequest, PricingResolveRequest,
+    PricingValidateRequest,
 };
 use crate::error::CliError;
 use crate::plugins::config_io::{PluginConfigDocument, TargetScope, target_path, validate_config};
@@ -218,21 +221,13 @@ fn resolve_pricing(
 }
 
 fn target_pricing_scope(scope: &ConfigurationScope) -> Result<TargetScope, CliError> {
-    let selected = [scope.user, scope.project, scope.global]
-        .into_iter()
-        .filter(|selected| *selected)
-        .count();
-    if selected > 1 {
-        return Err(CliError::Config(
+    match scope {
+        ConfigurationScope::Default | ConfigurationScope::User => Ok(TargetScope::User),
+        ConfigurationScope::Project => Ok(TargetScope::Project),
+        ConfigurationScope::Global => Ok(TargetScope::Global),
+        ConfigurationScope::Invalid => Err(CliError::Config(
             "choose only one of --user, --project, or --global".into(),
-        ));
-    }
-    if scope.project {
-        Ok(TargetScope::Project)
-    } else if scope.global {
-        Ok(TargetScope::Global)
-    } else {
-        Ok(TargetScope::User)
+        )),
     }
 }
 

@@ -15,14 +15,16 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::configuration::{
-    AgentConfigs, CodingAgent, GatewayConfig, GatewayOverrides, RELAY_PLUGIN_ID,
-    RELAY_SOURCE_PLUGIN_ID, ResolvedConfig, RunOverrides, any_config_file_exists,
-    resolve_run_config,
+    AgentConfigs, CodingAgent, GatewayConfig, RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID,
+    ResolvedConfig, any_config_file_exists, resolve_run_config,
 };
 use crate::error::CliError;
 use crate::hooks::{generated_hooks, transparent_hook_forward_command};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
+use crate::server::GatewayOverrides;
+
+use super::RunOverrides;
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
