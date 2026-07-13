@@ -763,7 +763,7 @@ entrypoint = "../worker-runtime/worker.sh"
         .write(true)
         .open(&artifact_path)
         .unwrap()
-        .set_len(crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .set_len(crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES + 1)
         .unwrap();
     std::fs::set_permissions(&artifact_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(&manifest_path, b"not valid TOML").unwrap();
@@ -771,7 +771,7 @@ entrypoint = "../worker-runtime/worker.sh"
         .write(true)
         .open(&manifest_path)
         .unwrap()
-        .set_len(crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
+        .set_len(crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES + 1)
         .unwrap();
 
     let error = match load_worker_plugins(vec![WorkerPluginLoadSpec {
@@ -995,7 +995,7 @@ fn activation_snapshot_budgets_reject_entry_and_byte_overflow() {
     let byte_error = byte_budget
         .record_bytes(
             path,
-            usize::try_from(crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES).unwrap() + 1,
+            usize::try_from(crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES).unwrap() + 1,
         )
         .unwrap_err()
         .to_string();

@@ -464,15 +464,15 @@ fn digest_environment_directory(
                 path.display()
             ));
         }
-        let bytes = crate::configuration::read_bounded_regular_file(
+        let bytes = crate::filesystem::bounded::read_bounded_regular_file(
             &source,
             "managed Python environment file",
         )?;
         *total = total.saturating_add(bytes.len() as u64);
-        if *total > crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
+        if *total > crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES {
             return Err(format!(
                 "managed Python environment exceeds the {}-byte attestation budget",
-                crate::configuration::MAX_BOOTSTRAP_IDENTITY_FILE_BYTES
+                crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES
             ));
         }
         digest.update(relative.to_string_lossy().as_bytes());

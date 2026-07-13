@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::filesystem::bounded::{
+    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, read_bounded_regular_file,
+};
 use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;

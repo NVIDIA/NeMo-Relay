@@ -18,10 +18,13 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::configuration::{
-    MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, ResolvedConfig, ResolvedDynamicPluginConfig,
-    load_bounded_dynamic_plugin_manifest_bytes, read_bounded_regular_file, resolve_plugins_config,
+    ResolvedConfig, ResolvedDynamicPluginConfig, load_bounded_dynamic_plugin_manifest_bytes,
+    resolve_plugins_config,
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
+use crate::filesystem::bounded::{
+    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, read_bounded_regular_file,
+};
 use crate::plugins::policy::{
     EvaluatedDynamicPluginHostPolicy, evaluate_dynamic_plugin_host_policy,
 };

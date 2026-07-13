@@ -3,6 +3,7 @@
 
 //! Small, platform-aware filesystem primitives shared by CLI subsystems.
 
+pub(crate) mod bounded;
 mod locks;
 pub(crate) mod temp;
 

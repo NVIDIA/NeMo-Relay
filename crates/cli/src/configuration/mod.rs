@@ -40,9 +40,6 @@ pub(crate) const BOOTSTRAP_FINGERPRINT_ENV: &str = "NEMO_RELAY_BOOTSTRAP_FINGERP
 pub(crate) const PLUGIN_IDLE_TIMEOUT_ENV: &str = "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS";
 pub(crate) const RELAY_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay-local";
 pub(crate) const RELAY_SOURCE_PLUGIN_ID: &str = "nemo-relay-plugin@nemo-relay";
-/// Maximum regular-file size hashed into persistent gateway identity (512 MiB).
-pub(crate) const MAX_BOOTSTRAP_IDENTITY_FILE_BYTES: u64 = 512 * 1024 * 1024;
-
 pub(crate) const DEFAULT_MAX_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
 pub(crate) const DEFAULT_MAX_PASSTHROUGH_BODY_BYTES: usize = 100 * 1024 * 1024;
 pub(crate) const GATEWAY_URL_ENV: &str = "NEMO_RELAY_GATEWAY_URL";
@@ -488,8 +485,10 @@ fn resolve_dynamic_plugin_relative_path(manifest_path: &Path, reference: &str) -
 
 fn bootstrap_file_digest(path: &Path, description: &str) -> Result<String, CliError> {
     let mut context = digest::Context::new(&digest::SHA256);
-    stream_bounded_regular_file(path, description, |bytes| context.update(bytes))
-        .map_err(CliError::Config)?;
+    crate::filesystem::bounded::stream_bounded_regular_file(path, description, |bytes| {
+        context.update(bytes)
+    })
+    .map_err(CliError::Config)?;
     Ok(context
         .finish()
         .as_ref()
@@ -520,8 +519,11 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
             manifest_path.display()
         ))
     })?;
-    let bytes = read_bounded_regular_file(&normalized, "dynamic plugin manifest")
-        .map_err(CliError::Config)?;
+    let bytes = crate::filesystem::bounded::read_bounded_regular_file(
+        &normalized,
+        "dynamic plugin manifest",
+    )
+    .map_err(CliError::Config)?;
     let contents = std::str::from_utf8(&bytes).map_err(|error| {
         CliError::Config(format!(
             "dynamic plugin manifest {} is not UTF-8: {error}",
@@ -531,91 +533,6 @@ pub(crate) fn load_bounded_dynamic_plugin_manifest_bytes(
     let manifest = DynamicPluginManifest::parse_toml(contents)
         .map_err(|error| CliError::Config(error.to_string()))?;
     Ok((manifest, normalized.to_string_lossy().into_owned(), bytes))
-}
-
-pub(crate) fn read_bounded_regular_file(path: &Path, description: &str) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    stream_bounded_regular_file(path, description, |chunk| bytes.extend_from_slice(chunk))?;
-    Ok(bytes)
-}
-
-pub(crate) fn stream_bounded_regular_file(
-    path: &Path,
-    description: &str,
-    mut consume: impl FnMut(&[u8]),
-) -> Result<(), String> {
-    const BUFFER_BYTES: usize = 64 * 1024;
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to inspect {description} {} for persistent gateway identity: {error}",
-            path.display()
-        )
-    })?;
-    if !metadata.file_type().is_file() {
-        return Err(format!(
-            "{description} {} must be a regular file for persistent gateway identity",
-            path.display()
-        ));
-    }
-    if metadata.len() > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
-        return Err(format!(
-            "{description} {} exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte persistent gateway identity budget",
-            path.display()
-        ));
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let mut file = options.open(path).map_err(|error| {
-        format!(
-            "failed to read {description} {} for persistent gateway identity: {error}",
-            path.display()
-        )
-    })?;
-    let opened_metadata = file.metadata().map_err(|error| {
-        format!(
-            "failed to inspect {description} {} for persistent gateway identity: {error}",
-            path.display()
-        )
-    })?;
-    if !opened_metadata.file_type().is_file() {
-        return Err(format!(
-            "{description} {} must be a regular file for persistent gateway identity",
-            path.display()
-        ));
-    }
-    if opened_metadata.len() > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
-        return Err(format!(
-            "{description} {} exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte persistent gateway identity budget",
-            path.display()
-        ));
-    }
-    let mut buffer = [0_u8; BUFFER_BYTES];
-    let mut total = 0_u64;
-    loop {
-        let read = file.read(&mut buffer).map_err(|error| {
-            format!(
-                "failed to read {description} {} for persistent gateway identity: {error}",
-                path.display()
-            )
-        })?;
-        if read == 0 {
-            break;
-        }
-        total = total.saturating_add(read as u64);
-        if total > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
-            return Err(format!(
-                "{description} {} exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte persistent gateway identity budget",
-                path.display()
-            ));
-        }
-        consume(&buffer[..read]);
-    }
-    Ok(())
 }
 
 const BOOTSTRAP_HMAC_KEY_BYTES: usize = 32;

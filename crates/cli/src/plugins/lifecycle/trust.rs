@@ -317,12 +317,14 @@ fn verify_signature(
 
     let signature_path = resolve_artifact_path(manifest_ref, signature_ref);
     let signature_bytes = read_signature_bytes(&signature_path)?;
-    let artifact_bytes =
-        crate::configuration::read_bounded_regular_file(artifact_path, "dynamic plugin artifact")
-            .map_err(|error| DynamicPluginTrustFailure::ArtifactRead {
-            path: artifact_path.to_path_buf(),
-            error,
-        })?;
+    let artifact_bytes = crate::filesystem::bounded::read_bounded_regular_file(
+        artifact_path,
+        "dynamic plugin artifact",
+    )
+    .map_err(|error| DynamicPluginTrustFailure::ArtifactRead {
+        path: artifact_path.to_path_buf(),
+        error,
+    })?;
 
     let mut parse_errors = Vec::new();
     for trusted_public_key in trusted_public_keys {
@@ -348,11 +350,12 @@ fn verify_signature(
 }
 
 fn read_signature_bytes(path: &Path) -> TrustResult<Vec<u8>> {
-    let raw = crate::configuration::read_bounded_regular_file(path, "dynamic plugin signature")
-        .map_err(|error| DynamicPluginTrustFailure::SignatureRead {
-            path: path.to_path_buf(),
-            error,
-        })?;
+    let raw =
+        crate::filesystem::bounded::read_bounded_regular_file(path, "dynamic plugin signature")
+            .map_err(|error| DynamicPluginTrustFailure::SignatureRead {
+                path: path.to_path_buf(),
+                error,
+            })?;
     let trimmed = String::from_utf8_lossy(&raw).trim().to_owned();
     if trimmed.is_empty() {
         return Err(DynamicPluginTrustFailure::SignatureRead {
@@ -402,9 +405,13 @@ fn resolve_artifact_path(manifest_ref: &str, artifact_ref: &str) -> PathBuf {
 
 fn file_sha256(path: &Path) -> Result<String, std::io::Error> {
     let mut digest = Sha256::new();
-    crate::configuration::stream_bounded_regular_file(path, "dynamic plugin artifact", |bytes| {
-        digest.update(bytes);
-    })
+    crate::filesystem::bounded::stream_bounded_regular_file(
+        path,
+        "dynamic plugin artifact",
+        |bytes| {
+            digest.update(bytes);
+        },
+    )
     .map_err(std::io::Error::other)?;
     Ok(format!(
         "sha256:{}",
