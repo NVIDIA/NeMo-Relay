@@ -102,7 +102,7 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
     assert_eq!(
         telemetry.field("learners").unwrap().kind,
-        EditorFieldKind::Json
+        EditorFieldKind::List
     );
 
     let acg = schema.field("acg").unwrap().schema().unwrap();

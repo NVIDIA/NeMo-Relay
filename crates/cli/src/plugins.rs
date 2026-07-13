@@ -826,6 +826,32 @@ where
         return Ok(());
     }
     let current = section_field_value(config, section, field.name)?;
+    if field.kind == EditorFieldKind::List {
+        let item = field.list_item.ok_or_else(|| {
+            CliError::Config(format!("{} does not describe its list entries", field.name))
+        })?;
+        let mut items = current.unwrap_or_else(|| json!([]));
+        if edit_list_value(
+            theme,
+            &format!("{}.{}", section.name, field.name),
+            &mut items,
+            item,
+        )? {
+            set_section_field(config, section, field.name, items)?;
+        }
+        return Ok(());
+    }
+    if field.kind == EditorFieldKind::StringMap {
+        let mut entries = current.unwrap_or_else(|| json!({}));
+        if edit_string_map_value(
+            theme,
+            &format!("{}.{}", section.name, field.name),
+            &mut entries,
+        )? {
+            set_section_field(config, section, field.name, entries)?;
+        }
+        return Ok(());
+    }
     let actions = [
         MenuItem::new("Set value"),
         MenuItem::new(shortcut_label(
@@ -866,6 +892,279 @@ where
     Ok(())
 }
 
+fn edit_list_value(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+) -> Result<bool, CliError> {
+    if !value.is_array() {
+        *value = json!([]);
+    }
+    let original = value.clone();
+    let mut selected_index = 0;
+    loop {
+        let entries = value.as_array().expect("list value is an array");
+        let mut menu = vec![MenuItem::new("Add item")];
+        menu.extend(entries.iter().enumerate().map(|(index, entry)| {
+            MenuItem::new(format!(
+                "Edit item {}: {}",
+                index + 1,
+                editor_item_label(entry, item)
+            ))
+        }));
+        menu.push(MenuItem::new(shortcut_label("Back", "q")));
+        let selection = prompt_menu(theme, prompt, &menu, selected_index)?;
+        if let Some(selected) = menu_response_index(&selection) {
+            selected_index = selected;
+        }
+        match selection {
+            MenuResponse::Selected(0) => {
+                let mut entry = new_editor_item(theme, item)?;
+                edit_editor_item(
+                    theme,
+                    &format!("{prompt}[{}]", entries.len()),
+                    &mut entry,
+                    item,
+                )?;
+                value
+                    .as_array_mut()
+                    .expect("list value is an array")
+                    .push(entry);
+            }
+            MenuResponse::Selected(index) if index <= entries.len() => {
+                edit_existing_list_item(theme, prompt, value, index - 1, item)?;
+            }
+            MenuResponse::Cancel | MenuResponse::Selected(_) => return Ok(*value != original),
+            MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
+            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
+                *value = json!([])
+            }
+            MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+                println!("  Preview and save are available from the main plugins.toml menu.");
+            }
+        }
+    }
+}
+
+fn edit_string_map_value(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+) -> Result<bool, CliError> {
+    if !value.is_object() {
+        *value = json!({});
+    }
+    let original = value.clone();
+    let mut selected_index = 0;
+    loop {
+        let entries = value.as_object().expect("string map value is an object");
+        let keys = entries.keys().cloned().collect::<Vec<_>>();
+        let mut menu = vec![MenuItem::new("Add entry")];
+        menu.extend(keys.iter().map(|key| {
+            MenuItem::new(format!(
+                "Edit {key}: {}",
+                entries.get(key).map(display_value).unwrap_or_default()
+            ))
+        }));
+        menu.push(MenuItem::new(shortcut_label("Back", "q")));
+        let selection = prompt_menu(theme, prompt, &menu, selected_index)?;
+        if let Some(selected) = menu_response_index(&selection) {
+            selected_index = selected;
+        }
+        match selection {
+            MenuResponse::Selected(0) => {
+                let key: String = Input::with_theme(theme)
+                    .with_prompt("Entry key")
+                    .interact_text()
+                    .map_err(editor_error)?;
+                if key.trim().is_empty() {
+                    return Err(CliError::Config("map entry key must not be empty".into()));
+                }
+                let entry: String = Input::with_theme(theme)
+                    .with_prompt("Entry value")
+                    .interact_text()
+                    .map_err(editor_error)?;
+                value
+                    .as_object_mut()
+                    .expect("string map value is an object")
+                    .insert(key, Value::String(entry));
+            }
+            MenuResponse::Selected(index) if index <= keys.len() => {
+                edit_existing_string_map_entry(theme, prompt, value, &keys[index - 1])?;
+            }
+            MenuResponse::Cancel | MenuResponse::Selected(_) => return Ok(*value != original),
+            MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
+            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
+                *value = json!({})
+            }
+            MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
+                println!("  Preview and save are available from the main plugins.toml menu.");
+            }
+        }
+    }
+}
+
+fn edit_existing_string_map_entry(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    key: &str,
+) -> Result<(), CliError> {
+    let actions = [
+        MenuItem::new("Edit value"),
+        MenuItem::new("Remove entry"),
+        MenuItem::new(shortcut_label("Back", "q")),
+    ];
+    match prompt_menu(theme, &format!("{prompt}.{key}"), &actions, 0)? {
+        MenuResponse::Selected(0) => {
+            let current = value
+                .as_object()
+                .and_then(|entries| entries.get(key))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let entry: String = Input::with_theme(theme)
+                .with_prompt("Entry value")
+                .with_initial_text(current)
+                .interact_text()
+                .map_err(editor_error)?;
+            value
+                .as_object_mut()
+                .expect("string map value is an object")
+                .insert(key.to_owned(), Value::String(entry));
+        }
+        MenuResponse::Selected(1) | MenuResponse::Shortcut(MenuShortcut::Clear, _) => {
+            value
+                .as_object_mut()
+                .expect("string map value is an object")
+                .remove(key);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn edit_existing_list_item(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    index: usize,
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+) -> Result<(), CliError> {
+    let actions = [
+        MenuItem::new("Edit item"),
+        MenuItem::new("Remove item"),
+        MenuItem::new(shortcut_label("Back", "q")),
+    ];
+    match prompt_menu(theme, &format!("{prompt}[{}]", index + 1), &actions, 0)? {
+        MenuResponse::Selected(0) => {
+            if let Some(entry) = value
+                .as_array_mut()
+                .and_then(|entries| entries.get_mut(index))
+            {
+                edit_editor_item(theme, &format!("{prompt}[{}]", index + 1), entry, item)?;
+            }
+        }
+        MenuResponse::Selected(1) | MenuResponse::Shortcut(MenuShortcut::Clear, _) => {
+            value
+                .as_array_mut()
+                .expect("list value is an array")
+                .remove(index);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn new_editor_item(
+    theme: &ColorfulTheme,
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+) -> Result<Value, CliError> {
+    if item.kind == EditorFieldKind::TaggedUnion {
+        let variant = Select::with_theme(theme)
+            .with_prompt("Item type")
+            .items(
+                &item
+                    .variants
+                    .iter()
+                    .map(|variant| variant.label)
+                    .collect::<Vec<_>>(),
+            )
+            .default(0)
+            .interact()
+            .map_err(editor_error)?;
+        return Ok((item.variants[variant].default)());
+    }
+    Ok(item.default.map(|default| default()).unwrap_or(Value::Null))
+}
+
+fn edit_editor_item(
+    theme: &ColorfulTheme,
+    prompt: &str,
+    value: &mut Value,
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+) -> Result<(), CliError> {
+    match item.kind {
+        EditorFieldKind::Section => {
+            let schema = item
+                .schema
+                .ok_or_else(|| CliError::Config("list item has no schema".into()))?(
+            );
+            edit_value_section(theme, prompt, value, schema, None)?;
+        }
+        EditorFieldKind::TaggedUnion => {
+            let tag = item
+                .discriminator
+                .and_then(|key| value.get(key))
+                .and_then(Value::as_str)
+                .ok_or_else(|| CliError::Config("tagged list item has no discriminator".into()))?;
+            let variant = item
+                .variants
+                .iter()
+                .find(|variant| variant.tag == tag)
+                .ok_or_else(|| CliError::Config(format!("unknown list item type {tag:?}")))?;
+            edit_value_section(theme, prompt, value, (variant.schema)(), None)?;
+        }
+        EditorFieldKind::List => {
+            let nested = item.list_item.ok_or_else(|| {
+                CliError::Config("nested list item has no entry description".into())
+            })?;
+            let _ = edit_list_value(theme, prompt, value, nested)?;
+        }
+        EditorFieldKind::StringMap => {
+            let _ = edit_string_map_value(theme, prompt, value)?;
+        }
+        kind => {
+            let field = EditorFieldSpec {
+                name: "item",
+                label: "item",
+                kind,
+                enum_values: &[],
+                optional: false,
+                nested_schema: None,
+                nested_default: None,
+                list_item: None,
+            };
+            *value = prompt_value(theme, &field, Some(value))?;
+        }
+    }
+    Ok(())
+}
+
+fn editor_item_label(
+    value: &Value,
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+) -> String {
+    if item.kind == EditorFieldKind::TaggedUnion {
+        return value
+            .get(item.discriminator.unwrap_or("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("invalid")
+            .to_string();
+    }
+    display_value(value)
+}
+
 fn edit_config_field<T>(
     theme: &ColorfulTheme,
     config: &mut T,
@@ -883,6 +1182,25 @@ where
         })?;
         if edit_value_section(theme, field.name, &mut value, schema, field.default_value())? {
             store_edited_config_section(config, field, value)?;
+        }
+        return Ok(());
+    }
+
+    if field.kind == EditorFieldKind::List {
+        let item = field.list_item.ok_or_else(|| {
+            CliError::Config(format!("{} does not describe its list entries", field.name))
+        })?;
+        let mut items = config_field_value(config, field.name)?.unwrap_or_else(|| json!([]));
+        if edit_list_value(theme, field.name, &mut items, item)? {
+            set_struct_field(config, field.name, items)?;
+        }
+        return Ok(());
+    }
+
+    if field.kind == EditorFieldKind::StringMap {
+        let mut entries = config_field_value(config, field.name)?.unwrap_or_else(|| json!({}));
+        if edit_string_map_value(theme, field.name, &mut entries)? {
+            set_struct_field(config, field.name, entries)?;
         }
         return Ok(());
     }
@@ -1119,6 +1437,25 @@ fn edit_value_field(
         return Ok(());
     }
 
+    if field.kind == EditorFieldKind::List {
+        let item = field.list_item.ok_or_else(|| {
+            CliError::Config(format!("{} does not describe its list entries", field.name))
+        })?;
+        let mut items = value_field_value(value, field.name).unwrap_or_else(|| json!([]));
+        if edit_list_value(theme, &format!("{prompt}.{}", field.name), &mut items, item)? {
+            set_value_field(value, field.name, items);
+        }
+        return Ok(());
+    }
+
+    if field.kind == EditorFieldKind::StringMap {
+        let mut entries = value_field_value(value, field.name).unwrap_or_else(|| json!({}));
+        if edit_string_map_value(theme, &format!("{prompt}.{}", field.name), &mut entries)? {
+            set_value_field(value, field.name, entries);
+        }
+        return Ok(());
+    }
+
     let current = value_field_value(value, field.name);
     let actions = [
         MenuItem::new("Set value"),
@@ -1344,6 +1681,10 @@ fn prompt_value(
         }
         EditorFieldKind::Section => Err(CliError::Config(format!(
             "{} is a nested section and cannot be edited as a scalar",
+            field.name
+        ))),
+        EditorFieldKind::List | EditorFieldKind::TaggedUnion => Err(CliError::Config(format!(
+            "{} is a structured value and cannot be edited as a scalar",
             field.name
         ))),
     }

@@ -933,6 +933,14 @@ pub(super) fn display_field_value(
     field: EditorFieldSpec,
     value: &Value,
 ) -> String {
+    if field.kind == EditorFieldKind::List {
+        let count = value.as_array().map_or(0, |items| items.len());
+        return format!("{count} item{}", if count == 1 { "" } else { "s" });
+    }
+    if field.kind == EditorFieldKind::StringMap {
+        let count = value.as_object().map_or(0, |entries| entries.len());
+        return format!("{count} entr{}", if count == 1 { "y" } else { "ies" });
+    }
     if default_field_value(section, field)
         .as_ref()
         .is_some_and(|default| default == value)

@@ -323,7 +323,7 @@ crate::editor_config! {
     impl RemoteBackendConfig {
         endpoint => { label: "endpoint", kind: String, optional: true },
         config_id => { label: "config_id", kind: String, optional: true },
-        config_ids => { label: "config_ids", kind: Json },
+        config_ids => { label: "config_ids", kind: List, list: &crate::config_editor::STRING_LIST_ITEM },
         headers => { label: "headers", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
     }

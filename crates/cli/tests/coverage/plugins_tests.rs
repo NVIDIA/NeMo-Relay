@@ -218,7 +218,7 @@ fn typed_editor_model_contains_adaptive_options() {
     let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
     assert_eq!(
         telemetry.field("learners").unwrap().kind,
-        EditorFieldKind::Json
+        EditorFieldKind::List
     );
 
     let acg = schema.field("acg").unwrap().schema().unwrap();
@@ -312,7 +312,7 @@ fn typed_editor_model_contains_pii_redaction_options() {
     );
     assert_eq!(
         builtin.field("target_paths").unwrap().kind,
-        EditorFieldKind::Json
+        EditorFieldKind::List
     );
     assert_eq!(
         builtin.field("detector").unwrap().kind,
@@ -1164,6 +1164,7 @@ fn optional_section_without_default(name: &'static str) -> EditorFieldSpec {
         optional: true,
         nested_schema: None,
         nested_default: None,
+        list_item: None,
     }
 }
 
@@ -1176,6 +1177,7 @@ fn depth_root_schema() -> &'static EditorSchema {
         optional: false,
         nested_schema: Some(depth_middle_schema),
         nested_default: None,
+        list_item: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1190,6 +1192,7 @@ fn depth_middle_schema() -> &'static EditorSchema {
         optional: false,
         nested_schema: Some(depth_leaf_schema),
         nested_default: None,
+        list_item: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1204,6 +1207,7 @@ fn depth_leaf_schema() -> &'static EditorSchema {
         optional: false,
         nested_schema: None,
         nested_default: None,
+        list_item: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -2256,6 +2260,7 @@ fn parse_float_value_rejects_non_finite_numbers() {
         optional: false,
         nested_schema: None,
         nested_default: None,
+        list_item: None,
     };
 
     assert_eq!(parse_float_value(&field, "0.75").unwrap(), json!(0.75));
