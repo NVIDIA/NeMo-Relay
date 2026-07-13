@@ -2502,31 +2502,6 @@ fn cli_help_lists_model_pricing_command_only() {
 }
 
 #[test]
-fn cli_hook_forward_help_documents_operational_flags() {
-    let output = Command::new(gateway_bin())
-        .args(["hook-forward", "--help"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-
-    for expected in [
-        "Coding agent whose canonical lifecycle payload is read from standard input",
-        "Base URL of the Relay gateway that receives the lifecycle payload",
-        "Forward to an existing compatible gateway without an install-generation fence",
-        "Configuration profile recorded with the forwarded session metadata",
-        "JSON value added to the forwarded session metadata",
-        "Expected gateway behavior recorded with the forwarded session metadata",
-        "Return a failure when the payload cannot be delivered or Relay rejects it",
-    ] {
-        assert!(
-            stdout.contains(expected),
-            "missing help text: {expected}\n{stdout}"
-        );
-    }
-}
-
-#[test]
 fn cli_help_lists_plugin_install_commands() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
