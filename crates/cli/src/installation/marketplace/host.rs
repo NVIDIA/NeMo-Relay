@@ -268,7 +268,7 @@ pub(crate) fn require_relay(
     runner
         .current_executable()
         .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::agents::portable_executable_path)
+        .map(crate::process::portable_executable_path)
 }
 
 pub(crate) fn validate_relay_hook_forward(
@@ -414,7 +414,7 @@ pub(super) fn format_command(program: &str, args: &[String]) -> String {
         "$ {}",
         parts
             .iter()
-            .map(|part| { crate::agents::shell_quote_arg_for_platform(part, cfg!(windows)) })
+            .map(|part| crate::process::shell_quote_arg_for_platform(part, cfg!(windows)))
             .collect::<Vec<_>>()
             .join(" ")
     )

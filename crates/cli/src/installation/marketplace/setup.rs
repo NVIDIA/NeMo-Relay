@@ -165,7 +165,7 @@ impl<H: MarketplaceHost> PluginSetupRunner for HostPluginSetupRunner<H> {
     }
 
     fn refresh_gateway(&self) -> Result<(), String> {
-        crate::agents::stop_plugin_gateway()
+        crate::bootstrap::state::stop_owned_and_reset(crate::bootstrap::DEFAULT_URL)
     }
 
     fn setup(&self, _host_arg: &str, gateway_url: &str, plugin_root: &Path) -> Result<(), String> {

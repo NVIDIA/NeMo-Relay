@@ -1973,8 +1973,6 @@ fn run_host_unregistration(
 }
 
 #[cfg(test)]
-use assets::*;
-#[cfg(test)]
 use state::*;
 
 #[cfg(test)]

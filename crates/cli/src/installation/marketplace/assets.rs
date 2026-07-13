@@ -115,11 +115,3 @@ pub(super) fn plugin_hooks(
     let generation_fence = absolute_or_self(generation_fence);
     host.plugin_hooks(relay, &generation_fence, generation_token)
 }
-
-#[cfg(test)]
-pub(super) fn plugin_mcp_env_vars_from(
-    environment: impl IntoIterator<Item = String>,
-    config: Option<&Value>,
-) -> Vec<String> {
-    crate::agents::codex_mcp_env_vars_from(environment, config)
-}

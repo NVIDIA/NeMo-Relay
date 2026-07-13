@@ -1444,7 +1444,7 @@ fn codex_mcp_env_vars_include_approved_dynamic_and_config_references_only() {
             }
         }]
     });
-    let names = plugin_mcp_env_vars_from(
+    let names = crate::agents::codex_mcp_env_vars_from(
         [
             "NEMO_RELAY_CUSTOM_SETTING",
             "OTEL_CUSTOM_SETTING",

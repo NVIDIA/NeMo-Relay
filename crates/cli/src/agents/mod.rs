@@ -717,12 +717,12 @@ fn failed_integration_readiness(
     readiness
 }
 
+pub(crate) use crate::process::portable_executable_path;
+pub(crate) use crate::process::shell_quote_arg_for_platform;
+#[cfg(test)]
+pub(crate) use crate::process::strip_windows_verbatim_prefix;
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
-pub(crate) use shared::host::portable_executable_path;
-pub(crate) use shared::host::shell_quote_arg_for_platform;
-#[cfg(test)]
-pub(crate) use shared::host::strip_windows_verbatim_prefix;
 
 use std::path::{Path, PathBuf};
 

@@ -18,6 +18,86 @@ use std::process::Command;
 
 use crate::agents::CodingAgent;
 
+pub(crate) fn shell_quote_arg_for_platform(raw: &str, windows: bool) -> String {
+    if windows {
+        return cmd_quote_arg(raw);
+    }
+    posix_quote_arg(raw)
+}
+
+fn posix_quote_arg(raw: &str) -> String {
+    if raw.is_empty() {
+        "''".into()
+    } else if raw
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | ':' | '.' | '_' | '-'))
+    {
+        raw.to_string()
+    } else {
+        format!("'{}'", raw.replace('\'', "'\\''"))
+    }
+}
+
+fn cmd_quote_arg(raw: &str) -> String {
+    if raw.is_empty() {
+        return "\"\"".into();
+    }
+    if raw.chars().all(|ch| {
+        ch.is_ascii_alphanumeric()
+            || matches!(ch, '/' | '\\' | ':' | '.' | '_' | '-' | '=' | '@' | '+')
+    }) {
+        return raw.to_string();
+    }
+    let mut escaped = String::new();
+    for ch in raw.chars() {
+        match ch {
+            '%' => escaped.push_str("%%cd:~,%"),
+            '"' => escaped.push_str("\"\""),
+            _ => escaped.push(ch),
+        }
+    }
+    format!("\"{escaped}\"")
+}
+
+#[cfg(windows)]
+pub(crate) fn portable_executable_path(path: PathBuf) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    strip_windows_verbatim_prefix(&encoded)
+        .map(|value| OsString::from_wide(&value))
+        .map(PathBuf::from)
+        .unwrap_or(path)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn portable_executable_path(path: PathBuf) -> PathBuf {
+    path
+}
+
+#[cfg(any(test, windows))]
+pub(crate) fn strip_windows_verbatim_prefix(encoded: &[u16]) -> Option<Vec<u16>> {
+    const PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC: &[u16] = &[
+        b'\\' as u16,
+        b'\\' as u16,
+        b'?' as u16,
+        b'\\' as u16,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        b'\\' as u16,
+    ];
+    if let Some(rest) = encoded.strip_prefix(UNC) {
+        let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+        normalized.extend_from_slice(rest);
+        Some(normalized)
+    } else {
+        encoded.strip_prefix(PREFIX).map(ToOwned::to_owned)
+    }
+}
+
 /// Parses the intentionally simple command strings accepted by `[agents.*].command`.
 ///
 /// Complex shell expressions belong after `nemo-relay run --`; configuration values are argv
