@@ -41,9 +41,10 @@ use setup::{
 #[cfg(test)]
 use setup::{run_plugin_doctor, run_plugin_setup};
 use state::{
-    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, PluginInstallOptions,
-    PluginLayout, PluginState, default_install_dir, mark_plugin_setup_installed, read_state,
-    remove_path, state_path, write_state, write_state_for_host,
+    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, MarketplaceHostIdentity,
+    PluginInstallOptions, PluginLayout, PluginState, default_install_dir,
+    mark_plugin_setup_installed, read_state, remove_path, state_path, write_state,
+    write_state_for_host,
 };
 
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
@@ -1458,27 +1459,16 @@ fn mcp_env_var_names(server: &Value) -> Option<Vec<String>> {
         .collect()
 }
 
-fn marketplace_manifest_path(host: CodingAgent, root: &Path) -> PathBuf {
-    match host {
-        CodingAgent::Codex => root
-            .join(".agents")
-            .join("plugins")
-            .join("marketplace.json"),
-        CodingAgent::ClaudeCode => root.join(".claude-plugin").join("marketplace.json"),
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before layout resolution")
-        }
-    }
+fn marketplace_manifest_path(host: impl MarketplaceHostIdentity, root: &Path) -> PathBuf {
+    host.marketplace_manifest_relative()
+        .iter()
+        .fold(root.to_path_buf(), |path, component| path.join(component))
 }
 
-fn plugin_manifest_path(host: CodingAgent, root: &Path) -> PathBuf {
-    match host {
-        CodingAgent::Codex => root.join(".codex-plugin").join("plugin.json"),
-        CodingAgent::ClaudeCode => root.join(".claude-plugin").join("plugin.json"),
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before layout resolution")
-        }
-    }
+fn plugin_manifest_path(host: impl MarketplaceHostIdentity, root: &Path) -> PathBuf {
+    host.plugin_manifest_relative()
+        .iter()
+        .fold(root.to_path_buf(), |path, component| path.join(component))
 }
 
 fn plugin_mcp_config_path(root: &Path) -> PathBuf {
