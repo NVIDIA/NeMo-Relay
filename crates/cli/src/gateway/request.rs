@@ -98,7 +98,7 @@ pub(super) fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGa
             .get("model")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        subagent_id: gateway_subagent_id(&request.headers),
+        subagent_id: gateway_subagent_id(&request.headers, &request.request_json, request.provider),
         conversation_id: gateway_identifier(
             &request.headers,
             &request.request_json,

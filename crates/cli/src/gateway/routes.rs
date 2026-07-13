@@ -190,8 +190,12 @@ pub(super) fn gateway_session_id(
     alignment::gateway_session_id(headers, body, route.alignment_route())
 }
 
-pub(super) fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
-    alignment::gateway_subagent_id(headers)
+pub(super) fn gateway_subagent_id(
+    headers: &HeaderMap,
+    body: &Value,
+    route: ProviderRoute,
+) -> Option<String> {
+    alignment::gateway_subagent_id(headers, body, route.alignment_route())
 }
 
 // Keeps the gateway-facing helper local for tests while the generic extraction pattern lives in

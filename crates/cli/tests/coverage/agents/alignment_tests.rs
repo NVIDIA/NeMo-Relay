@@ -250,7 +250,10 @@ fn gateway_subagent_and_identifier_helpers_respect_header_precedence() {
         "object": { "id": { "nested": true } }
     });
 
-    assert_eq!(gateway_subagent_id(&headers).as_deref(), Some("worker-1"));
+    assert_eq!(
+        gateway_subagent_id(&headers, &body, GatewayRouteKind::OpenAiResponses).as_deref(),
+        Some("worker-1")
+    );
     assert_eq!(
         gateway_identifier(
             &headers,

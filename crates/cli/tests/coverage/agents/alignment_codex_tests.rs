@@ -29,37 +29,75 @@ fn thread_spawn(parent_thread_id: &str) -> Value {
 }
 
 #[test]
-fn prompt_cache_session_id_requires_codex_responses_metadata() {
+fn responses_session_id_prefers_shared_id_and_keeps_prompt_cache_fallback() {
     let body = json!({
         "prompt_cache_key": "thread-1",
-        "client_metadata": { "x-codex-installation-id": "install-1" }
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "session_id": "session-1"
+        }
     });
 
     assert_eq!(
-        prompt_cache_session_id(&body, GatewayRouteKind::OpenAiResponses).as_deref(),
-        Some("thread-1")
+        responses_session_id(&body, GatewayRouteKind::OpenAiResponses).as_deref(),
+        Some("session-1")
     );
     assert_eq!(
-        prompt_cache_session_id(&body, GatewayRouteKind::OpenAiChatCompletions),
+        responses_session_id(&body, GatewayRouteKind::OpenAiChatCompletions),
         None
     );
     assert_eq!(
-        prompt_cache_session_id(
+        responses_session_id(
             &json!({ "prompt_cache_key": "plain-cache" }),
             GatewayRouteKind::OpenAiResponses,
         ),
         None
     );
     assert_eq!(
-        prompt_cache_session_id(
+        responses_session_id(
             &json!({
-                "prompt_cache_key": "",
+                "prompt_cache_key": "legacy-thread",
                 "client_metadata": { "x-codex-installation-id": "install-1" }
             }),
             GatewayRouteKind::OpenAiResponses,
-        ),
+        )
+        .as_deref(),
+        Some("legacy-thread")
+    );
+}
+
+#[test]
+fn responses_subagent_id_accepts_only_codex_collab_spawn_metadata() {
+    let body = json!({
+        "client_metadata": {
+            "x-codex-installation-id": "install-1",
+            "x-openai-subagent": "collab_spawn",
+            "thread_id": "child-thread"
+        }
+    });
+
+    assert_eq!(
+        responses_subagent_id(&body, GatewayRouteKind::OpenAiResponses).as_deref(),
+        Some("child-thread")
+    );
+    assert_eq!(
+        responses_subagent_id(&body, GatewayRouteKind::OpenAiChatCompletions),
         None
     );
+
+    for kind in ["review", "compact", "memory"] {
+        let body = json!({
+            "client_metadata": {
+                "x-codex-installation-id": "install-1",
+                "x-openai-subagent": kind,
+                "thread_id": "internal-thread"
+            }
+        });
+        assert_eq!(
+            responses_subagent_id(&body, GatewayRouteKind::OpenAiResponses),
+            None
+        );
+    }
 }
 
 #[test]
