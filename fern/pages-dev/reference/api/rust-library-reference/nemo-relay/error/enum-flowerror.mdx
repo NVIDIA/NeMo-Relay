@@ -2,14 +2,14 @@
 title: "Enum Flow Error"
 sidebar-title: "FlowError"
 description: "The error type for all NeMo Relay runtime operations."
-position: 1
+position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum FlowError &#123;\n    AlreadyExists(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    NotFound(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    InvalidArgument(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    ScopeStackEmpty,\n    GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Internal(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum FlowError &#123;\n    AlreadyExists(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    NotFound(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    InvalidArgument(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    ScopeStackEmpty,\n    GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Upstream(<a href=\"struct-upstreamfailure\">UpstreamFailure</a>),\n    Internal(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
 
 The error type for all NeMo Relay runtime operations.
 
@@ -56,6 +56,12 @@ This should not occur under normal operation because the root scope is always pr
 A conditional execution guardrail rejected the operation.
 
 The contained string is the rejection reason provided by the guardrail. This is returned during `tool_call_execute` or `llm_call_execute` when a conditional guardrail returns `Some(reason)`.
+
+### `Upstream(UpstreamFailure)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Upstream(<a href=\"struct-upstreamfailure\">UpstreamFailure</a>)"}} /></pre>
+
+Structured upstream provider failure from retry-aware gateway dispatch.
 
 ### `Internal(String)`
 

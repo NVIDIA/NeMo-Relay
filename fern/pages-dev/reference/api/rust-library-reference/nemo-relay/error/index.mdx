@@ -13,9 +13,14 @@ Error types for the NeMo Relay runtime.
 
 All fallible operations in the runtime return [`Result<T>`](/reference/api/rust-library-reference/nemo-relay/error/type-result), which uses [`FlowError`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) as the error type. Errors are categorized by cause (duplicate registration, missing entity, guardrail rejection, etc.).
 
+## Structs
+
+- [UpstreamFailure](/reference/api/rust-library-reference/nemo-relay/error/struct-upstreamfailure): Structured provider failure surfaced only for explicitly retry-aware dispatches.
+
 ## Enums
 
 - [FlowError](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror): The error type for all NeMo Relay runtime operations.
+- [UpstreamFailureClass](/reference/api/rust-library-reference/nemo-relay/error/enum-upstreamfailureclass): Stable classification for an upstream provider failure captured by retry-aware dispatch.
 
 ## Type Aliases
 

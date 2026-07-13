@@ -25,6 +25,10 @@ Once assembled, the payload can be fed back through the matching [`crate::codec:
 - [SseEvent](/reference/api/rust-library-reference/nemo-relay/codec/streaming/struct-sseevent): One decoded SSE frame, paired with the parsed `data:` payload.
 - [SseEventDecoder](/reference/api/rust-library-reference/nemo-relay/codec/streaming/struct-sseeventdecoder): Incremental decoder for `text/event-stream` byte streams that yields one JSON object per complete `data:` payload.
 
+## Enums
+
+- [NormalizedStreamEvent](/reference/api/rust-library-reference/nemo-relay/codec/streaming/enum-normalizedstreamevent): Provider-neutral incremental stream item used by cross-protocol transcoders.
+
 ## Traits
 
 - [StreamingCodec](/reference/api/rust-library-reference/nemo-relay/codec/streaming/trait-streamingcodec): Per-provider streaming codec used with [`crate::api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute).
