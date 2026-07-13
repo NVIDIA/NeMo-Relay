@@ -4,6 +4,7 @@
 //! Small, platform-aware filesystem primitives shared by CLI subsystems.
 
 mod locks;
+pub(crate) mod temp;
 
 pub(crate) use locks::{LockAttempt, try_lock_exclusive, try_lock_shared, unlock_file};
 

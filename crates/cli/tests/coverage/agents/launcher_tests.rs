@@ -839,7 +839,7 @@ fn process_private_directories_are_owner_only() {
     use std::os::unix::fs::PermissionsExt;
 
     let parent = tempfile::tempdir().unwrap();
-    let path = private_temp_dir(parent.path(), "relay-private").unwrap();
+    let path = crate::filesystem::temp::private_temp_dir(parent.path(), "relay-private").unwrap();
     assert_eq!(
         std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o700
@@ -934,7 +934,7 @@ fn hermes_overlay_does_not_link_an_ancestor_entry_that_contains_it() {
     let overlay = source_home.path().join("overlay");
     std::fs::create_dir(&overlay).unwrap();
 
-    populate_hermes_overlay(
+    crate::agents::hermes::launch::populate_overlay(
         &overlay,
         source_home.path(),
         &source_config,
@@ -986,7 +986,10 @@ fn hermes_hooks_path_prefers_configured_then_env_then_home() {
     let _guard = current_dir_lock().lock().unwrap();
     let temp = tempfile::tempdir().unwrap();
     let configured = temp.path().join("configured.yaml");
-    assert_eq!(hermes_hooks_path(Some(&configured)).unwrap(), configured);
+    assert_eq!(
+        crate::agents::hermes::launch::hooks_path_for_launch(Some(&configured)).unwrap(),
+        configured
+    );
 
     let _env = EnvScope::set(&[
         ("HERMES_HOME", Some(temp.path().as_os_str())),
@@ -994,7 +997,7 @@ fn hermes_hooks_path_prefers_configured_then_env_then_home() {
         ("USERPROFILE", None),
     ]);
     assert_eq!(
-        hermes_hooks_path(None).unwrap(),
+        crate::agents::hermes::launch::hooks_path_for_launch(None).unwrap(),
         temp.path().join("config.yaml")
     );
 
@@ -1005,13 +1008,15 @@ fn hermes_hooks_path_prefers_configured_then_env_then_home() {
         ("USERPROFILE", None),
     ]);
     assert_eq!(
-        hermes_hooks_path(None).unwrap(),
+        crate::agents::hermes::launch::hooks_path_for_launch(None).unwrap(),
         temp.path().join(".hermes/config.yaml")
     );
 
     drop(_env);
     let _env = EnvScope::set(&[("HERMES_HOME", None), ("HOME", None), ("USERPROFILE", None)]);
-    let error = hermes_hooks_path(None).unwrap_err().to_string();
+    let error = crate::agents::hermes::launch::hooks_path_for_launch(None)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("could not resolve home directory"));
 }
 

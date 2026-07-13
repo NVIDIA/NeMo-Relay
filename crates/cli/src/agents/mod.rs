@@ -185,6 +185,24 @@ pub(crate) fn codex_mcp_env_vars_from(
     codex::assets::mcp_env_vars_from(environment, config)
 }
 
+pub(crate) fn prepare_launch(
+    agent: CodingAgent,
+    launch: &mut crate::process::PreparedAgentLaunch,
+    gateway_url: &str,
+    resolved: &crate::configuration::ResolvedConfig,
+    dry_run: bool,
+) -> Result<(), crate::error::CliError> {
+    match agent {
+        CodingAgent::Codex => codex::launch::prepare(launch, gateway_url),
+        CodingAgent::ClaudeCode => claude::launch::prepare(launch, gateway_url, dry_run),
+        CodingAgent::Hermes => hermes::launch::prepare(
+            launch,
+            resolved.agents.hermes.hooks_path.as_deref(),
+            dry_run,
+        ),
+    }
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;

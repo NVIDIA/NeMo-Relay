@@ -461,19 +461,7 @@ impl PreparedAgentLaunch {
         if let Some(path) = path_with_transparent_hook_dir() {
             run.env.push(("PATH".into(), path));
         }
-        match agent {
-            CodingAgent::ClaudeCode => {
-                crate::agents::claude::launch::prepare(&mut run, gateway_url, dry_run)?
-            }
-            CodingAgent::Codex => crate::agents::codex::launch::prepare(&mut run, gateway_url)?,
-            CodingAgent::Hermes => {
-                if dry_run {
-                    run.prepare_hermes_dry(resolved.agents.hermes.hooks_path.as_deref())?;
-                } else {
-                    run.prepare_hermes(resolved.agents.hermes.hooks_path.as_deref())?;
-                }
-            }
-        }
+        crate::agents::prepare_launch(agent, &mut run, gateway_url, resolved, dry_run)?;
         Ok(run)
     }
 
@@ -484,44 +472,9 @@ impl PreparedAgentLaunch {
 
     // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. A
     // process-private HERMES_HOME exposes dynamic hooks without rewriting user configuration.
-    fn prepare_hermes(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
-        let source_config = hermes_hooks_path(hooks_path)?;
-        let source_home = source_config.parent().ok_or_else(|| {
-            CliError::Launch(format!(
-                "Hermes config path {} has no parent directory",
-                source_config.display()
-            ))
-        })?;
-        let gateway_url = self
-            .env
-            .iter()
-            .find_map(|(name, value)| {
-                (name == crate::configuration::GATEWAY_URL_ENV).then_some(value.as_str())
-            })
-            .expect("transparent runs always define their gateway URL");
-        let overlay_home = create_hermes_overlay(source_home, &source_config, gateway_url)?;
-        self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
-        self.env
-            .push(("HERMES_HOME".into(), overlay_home.display().to_string()));
-        self.notes.push(format!(
-            "using an isolated Hermes config overlay for {}",
-            source_config.display()
-        ));
-        self.temp_dirs.push(overlay_home);
-        Ok(())
-    }
 
     // Records the Hermes hook file that would be patched during a real run without touching the
     // filesystem, preserving dry-run as an inspection-only operation.
-    fn prepare_hermes_dry(&mut self, hooks_path: Option<&std::path::Path>) -> Result<(), CliError> {
-        let path = hermes_hooks_path(hooks_path)?;
-        self.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
-        self.notes.push(format!(
-            "would create an isolated Hermes config overlay for {}",
-            path.display()
-        ));
-        Ok(())
-    }
 
     // Spawns the prepared child process with injected environment.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
@@ -855,97 +808,6 @@ fn path_with_transparent_hook_dir() -> Option<String> {
 // Creates a per-process Hermes home whose user state points at the original profile while the
 // config and hook approval files remain private to this transparent run. Hermes has no standalone
 // config-file override, so `HERMES_HOME` is its supported process-scoped configuration boundary.
-fn create_hermes_overlay(
-    source_home: &Path,
-    source_config: &Path,
-    gateway_url: &str,
-) -> Result<PathBuf, CliError> {
-    // Prefer a sibling of HERMES_HOME so Windows file hard links remain on one volume. Fall back
-    // to the OS temp directory when the profile parent is not writable; regular files then use a
-    // copy fallback, while profile directories remain live through junctions.
-    let overlay = source_home
-        .parent()
-        .filter(|parent| parent.is_dir())
-        .and_then(|parent| private_temp_dir(parent, ".nemo-relay-hermes-home").ok())
-        .map(Ok)
-        .unwrap_or_else(|| temp_dir("nemo-relay-hermes-home"))?;
-    if let Err(error) = populate_hermes_overlay(&overlay, source_home, source_config, gateway_url) {
-        let _ = std::fs::remove_dir_all(&overlay);
-        return Err(error);
-    }
-    Ok(overlay)
-}
-
-fn populate_hermes_overlay(
-    overlay: &Path,
-    source_home: &Path,
-    source_config: &Path,
-    gateway_url: &str,
-) -> Result<(), CliError> {
-    let absolute_overlay = overlay
-        .canonicalize()
-        .unwrap_or_else(|_| overlay.to_path_buf());
-    match std::fs::read_dir(source_home) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry?;
-                let name = entry.file_name();
-                if name == "config.yaml" || name == "shell-hooks-allowlist.json" {
-                    continue;
-                }
-                let source = entry.path();
-                let absolute_source = source.canonicalize().unwrap_or_else(|_| source.clone());
-                if absolute_overlay.starts_with(absolute_source) {
-                    continue;
-                }
-                link_hermes_state(&source, &overlay.join(name), entry.file_type()?.is_dir())?;
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(CliError::Io(error)),
-    }
-    let existing = match std::fs::read_to_string(source_config) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(CliError::Io(error)),
-    };
-    let relay = std::env::current_exe()
-        .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::agents::portable_executable_path)
-        .unwrap_or_else(|_| PathBuf::from("nemo-relay"));
-    let contents = crate::agents::hermes::transparent_config(&existing, &relay, gateway_url)?;
-    std::fs::write(overlay.join("config.yaml"), contents)?;
-    Ok(())
-}
-
-fn link_hermes_state(source: &Path, destination: &Path, directory: bool) -> Result<(), CliError> {
-    #[cfg(unix)]
-    {
-        let _ = directory;
-        std::os::unix::fs::symlink(source, destination)?;
-        Ok(())
-    }
-    #[cfg(windows)]
-    {
-        if directory {
-            create_windows_junction(source, destination)?;
-        } else {
-            match std::fs::hard_link(source, destination) {
-                Ok(()) => {}
-                Err(_) => {
-                    std::fs::copy(source, destination)?;
-                }
-            }
-        }
-        Ok(())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = directory;
-        std::fs::copy(source, destination)?;
-        Ok(())
-    }
-}
 
 #[cfg(windows)]
 fn create_windows_junction(source: &Path, destination: &Path) -> Result<(), CliError> {
@@ -979,20 +841,6 @@ fn create_windows_junction(source: &Path, destination: &Path) -> Result<(), CliE
 
 // Chooses the Hermes config used as the source for a transparent-run overlay. If setup recorded a
 // specific path, reuse it; otherwise fall back to the active Hermes home.
-fn hermes_hooks_path(configured: Option<&Path>) -> Result<PathBuf, CliError> {
-    if let Some(path) = configured {
-        return Ok(path.to_path_buf());
-    }
-    if let Some(home) = std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(home).join("config.yaml"));
-    }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| {
-            CliError::Launch("could not resolve home directory for Hermes hooks".into())
-        })?;
-    Ok(PathBuf::from(home).join(".hermes").join("config.yaml"))
-}
 
 // Converts JSON hook groups into inline TOML arrays for Codex `--config` flags. The function
 // preserves matchers when present and assumes generated hook groups contain one command hook.
@@ -1001,24 +849,6 @@ fn hermes_hooks_path(configured: Option<&Path>) -> Result<PathBuf, CliError> {
 
 // Creates a uniquely named directory under the OS temp directory. UUIDv7 avoids collisions
 // between concurrent transparent runs without keeping persistent coordination state.
-fn temp_dir(prefix: &str) -> Result<PathBuf, CliError> {
-    private_temp_dir(&std::env::temp_dir(), prefix)
-}
-
-fn private_temp_dir(parent: &Path, prefix: &str) -> Result<PathBuf, CliError> {
-    let path = parent.join(format!("{prefix}-{}", uuid::Uuid::now_v7()));
-    #[cfg(unix)]
-    let builder = {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder
-    };
-    #[cfg(not(unix))]
-    let builder = std::fs::DirBuilder::new();
-    builder.create(&path)?;
-    Ok(path)
-}
 
 #[cfg(test)]
 #[path = "../../tests/coverage/agents/launcher_tests.rs"]

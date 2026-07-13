@@ -43,6 +43,7 @@ pub(super) fn parse_version(raw: &str) -> Option<Version> {
 mod config;
 mod files;
 mod integration;
+pub(crate) mod launch;
 mod trust;
 
 pub(crate) use integration::*;
