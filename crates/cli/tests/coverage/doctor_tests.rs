@@ -1625,3 +1625,26 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
 }
+
+#[test]
+fn claude_hook_floor_warning_pins_version_boundary() {
+    // 2.1.116 is the first Claude Code whose plugin hook whitelist accepts UserPromptExpansion;
+    // 2.1.114 is the newest published version that rejects it (2.1.115 was never published).
+    let cases = [
+        ("2.1.114 (Claude Code)", true),
+        ("2.1.116 (Claude Code)", false),
+        ("2.1.206 (Claude Code)", false),
+        ("2.0.999 (Claude Code)", true),
+        ("3.0.0 (Claude Code)", false),
+        ("2.1.116-beta (Claude Code)", false),
+        ("not a version", false),
+        ("", false),
+    ];
+    for (version, expect_warning) in cases {
+        assert_eq!(
+            claude_hook_floor_warning(version).is_some(),
+            expect_warning,
+            "unexpected floor verdict for {version:?}"
+        );
+    }
+}

@@ -1124,15 +1124,15 @@ fn acg_component_decode_request_for_surface_reports_codec_specific_errors() {
 
     assert!(matches!(
         decode_request_for_surface(RequestSurface::AnthropicMessages, &invalid_request),
-        Err(AdaptiveError::Internal(message)) if message.contains("failed to decode anthropic request")
+        Err(AdaptiveError::Internal(message)) if message.contains("failed to decode anthropic_messages request")
     ));
     assert!(matches!(
         decode_request_for_surface(RequestSurface::OpenAIChat, &invalid_request),
-        Err(AdaptiveError::Internal(message)) if message.contains("failed to decode openai chat request")
+        Err(AdaptiveError::Internal(message)) if message.contains("failed to decode open_ai_chat request")
     ));
     assert!(matches!(
         decode_request_for_surface(RequestSurface::OpenAIResponses, &invalid_request),
-        Err(AdaptiveError::Internal(message)) if message.contains("failed to decode openai responses request")
+        Err(AdaptiveError::Internal(message)) if message.contains("failed to decode open_ai_responses request")
     ));
 }
 

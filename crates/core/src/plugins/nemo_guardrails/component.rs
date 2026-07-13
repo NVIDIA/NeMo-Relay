@@ -11,6 +11,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
+use crate::codec::resolve::supported_codec_names;
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
@@ -901,10 +902,7 @@ fn validate_codec_requirements(
         return;
     };
 
-    if !matches!(
-        codec,
-        "openai_chat" | "openai_responses" | "anthropic_messages"
-    ) {
+    if !supported_codec_names().contains(&codec) {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
