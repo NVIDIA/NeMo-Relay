@@ -22,6 +22,7 @@ use crate::plugins::policy::{
 };
 
 struct PluginConfigDiscoveryScope {
+    _cwd_guard: crate::test_support::CwdTestScope,
     _guard: MutexGuard<'static, ()>,
     previous_cwd: PathBuf,
     previous_xdg_config_home: Option<OsString>,
@@ -33,6 +34,7 @@ struct PluginConfigDiscoveryScope {
 
 impl PluginConfigDiscoveryScope {
     fn enter(cwd: &std::path::Path, xdg_config_home: &std::path::Path) -> Self {
+        let cwd_guard = crate::test_support::CwdTestScope::locked();
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -51,6 +53,7 @@ impl PluginConfigDiscoveryScope {
         }
         std::env::set_current_dir(cwd).unwrap();
         Self {
+            _cwd_guard: cwd_guard,
             _guard: guard,
             previous_cwd,
             previous_xdg_config_home,
