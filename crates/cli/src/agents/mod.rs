@@ -169,6 +169,33 @@ impl crate::installation::marketplace::state::MarketplaceHostIdentity for Coding
             Self::Hermes => unreachable!("Hermes does not use marketplace layout"),
         }
     }
+
+    fn marketplace_manifest(self, marketplace: &str, plugin: &str) -> serde_json::Value {
+        marketplace_manifest(self, marketplace, plugin)
+    }
+
+    fn plugin_manifest(self, plugin: &str) -> serde_json::Value {
+        plugin_manifest(self, plugin)
+    }
+
+    fn plugin_mcp_config(self, server: serde_json::Value) -> Result<serde_json::Value, String> {
+        plugin_mcp_config(self, server)
+    }
+
+    fn plugin_hooks(
+        self,
+        relay: &std::path::Path,
+        generation_fence: &std::path::Path,
+        generation_token: &str,
+    ) -> Result<serde_json::Value, String> {
+        let command = crate::hooks::persistent_hook_forward_command(
+            relay,
+            self,
+            generation_fence,
+            generation_token,
+        )?;
+        Ok(crate::hooks::generated_hooks(self, &command))
+    }
 }
 
 pub(crate) fn marketplace_manifest(

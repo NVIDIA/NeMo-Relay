@@ -20,6 +20,15 @@ pub(crate) trait MarketplaceHostIdentity: Copy {
     fn label(self) -> &'static str;
     fn marketplace_manifest_relative(self) -> &'static [&'static str];
     fn plugin_manifest_relative(self) -> &'static [&'static str];
+    fn marketplace_manifest(self, marketplace: &str, plugin: &str) -> Value;
+    fn plugin_manifest(self, plugin: &str) -> Value;
+    fn plugin_mcp_config(self, server: Value) -> Result<Value, String>;
+    fn plugin_hooks(
+        self,
+        relay: &Path,
+        generation_fence: &Path,
+        generation_token: &str,
+    ) -> Result<Value, String>;
 }
 
 #[derive(Debug, Clone)]

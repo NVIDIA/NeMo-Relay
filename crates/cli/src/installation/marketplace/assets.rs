@@ -9,17 +9,17 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::agents::CodingAgent;
-use crate::hooks::generated_hooks;
 use crate::installation::generation::{
     write_new_generation_with_token_at, write_staged_generation_with_token,
 };
 
-use super::state::{PluginInstallOptions, PluginLayout, remove_path, write_json};
+use super::state::{
+    MarketplaceHostIdentity, PluginInstallOptions, PluginLayout, remove_path, write_json,
+};
 use super::{MARKETPLACE_NAME, PLUGIN_NAME};
 
 pub(super) fn write_plugin_marketplace(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     layout: &PluginLayout,
     relay: &Path,
     options: &PluginInstallOptions,
@@ -36,7 +36,7 @@ pub(super) fn write_plugin_marketplace(
 }
 
 pub(super) fn write_plugin_marketplace_for_generation(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     layout: &PluginLayout,
     relay: &Path,
     active_generation_fence: &Path,
@@ -80,23 +80,23 @@ pub(super) fn write_plugin_marketplace_for_generation(
     Ok(())
 }
 
-pub(super) fn marketplace_manifest(host: CodingAgent) -> Value {
-    crate::agents::marketplace_manifest(host, MARKETPLACE_NAME, PLUGIN_NAME)
+pub(super) fn marketplace_manifest(host: impl MarketplaceHostIdentity) -> Value {
+    host.marketplace_manifest(MARKETPLACE_NAME, PLUGIN_NAME)
 }
 
-pub(super) fn plugin_manifest(host: CodingAgent) -> Value {
-    crate::agents::plugin_manifest(host, PLUGIN_NAME)
+pub(super) fn plugin_manifest(host: impl MarketplaceHostIdentity) -> Value {
+    host.plugin_manifest(PLUGIN_NAME)
 }
 
 pub(super) fn plugin_mcp_config(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     relay: &Path,
     generation_fence: &Path,
     generation_token: &str,
 ) -> Result<Value, String> {
     let generation_fence = absolute_or_self(generation_fence);
     let server = crate::mcp::persistent_server(relay, &generation_fence, generation_token);
-    crate::agents::plugin_mcp_config(host, server)
+    host.plugin_mcp_config(server)
 }
 
 fn absolute_or_self(path: &Path) -> std::path::PathBuf {
@@ -109,22 +109,13 @@ fn absolute_or_self(path: &Path) -> std::path::PathBuf {
 }
 
 pub(super) fn plugin_hooks(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     relay: &Path,
     generation_fence: &Path,
     generation_token: &str,
 ) -> Result<Value, String> {
-    let agent = host;
     let generation_fence = absolute_or_self(generation_fence);
-    Ok(generated_hooks(
-        agent,
-        &crate::hooks::persistent_hook_forward_command(
-            relay,
-            agent,
-            &generation_fence,
-            generation_token,
-        )?,
-    ))
+    host.plugin_hooks(relay, &generation_fence, generation_token)
 }
 
 #[cfg(test)]
