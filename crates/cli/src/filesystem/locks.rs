@@ -30,7 +30,7 @@ pub(crate) fn unlock_file(file: &File) -> io::Result<()> {
     FileExt::unlock(file)
 }
 
-fn normalize_lock_attempt(result: io::Result<()>) -> io::Result<LockAttempt> {
+pub(super) fn normalize_lock_attempt(result: io::Result<()>) -> io::Result<LockAttempt> {
     match result {
         Ok(()) => Ok(LockAttempt::Acquired),
         Err(error) if lock_is_contended(&error) => Ok(LockAttempt::Contended),

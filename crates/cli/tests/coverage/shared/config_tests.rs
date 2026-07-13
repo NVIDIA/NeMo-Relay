@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::agents::CodingAgent;
-use crate::filesystem::bounded::{
-    MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, read_bounded_regular_file,
-};
+use crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES as MAX_BOOTSTRAP_IDENTITY_FILE_BYTES;
+#[cfg(unix)]
+use crate::filesystem::bounded::read_bounded_regular_file;
 use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;
