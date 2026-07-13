@@ -979,7 +979,8 @@ fn edit_string_map_value(
                     .interact_text()
                     .map_err(editor_error)?;
                 if key.trim().is_empty() {
-                    return Err(CliError::Config("map entry key must not be empty".into()));
+                    println!("  Entry key must not be empty.");
+                    continue;
                 }
                 let entry: String = Input::with_theme(theme)
                     .with_prompt("Entry value")
@@ -988,7 +989,7 @@ fn edit_string_map_value(
                 value
                     .as_object_mut()
                     .expect("string map value is an object")
-                    .insert(key, Value::String(entry));
+                    .insert(key.trim().to_owned(), Value::String(entry));
             }
             MenuResponse::Selected(index) if index <= keys.len() => {
                 edit_existing_string_map_entry(theme, prompt, value, &keys[index - 1])?;
