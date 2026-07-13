@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::Args;
 
-use super::arguments::AgentArg;
+use super::root::AgentArg;
 use super::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::error::CliError;

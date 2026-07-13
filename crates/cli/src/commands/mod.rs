@@ -3,7 +3,6 @@
 
 //! Command parsing, dispatch, rendering, and exit-code ownership.
 
-pub(crate) mod arguments;
 mod completions;
 mod configuration;
 mod diagnostics;
@@ -12,6 +11,7 @@ mod install;
 mod mcp;
 mod model_pricing;
 mod plugins;
+pub(crate) mod root;
 mod run;
 mod serve;
 
@@ -19,11 +19,13 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use self::arguments::{Cli, Command};
-#[cfg(test)]
-use self::arguments::{PluginsCommand, PricingCommand};
 #[cfg(test)]
 use self::completions::CompletionsCommand;
+#[cfg(test)]
+use self::model_pricing::PricingCommand;
+#[cfg(test)]
+use self::plugins::PluginsCommand;
+use self::root::{Cli, Command};
 use self::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::{

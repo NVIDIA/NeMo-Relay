@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
 
-use super::arguments::AgentArg;
+use super::root::AgentArg;
 use crate::error::CliError;
 
 #[derive(Debug, Clone, Args)]

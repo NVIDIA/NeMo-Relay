@@ -9,7 +9,7 @@ use clap::Args;
 
 use clap::CommandFactory;
 
-use crate::commands::arguments::Cli;
+use crate::commands::root::Cli;
 use crate::error::CliError;
 
 #[derive(Debug, Clone, Args)]

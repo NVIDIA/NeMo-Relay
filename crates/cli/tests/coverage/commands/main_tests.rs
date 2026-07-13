@@ -7,9 +7,10 @@ use std::ffi::OsString;
 use super::completions::CompletionsCommand;
 use super::serve::ServerArgs;
 use super::*;
-use crate::commands::arguments::{
+use crate::commands::model_pricing::{PricingSubcommand, PricingValidateCommand};
+use crate::commands::plugins::{
     PluginsCommand, PluginsEditCommand, PluginsInspectCommand, PluginsListCommand,
-    PluginsSubcommand, PluginsValidateCommand, PricingSubcommand, PricingValidateCommand,
+    PluginsSubcommand, PluginsValidateCommand,
 };
 
 struct EnvScope {

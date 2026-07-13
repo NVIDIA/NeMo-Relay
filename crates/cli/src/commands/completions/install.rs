@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use clap_complete::Shell;
 
-use crate::commands::arguments::Cli;
+use crate::commands::root::Cli;
 use crate::error::CliError;
 
 /// Generates the completion script for `$SHELL` and writes it to the matching shell-specific
