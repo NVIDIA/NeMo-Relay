@@ -25,17 +25,19 @@ use tokio::sync::Mutex;
 
 use crate::agents::shared::adapters::{SKILL_LOAD_SOURCE_KEY, SKILL_LOAD_SOURCE_PROMPT_EXPANSION};
 use crate::agents::shared::alignment::{
-    self, GatewayManagementPolicy, PendingSubagentStart, SessionAlias, SessionAlignmentState,
-    insert_optional, json_string_at, json_value_at, merge_metadata,
+    self, GatewayManagementPolicy, SessionAlias, SessionAlignmentState, insert_optional,
+    json_string_at, json_value_at, merge_metadata,
 };
 use crate::configuration::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
 mod correlation;
 mod idle;
+mod routing;
 mod types;
 
 use correlation::*;
 use idle::*;
+use routing::*;
 pub(crate) use types::*;
 
 use crate::events::{
@@ -566,183 +568,6 @@ impl SessionManager {
         }
         Ok(alias)
     }
-}
-
-// Mutates a gateway LLM start in place after alias resolution. The parent session id is what the
-// runtime session manager should open, while the subagent id and alias metadata preserve the child
-// thread as the LLM owner.
-fn apply_start_alias(start: &mut LlmGatewayStart, alias: &SessionAlias) {
-    start.session_id = Some(alias.parent_session_id.clone());
-    start.subagent_id = Some(alias.subagent_id.clone());
-    start.metadata = merge_metadata(start.metadata.clone(), alias.metadata());
-}
-
-// Handles child SessionStart events before normal per-session dispatch. Some harnesses advertise a
-// parent session on SessionStart; when the child is still empty, queue or promote that start as a
-// subagent instead of letting it open a new root trace. Applies to Codex child threads today.
-async fn queue_or_promote_child_start(
-    event: &mut NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-    config: SessionConfig,
-) -> Result<bool, CliError> {
-    let Some((child_session_id, pending)) = alignment::pending_subagent_start(event).await else {
-        return Ok(false);
-    };
-    if sessions
-        .get(&child_session_id)
-        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
-    {
-        return Ok(false);
-    }
-    if sessions.contains_key(pending.parent_session_id()) {
-        alignment_state.remove_pending(&child_session_id);
-        promote_pending_subagent(sessions, alignment_state, child_session_id, pending, config)
-            .await?;
-    } else {
-        // Child-first ordering is possible for harness-managed children. Drop any empty child
-        // placeholder and wait until the parent hook or a gateway LLM forces promotion. Applies to
-        // Codex transparent runs today.
-        sessions.remove(&child_session_id);
-        alignment_state.insert_pending(child_session_id, pending);
-    }
-    Ok(true)
-}
-
-async fn apply_event_to_session(
-    sessions: &mut HashMap<String, Session>,
-    session_id: &str,
-    event: NormalizedEvent,
-    event_kind: AgentKind,
-    config: SessionConfig,
-    is_agent_started: bool,
-) -> Result<bool, CliError> {
-    let session = sessions
-        .entry(session_id.to_string())
-        .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
-    if is_agent_started
-        && session.agent_kind == AgentKind::Gateway
-        && event_kind != AgentKind::Gateway
-    {
-        session.agent_kind = event_kind;
-    }
-    session.apply(event).await?;
-    Ok(session.is_empty())
-}
-
-// Promotes all child SessionStart hooks that were waiting on a newly opened parent. Multiple
-// children can wait for the same parent when parallel harness-managed subagents start before the
-// root hook is observed. Applies to Codex child threads today.
-async fn promote_pending_subagents_for_parent(
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-    parent_session_id: &str,
-    config: SessionConfig,
-) -> Result<(), CliError> {
-    for (child_session_id, pending) in alignment_state.pending_for_parent(parent_session_id) {
-        promote_pending_subagent(
-            sessions,
-            alignment_state,
-            child_session_id,
-            pending,
-            config.clone(),
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-// Converts one pending child SessionStart into a parent-owned subagent and installs the alias used
-// by later child-session events. If the child session gained real activity while pending, promotion
-// is skipped rather than moving existing LLM/tool handles across scopes. Applies to Codex child
-// threads today.
-async fn promote_pending_subagent(
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-    child_session_id: String,
-    pending: PendingSubagentStart,
-    config: SessionConfig,
-) -> Result<Option<SessionAlias>, CliError> {
-    if sessions
-        .get(&child_session_id)
-        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
-    {
-        return Ok(None);
-    }
-    sessions.remove(&child_session_id);
-    let parent_session_id = pending.parent_session_id().to_string();
-    let parent_session = sessions
-        .entry(parent_session_id.clone())
-        .or_insert_with(|| {
-            Session::new(parent_session_id.clone(), pending.event.agent_kind, config)
-        });
-    if !parent_session.session_started && parent_session.agent_scope.is_none() {
-        // Gateway traffic can be the first signal that forces promotion. In that case, synthesize
-        // the parent session metadata; the later subagent start will create a turn-scoped parent.
-        parent_session
-            .apply(NormalizedEvent::AgentStarted(SessionEvent {
-                session_id: parent_session_id,
-                agent_kind: pending.event.agent_kind,
-                event_name: "implicit_parent_for_aligned_subagent".into(),
-                payload: Value::Null,
-                metadata: Value::Null,
-            }))
-            .await?;
-    }
-    let subagent_event = pending.subagent_start_event();
-    parent_session
-        .apply(NormalizedEvent::SubagentStarted(subagent_event))
-        .await?;
-    let alias = pending.alias_for_child_session(child_session_id.clone());
-    alignment_state.insert_alias(child_session_id, alias.clone());
-    Ok(Some(alias))
-}
-
-fn route_event_for_session(
-    event: NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-) -> Option<(NormalizedEvent, String, bool)> {
-    let mut event = alignment_state.route_event(event);
-    let explicit_subagent_alias = alignment::explicit_subagent_alias(&mut event);
-    let session_id = event.session_id().to_string();
-    let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
-
-    if event.is_terminal() && !sessions.contains_key(&session_id) {
-        return None;
-    }
-    if !apply_explicit_subagent_alias(
-        &mut event,
-        sessions,
-        alignment_state,
-        explicit_subagent_alias,
-    ) {
-        return None;
-    }
-    Some((event, session_id, is_agent_started))
-}
-
-fn apply_explicit_subagent_alias(
-    event: &mut NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-    explicit_subagent_alias: Option<(String, SessionAlias)>,
-) -> bool {
-    let Some((child_session_id, alias)) = explicit_subagent_alias else {
-        alignment_state.align_explicit_subagent_end(event);
-        return true;
-    };
-
-    if sessions
-        .get(&child_session_id)
-        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
-    {
-        return false;
-    }
-    sessions.remove(&child_session_id);
-    alignment_state.insert_alias(child_session_id, alias);
-    alignment_state.align_explicit_subagent_end(event);
-    true
 }
 
 impl Session {
