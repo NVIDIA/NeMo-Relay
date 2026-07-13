@@ -69,7 +69,7 @@ component_management:
         - "crates/cli/src"
       statuses:
         - type: project
-          target: 88%
+          target: 90%
           threshold: 0.5%
           base: auto
           if_ci_failed: error
@@ -137,8 +137,9 @@ ignore:
   - "crates/cli/tests/"
   # CLI TTY shells are exercised by smoke tests, but their prompt loops are
   # intentionally split away from testable model modules.
-  - "crates/cli/src/plugins.rs"
-  - "crates/cli/src/setup.rs"
+  - "crates/cli/src/plugins/mod.rs"
+  - "crates/cli/src/plugins/dynamic_editor.rs"
+  - "crates/cli/src/commands/configure/wizard.rs"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.
