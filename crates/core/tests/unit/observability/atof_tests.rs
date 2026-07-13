@@ -1413,6 +1413,11 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
     assert!(resolved_header_map(&Default::default(), &missing_env).is_err());
     let conflict = std::collections::HashMap::from([("x-test".into(), "PATH".into())]);
     assert!(resolved_header_map(&headers, &conflict).is_err());
+    let mixed_case_headers =
+        std::collections::HashMap::from([("Authorization".into(), "Bearer literal".into())]);
+    let mixed_case_conflict =
+        std::collections::HashMap::from([("authorization".into(), "PATH".into())]);
+    assert!(resolved_header_map(&mixed_case_headers, &mixed_case_conflict).is_err());
 
     let empty_url = AtofEndpointConfig {
         url: "  ".into(),

@@ -1005,14 +1005,18 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
 
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
+    let mut names = std::collections::HashSet::new();
     if let Some(headers) = endpoint.get("headers") {
         let Some(object) = headers.as_object() else {
             return Err("headers must be an object of string values".into());
         };
         for (key, value) in object {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
             let Some(value) = value.as_str() else {
                 return Err(format!("headers.{key} must be a string"));
             };
+            names.insert(name);
             out.push((key.clone(), value.to_string()));
         }
     }
@@ -1021,7 +1025,9 @@ fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
             return Err("header_env must be an object of string values".into());
         };
         for (key, variable) in object {
-            if out.iter().any(|(existing, _)| existing == key) {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
+            if names.contains(&name) {
                 return Err(format!(
                     "header {key:?} cannot appear in both headers and header_env"
                 ));
@@ -1034,6 +1040,7 @@ fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
             if value.trim().is_empty() {
                 return Err(format!("environment variable {variable:?} is blank"));
             }
+            names.insert(name);
             out.push((key.clone(), value));
         }
     }

@@ -618,7 +618,9 @@ fn resolved_header_map(
         out.insert(name, value);
     }
     for (key, variable) in header_env {
-        if headers.contains_key(key) {
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+        if out.contains_key(&name) {
             return Err(AtofExporterError::InvalidEndpoint(format!(
                 "header {key:?} cannot be configured in both headers and header_env"
             )));
@@ -633,8 +635,6 @@ fn resolved_header_map(
                 "environment variable {variable:?} for header {key:?} is blank"
             )));
         }
-        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-            .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
         let value = reqwest::header::HeaderValue::from_str(&value)
             .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
         out.insert(name, value);
