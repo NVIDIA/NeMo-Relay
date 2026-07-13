@@ -70,5 +70,27 @@ pub(super) async fn easy_path(
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
     let inherited = server.to_runtime();
-    crate::process::launcher::easy_path(agent, command.command, Some(&inherited)).await
+    // An explicit config path is the user's contract. Without one, setup is required only when
+    // none of the normal discovery layers exists. Keep this interactive decision in the command
+    // layer so process supervision receives a complete, agent-neutral run request.
+    let explicit_config = inherited.config.as_deref();
+    let needs_setup = explicit_config.map_or_else(
+        || !crate::configuration::any_config_file_exists(),
+        |path| !path.exists(),
+    );
+    if needs_setup {
+        crate::configuration::wizard::run(Some(agent)).await?;
+    }
+    let runtime = crate::process::RunOverrides {
+        agent: Some(agent),
+        config: explicit_config.map(PathBuf::from),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: false,
+        print: false,
+        command: command.command,
+    };
+    crate::process::launcher::run(runtime, Some(&inherited)).await
 }

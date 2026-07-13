@@ -17,8 +17,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::configuration::{
-    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, any_config_file_exists,
-    resolve_run_config,
+    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, resolve_run_config,
 };
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
@@ -40,50 +39,6 @@ pub(crate) async fn run(
     let run = TransparentRun::new(command, inherited).await?;
     run.print_if_requested();
     run.execute().await
-}
-
-/// Runs the easy-path bare-agent shortcut (`nemo-relay claude`, `nemo-relay codex`, etc.).
-///
-/// If no config file is present at any discovery layer, this fires the interactive setup inline
-/// (`crate::configuration::wizard::run`) which writes a `config.toml`, then proceeds to launch the agent. When
-/// config IS present, the easy path constructs a synthetic `RunOverrides` and delegates to the
-/// same transparent-run pipeline `nemo-relay run` uses — same observability wiring, same agent
-/// argv resolution, same lifecycle management.
-pub(crate) async fn easy_path(
-    agent: CodingAgent,
-    command: Vec<String>,
-    inherited: Option<&GatewayOverrides>,
-) -> Result<ExitCode, CliError> {
-    // Explicit `--config <path>` short-circuits the discovery-based setup trigger: when the
-    // user has pointed at a specific file, that file is the contract — fire setup only if it
-    // doesn't exist yet, and never run setup just because no config lives at any default
-    // discovery location.
-    let explicit_config = inherited.and_then(|args| args.config.as_deref());
-    let needs_setup = match explicit_config {
-        Some(path) => !path.exists(),
-        None => !any_config_file_exists(),
-    };
-    if needs_setup {
-        // No config anywhere — fire setup inline, scoped to the agent the user typed. After
-        // it returns, config discovery will pick up the freshly-written `config.toml` and
-        // `run()` below will see a populated environment. If setup errors (non-TTY, user
-        // cancelled), surface that directly.
-        crate::configuration::wizard::run(Some(agent)).await?;
-    }
-    let synthetic = RunOverrides {
-        agent: Some(agent),
-        // Forward the explicit config path so `run` parses the same file the user asked for,
-        // rather than re-discovering from defaults.
-        config: explicit_config.map(std::path::Path::to_path_buf),
-        openai_base_url: None,
-        anthropic_base_url: None,
-        session_metadata: None,
-        plugin_config_path: None,
-        dry_run: false,
-        print: false,
-        command,
-    };
-    run(synthetic, inherited).await
 }
 
 struct TransparentRun {
