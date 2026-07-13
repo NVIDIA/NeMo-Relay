@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-use super::arguments::ServerArgs;
+use super::serve::ServerArgs;
 use crate::error::CliError;
 
 pub(super) async fn execute(server: &ServerArgs) -> Result<ExitCode, CliError> {

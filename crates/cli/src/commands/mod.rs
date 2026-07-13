@@ -13,14 +13,18 @@ mod mcp;
 mod model_pricing;
 mod plugins;
 mod run;
+mod serve;
 
 use std::process::ExitCode;
 
 use clap::Parser;
 
-use self::arguments::{Cli, Command, ServerArgs};
+use self::arguments::{Cli, Command};
 #[cfg(test)]
-use self::arguments::{CompletionsCommand, PluginsCommand, PricingCommand};
+use self::arguments::{PluginsCommand, PricingCommand};
+#[cfg(test)]
+use self::completions::CompletionsCommand;
+use self::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::{
     configuration as runtime_configuration, diagnostics as runtime_diagnostics, error, server,

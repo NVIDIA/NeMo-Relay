@@ -5,10 +5,20 @@ mod install;
 
 use std::process::ExitCode;
 
+use clap::Args;
+
 use clap::CommandFactory;
 
-use crate::commands::arguments::{Cli, CompletionsCommand};
+use crate::commands::arguments::Cli;
 use crate::error::CliError;
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct CompletionsCommand {
+    #[arg(value_enum)]
+    pub(crate) shell: Option<clap_complete::Shell>,
+    #[arg(long)]
+    pub(crate) install: bool,
+}
 
 pub(super) fn execute(command: CompletionsCommand) -> Result<ExitCode, CliError> {
     if command.install {

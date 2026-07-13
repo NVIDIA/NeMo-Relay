@@ -1,10 +1,31 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use super::arguments::DoctorCommand;
+use clap::Args;
+
+use super::arguments::{AgentArg, IntegrationHost};
 use crate::error::CliError;
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct DoctorCommand {
+    #[arg(value_enum)]
+    pub(crate) agent: Option<AgentArg>,
+    #[arg(long, value_enum)]
+    pub(crate) plugin: Option<IntegrationHost>,
+    #[arg(long)]
+    pub(crate) install_dir: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct AgentsCommand {
+    #[arg(long)]
+    pub(crate) json: bool,
+}
 
 pub(super) async fn execute(command: DoctorCommand) -> Result<ExitCode, CliError> {
     if let Some(plugin) = command.plugin {

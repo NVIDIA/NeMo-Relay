@@ -4,11 +4,12 @@
 use clap::Parser;
 use std::ffi::OsString;
 
+use super::completions::CompletionsCommand;
+use super::serve::ServerArgs;
 use super::*;
 use crate::commands::arguments::{
-    CompletionsCommand, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
-    PluginsListCommand, PluginsSubcommand, PluginsValidateCommand, PricingSubcommand,
-    PricingValidateCommand, ServerArgs,
+    PluginsCommand, PluginsEditCommand, PluginsInspectCommand, PluginsListCommand,
+    PluginsSubcommand, PluginsValidateCommand, PricingSubcommand, PricingValidateCommand,
 };
 
 struct EnvScope {

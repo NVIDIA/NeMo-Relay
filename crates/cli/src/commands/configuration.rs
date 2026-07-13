@@ -3,8 +3,18 @@
 
 use std::process::ExitCode;
 
-use super::arguments::ConfigCommand;
+use clap::Args;
+
+use super::arguments::AgentArg;
 use crate::error::CliError;
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct ConfigCommand {
+    #[arg(value_enum)]
+    pub(crate) agent: Option<AgentArg>,
+    #[arg(long)]
+    pub(crate) reset: bool,
+}
 
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
     let agent = command.agent.map(Into::into);

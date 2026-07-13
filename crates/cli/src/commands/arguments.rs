@@ -1,11 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 
+use super::completions::CompletionsCommand;
+use super::configuration::ConfigCommand;
+use super::diagnostics::{AgentsCommand, DoctorCommand};
+use super::hook_forward::HookForwardCommand;
+use super::run::{EasyPathCommand, RunCommand};
+use super::serve::ServerArgs;
 use crate::agents::CodingAgent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -23,54 +28,6 @@ impl From<AgentArg> for CodingAgent {
             AgentArg::Claude => Self::ClaudeCode,
             AgentArg::Codex => Self::Codex,
             AgentArg::Hermes => Self::Hermes,
-        }
-    }
-}
-
-impl ServerArgs {
-    pub(crate) fn to_runtime(&self) -> crate::server::GatewayOverrides {
-        crate::server::GatewayOverrides {
-            config: self.config.clone(),
-            bind: self.bind,
-            openai_base_url: self.openai_base_url.clone(),
-            anthropic_base_url: self.anthropic_base_url.clone(),
-            plugin_config_path: self.plugin_config_path.clone(),
-            ready_file: self.ready_file.clone(),
-            max_hook_payload_bytes: self.max_hook_payload_bytes,
-            max_passthrough_body_bytes: self.max_passthrough_body_bytes,
-        }
-    }
-}
-
-impl RunCommand {
-    pub(crate) fn into_runtime(self) -> crate::process::RunOverrides {
-        crate::process::RunOverrides {
-            agent: self.agent.map(Into::into),
-            config: self.config,
-            openai_base_url: self.openai_base_url,
-            anthropic_base_url: self.anthropic_base_url,
-            session_metadata: self.session_metadata,
-            plugin_config_path: self.plugin_config_path,
-            dry_run: self.dry_run,
-            print: self.print,
-            command: self.command,
-        }
-    }
-}
-
-impl HookForwardCommand {
-    pub(crate) fn into_runtime(self) -> crate::hooks::HookForwardRequest {
-        crate::hooks::HookForwardRequest {
-            agent: self.agent.into(),
-            gateway_url: self.gateway_url,
-            generation_file: self.generation_file,
-            generation_token: self.generation_token,
-            forward_only: self.forward_only,
-            transparent_run: self.transparent_run,
-            profile: self.profile,
-            session_metadata: self.session_metadata,
-            gateway_mode: self.gateway_mode.map(Into::into),
-            fail_closed: self.fail_closed,
         }
     }
 }
@@ -164,25 +121,6 @@ pub(crate) enum Command {
     HookForward(HookForwardCommand),
 }
 
-/// Args for `nemo-relay doctor`. `--json` is on this command (rather than as a global flag)
-/// so it doesn't pollute the help output of subcommands where it has no meaning.
-#[derive(Debug, Clone, Args)]
-pub(crate) struct DoctorCommand {
-    /// Limit readiness checks to one supported agent.
-    #[arg(value_enum)]
-    pub(crate) agent: Option<AgentArg>,
-    /// Diagnose an installed coding-agent integration instead of the normal Relay config.
-    #[arg(long, value_enum)]
-    pub(crate) plugin: Option<IntegrationHost>,
-    /// Plugin install state directory. Defaults to the platform data directory.
-    #[arg(long)]
-    pub(crate) install_dir: Option<PathBuf>,
-    /// Emit machine-readable JSON instead of the formatted human report. Versioned via
-    /// `schema_version`; stable shape for CI / evaluation harness consumption.
-    #[arg(long)]
-    pub(crate) json: bool,
-}
-
 #[derive(Debug, Clone, Args)]
 pub(crate) struct InstallCommand {
     #[arg(value_enum)]
@@ -205,49 +143,6 @@ pub(crate) struct UninstallCommand {
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) dry_run: bool,
-}
-
-/// Args for `nemo-relay agents`. Shares the `--json` shape with `nemo-relay doctor`'s
-/// `agents` field so the two outputs can be unified by downstream consumers.
-#[derive(Debug, Clone, Args)]
-pub(crate) struct AgentsCommand {
-    /// Emit the supported + detected agent list as JSON instead of formatted text.
-    #[arg(long)]
-    pub(crate) json: bool,
-}
-
-/// Args for `nemo-relay completions <shell>` (print to stdout) or `nemo-relay completions --install`
-/// (auto-detect $SHELL and write to the standard fpath / completions directory).
-///
-/// The Homebrew / curl-install flows drop completion scripts automatically; this subcommand is
-/// the escape hatch for CI, custom shells, regeneration, and `cargo install` users where no
-/// post-install hook runs.
-#[derive(Debug, Clone, Args)]
-pub(crate) struct CompletionsCommand {
-    /// Shell to generate the completion script for. Optional when used with `--install` (the
-    /// installer auto-detects `$SHELL`).
-    #[arg(value_enum)]
-    pub(crate) shell: Option<clap_complete::Shell>,
-    /// Write the completion script into the shell's standard completions directory instead of
-    /// printing to stdout. Auto-detects `$SHELL` when no shell argument is given.
-    #[arg(long)]
-    pub(crate) install: bool,
-}
-
-/// Args for `nemo-relay config`. The setup wizard runs by default; `--reset` short-circuits to
-/// a destructive clear. An optional positional agent name scopes both the wizard and `--reset`
-/// to a single agent's settings, leaving other agents' blocks untouched.
-#[derive(Debug, Clone, Args)]
-pub(crate) struct ConfigCommand {
-    /// Scope this run to one agent. Wizard skips the agent multi-select; `--reset` removes
-    /// only that agent's block from the existing config file. Omit to operate on all agents.
-    #[arg(value_enum)]
-    pub(crate) agent: Option<AgentArg>,
-    /// Delete the project config file or the scoped transparent-wrapper agent block. Persistent
-    /// Hermes MCP, hooks, and trust are removed with `nemo-relay uninstall hermes`. The wizard
-    /// does not run after reset; invoke `nemo-relay config` again to recreate configuration.
-    #[arg(long)]
-    pub(crate) reset: bool,
 }
 
 /// Args for `nemo-relay plugins`.
@@ -478,104 +373,6 @@ pub(crate) struct PluginsRemoveCommand {
     pub(crate) id: String,
 }
 
-#[derive(Debug, Clone, Default, Args)]
-pub(crate) struct ServerArgs {
-    /// Path to an explicit config file (disables auto-discovery of workspace/global/system)
-    #[arg(long)]
-    pub(crate) config: Option<PathBuf>,
-    /// Address for the gateway to listen on in daemon mode (default 127.0.0.1:4040)
-    #[arg(long, env = "NEMO_RELAY_GATEWAY_BIND")]
-    pub(crate) bind: Option<SocketAddr>,
-    /// Upstream OpenAI-compatible base URL (e.g. https://api.openai.com/v1, NVIDIA inference)
-    #[arg(long, env = "NEMO_RELAY_OPENAI_BASE_URL")]
-    pub(crate) openai_base_url: Option<String>,
-    /// Upstream Anthropic base URL (e.g. https://api.anthropic.com)
-    #[arg(long, env = "NEMO_RELAY_ANTHROPIC_BASE_URL")]
-    pub(crate) anthropic_base_url: Option<String>,
-    /// Internal override for the plugin configuration file.
-    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
-    pub(crate) plugin_config_path: Option<PathBuf>,
-    /// Internal readiness file used by plugin sidecar bootstrap.
-    #[arg(long, hide = true)]
-    pub(crate) ready_file: Option<PathBuf>,
-    /// Maximum accepted coding-agent hook payload size, in bytes.
-    #[arg(long, env = "NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES")]
-    pub(crate) max_hook_payload_bytes: Option<usize>,
-    /// Maximum accepted provider passthrough request body size, in bytes.
-    #[arg(long, env = "NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES")]
-    pub(crate) max_passthrough_body_bytes: Option<usize>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub(crate) struct HookForwardCommand {
-    #[arg(value_enum)]
-    pub(crate) agent: AgentArg,
-    #[arg(long)]
-    pub(crate) gateway_url: Option<String>,
-    /// Private install-generation fence used by generated persistent hooks.
-    #[arg(long, hide = true)]
-    pub(crate) generation_file: Option<PathBuf>,
-    /// Immutable generation identity paired with `generation_file` by installed hooks.
-    #[arg(long, hide = true)]
-    pub(crate) generation_token: Option<String>,
-    /// Forward to an existing gateway without starting or recovering Relay.
-    #[arg(
-        long,
-        conflicts_with_all = ["generation_file", "generation_token"]
-    )]
-    pub(crate) forward_only: bool,
-    /// Marks the process-private hook source injected by `nemo-relay run`.
-    #[arg(
-        long,
-        hide = true,
-        conflicts_with_all = ["generation_file", "generation_token", "forward_only"]
-    )]
-    pub(crate) transparent_run: bool,
-    #[arg(long)]
-    pub(crate) profile: Option<String>,
-    #[arg(long)]
-    pub(crate) session_metadata: Option<String>,
-    #[arg(long, value_enum)]
-    pub(crate) gateway_mode: Option<GatewayModeArg>,
-    #[arg(long)]
-    pub(crate) fail_closed: bool,
-}
-
-/// Args for the easy-path agent shortcut (`nemo-relay claude`, `nemo-relay codex`, etc.).
-/// Holds only pass-through agent args; the agent itself is selected by which subcommand variant
-/// is invoked, and upstream settings come from the resolved config file. If no config file is
-/// present, the dispatcher fires setup.
-#[derive(Debug, Clone, Args)]
-pub(crate) struct EasyPathCommand {
-    /// Pass-through args forwarded to the underlying agent process. Use `--` to separate them
-    /// from `nemo-relay`'s own flags. See the `Examples` section below for agent-specific shapes.
-    #[arg(last = true)]
-    pub(crate) command: Vec<String>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub(crate) struct RunCommand {
-    #[arg(long, value_enum)]
-    pub(crate) agent: Option<AgentArg>,
-    #[arg(long)]
-    pub(crate) config: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) openai_base_url: Option<String>,
-    #[arg(long)]
-    pub(crate) anthropic_base_url: Option<String>,
-    #[arg(long)]
-    pub(crate) session_metadata: Option<String>,
-    /// Internal override for the plugin configuration file.
-    #[arg(long, env = "NEMO_RELAY_PLUGIN_CONFIG_PATH", hide = true)]
-    pub(crate) plugin_config_path: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) dry_run: bool,
-    #[arg(long)]
-    pub(crate) print: bool,
-    #[arg(last = true)]
-    pub(crate) command: Vec<String>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub(crate) enum IntegrationHost {
@@ -727,24 +524,6 @@ impl PricingResolveCommand {
             completion_tokens: self.completion_tokens,
             cache_read_tokens: self.cache_read_tokens,
             cache_write_tokens: self.cache_write_tokens,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub(crate) enum GatewayModeArg {
-    HookOnly,
-    Passthrough,
-    Required,
-}
-
-impl From<GatewayModeArg> for crate::hooks::GatewayMode {
-    fn from(value: GatewayModeArg) -> Self {
-        match value {
-            GatewayModeArg::HookOnly => Self::HookOnly,
-            GatewayModeArg::Passthrough => Self::Passthrough,
-            GatewayModeArg::Required => Self::Required,
         }
     }
 }

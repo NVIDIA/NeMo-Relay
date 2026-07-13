@@ -3,7 +3,8 @@
 
 use std::process::ExitCode;
 
-use super::arguments::{PluginsCommand, PluginsSubcommand, ServerArgs};
+use super::arguments::{PluginsCommand, PluginsSubcommand};
+use super::serve::ServerArgs;
 use crate::error::CliError;
 
 pub(super) fn execute(command: PluginsCommand, server: &ServerArgs) -> Result<ExitCode, CliError> {
