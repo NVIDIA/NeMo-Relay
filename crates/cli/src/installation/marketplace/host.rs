@@ -11,8 +11,6 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-use crate::agents::CodingAgent;
-
 use super::state::PluginInstallOptions;
 use super::{MARKETPLACE_NAME, MarketplaceHost, PLUGIN_NAME, RELAY_COMMAND};
 
@@ -81,9 +79,9 @@ pub(super) fn run_host_marketplace_removal(
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct HostRegistrationReport {
-    pub(super) host_plugin_registered: bool,
-    pub(super) host_marketplace_registered: bool,
+pub(crate) struct HostRegistrationReport {
+    pub(crate) host_plugin_registered: bool,
+    pub(crate) host_marketplace_registered: bool,
 }
 
 impl HostRegistrationReport {
@@ -103,7 +101,7 @@ impl HostRegistrationReport {
 
 #[cfg(test)]
 pub(super) fn validate_host_registration(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
@@ -127,7 +125,7 @@ pub(super) fn validate_host_registration(
 }
 
 pub(super) fn host_registration_report(
-    host: CodingAgent,
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<HostRegistrationReport, String> {
@@ -138,18 +136,26 @@ pub(super) fn host_registration_report(
         });
     }
     require_host_cli(host, options, runner)?;
-    Ok(match host {
-        CodingAgent::ClaudeCode => HostRegistrationReport {
-            host_plugin_registered: claude_plugin_registered(options, runner)?,
-            host_marketplace_registered: claude_marketplace_registered(options, runner)?,
-        },
-        CodingAgent::Codex => HostRegistrationReport {
-            host_plugin_registered: codex_plugin_registered(options, runner)?,
-            host_marketplace_registered: codex_marketplace_registered(options, runner)?,
-        },
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before host registration checks")
-        }
+    host.registration_report(options, runner)
+}
+
+pub(crate) fn claude_registration_report(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<HostRegistrationReport, String> {
+    Ok(HostRegistrationReport {
+        host_plugin_registered: claude_plugin_registered(options, runner)?,
+        host_marketplace_registered: claude_marketplace_registered(options, runner)?,
+    })
+}
+
+pub(crate) fn codex_registration_report(
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+) -> Result<HostRegistrationReport, String> {
+    Ok(HostRegistrationReport {
+        host_plugin_registered: codex_plugin_registered(options, runner)?,
+        host_marketplace_registered: codex_marketplace_registered(options, runner)?,
     })
 }
 

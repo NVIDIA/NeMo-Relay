@@ -7,6 +7,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use super::host::{CommandRunner, HostRegistrationReport};
+use super::state::PluginInstallOptions;
+
 pub(crate) trait MarketplaceHost: Copy {
     fn install_arg(self) -> &'static str;
     fn label(self) -> &'static str;
@@ -25,4 +28,9 @@ pub(crate) trait MarketplaceHost: Copy {
     ) -> Result<Value, String>;
     fn plugin_registration_args(self, plugin_id: &str) -> Vec<String>;
     fn plugin_removal_args(self, plugin_name: &str, plugin_id: &str) -> Vec<String>;
+    fn registration_report(
+        self,
+        options: &PluginInstallOptions,
+        runner: &dyn CommandRunner,
+    ) -> Result<HostRegistrationReport, String>;
 }

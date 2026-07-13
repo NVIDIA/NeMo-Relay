@@ -226,6 +226,22 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
         }
     }
+
+    fn registration_report(
+        self,
+        options: &crate::installation::marketplace::state::PluginInstallOptions,
+        runner: &dyn crate::installation::marketplace::host::CommandRunner,
+    ) -> Result<crate::installation::marketplace::host::HostRegistrationReport, String> {
+        match self {
+            Self::Codex => {
+                crate::installation::marketplace::host::codex_registration_report(options, runner)
+            }
+            Self::ClaudeCode => {
+                crate::installation::marketplace::host::claude_registration_report(options, runner)
+            }
+            Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
+        }
+    }
 }
 
 pub(crate) fn marketplace_manifest(
