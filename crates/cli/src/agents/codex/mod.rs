@@ -6,6 +6,7 @@ use semver::Version;
 use super::AgentDescriptor;
 
 pub(super) mod app_server;
+pub(super) mod assets;
 pub(super) mod host;
 
 pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {

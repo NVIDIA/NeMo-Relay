@@ -5,7 +5,6 @@
 
 mod host;
 mod marketplace;
-mod operation_lock;
 mod setup;
 mod state;
 
@@ -25,6 +24,7 @@ use crate::installation::generation::{
 };
 use crate::installation::{InstallRequest, UninstallRequest};
 
+use crate::installation::operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
 use host::{
     CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,
     run_host_marketplace_registration, run_host_marketplace_removal, run_host_plugin_registration,
@@ -34,7 +34,6 @@ use marketplace::{
     marketplace_manifest, plugin_hooks, plugin_manifest, plugin_mcp_config,
     write_plugin_marketplace, write_plugin_marketplace_for_generation,
 };
-use operation_lock::{DEFAULT_OPERATION_LOCK_TIMEOUT, PluginOperationLock};
 use setup::{
     PluginSetupRunner, PluginSetupSnapshot, RealPluginSetupRunner, run_plugin_doctor_json,
     run_plugin_doctor_with_generation, run_plugin_setup_with_generation, run_plugin_uninstall,
@@ -628,7 +627,7 @@ fn install_host_with_operation_timeout(
     let _operation_lock = (!options.dry_run)
         .then(|| {
             PluginOperationLock::acquire(
-                host,
+                host.install_arg(),
                 &options.operation_lock_dir,
                 &options.install_dir,
                 lock_timeout,
@@ -979,7 +978,7 @@ fn uninstall_host_with_operation_timeout(
     let _operation_lock = (!options.dry_run)
         .then(|| {
             PluginOperationLock::acquire(
-                host,
+                host.install_arg(),
                 &options.operation_lock_dir,
                 &options.install_dir,
                 lock_timeout,

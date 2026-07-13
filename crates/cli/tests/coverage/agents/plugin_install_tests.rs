@@ -1106,7 +1106,7 @@ fn cross_process_lock_holder() {
             PathBuf::from(std::env::var_os(OPERATION_LOCK_HELPER_GLOBAL_DIR_ENV).unwrap());
         _operation_lock = Some(
             PluginOperationLock::acquire(
-                CodingAgent::Codex,
+                CodingAgent::Codex.install_arg(),
                 &global_lock_dir,
                 Path::new(&path),
                 Duration::from_secs(5),

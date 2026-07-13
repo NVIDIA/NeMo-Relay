@@ -8,27 +8,26 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::agents::CodingAgent;
 use crate::filesystem::{LockAttempt, try_lock_exclusive};
 
-pub(super) const DEFAULT_OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const DEFAULT_OPERATION_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
-pub(super) struct PluginOperationLock {
+pub(crate) struct PluginOperationLock {
     _global_file: File,
     _root_file: File,
 }
 
 impl PluginOperationLock {
-    pub(super) fn acquire(
-        host: CodingAgent,
+    pub(crate) fn acquire(
+        installation_key: &str,
         global_lock_dir: &Path,
         install_dir: &Path,
         timeout: Duration,
     ) -> Result<Self, String> {
         let deadline = Instant::now() + timeout;
-        let global_file = acquire_lock_file(host, global_lock_dir, deadline, "global")?;
-        let root_file = acquire_lock_file(host, install_dir, deadline, "install-root")?;
+        let global_file = acquire_lock_file(installation_key, global_lock_dir, deadline, "global")?;
+        let root_file = acquire_lock_file(installation_key, install_dir, deadline, "install-root")?;
         Ok(Self {
             _global_file: global_file,
             _root_file: root_file,
@@ -37,7 +36,7 @@ impl PluginOperationLock {
 }
 
 fn acquire_lock_file(
-    host: CodingAgent,
+    installation_key: &str,
     directory: &Path,
     deadline: Instant,
     scope: &str,
@@ -48,7 +47,7 @@ fn acquire_lock_file(
             directory.display()
         )
     })?;
-    let path = operation_lock_path(host, directory);
+    let path = operation_lock_path(installation_key, directory);
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
@@ -69,7 +68,7 @@ fn acquire_lock_file(
                 if Instant::now() >= deadline {
                     return Err(format!(
                         "timed out waiting for another {} plugin install or uninstall operation on the {scope} lock at {}; wait for it to finish and retry",
-                        host_name(host),
+                        installation_key,
                         directory.display()
                     ));
                 }
@@ -87,16 +86,6 @@ fn acquire_lock_file(
     }
 }
 
-pub(super) fn operation_lock_path(host: CodingAgent, install_dir: &Path) -> PathBuf {
-    install_dir.join(format!(".nemo-relay-{}-operation.lock", host_name(host)))
-}
-
-fn host_name(host: CodingAgent) -> &'static str {
-    match host {
-        CodingAgent::Codex => "codex",
-        CodingAgent::ClaudeCode => "claude-code",
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before operation locking")
-        }
-    }
+pub(crate) fn operation_lock_path(installation_key: &str, install_dir: &Path) -> PathBuf {
+    install_dir.join(format!(".nemo-relay-{installation_key}-operation.lock"))
 }

@@ -7,7 +7,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::agents::CodingAgent;
 use crate::hooks::generated_hooks;
@@ -81,96 +81,11 @@ pub(super) fn write_plugin_marketplace_for_generation(
 }
 
 pub(super) fn marketplace_manifest(host: CodingAgent) -> Value {
-    match host {
-        CodingAgent::Codex => json!({
-            "name": MARKETPLACE_NAME,
-            "interface": {
-                "displayName": "NeMo Relay Local"
-            },
-            "plugins": [{
-                "name": PLUGIN_NAME,
-                "source": {
-                    "source": "local",
-                    "path": "./plugins/nemo-relay-plugin"
-                },
-                "policy": {
-                    "installation": "AVAILABLE",
-                    "authentication": "ON_INSTALL"
-                },
-                "category": "Coding"
-            }]
-        }),
-        CodingAgent::ClaudeCode => json!({
-            "name": MARKETPLACE_NAME,
-            "metadata": {
-                "description": "Local NeMo Relay plugins for Claude Code."
-            },
-            "owner": {
-                "name": "NVIDIA Corporation and Affiliates",
-                "email": "noreply@nvidia.com"
-            },
-            "plugins": [{
-                "name": PLUGIN_NAME,
-                "description": "Run the shared native Relay gateway and capture Claude Code lifecycle events.",
-                "source": "./plugins/nemo-relay-plugin",
-                "category": "development"
-            }]
-        }),
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before manifest generation")
-        }
-    }
+    crate::agents::marketplace_manifest(host, MARKETPLACE_NAME, PLUGIN_NAME)
 }
 
 pub(super) fn plugin_manifest(host: CodingAgent) -> Value {
-    let description = match host {
-        CodingAgent::Codex => {
-            "Native Relay gateway lifecycle and Codex hooks for complete local observability."
-        }
-        CodingAgent::ClaudeCode => {
-            "Native Relay gateway lifecycle and Claude Code hooks for complete local observability."
-        }
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before manifest generation")
-        }
-    };
-    let keywords = match host {
-        CodingAgent::Codex => json!(["nemo-relay", "codex", "hooks", "observability"]),
-        CodingAgent::ClaudeCode => {
-            json!(["nemo-relay", "claude-code", "hooks", "observability"])
-        }
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before manifest generation")
-        }
-    };
-    let mut manifest = json!({
-        "name": PLUGIN_NAME,
-        "version": env!("CARGO_PKG_VERSION"),
-        "description": description,
-        "author": {
-            "name": "NVIDIA Corporation and Affiliates",
-            "url": "https://github.com/NVIDIA/NeMo-Relay"
-        },
-        "homepage": "https://github.com/NVIDIA/NeMo-Relay",
-        "repository": "https://github.com/NVIDIA/NeMo-Relay",
-        "license": "Apache-2.0",
-        "keywords": keywords
-    });
-    manifest["mcpServers"] = json!("./.mcp.json");
-    if matches!(host, CodingAgent::Codex) {
-        manifest["interface"] = json!({
-            "displayName": "NeMo Relay Plugin",
-            "shortDescription": "Run the native Relay gateway and capture Codex lifecycle events.",
-            "longDescription": "Starts the native nemo-relay gateway through a required lifecycle-bound MCP server, routes model traffic through it, and installs command hooks that preserve canonical Codex lifecycle payloads.",
-            "developerName": "NVIDIA",
-            "category": "Coding",
-            "capabilities": ["Read"],
-            "defaultPrompt": ["Capture this Codex session with NeMo Relay observability."],
-            "websiteURL": "https://github.com/NVIDIA/NeMo-Relay",
-            "brandColor": "#76B900"
-        });
-    }
-    manifest
+    crate::agents::plugin_manifest(host, PLUGIN_NAME)
 }
 
 pub(super) fn plugin_mcp_config(
@@ -180,32 +95,8 @@ pub(super) fn plugin_mcp_config(
     generation_token: &str,
 ) -> Result<Value, String> {
     let generation_fence = absolute_or_self(generation_fence);
-    let mut server = crate::mcp::persistent_server(relay, &generation_fence, generation_token);
-    let fields = server
-        .as_object_mut()
-        .expect("persistent MCP server is a JSON object");
-    match host {
-        CodingAgent::Codex => {
-            fields.insert("env_vars".into(), json!(plugin_mcp_env_vars()?));
-            fields.insert("required".into(), json!(true));
-            fields.insert("startup_timeout_sec".into(), json!(20));
-        }
-        CodingAgent::ClaudeCode => {
-            fields.insert("alwaysLoad".into(), json!(true));
-        }
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before MCP generation")
-        }
-    }
-    Ok(match host {
-        CodingAgent::Codex => json!({ (crate::mcp::SERVER_NAME): server }),
-        CodingAgent::ClaudeCode => {
-            json!({ "mcpServers": { (crate::mcp::SERVER_NAME): server } })
-        }
-        CodingAgent::Hermes => {
-            unreachable!("all is expanded before MCP generation")
-        }
-    })
+    let server = crate::mcp::persistent_server(relay, &generation_fence, generation_token);
+    crate::agents::plugin_mcp_config(host, server)
 }
 
 fn absolute_or_self(path: &Path) -> std::path::PathBuf {
@@ -236,16 +127,10 @@ pub(super) fn plugin_hooks(
     ))
 }
 
-pub(super) fn plugin_mcp_env_vars() -> Result<Vec<String>, String> {
-    let environment = env::vars_os().filter_map(|(name, _)| name.into_string().ok());
-    let config =
-        crate::configuration::user_plugin_runtime_config().map_err(|error| error.to_string())?;
-    Ok(plugin_mcp_env_vars_from(environment, config.as_ref()))
-}
-
+#[cfg(test)]
 pub(super) fn plugin_mcp_env_vars_from(
     environment: impl IntoIterator<Item = String>,
     config: Option<&Value>,
 ) -> Vec<String> {
-    crate::mcp_environment::forwarded_names(environment, config)
+    crate::agents::codex_mcp_env_vars_from(environment, config)
 }

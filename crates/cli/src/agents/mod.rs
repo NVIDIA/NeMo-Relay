@@ -146,6 +146,45 @@ impl CodingAgent {
     }
 }
 
+pub(crate) fn marketplace_manifest(
+    agent: CodingAgent,
+    marketplace: &str,
+    plugin: &str,
+) -> serde_json::Value {
+    match agent {
+        CodingAgent::Codex => codex::assets::marketplace_manifest(marketplace, plugin),
+        CodingAgent::ClaudeCode => claude::assets::marketplace_manifest(marketplace, plugin),
+        CodingAgent::Hermes => unreachable!("Hermes does not install a marketplace plugin"),
+    }
+}
+
+pub(crate) fn plugin_manifest(agent: CodingAgent, plugin: &str) -> serde_json::Value {
+    match agent {
+        CodingAgent::Codex => codex::assets::plugin_manifest(plugin),
+        CodingAgent::ClaudeCode => claude::assets::plugin_manifest(plugin),
+        CodingAgent::Hermes => unreachable!("Hermes does not install a marketplace plugin"),
+    }
+}
+
+pub(crate) fn plugin_mcp_config(
+    agent: CodingAgent,
+    server: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    match agent {
+        CodingAgent::Codex => codex::assets::mcp_config(server),
+        CodingAgent::ClaudeCode => Ok(claude::assets::mcp_config(server)),
+        CodingAgent::Hermes => unreachable!("Hermes does not install a marketplace plugin"),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn codex_mcp_env_vars_from(
+    environment: impl IntoIterator<Item = String>,
+    config: Option<&serde_json::Value>,
+) -> Vec<String> {
+    codex::assets::mcp_env_vars_from(environment, config)
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;

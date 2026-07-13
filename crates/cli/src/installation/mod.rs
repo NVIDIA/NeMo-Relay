@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 pub(crate) mod generation;
+pub(crate) mod operation_lock;
 
 #[derive(Debug, Clone)]
 pub(crate) struct InstallRequest {
