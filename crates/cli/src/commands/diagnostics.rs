@@ -32,10 +32,7 @@ pub(super) async fn execute(command: DoctorCommand) -> Result<ExitCode, CliError
     if let Some(plugin) = command.plugin {
         let candidates = plugin.agents();
         let agents = if plugin.is_all() {
-            crate::installation::marketplace::installed_agents(
-                &candidates,
-                command.install_dir.as_deref(),
-            )?
+            crate::agents::installed_integrations(&candidates, command.install_dir.as_deref())
         } else {
             candidates
         };

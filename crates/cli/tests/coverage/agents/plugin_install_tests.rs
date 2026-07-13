@@ -1953,15 +1953,13 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     std::fs::create_dir_all(&empty_path).unwrap();
     let _path = PathScope::set_isolated(&empty_path, &dir.path().join("home"));
 
+    assert!(crate::agents::detected_install_integrations(&CodingAgent::ALL).is_empty());
     assert!(
-        detected_install_agents(&CodingAgent::ALL)
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        installed_agents(&CodingAgent::ALL, Some(&dir.path().join("install")))
-            .unwrap()
-            .is_empty()
+        crate::agents::installed_integrations(
+            &CodingAgent::ALL,
+            Some(&dir.path().join("install")),
+        )
+        .is_empty()
     );
 
     let doctor_error = doctor(&[], Some(dir.path().join("install")), true)
@@ -2017,54 +2015,23 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
 }
 
 #[test]
-fn select_all_uses_operation_specific_inputs() {
+fn installed_selection_uses_persisted_integration_state() {
     let dir = tempdir().unwrap();
     let home = dir.path().join("home");
     std::fs::create_dir_all(home.join(".hermes")).unwrap();
     let _home = HomeScope::enter(&home);
-    let runner = MockRunner::default().with_executable("codex", "/bin/codex");
-    let selected = select_available_agents(
-        &CodingAgent::ALL,
-        HostSelectionMode::Install,
-        dir.path(),
-        &runner,
-    )
-    .unwrap();
-    assert_eq!(selected, vec![CodingAgent::Codex]);
-
     std::fs::write(
         state_path(CodingAgent::ClaudeCode, dir.path()),
         r#"{"marketplaceRoot":"/tmp/m","pluginRoot":"/tmp/p"}"#,
     )
     .unwrap();
-    let selected = select_available_agents(
-        &CodingAgent::ALL,
-        HostSelectionMode::Install,
-        dir.path(),
-        &runner,
-    )
-    .unwrap();
-    assert_eq!(selected, vec![CodingAgent::Codex]);
-
-    let selected = select_available_agents(
-        &CodingAgent::ALL,
-        HostSelectionMode::InstalledState,
-        dir.path(),
-        &runner,
-    )
-    .unwrap();
+    let selected = crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()));
     assert_eq!(selected, vec![CodingAgent::ClaudeCode]);
 
     let unrelated_hermes_config = b"# user-owned formatting\nmodel: custom\n";
     let hermes_config = home.join(".hermes/config.yaml");
     std::fs::write(&hermes_config, unrelated_hermes_config).unwrap();
-    let selected = select_available_agents(
-        &CodingAgent::ALL,
-        HostSelectionMode::InstalledState,
-        dir.path(),
-        &runner,
-    )
-    .unwrap();
+    let selected = crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()));
     assert_eq!(selected, vec![CodingAgent::ClaudeCode]);
     assert_eq!(
         std::fs::read(&hermes_config).unwrap(),

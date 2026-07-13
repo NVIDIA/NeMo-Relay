@@ -23,12 +23,6 @@ pub(crate) struct PluginInstallOptions {
     pub(crate) skip_doctor: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) enum HostSelectionMode {
-    Install,
-    InstalledState,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct HostRegistrationProgress {
     pub(super) host_plugin_added: bool,

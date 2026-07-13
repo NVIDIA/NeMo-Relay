@@ -44,9 +44,9 @@ use setup::{
 #[cfg(test)]
 use setup::{run_plugin_doctor, run_plugin_setup};
 use state::{
-    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, PluginInstallOptions,
-    PluginLayout, PluginState, default_install_dir, mark_plugin_setup_installed, read_state,
-    remove_path, state_path, write_state, write_state_for_host,
+    CanonicalizeOrSelf, HostRegistrationProgress, PluginInstallOptions, PluginLayout, PluginState,
+    default_install_dir, mark_plugin_setup_installed, read_state, remove_path, state_path,
+    write_state, write_state_for_host,
 };
 
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
@@ -382,57 +382,12 @@ fn doctor_json(
     })
 }
 
-fn select_available_agents(
-    candidates: &[CodingAgent],
-    mode: HostSelectionMode,
-    install_dir: &Path,
-    runner: &dyn CommandRunner,
-) -> Result<Vec<CodingAgent>, CliError> {
-    let mut hosts = Vec::new();
-    for &candidate in candidates {
-        let selected = match mode {
-            HostSelectionMode::Install => runner
-                .resolve_executable(candidate.executable())
-                .map_err(CliError::Install)?
-                .is_some(),
-            HostSelectionMode::InstalledState => match candidate {
-                CodingAgent::Hermes => crate::agents::hermes::install::config_path()
-                    .is_ok_and(|path| crate::agents::hermes::persistent_state_exists(&path)),
-                _ => state_path(candidate, install_dir).exists(),
-            },
-        };
-        if selected {
-            hosts.push(candidate);
-        }
-    }
-    Ok(hosts)
+pub(crate) fn default_marketplace_install_dir() -> PathBuf {
+    default_install_dir().canonicalize_or_self()
 }
 
-pub(crate) fn detected_install_agents(
-    candidates: &[CodingAgent],
-) -> Result<Vec<CodingAgent>, CliError> {
-    select_available_agents(
-        candidates,
-        HostSelectionMode::Install,
-        &default_install_dir().canonicalize_or_self(),
-        &RealCommandRunner,
-    )
-}
-
-pub(crate) fn installed_agents(
-    candidates: &[CodingAgent],
-    install_dir: Option<&Path>,
-) -> Result<Vec<CodingAgent>, CliError> {
-    let install_dir = install_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(default_install_dir)
-        .canonicalize_or_self();
-    select_available_agents(
-        candidates,
-        HostSelectionMode::InstalledState,
-        &install_dir,
-        &RealCommandRunner,
-    )
+pub(crate) fn persisted_state_exists(host: impl MarketplaceHost, install_dir: &Path) -> bool {
+    state_path(host, install_dir).exists()
 }
 
 fn install_host(

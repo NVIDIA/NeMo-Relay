@@ -515,6 +515,34 @@ pub(crate) fn uninstall_integration(
     }
 }
 
+pub(crate) fn detected_install_integrations(candidates: &[CodingAgent]) -> Vec<CodingAgent> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|agent| crate::process::resolve_executable(agent.executable()).is_some())
+        .collect()
+}
+
+pub(crate) fn installed_integrations(
+    candidates: &[CodingAgent],
+    install_dir: Option<&Path>,
+) -> Vec<CodingAgent> {
+    let install_dir = install_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(crate::installation::marketplace::default_marketplace_install_dir);
+    candidates
+        .iter()
+        .copied()
+        .filter(|agent| match agent {
+            CodingAgent::Codex | CodingAgent::ClaudeCode => {
+                crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
+            }
+            CodingAgent::Hermes => hermes::install::config_path()
+                .is_ok_and(|path| hermes::persistent_state_exists(&path)),
+        })
+        .collect()
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;

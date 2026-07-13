@@ -87,7 +87,7 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
-        crate::installation::marketplace::detected_install_agents(&candidates)?
+        crate::agents::detected_install_integrations(&candidates)
     } else {
         candidates
     };
@@ -107,10 +107,7 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
     let request = command.into_runtime();
     let candidates = target.agents();
     let agents = if target.is_all() {
-        crate::installation::marketplace::installed_agents(
-            &candidates,
-            request.install_dir.as_deref(),
-        )?
+        crate::agents::installed_integrations(&candidates, request.install_dir.as_deref())
     } else {
         candidates
     };
