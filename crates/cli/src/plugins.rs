@@ -1198,14 +1198,14 @@ fn tagged_union_variant_value(
         .ok_or_else(|| CliError::Config("tagged union variant does not exist".into()))
 }
 
-fn new_tagged_union_value(
+fn select_tagged_union_variant(
     theme: &ColorfulTheme,
     tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
-) -> Result<Value, CliError> {
+) -> Result<usize, CliError> {
     if tagged_union.variants.is_empty() {
         return Err(CliError::Config("tagged union has no variants".into()));
     }
-    let variant = Select::with_theme(theme)
+    Select::with_theme(theme)
         .with_prompt("Variant type")
         .items(
             &tagged_union
@@ -1216,8 +1216,17 @@ fn new_tagged_union_value(
         )
         .default(0)
         .interact()
-        .map_err(editor_error)?;
-    tagged_union_variant_value(tagged_union, variant)
+        .map_err(editor_error)
+}
+
+fn new_tagged_union_value(
+    theme: &ColorfulTheme,
+    tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+) -> Result<Value, CliError> {
+    tagged_union_variant_value(
+        tagged_union,
+        select_tagged_union_variant(theme, tagged_union)?,
+    )
 }
 
 fn edit_tagged_union_payload(
@@ -1249,6 +1258,50 @@ enum TaggedUnionFieldEdit {
     Unchanged,
 }
 
+struct TaggedUnionFieldState {
+    baseline: Value,
+    value: Value,
+}
+
+impl TaggedUnionFieldState {
+    fn new(current: Option<Value>, default: Option<Value>) -> Self {
+        let baseline = current.or(default).unwrap_or(Value::Null);
+        Self {
+            value: baseline.clone(),
+            baseline,
+        }
+    }
+
+    fn value(&self) -> &Value {
+        &self.value
+    }
+
+    fn value_mut(&mut self) -> &mut Value {
+        &mut self.value
+    }
+
+    fn change_variant(
+        &mut self,
+        tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
+        selected: usize,
+    ) -> Result<(), CliError> {
+        self.value = tagged_union_variant_value(tagged_union, selected)?;
+        Ok(())
+    }
+
+    fn reset(self) -> TaggedUnionFieldEdit {
+        TaggedUnionFieldEdit::Reset
+    }
+
+    fn finish(self) -> TaggedUnionFieldEdit {
+        if self.value == self.baseline {
+            TaggedUnionFieldEdit::Unchanged
+        } else {
+            TaggedUnionFieldEdit::Set(self.value)
+        }
+    }
+}
+
 fn edit_tagged_union_field(
     theme: &ColorfulTheme,
     prompt: &str,
@@ -1256,8 +1309,7 @@ fn edit_tagged_union_field(
     default: Option<Value>,
     tagged_union: &nemo_relay::config_editor::EditorTaggedUnionSpec,
 ) -> Result<TaggedUnionFieldEdit, CliError> {
-    let baseline = current.or(default).unwrap_or(Value::Null);
-    let mut value = baseline.clone();
+    let mut state = TaggedUnionFieldState::new(current, default);
     loop {
         let actions = [
             MenuItem::new("Edit fields"),
@@ -1270,31 +1322,30 @@ fn edit_tagged_union_field(
         ];
         match prompt_menu(
             theme,
-            &format!("{prompt}, current {}", display_value(&value)),
+            &format!("{prompt}, current {}", display_value(state.value())),
             &actions,
             0,
         )? {
             MenuResponse::Selected(0) => {
-                edit_tagged_union_payload(theme, prompt, &mut value, tagged_union)?;
+                edit_tagged_union_payload(theme, prompt, state.value_mut(), tagged_union)?;
             }
             MenuResponse::Selected(1) => {
-                value = new_tagged_union_value(theme, tagged_union)?;
-                edit_tagged_union_payload(theme, prompt, &mut value, tagged_union)?;
+                state.change_variant(
+                    tagged_union,
+                    select_tagged_union_variant(theme, tagged_union)?,
+                )?;
+                edit_tagged_union_payload(theme, prompt, state.value_mut(), tagged_union)?;
             }
             MenuResponse::Selected(2)
             | MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
-                return Ok(TaggedUnionFieldEdit::Reset);
+                return Ok(state.reset());
             }
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
             MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
                 println!("  Preview and save are available from the main plugins.toml menu.");
             }
             MenuResponse::Cancel | MenuResponse::Selected(_) => {
-                return Ok(if value == baseline {
-                    TaggedUnionFieldEdit::Unchanged
-                } else {
-                    TaggedUnionFieldEdit::Set(value)
-                });
+                return Ok(state.finish());
             }
         }
     }

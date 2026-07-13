@@ -2407,11 +2407,28 @@ fn tagged_unions_support_list_items_and_top_level_fields() {
 }
 
 #[test]
-fn tagged_union_fields_support_variant_changes_and_reset() {
+fn top_level_tagged_union_lifecycle_changes_variants_and_resets() {
+    let default = json!({ "kind": "example" });
+    let mut edited = TaggedUnionFieldState::new(Some(json!({ "kind": "other" })), None);
+    edited
+        .value_mut()
+        .as_object_mut()
+        .unwrap()
+        .insert("setting".into(), json!(true));
     assert_eq!(
-        tagged_union_variant_value(&TAGGED_UNION, 1).unwrap(),
-        json!({ "kind": "other" })
+        edited.finish(),
+        TaggedUnionFieldEdit::Set(json!({ "kind": "other", "setting": true }))
     );
+
+    let mut changed =
+        TaggedUnionFieldState::new(Some(json!({ "kind": "other" })), Some(default.clone()));
+    changed.change_variant(&TAGGED_UNION, 0).unwrap();
+    assert_eq!(changed.value(), &default);
+    assert_eq!(changed.finish(), TaggedUnionFieldEdit::Set(default));
+
+    let reset = TaggedUnionFieldState::new(Some(json!({ "kind": "other" })), None).reset();
+    assert_eq!(reset, TaggedUnionFieldEdit::Reset);
+
     assert!(
         tagged_union_variant_value(&TAGGED_UNION, 2)
             .unwrap_err()
