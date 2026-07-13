@@ -21,6 +21,7 @@ use toml_edit::DocumentMut;
 use crate::configuration::CodingAgent;
 use crate::error::CliError;
 
+#[path = "wizard_model.rs"]
 mod model;
 
 pub(crate) use self::model::reset;
@@ -326,5 +327,5 @@ fn setup_error(err: dialoguer::Error) -> CliError {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/setup_tests.rs"]
+#[path = "../../tests/coverage/shared/setup_tests.rs"]
 mod tests;

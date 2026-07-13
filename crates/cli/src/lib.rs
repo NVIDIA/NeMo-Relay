@@ -21,7 +21,6 @@ mod plugins;
 mod process;
 mod server;
 mod sessions;
-mod setup;
 
 #[cfg(test)]
 #[path = "../tests/coverage/shared/hook_assertions.rs"]

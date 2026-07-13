@@ -8,9 +8,9 @@ use crate::error::CliError;
 
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
     if command.reset {
-        crate::setup::reset(command.agent)?;
+        crate::configuration::wizard::reset(command.agent)?;
     } else {
-        crate::setup::run(command.agent).await?;
+        crate::configuration::wizard::run(command.agent).await?;
     }
     Ok(ExitCode::SUCCESS)
 }

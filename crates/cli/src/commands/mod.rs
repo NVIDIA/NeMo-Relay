@@ -22,7 +22,6 @@ use crate::configuration::{Cli, CodingAgent, Command, ServerArgs};
 use crate::configuration::{CompletionsCommand, PluginsCommand, PricingCommand};
 use crate::{
     configuration as runtime_configuration, diagnostics as runtime_diagnostics, error, server,
-    setup,
 };
 
 // Runs the async CLI entrypoint and converts any surfaced gateway error into a non-zero process
@@ -114,7 +113,7 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     } else if runtime_configuration::any_config_file_exists() {
         runtime_diagnostics::run_doctor(None, false).await
     } else {
-        setup::run(None).await?;
+        runtime_configuration::wizard::run(None).await?;
         Ok(ExitCode::SUCCESS)
     }
 }

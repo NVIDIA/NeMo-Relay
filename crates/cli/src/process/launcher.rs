@@ -42,7 +42,7 @@ pub(crate) async fn run(
 /// Runs the easy-path bare-agent shortcut (`nemo-relay claude`, `nemo-relay codex`, etc.).
 ///
 /// If no config file is present at any discovery layer, this fires the interactive setup inline
-/// (`crate::setup::run`) which writes a `config.toml`, then proceeds to launch the agent. When
+/// (`crate::configuration::wizard::run`) which writes a `config.toml`, then proceeds to launch the agent. When
 /// config IS present, the easy path constructs a synthetic `RunCommand` and delegates to the
 /// same transparent-run pipeline `nemo-relay run` uses — same observability wiring, same agent
 /// argv resolution, same lifecycle management.
@@ -65,7 +65,7 @@ pub(crate) async fn easy_path(
         // it returns, config discovery will pick up the freshly-written `config.toml` and
         // `run()` below will see a populated environment. If setup errors (non-TTY, user
         // cancelled), surface that directly.
-        crate::setup::run(Some(agent)).await?;
+        crate::configuration::wizard::run(Some(agent)).await?;
     }
     let synthetic = RunCommand {
         agent: Some(agent),
