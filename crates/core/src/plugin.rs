@@ -857,7 +857,37 @@ pub(crate) fn register_plugin_tracked(plugin: Arc<dyn Plugin>) -> Result<u64> {
 }
 
 pub(crate) fn register_builtin_plugin(plugin: Arc<dyn Plugin>) -> Result<()> {
+    let plugin_kind = plugin.plugin_kind();
+    {
+        let guard = PLUGIN_HANDLERS.read().map_err(|err| {
+            PluginError::Internal(format!("plugin registry lock poisoned: {err}"))
+        })?;
+        if let Some(existing) = guard.get(plugin_kind) {
+            if existing.owner == PluginRegistrationOwner::Builtin {
+                return Ok(());
+            }
+            return Err(plugin_already_registered_error(
+                plugin_kind,
+                PluginRegistrationOwner::Builtin,
+            ));
+        }
+    }
+
     register_plugin_with_owner(plugin, PluginRegistrationOwner::Builtin).map(|_| ())
+}
+
+fn plugin_already_registered_error(
+    plugin_kind: &str,
+    owner: PluginRegistrationOwner,
+) -> PluginError {
+    let ownership = if owner == PluginRegistrationOwner::Builtin {
+        "reserved builtin "
+    } else {
+        ""
+    };
+    PluginError::RegistrationFailed(format!(
+        "{ownership}plugin '{plugin_kind}' is already registered"
+    ))
 }
 
 fn register_plugin_with_owner(
@@ -874,14 +904,7 @@ fn register_plugin_with_owner(
         {
             return Ok(existing.registration_id);
         }
-        let ownership = if owner == PluginRegistrationOwner::Builtin {
-            "reserved builtin "
-        } else {
-            ""
-        };
-        return Err(PluginError::RegistrationFailed(format!(
-            "{ownership}plugin '{plugin_kind}' is already registered"
-        )));
+        return Err(plugin_already_registered_error(&plugin_kind, owner));
     }
     let registration_id = NEXT_PLUGIN_REGISTRATION_ID.fetch_add(1, Ordering::Relaxed);
     guard.insert(
@@ -900,6 +923,26 @@ fn register_plugin_with_owner(
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
+    let all_registered = {
+        let guard = PLUGIN_HANDLERS.read().map_err(|err| {
+            PluginError::Internal(format!("plugin registry lock poisoned: {err}"))
+        })?;
+        [
+            crate::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND,
+            crate::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND,
+            crate::plugins::model_pricing::PRICING_PLUGIN_KIND,
+        ]
+        .iter()
+        .all(|kind| {
+            guard
+                .get(*kind)
+                .is_some_and(|plugin| plugin.owner == PluginRegistrationOwner::Builtin)
+        })
+    };
+    if all_registered {
+        return Ok(());
+    }
+
     // Registration is idempotent for genuine built-ins. Revalidate on every
     // call so a removed built-in is restored, a replacement is rejected, and
     // a corrected ownership conflict can be retried without restarting Relay.
