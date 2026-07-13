@@ -3,7 +3,12 @@
 
 //! Gateway response handling for forwarded lifecycle hooks.
 
-use super::*;
+use futures_util::StreamExt;
+use serde_json::Value;
+
+use crate::error::CliError;
+
+pub(super) const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub(super) async fn handle_hook_forward_response(
     response: Result<reqwest::Response, reqwest::Error>,
@@ -33,7 +38,7 @@ pub(super) async fn handle_hook_forward_response(
     }
 }
 
-pub(super) fn handle_verified_hook_forward_response(
+pub(crate) fn handle_verified_hook_forward_response(
     response: Result<
         crate::gateway::client::VerifiedHttpResponse,
         crate::gateway::client::VerifiedHttpError,
@@ -66,7 +71,7 @@ pub(super) fn handle_verified_hook_forward_response(
     }
 }
 
-pub(super) fn handle_hook_forward_status(
+pub(crate) fn handle_hook_forward_status(
     status: reqwest::StatusCode,
     body: String,
     fail_closed: bool,

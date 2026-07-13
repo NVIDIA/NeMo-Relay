@@ -3,7 +3,14 @@
 
 //! Hook definition and portable command encoding.
 
-use super::*;
+use std::path::Path;
+
+use serde_json::{Value, json};
+
+use crate::agents::CodingAgent;
+
+#[cfg(any(windows, test))]
+use base64::Engine;
 
 pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
     if agent.uses_direct_hook_entries() {

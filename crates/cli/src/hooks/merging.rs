@@ -3,7 +3,9 @@
 
 //! Non-destructive lifecycle-hook configuration merging.
 
-use super::*;
+use serde_json::{Value, json};
+
+use crate::error::CliError;
 
 pub(crate) fn merge_hooks(existing: Value, generated: Value) -> Result<Value, CliError> {
     let mut root = hook_config_root(existing)?;

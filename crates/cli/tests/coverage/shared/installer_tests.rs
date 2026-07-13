@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use base64::Engine;
+use std::path::Path;
+use std::time::Duration;
+
+use reqwest::header::HeaderMap;
+use serde_json::Value;
+
+use crate::agents::CodingAgent;
 
 struct BootstrapConfigHome {
     _guard: std::sync::MutexGuard<'static, ()>,
