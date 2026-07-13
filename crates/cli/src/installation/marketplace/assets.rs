@@ -13,8 +13,8 @@ use crate::installation::generation::{
     write_new_generation_with_token_at, write_staged_generation_with_token,
 };
 
-use super::state::{MarketplaceHost, PluginInstallOptions, PluginLayout, remove_path, write_json};
-use super::{MARKETPLACE_NAME, PLUGIN_NAME};
+use super::state::{PluginInstallOptions, PluginLayout, remove_path, write_json};
+use super::{MARKETPLACE_NAME, MarketplaceHost, PLUGIN_NAME};
 
 pub(super) fn write_plugin_marketplace(
     host: impl MarketplaceHost,

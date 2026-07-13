@@ -13,8 +13,8 @@ use serde_json::json;
 
 use crate::agents::CodingAgent;
 
-use super::state::{MarketplaceHost, PluginInstallOptions};
-use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
+use super::state::PluginInstallOptions;
+use super::{MARKETPLACE_NAME, MarketplaceHost, PLUGIN_NAME, RELAY_COMMAND};
 
 pub(super) fn run_host_marketplace_registration(
     host: impl MarketplaceHost,

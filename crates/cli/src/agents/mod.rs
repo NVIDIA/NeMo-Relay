@@ -145,7 +145,7 @@ impl CodingAgent {
     }
 }
 
-impl crate::installation::marketplace::state::MarketplaceHost for CodingAgent {
+impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
     fn install_arg(self) -> &'static str {
         self.install_arg()
     }

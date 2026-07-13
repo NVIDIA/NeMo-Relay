@@ -12,28 +12,7 @@ use serde_json::{Value, json};
 
 use crate::installation::generation::GENERATION_FILE_NAME;
 
-use super::PLUGIN_NAME;
-
-/// Agent-owned identity and layout information required by marketplace transactions.
-pub(crate) trait MarketplaceHost: Copy {
-    fn install_arg(self) -> &'static str;
-    fn label(self) -> &'static str;
-    fn executable(self) -> &'static str;
-    fn validate_version_output(self, output: &str) -> Result<(), String>;
-    fn marketplace_manifest_relative(self) -> &'static [&'static str];
-    fn plugin_manifest_relative(self) -> &'static [&'static str];
-    fn marketplace_manifest(self, marketplace: &str, plugin: &str) -> Value;
-    fn plugin_manifest(self, plugin: &str) -> Value;
-    fn plugin_mcp_config(self, server: Value) -> Result<Value, String>;
-    fn plugin_hooks(
-        self,
-        relay: &Path,
-        generation_fence: &Path,
-        generation_token: &str,
-    ) -> Result<Value, String>;
-    fn plugin_registration_args(self, plugin_id: &str) -> Vec<String>;
-    fn plugin_removal_args(self, plugin_name: &str, plugin_id: &str) -> Vec<String>;
-}
+use super::{MarketplaceHost, PLUGIN_NAME};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PluginInstallOptions {

@@ -6,7 +6,10 @@
 mod assets;
 pub(crate) mod host;
 mod setup;
+mod spec;
 pub(crate) mod state;
+
+pub(crate) use spec::MarketplaceHost;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,10 +44,9 @@ use setup::{
 #[cfg(test)]
 use setup::{run_plugin_doctor, run_plugin_setup};
 use state::{
-    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, MarketplaceHost,
-    PluginInstallOptions, PluginLayout, PluginState, default_install_dir,
-    mark_plugin_setup_installed, read_state, remove_path, state_path, write_state,
-    write_state_for_host,
+    CanonicalizeOrSelf, HostRegistrationProgress, HostSelectionMode, PluginInstallOptions,
+    PluginLayout, PluginState, default_install_dir, mark_plugin_setup_installed, read_state,
+    remove_path, state_path, write_state, write_state_for_host,
 };
 
 pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
