@@ -10,7 +10,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 use super::*;
-use crate::configuration::CodingAgent;
+use crate::agents::CodingAgent;
 
 const TEST_GENERATION_TOKEN: &str = "test-generation";
 

@@ -16,7 +16,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::configuration::CodingAgent;
+use crate::agents::CodingAgent;
 
 /// Parses the intentionally simple command strings accepted by `[agents.*].command`.
 ///

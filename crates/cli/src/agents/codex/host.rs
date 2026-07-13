@@ -12,9 +12,8 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue, value};
 
-use crate::configuration::{
-    BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, CodingAgent, RELAY_PLUGIN_ID,
-};
+use crate::agents::CodingAgent;
+use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, RELAY_PLUGIN_ID};
 use crate::hooks::generated_hooks;
 #[cfg(test)]
 use crate::hooks::merge_hooks;

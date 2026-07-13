@@ -16,9 +16,8 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use crate::configuration::{
-    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, resolve_run_config,
-};
+use crate::agents::CodingAgent;
+use crate::configuration::{AgentConfigs, GatewayConfig, ResolvedConfig, resolve_run_config};
 use crate::error::CliError;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;

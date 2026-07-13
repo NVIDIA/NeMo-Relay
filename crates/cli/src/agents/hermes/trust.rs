@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
-use crate::configuration::CodingAgent;
+use crate::agents::CodingAgent;
 use crate::error::CliError;
 
 pub(super) fn trusted_hooks(

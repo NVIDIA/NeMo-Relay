@@ -32,8 +32,9 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
+use crate::agents::CodingAgent;
 use crate::configuration::{
-    AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
+    AgentConfigs, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
     default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
 use crate::error::CliError;

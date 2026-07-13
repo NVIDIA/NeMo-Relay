@@ -23,8 +23,8 @@ use super::files::{
     acquire_install_lock, read_optional_utf8, remove_optional_file, replace_optional_file,
 };
 use super::trust::{json_bytes, parse_json_object, trusted_hooks, verify_trust};
+use crate::agents::CodingAgent;
 use crate::bootstrap::DEFAULT_BIND;
-use crate::configuration::CodingAgent;
 use crate::error::CliError;
 use crate::filesystem::atomic_write;
 #[cfg(test)]

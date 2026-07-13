@@ -24,7 +24,6 @@ use ring::{digest, hmac};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-pub(crate) use crate::agents::CodingAgent;
 use crate::error::CliError;
 use crate::filesystem::{LockAttempt, try_lock_exclusive, try_lock_shared};
 #[cfg(test)]

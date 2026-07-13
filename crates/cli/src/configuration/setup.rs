@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, value};
 
-use crate::configuration::CodingAgent;
+use crate::agents::CodingAgent;
 use crate::error::CliError;
 use crate::plugins::{ConfigurationScope, PluginsEditRequest};
 

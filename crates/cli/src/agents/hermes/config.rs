@@ -36,13 +36,13 @@ pub(crate) fn transparent_config(
     remove_owned_mcp(&mut root, owned.is_some())?;
     let command = crate::hooks::transparent_hook_forward_command(
         relay,
-        crate::configuration::CodingAgent::Hermes,
+        crate::agents::CodingAgent::Hermes,
         gateway_url,
     )
     .map_err(CliError::Install)?;
     let root = merge_hooks(
         root,
-        generated_hooks(crate::configuration::CodingAgent::Hermes, &command),
+        generated_hooks(crate::agents::CodingAgent::Hermes, &command),
     )?;
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }
@@ -54,7 +54,7 @@ pub(crate) fn persistent_hook_command(
 ) -> Result<String, String> {
     crate::hooks::persistent_hook_forward_command(
         relay,
-        crate::configuration::CodingAgent::Hermes,
+        crate::agents::CodingAgent::Hermes,
         generation,
         generation_token,
     )
@@ -69,7 +69,7 @@ pub(super) fn persistent_hook_command_for_platform(
 ) -> String {
     crate::hooks::persistent_hook_forward_command_for_platform(
         relay,
-        crate::configuration::CodingAgent::Hermes,
+        crate::agents::CodingAgent::Hermes,
         generation,
         generation_token,
         windows,
@@ -98,7 +98,7 @@ pub(super) fn persistent_config(
     strip_owned_hooks(&mut root, owned.as_deref())?;
     root = merge_hooks(
         root,
-        generated_hooks(crate::configuration::CodingAgent::Hermes, command),
+        generated_hooks(crate::agents::CodingAgent::Hermes, command),
     )?;
     let servers = object_field_mut(&mut root, "mcp_servers", "mcp_servers")?;
     servers.insert(
@@ -224,7 +224,7 @@ pub(super) fn owned_install_command(
 }
 
 fn has_complete_hook_set(root: &Value, command: &str) -> bool {
-    crate::configuration::CodingAgent::Hermes
+    crate::agents::CodingAgent::Hermes
         .hook_events()
         .iter()
         .all(|event| {
@@ -251,7 +251,7 @@ fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, Cl
         return Ok(None);
     };
     let mut common = None;
-    for event in crate::configuration::CodingAgent::Hermes.hook_events() {
+    for event in crate::agents::CodingAgent::Hermes.hook_events() {
         let commands = hooks
             .get(*event)
             .and_then(Value::as_array)
