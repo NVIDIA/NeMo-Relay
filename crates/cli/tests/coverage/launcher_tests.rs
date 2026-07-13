@@ -931,6 +931,41 @@ async fn dry_run_does_not_spawn_agent() {
 }
 
 #[tokio::test]
+async fn dry_run_does_not_initialize_logging_sinks() {
+    let temp = tempfile::tempdir().unwrap();
+    let log_path = temp.path().join("should-not-create.log.jsonl");
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[[logging.sinks]]\npath = {}\n",
+            super::toml_string(log_path.to_string_lossy().as_ref()),
+        ),
+    )
+    .unwrap();
+
+    let command = RunCommand {
+        agent: Some(CodingAgent::Codex),
+        config: Some(config_path),
+        openai_base_url: None,
+        anthropic_base_url: None,
+        session_metadata: None,
+        plugin_config_path: None,
+        dry_run: true,
+        print: false,
+        command: vec!["codex".into()],
+    };
+
+    let code = run(command, None).await.unwrap();
+
+    assert_eq!(code, ExitCode::SUCCESS);
+    assert!(
+        !log_path.exists(),
+        "dry-run must not open logging sinks / create log files"
+    );
+}
+
+#[tokio::test]
 async fn dry_run_does_not_hydrate_dynamic_plugin_lifecycle_state() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_dir = temp.path().join("plugins/acme");

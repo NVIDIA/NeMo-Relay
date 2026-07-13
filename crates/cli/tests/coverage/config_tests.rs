@@ -1945,3 +1945,258 @@ unknown_component = "error"
         Some("warn")
     );
 }
+
+#[test]
+fn logging_defaults_when_section_absent() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(&config_path, "").unwrap();
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(resolved.logging, LoggingConfig::default());
+    assert_eq!(resolved.logging.level, LogLevel::Info);
+    assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
+    assert!(resolved.logging.sinks.is_empty());
+}
+
+#[test]
+fn logging_parses_global_settings_and_file_sinks() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    let log_a = temp.path().join("a.log.jsonl");
+    let log_b = temp.path().join("b.log.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[logging]
+level = "debug"
+stderr_format = "human"
+
+[[logging.sinks]]
+path = "{}"
+level = "trace"
+format = "jsonl"
+queue_capacity = 32
+flush_interval_millis = 250
+
+[[logging.sinks]]
+path = "{}"
+format = "human"
+"#,
+            log_a.display(),
+            log_b.display()
+        ),
+    )
+    .unwrap();
+    let args = ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(resolved.logging.level, LogLevel::Debug);
+    assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
+    assert_eq!(resolved.logging.sinks.len(), 2);
+    match &resolved.logging.sinks[0] {
+        LogSinkConfig::File(sink) => {
+            assert_eq!(sink.path, log_a);
+            assert_eq!(sink.level, LogLevel::Trace);
+            assert_eq!(sink.format, LogFormat::Jsonl);
+            assert_eq!(sink.queue_capacity, 32);
+            assert_eq!(sink.flush_interval_millis, 250);
+        }
+    }
+    match &resolved.logging.sinks[1] {
+        LogSinkConfig::File(sink) => {
+            assert_eq!(sink.path, log_b);
+            // Omitted sink level inherits global logging.level.
+            assert_eq!(sink.level, LogLevel::Debug);
+            assert_eq!(sink.format, LogFormat::Human);
+            assert_eq!(sink.queue_capacity, DEFAULT_FILE_QUEUE_CAPACITY);
+            assert_eq!(
+                sink.flush_interval_millis,
+                DEFAULT_FILE_FLUSH_INTERVAL_MILLIS
+            );
+        }
+    }
+}
+
+#[test]
+fn logging_rejects_invalid_level_format_missing_path_and_zero_queue() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let bad_level = temp.path().join("bad-level.toml");
+    std::fs::write(
+        &bad_level,
+        r#"
+[logging]
+level = "verbose"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(bad_level),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging level"));
+
+    let bad_format = temp.path().join("bad-format.toml");
+    std::fs::write(
+        &bad_format,
+        r#"
+[logging]
+stderr_format = "yaml"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(bad_format),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging format"));
+
+    let missing_path = temp.path().join("missing-path.toml");
+    std::fs::write(
+        &missing_path,
+        r#"
+[[logging.sinks]]
+format = "jsonl"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(missing_path),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("requires path"));
+
+    let zero_queue = temp.path().join("zero-queue.toml");
+    std::fs::write(
+        &zero_queue,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+queue_capacity = 0
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(zero_queue),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("queue_capacity must be greater than 0"));
+}
+
+#[test]
+fn logging_rejects_invalid_sink_level_and_format() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let bad_sink_level = temp.path().join("bad-sink-level.toml");
+    std::fs::write(
+        &bad_sink_level,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+level = "verbose"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(bad_sink_level),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging level"));
+
+    let bad_sink_format = temp.path().join("bad-sink-format.toml");
+    std::fs::write(
+        &bad_sink_format,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+format = "yaml"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(bad_sink_format),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging format"));
+}
+
+#[test]
+fn logging_rejects_empty_sink_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(
+        &config_path,
+        r#"
+[[logging.sinks]]
+path = ""
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("path must not be empty"));
+}
+
+#[test]
+fn logging_config_does_not_read_rust_log() {
+    let _env = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous = std::env::var_os("RUST_LOG");
+    unsafe {
+        std::env::set_var("RUST_LOG", "trace");
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(
+        &config_path,
+        r#"
+[logging]
+level = "error"
+"#,
+    )
+    .unwrap();
+    let resolved = resolve_server_config(&ServerArgs {
+        config: Some(config_path),
+        ..ServerArgs::default()
+    })
+    .unwrap();
+
+    assert_eq!(resolved.logging.level, LogLevel::Error);
+    assert!(resolved.logging.sinks.is_empty());
+
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("RUST_LOG", value),
+            None => std::env::remove_var("RUST_LOG"),
+        }
+    }
+}

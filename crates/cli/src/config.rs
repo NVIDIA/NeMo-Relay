@@ -577,8 +577,120 @@ impl GatewayConfig {
 pub(crate) struct ResolvedConfig {
     pub(crate) gateway: GatewayConfig,
     pub(crate) agents: AgentConfigs,
+    pub(crate) logging: LoggingConfig,
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
+}
+
+/// Operational logging configuration resolved from `[logging]` in config.toml.
+///
+/// `level` is the process-wide **minimum severity**: call sites may emit any level, but records
+/// less severe than this threshold are discarded. Per-file sinks may raise their own minimum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoggingConfig {
+    /// Minimum severity for operational logs (not a "maximum" in everyday language).
+    pub(crate) level: LogLevel,
+    pub(crate) stderr_format: LogFormat,
+    pub(crate) sinks: Vec<LogSinkConfig>,
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: LogLevel::Info,
+            stderr_format: LogFormat::Human,
+            sinks: Vec::new(),
+        }
+    }
+}
+
+/// Global / per-sink minimum severity for operational logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    fn parse(raw: &str) -> Result<Self, CliError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "error" => Ok(Self::Error),
+            "warn" | "warning" => Ok(Self::Warn),
+            "info" => Ok(Self::Info),
+            "debug" => Ok(Self::Debug),
+            "trace" => Ok(Self::Trace),
+            other => Err(CliError::Config(format!(
+                "invalid logging level '{other}'; expected error, warn, info, debug, or trace"
+            ))),
+        }
+    }
+}
+
+/// Output encoding for an operational log sink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogFormat {
+    Human,
+    Jsonl,
+}
+
+impl LogFormat {
+    fn parse(raw: &str) -> Result<Self, CliError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "human" => Ok(Self::Human),
+            "jsonl" | "json" => Ok(Self::Jsonl),
+            other => Err(CliError::Config(format!(
+                "invalid logging format '{other}'; expected human or jsonl"
+            ))),
+        }
+    }
+}
+
+/// Additional operational log sink beyond always-on stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LogSinkConfig {
+    File(FileLogSinkConfig),
+}
+
+/// File sink settings for non-blocking operational logging.
+///
+/// Relative `path` values are resolved against the process current working directory at sink open
+/// time (common CLI convention). Absolute paths are used as-is. `~` and env expansion are not
+/// applied.
+///
+/// File sinks write through an async queue so logging cannot stall the process on disk I/O.
+/// `queue_capacity` and `flush_interval_millis` are optional advanced overrides; omitted values
+/// use [`DEFAULT_FILE_QUEUE_CAPACITY`] and [`DEFAULT_FILE_FLUSH_INTERVAL_MILLIS`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileLogSinkConfig {
+    pub(crate) path: PathBuf,
+    /// Minimum severity for this file sink (may be stricter than the global `logging.level`).
+    pub(crate) level: LogLevel,
+    pub(crate) format: LogFormat,
+    /// Max records waiting for disk write (async queue bound).
+    pub(crate) queue_capacity: usize,
+    /// Periodic flush cadence in milliseconds. `0` disables periodic flush (shutdown flush only).
+    pub(crate) flush_interval_millis: u64,
+}
+
+/// Default async queue depth for file sinks when `queue_capacity` is omitted.
+pub(crate) const DEFAULT_FILE_QUEUE_CAPACITY: usize = 1024;
+
+/// Default periodic flush interval for file sinks when `flush_interval_millis` is omitted.
+pub(crate) const DEFAULT_FILE_FLUSH_INTERVAL_MILLIS: u64 = 1000;
+
+impl Default for FileLogSinkConfig {
+    fn default() -> Self {
+        Self {
+            path: PathBuf::from(".nemo-relay/logs/relay.log.jsonl"),
+            level: LogLevel::Info,
+            format: LogFormat::Jsonl,
+            queue_capacity: DEFAULT_FILE_QUEUE_CAPACITY,
+            flush_interval_millis: DEFAULT_FILE_FLUSH_INTERVAL_MILLIS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,6 +742,28 @@ struct FileConfig {
     gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
+    logging: Option<FileLoggingConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct FileLoggingConfig {
+    level: Option<String>,
+    stderr_format: Option<String>,
+    #[serde(default)]
+    sinks: Vec<RawFileLogSinkConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RawFileLogSinkConfig {
+    /// Required. Every `[[logging.sinks]]` entry is a file sink.
+    path: Option<PathBuf>,
+    level: Option<String>,
+    format: Option<String>,
+    /// Optional advanced: async queue depth (default [`DEFAULT_FILE_QUEUE_CAPACITY`]).
+    queue_capacity: Option<usize>,
+    /// Optional advanced: periodic flush interval in ms (default
+    /// [`DEFAULT_FILE_FLUSH_INTERVAL_MILLIS`]). `0` means flush only on shutdown.
+    flush_interval_millis: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -966,7 +1100,73 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
     apply_file_agents_config(&mut resolved.agents, config.agents);
+    apply_file_logging_config(&mut resolved.logging, config.logging)?;
     Ok(())
+}
+
+fn apply_file_logging_config(
+    logging: &mut LoggingConfig,
+    config: Option<FileLoggingConfig>,
+) -> Result<(), CliError> {
+    let Some(config) = config else {
+        return Ok(());
+    };
+    if let Some(level) = config.level.as_deref() {
+        logging.level = LogLevel::parse(level)?;
+    }
+    if let Some(stderr_format) = config.stderr_format.as_deref() {
+        logging.stderr_format = LogFormat::parse(stderr_format)?;
+    }
+    if !config.sinks.is_empty() {
+        let default_sink_level = logging.level;
+        logging.sinks = config
+            .sinks
+            .into_iter()
+            .map(|sink| parse_file_log_sink(sink, default_sink_level))
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+    Ok(())
+}
+
+fn parse_file_log_sink(
+    config: RawFileLogSinkConfig,
+    default_level: LogLevel,
+) -> Result<LogSinkConfig, CliError> {
+    let path = config
+        .path
+        .ok_or_else(|| CliError::Config("logging sink requires path".into()))?;
+    if path.as_os_str().is_empty() {
+        return Err(CliError::Config(
+            "logging sink path must not be empty".into(),
+        ));
+    }
+    let level = match config.level.as_deref() {
+        Some(raw) => LogLevel::parse(raw)?,
+        None => default_level,
+    };
+    let format = match config.format.as_deref() {
+        Some(raw) => LogFormat::parse(raw)?,
+        None => LogFormat::Jsonl,
+    };
+    let queue_capacity = match config.queue_capacity {
+        Some(0) => {
+            return Err(CliError::Config(
+                "logging sink queue_capacity must be greater than 0".into(),
+            ));
+        }
+        Some(capacity) => capacity,
+        None => DEFAULT_FILE_QUEUE_CAPACITY,
+    };
+    let flush_interval_millis = config
+        .flush_interval_millis
+        .unwrap_or(DEFAULT_FILE_FLUSH_INTERVAL_MILLIS);
+    Ok(LogSinkConfig::File(FileLogSinkConfig {
+        path,
+        level,
+        format,
+        queue_capacity,
+        flush_interval_millis,
+    }))
 }
 
 fn apply_file_gateway_config(

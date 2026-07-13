@@ -142,6 +142,27 @@ leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with `nemo-relay plugins edit`, or use
 `nemo-relay plugins edit --project` for project configuration.
 
+### Operational Logging
+
+Configure Relay process logging under `[logging]` in `config.toml`. Stderr is
+always enabled. Optional file sinks append asynchronously so logging cannot
+block the gateway or agent on slow disk I/O.
+
+```toml
+[logging]
+level = "info"              # minimum severity: error | warn | info | debug | trace
+stderr_format = "human"     # human | jsonl
+
+[[logging.sinks]]
+path = ".nemo-relay/logs/relay.log.jsonl"  # required; relative paths use process CWD
+format = "jsonl"            # optional; default jsonl (human | jsonl)
+level = "debug"             # optional; defaults to [logging].level
+
+# Advanced async file delivery (optional; omit to use defaults):
+queue_capacity = 1024           # max records waiting for disk write (must be > 0)
+flush_interval_millis = 1000    # periodic flush; 0 = flush only on shutdown
+```
+
 ## Add Model Pricing for Cost Estimates
 
 Model pricing is configured with the same `plugins.toml` discovery path as
