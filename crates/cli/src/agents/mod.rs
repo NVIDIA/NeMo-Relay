@@ -145,6 +145,32 @@ impl CodingAgent {
     }
 }
 
+impl crate::installation::marketplace::state::MarketplaceHostIdentity for CodingAgent {
+    fn install_arg(self) -> &'static str {
+        self.install_arg()
+    }
+
+    fn label(self) -> &'static str {
+        self.label()
+    }
+
+    fn marketplace_manifest_relative(self) -> &'static [&'static str] {
+        match self {
+            Self::Codex => &[".agents", "plugins", "marketplace.json"],
+            Self::ClaudeCode => &[".claude-plugin", "marketplace.json"],
+            Self::Hermes => unreachable!("Hermes does not use marketplace layout"),
+        }
+    }
+
+    fn plugin_manifest_relative(self) -> &'static [&'static str] {
+        match self {
+            Self::Codex => &[".codex-plugin", "plugin.json"],
+            Self::ClaudeCode => &[".claude-plugin", "plugin.json"],
+            Self::Hermes => unreachable!("Hermes does not use marketplace layout"),
+        }
+    }
+}
+
 pub(crate) fn marketplace_manifest(
     agent: CodingAgent,
     marketplace: &str,

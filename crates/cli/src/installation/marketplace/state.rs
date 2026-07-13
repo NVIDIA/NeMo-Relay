@@ -10,10 +10,17 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::agents::CodingAgent;
 use crate::installation::generation::GENERATION_FILE_NAME;
 
 use super::PLUGIN_NAME;
+
+/// Agent-owned identity and layout information required by marketplace transactions.
+pub(crate) trait MarketplaceHostIdentity: Copy {
+    fn install_arg(self) -> &'static str;
+    fn label(self) -> &'static str;
+    fn marketplace_manifest_relative(self) -> &'static [&'static str];
+    fn plugin_manifest_relative(self) -> &'static [&'static str];
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PluginInstallOptions {
@@ -44,7 +51,8 @@ impl HostRegistrationProgress {
 
 #[derive(Debug, Clone)]
 pub(super) struct PluginLayout {
-    pub(super) host: CodingAgent,
+    pub(super) host_arg: &'static str,
+    pub(super) host_label: &'static str,
     pub(super) marketplace_root: PathBuf,
     pub(super) marketplace_manifest: PathBuf,
     pub(super) plugin_root: PathBuf,
@@ -57,28 +65,19 @@ pub(super) struct PluginLayout {
 }
 
 impl PluginLayout {
-    pub(super) fn new(host: CodingAgent, install_dir: &Path) -> Self {
+    pub(super) fn new(host: impl MarketplaceHostIdentity, install_dir: &Path) -> Self {
         let marketplace_root = install_dir.join(format!("{}-marketplace", host.install_arg()));
-        let marketplace_manifest = match host {
-            CodingAgent::Codex => marketplace_root
-                .join(".agents")
-                .join("plugins")
-                .join("marketplace.json"),
-            CodingAgent::ClaudeCode => marketplace_root
-                .join(".claude-plugin")
-                .join("marketplace.json"),
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before layout resolution")
-            }
-        };
+        let marketplace_manifest = host
+            .marketplace_manifest_relative()
+            .iter()
+            .fold(marketplace_root.clone(), |path, component| {
+                path.join(component)
+            });
         let plugin_root = marketplace_root.join("plugins").join(PLUGIN_NAME);
-        let plugin_manifest = match host {
-            CodingAgent::Codex => plugin_root.join(".codex-plugin").join("plugin.json"),
-            CodingAgent::ClaudeCode => plugin_root.join(".claude-plugin").join("plugin.json"),
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before layout resolution")
-            }
-        };
+        let plugin_manifest = host
+            .plugin_manifest_relative()
+            .iter()
+            .fold(plugin_root.clone(), |path, component| path.join(component));
         let mcp_config = plugin_root.join(".mcp.json");
         let generation_fence = plugin_root.join(GENERATION_FILE_NAME);
         let generation_lock = install_dir.join(format!(
@@ -88,7 +87,8 @@ impl PluginLayout {
         let hooks_path = plugin_root.join("hooks").join("hooks.json");
         let state_path = state_path(host, install_dir);
         Self {
-            host,
+            host_arg: host.install_arg(),
+            host_label: host.label(),
             marketplace_root,
             marketplace_manifest,
             plugin_root,
@@ -106,7 +106,7 @@ impl PluginLayout {
         {
             return Err(format!(
                 "refusing persisted {} plugin state outside the selected install layout {}",
-                self.host.label(),
+                self.host_label,
                 self.state_path.display()
             ));
         }
@@ -132,7 +132,7 @@ impl PluginLayout {
             if !canonical_marketplace.starts_with(&canonical_install) {
                 return Err(format!(
                     "refusing persisted {} marketplace root outside the selected install directory",
-                    self.host.label()
+                    self.host_label
                 ));
             }
         }
@@ -203,8 +203,8 @@ pub(super) fn write_state(
     layout: &PluginLayout,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
-    write_state_for_host(
-        layout.host,
+    write_state_for_host_arg(
+        layout.host_arg,
         &PluginState {
             marketplace_root: layout.marketplace_root.clone(),
             plugin_root: layout.plugin_root.clone(),
@@ -221,7 +221,7 @@ pub(super) fn write_state(
 }
 
 pub(super) fn mark_plugin_setup_installed(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     layout: &PluginLayout,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
@@ -237,12 +237,21 @@ pub(super) fn mark_plugin_setup_installed(
 }
 
 pub(super) fn write_state_for_host(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     state: &PluginState,
     install_dir: &Path,
     options: &PluginInstallOptions,
 ) -> Result<(), String> {
-    let path = state_path(host, install_dir);
+    write_state_for_host_arg(host.install_arg(), state, install_dir, options)
+}
+
+fn write_state_for_host_arg(
+    host_arg: &str,
+    state: &PluginState,
+    install_dir: &Path,
+    options: &PluginInstallOptions,
+) -> Result<(), String> {
+    let path = state_path_for_arg(host_arg, install_dir);
     if options.dry_run {
         println!("write {}", path.display());
         return Ok(());
@@ -250,7 +259,7 @@ pub(super) fn write_state_for_host(
     write_json(
         &path,
         &json!({
-            "host": host.install_arg(),
+            "host": host_arg,
             "marketplaceRoot": state.marketplace_root,
             "pluginRoot": state.plugin_root,
             "hostUnregistered": state.host_plugin_removed && state.host_marketplace_removed,
@@ -261,7 +270,10 @@ pub(super) fn write_state_for_host(
     )
 }
 
-pub(super) fn read_state(host: CodingAgent, install_dir: &Path) -> Option<PluginState> {
+pub(super) fn read_state(
+    host: impl MarketplaceHostIdentity,
+    install_dir: &Path,
+) -> Option<PluginState> {
     let raw = fs::read_to_string(state_path(host, install_dir)).ok()?;
     let value = serde_json::from_str::<Value>(&raw).ok()?;
     let legacy_host_unregistered = value
@@ -286,8 +298,12 @@ pub(super) fn read_state(host: CodingAgent, install_dir: &Path) -> Option<Plugin
     })
 }
 
-pub(super) fn state_path(host: CodingAgent, install_dir: &Path) -> PathBuf {
-    install_dir.join(format!("{}.json", host.install_arg()))
+pub(super) fn state_path(host: impl MarketplaceHostIdentity, install_dir: &Path) -> PathBuf {
+    state_path_for_arg(host.install_arg(), install_dir)
+}
+
+fn state_path_for_arg(host_arg: &str, install_dir: &Path) -> PathBuf {
+    install_dir.join(format!("{host_arg}.json"))
 }
 
 pub(super) fn write_json(path: &Path, value: &Value) -> Result<(), String> {
