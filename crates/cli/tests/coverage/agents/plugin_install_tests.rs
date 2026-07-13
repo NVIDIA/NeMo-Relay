@@ -1375,7 +1375,7 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
 }
 
 #[test]
-fn relay_identity_uses_running_executable_when_path_points_elsewhere() {
+fn relay_identity_prefers_the_path_resolved_executable() {
     let dir = tempdir().unwrap();
     let runner = MockRunner::default()
         .with_current_executable("/opt/nemo-relay/current/nemo-relay")
@@ -1386,7 +1386,7 @@ fn relay_identity_uses_running_executable_when_path_points_elsewhere() {
         .path()
         .join("plugins/nemo-relay-plugin/.nemo-relay-generation");
 
-    assert_eq!(relay, PathBuf::from("/opt/nemo-relay/current/nemo-relay"));
+    assert_eq!(relay, PathBuf::from("/opt/nemo-relay/stale/nemo-relay"));
     assert_eq!(
         plugin_hooks(
             CodingAgent::Codex,
@@ -3685,7 +3685,7 @@ fn failed_staging_preserves_a_preexisting_dangling_generation_lock_symlink() {
         Err(error) => error,
     };
 
-    assert!(error.contains("injected test failure"), "{error}");
+    assert!(error.contains("generation lock"), "{error}");
     assert!(!stage_parent.exists());
     assert!(
         std::fs::symlink_metadata(&target.generation_lock)
@@ -3693,7 +3693,7 @@ fn failed_staging_preserves_a_preexisting_dangling_generation_lock_symlink() {
             .file_type()
             .is_symlink()
     );
-    assert!(symlink_target.exists());
+    assert!(!symlink_target.exists());
 }
 
 #[test]

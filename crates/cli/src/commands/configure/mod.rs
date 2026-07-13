@@ -21,12 +21,15 @@ pub(crate) struct ConfigCommand {
     /// managed separately with `nemo-relay uninstall hermes`.
     #[arg(long)]
     pub(crate) reset: bool,
+    /// Configuration scope to reset. Defaults to the project configuration.
+    #[arg(long, value_enum, requires = "reset")]
+    pub(crate) scope: Option<model::ConfigScope>,
 }
 
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
     let agent = command.agent.map(Into::into);
     if command.reset {
-        model::reset(agent)?;
+        model::reset(command.scope.unwrap_or(model::ConfigScope::Project), agent)?;
     } else {
         wizard::run(agent).await?;
     }

@@ -197,6 +197,18 @@ fn invalid_and_unknown_requests_return_jsonrpc_errors() {
         response_for(&json!({"jsonrpc":"2.0", "id":5, "method":"initialize", "params":{}})),
         Some(jsonrpc_error(json!(5), -32602, "Missing protocolVersion"))
     );
+    assert_eq!(
+        response_for(&json!({"jsonrpc":"2.0"})),
+        Some(jsonrpc_error(Value::Null, -32600, "Invalid Request"))
+    );
+    assert_eq!(
+        response_for(&json!({"jsonrpc":"2.0", "id":true, "method":"ping"})),
+        Some(jsonrpc_error(Value::Null, -32600, "Invalid Request"))
+    );
+    assert_eq!(
+        response_for(&json!({"jsonrpc":"2.0", "method":7})),
+        Some(jsonrpc_error(Value::Null, -32600, "Invalid Request"))
+    );
 }
 
 #[test]

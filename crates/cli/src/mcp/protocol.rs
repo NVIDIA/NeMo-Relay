@@ -25,16 +25,22 @@ pub(super) fn evaluate_frame(frame: &str) -> FrameAction {
 }
 
 pub(super) fn response_for(message: &Value) -> Option<Value> {
-    let id = message.get("id").cloned();
+    let raw_id = message.get("id");
+    let response_id = raw_id
+        .filter(|id| valid_request_id(id))
+        .cloned()
+        .unwrap_or(Value::Null);
     if !message.is_object() || message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Some(jsonrpc_error(
-            id.unwrap_or(Value::Null),
-            -32600,
-            "Invalid Request",
-        ));
+        return Some(jsonrpc_error(response_id, -32600, "Invalid Request"));
     }
-    let id = id?;
     let method = message.get("method").and_then(Value::as_str);
+    if raw_id.is_some_and(|id| !valid_request_id(id)) {
+        return Some(jsonrpc_error(Value::Null, -32600, "Invalid Request"));
+    }
+    if method.is_none() {
+        return Some(jsonrpc_error(response_id, -32600, "Invalid Request"));
+    }
+    let id = raw_id?.clone();
     match method {
         Some("initialize") => {
             let Some(requested_protocol) = message
@@ -74,6 +80,10 @@ pub(super) fn response_for(message: &Value) -> Option<Value> {
         Some(_) => Some(jsonrpc_error(id, -32601, "Method not found")),
         None => Some(jsonrpc_error(id, -32600, "Invalid Request")),
     }
+}
+
+fn valid_request_id(id: &Value) -> bool {
+    id.is_string() || id.as_i64().is_some() || id.as_u64().is_some()
 }
 
 pub(super) fn jsonrpc_error(id: Value, code: i64, message: &str) -> Value {

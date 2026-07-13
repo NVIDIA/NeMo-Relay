@@ -5,6 +5,7 @@ pub(crate) mod client;
 mod request;
 mod response;
 mod routes;
+pub(crate) mod tls;
 
 use request::*;
 use response::*;
@@ -653,7 +654,7 @@ async fn forward_upstream_request(
     );
     let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
     for (name, value) in &sanitized {
-        if should_forward_request_header(name) {
+        if should_forward_request_header(name, &sanitized) {
             upstream = upstream.header(name, value);
         }
     }
@@ -861,7 +862,7 @@ pub(crate) async fn models(
     );
     let mut upstream = state.http.get(upstream_url);
     for (name, value) in &sanitized {
-        if should_forward_request_header(name) {
+        if should_forward_request_header(name, &sanitized) {
             upstream = upstream.header(name, value);
         }
     }

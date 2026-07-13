@@ -12,9 +12,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -57,6 +58,8 @@ pub(crate) struct AppState {
     pub(crate) last_activity: Arc<Mutex<Instant>>,
     pub(crate) bootstrap_shutdown: Option<BootstrapShutdown>,
     pub(crate) instance_id: String,
+    pub(crate) bootstrap_tls: Option<Arc<rustls::ServerConfig>>,
+    pub(crate) local_address: Option<SocketAddr>,
 }
 
 #[derive(Clone)]
@@ -99,8 +102,8 @@ pub(crate) async fn bind_listener(bind: SocketAddr) -> Result<TcpListener, CliEr
             CliError::Launch(format!(
                 "cannot bind {} — port is already in use. Most likely cause: another \
                  `nemo-relay` daemon is already running. Fix one of:\n  \
-                 • stop the running daemon (Unix: `pkill -f nemo-relay`, Windows: \
-                 `taskkill /IM nemo-relay.exe`)\n  \
+                 • use the managed shutdown command, or identify the owning daemon PID and \
+                 terminate only that process\n  \
                  • use an ephemeral port: `nemo-relay --bind 127.0.0.1:0`\n  \
                  • pick a free port: `nemo-relay --bind 127.0.0.1:4041`",
                 bind
@@ -231,21 +234,39 @@ async fn serve_listener_with_dynamic_inner(
     shutdown_mode: Option<ShutdownMode>,
     ready_file: Option<&Path>,
 ) -> Result<(), CliError> {
+    let bootstrap_shutdown_token = std::env::var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty());
+    // The token belongs only to this server. Remove it before worker plugin processes are spawned.
+    unsafe {
+        std::env::remove_var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN");
+    }
     let bootstrap_challenge_key = bootstrap_fingerprint
         .as_ref()
         .map(|_| BootstrapChallengeKey::load())
         .transpose()?;
+    let bootstrap_tls = bootstrap_fingerprint
+        .as_ref()
+        .map(|_| crate::gateway::tls::RelayTlsIdentity::load_or_create())
+        .transpose()
+        .map_err(CliError::Launch)?
+        .map(|identity| identity.server_config())
+        .transpose()
+        .map_err(CliError::Launch)?;
     let require_provider_client_token = managed_bootstrap.is_some();
     let plugin_activation =
         PluginActivation::initialize(config.plugin_config.clone(), dynamic_plugins).await?;
-    let (bootstrap_shutdown, bootstrap_shutdown_rx) = bootstrap_shutdown_channel();
-    let state = AppState::new_with_bootstrap(
+    let (bootstrap_shutdown, bootstrap_shutdown_rx) =
+        bootstrap_shutdown_channel(bootstrap_shutdown_token.clone());
+    let mut state = AppState::new_with_bootstrap(
         config,
         bootstrap_fingerprint,
         bootstrap_challenge_key,
         require_provider_client_token,
         bootstrap_shutdown,
     );
+    state.bootstrap_tls = bootstrap_tls;
+    state.local_address = Some(listener.local_addr()?);
     let instance_id = state.instance_id.clone();
     let sessions = state.sessions.clone();
     let last_activity = state.last_activity.clone();
@@ -254,8 +275,11 @@ async fn serve_listener_with_dynamic_inner(
     if let Some(identity) = managed_bootstrap.as_ref() {
         identity.verify_current()?;
     }
-    let _owner =
-        crate::bootstrap::state::publish_owner_from_env(local_address).map_err(CliError::Launch)?;
+    let _owner = crate::bootstrap::state::publish_owner_from_env(
+        local_address,
+        bootstrap_shutdown_token.as_deref(),
+    )
+    .map_err(CliError::Launch)?;
     if let Some(path) = ready_file {
         write_ready_file(path, local_address, &instance_id)?;
     }
@@ -389,6 +413,8 @@ impl AppState {
             last_activity: Arc::new(Mutex::new(Instant::now())),
             bootstrap_shutdown,
             instance_id: uuid::Uuid::now_v7().to_string(),
+            bootstrap_tls: None,
+            local_address: None,
         }
     }
 
@@ -420,6 +446,7 @@ fn router_with_state(state: AppState) -> Router {
     let max_hook_payload_bytes = state.config.max_hook_payload_bytes;
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/bootstrap/tunnel", get(bootstrap_tls_tunnel))
         .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
@@ -436,11 +463,75 @@ fn router_with_state(state: AppState) -> Router {
         .with_state(state)
 }
 
-fn bootstrap_shutdown_channel() -> (Option<BootstrapShutdown>, Option<oneshot::Receiver<()>>) {
-    let Some(token) = std::env::var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN")
-        .ok()
-        .filter(|token| !token.is_empty())
+async fn bootstrap_tls_tunnel(
+    State(state): State<AppState>,
+    mut request: Request<Body>,
+) -> Response {
+    let headers = request.headers();
+    let Some(fingerprint) = headers
+        .get("x-nemo-relay-bootstrap-fingerprint")
+        .and_then(|value| value.to_str().ok())
     else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let Some(nonce) = headers
+        .get("x-nemo-relay-bootstrap-nonce")
+        .and_then(|value| value.to_str().ok())
+        .filter(|nonce| nonce.len() == 64 && nonce.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    let fingerprint_matches = state
+        .bootstrap_fingerprint
+        .as_deref()
+        .is_some_and(|actual| bool::from(actual.as_bytes().ct_eq(fingerprint.as_bytes())));
+    let (Some(key), Some(tls), Some(local_address)) = (
+        state.bootstrap_challenge_key.as_ref(),
+        state.bootstrap_tls.clone(),
+        state.local_address,
+    ) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !fingerprint_matches
+        || headers
+            .get(http::header::UPGRADE)
+            .and_then(|value| value.to_str().ok())
+            != Some("nemo-relay-tls")
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let proof = key.proof(fingerprint, nonce);
+    let upgrade = hyper::upgrade::on(&mut request);
+    tokio::spawn(async move {
+        let Ok(upgraded) = upgrade.await else {
+            return;
+        };
+        let acceptor = tokio_rustls::TlsAcceptor::from(tls);
+        let Ok(mut encrypted) = acceptor
+            .accept(hyper_util::rt::TokioIo::new(upgraded))
+            .await
+        else {
+            return;
+        };
+        let Ok(mut local) = tokio::net::TcpStream::connect(local_address).await else {
+            return;
+        };
+        let _ = tokio::io::copy_bidirectional(&mut encrypted, &mut local).await;
+    });
+    Response::builder()
+        .status(StatusCode::SWITCHING_PROTOCOLS)
+        .header(http::header::CONNECTION, "upgrade")
+        .header(http::header::UPGRADE, "nemo-relay-tls")
+        .header("x-nemo-relay-bootstrap-proof", proof)
+        .header(http::header::CONTENT_LENGTH, "0")
+        .body(Body::empty())
+        .expect("bootstrap TLS upgrade response is valid")
+}
+
+fn bootstrap_shutdown_channel(
+    token: Option<String>,
+) -> (Option<BootstrapShutdown>, Option<oneshot::Receiver<()>>) {
+    let Some(token) = token else {
         return (None, None);
     };
     let (sender, receiver) = oneshot::channel();

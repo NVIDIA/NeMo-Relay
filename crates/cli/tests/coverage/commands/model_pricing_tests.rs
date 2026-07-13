@@ -104,6 +104,22 @@ fn pricing_component_rejects_malformed_component_config() {
 }
 
 #[test]
+fn pricing_catalog_reads_are_bounded_and_require_utf8() {
+    let temp = tempfile::tempdir().unwrap();
+    let invalid_utf8 = temp.path().join("invalid.json");
+    std::fs::write(&invalid_utf8, [0xff]).unwrap();
+    let error = read_pricing_catalog(&invalid_utf8).unwrap_err().to_string();
+    assert!(error.contains("not valid UTF-8"), "{error}");
+
+    let oversized = temp.path().join("oversized.json");
+    let file = std::fs::File::create(&oversized).unwrap();
+    file.set_len(crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES + 1)
+        .unwrap();
+    let error = read_pricing_catalog(&oversized).unwrap_err().to_string();
+    assert!(error.contains("exceeds"), "{error}");
+}
+
+#[test]
 fn pricing_document_update_preserves_dynamic_and_host_sections() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("plugins.toml");

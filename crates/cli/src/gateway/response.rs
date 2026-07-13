@@ -13,7 +13,7 @@ use crate::error::CliError;
 pub(super) fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
     let mut output = Map::new();
     for (name, value) in headers {
-        if should_record_header(name)
+        if should_record_header(name, headers)
             && let Ok(value) = value.to_str()
         {
             output.insert(name.as_str().to_string(), json!(value));
@@ -29,7 +29,10 @@ pub(super) fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
 pub(super) fn response_headers(headers: &HeaderMap) -> HeaderMap {
     let mut output = HeaderMap::new();
     for (name, value) in headers {
-        if !is_hop_by_hop(name) && name != http::header::CONTENT_LENGTH {
+        if !is_hop_by_hop(name)
+            && !named_by_connection_header(name, headers)
+            && name != http::header::CONTENT_LENGTH
+        {
             output.append(name.clone(), value.clone());
         }
     }
@@ -53,8 +56,9 @@ pub(super) fn build_response(
 // Allows provider request headers through unless they are transport-owned or must be recalculated
 // for the forwarded body. Host and content length are intentionally excluded because reqwest sets
 // them for the upstream connection.
-pub(super) fn should_forward_request_header(name: &HeaderName) -> bool {
+pub(super) fn should_forward_request_header(name: &HeaderName, headers: &HeaderMap) -> bool {
     !is_hop_by_hop(name)
+        && !named_by_connection_header(name, headers)
         && name != http::header::HOST
         && name != http::header::CONTENT_LENGTH
         && name.as_str() != BOOTSTRAP_CLIENT_TOKEN_HEADER
@@ -73,13 +77,22 @@ pub(super) fn should_forward_request_header(name: &HeaderName) -> bool {
 // SDK and similar), `anthropic-api-key` (Anthropic), and the generic `api-key` alias used by some
 // providers/proxies (e.g., Azure OpenAI). `HeaderName::as_str()` already returns the canonical
 // lowercase form so string comparisons are case-insensitive by construction.
-pub(super) fn should_record_header(name: &HeaderName) -> bool {
-    should_forward_request_header(name)
+pub(super) fn should_record_header(name: &HeaderName, headers: &HeaderMap) -> bool {
+    should_forward_request_header(name, headers)
         && name != http::header::AUTHORIZATION
         && name != http::header::COOKIE
         && name.as_str() != "x-api-key"
         && name.as_str() != "api-key"
         && name.as_str() != "anthropic-api-key"
+}
+
+fn named_by_connection_header(name: &HeaderName, headers: &HeaderMap) -> bool {
+    headers
+        .get_all(http::header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim().eq_ignore_ascii_case(name.as_str()))
 }
 
 // Identifies headers that describe a single transport hop and therefore must not be proxied across

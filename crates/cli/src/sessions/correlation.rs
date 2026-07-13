@@ -201,12 +201,7 @@ pub(super) fn same_optional(left: Option<&str>, right: Option<&str>) -> bool {
 pub(super) fn owner_status_teaches_request_affinity(status: &str) -> bool {
     matches!(
         status,
-        "explicit"
-            | "single_hint"
-            | "matched_hint"
-            | "active_subagent"
-            | "subagent_start"
-            | "request_affinity"
+        "explicit" | "single_hint" | "matched_hint" | "active_subagent" | "request_affinity"
     )
 }
 
@@ -320,9 +315,12 @@ pub(super) fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
 // Returns a session id only when exactly one session is active. Gateway requests without explicit
 // session headers use this narrow fallback to avoid cross-correlating concurrent agents.
 pub(super) fn single_active_session_id(sessions: &HashMap<String, Session>) -> Option<String> {
-    (sessions.len() == 1)
-        .then(|| sessions.keys().next().cloned())
-        .flatten()
+    let now = std::time::Instant::now();
+    let mut active = sessions
+        .iter()
+        .filter(|(_, session)| session.is_active_or_recent(now));
+    let (session_id, _) = active.next()?;
+    active.next().is_none().then(|| session_id.clone())
 }
 
 // Selects a gateway session without guessing between concurrent agents. An explicit session id or

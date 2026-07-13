@@ -76,6 +76,9 @@ impl Drop for EnvScope {
 }
 
 fn read_headers(stream: &mut std::net::TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let mut bytes = Vec::new();
     let mut byte = [0_u8; 1];
     while !bytes.ends_with(b"\r\n\r\n") {
@@ -83,6 +86,27 @@ fn read_headers(stream: &mut std::net::TcpStream) -> String {
         bytes.push(byte[0]);
     }
     String::from_utf8(bytes).unwrap()
+}
+
+fn accept_bounded(listener: &TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out accepting test connection"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("failed to accept test connection: {error}"),
+        }
+    }
 }
 
 fn header(request: &str, name: &str) -> String {
@@ -118,14 +142,13 @@ fn compatible_gateway_is_reused_without_starting_another_process() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let mut stream = accept_bounded(&listener);
         let request = read_headers(&mut stream);
         let nonce = header(&request, "x-nemo-relay-bootstrap-nonce");
         let proof = key.proof("fingerprint", &nonce);
         let body = format!(
             "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"existing-instance\"}}",
-            env!("CARGO_PKG_VERSION"),
-            BOOTSTRAP_PROTOCOL_VERSION
+            "compatible-other-version", BOOTSTRAP_PROTOCOL_VERSION
         );
         stream
             .write_all(
@@ -150,10 +173,11 @@ fn compatible_gateway_is_reused_without_starting_another_process() {
 
 #[test]
 fn foreign_and_incompatible_listeners_are_never_adopted() {
-    for (body, expected) in [
-        ("{}", "not a compatible"),
+    for (status, body, expected) in [
+        ("200 OK", "{}", "not a compatible"),
         (
-            "{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"other\",\"bootstrap_protocol\":2,\"instance_id\":\"other\"}",
+            "409 Conflict",
+            "{\"status\":\"incompatible\",\"service\":\"nemo-relay\",\"version\":\"other\",\"bootstrap_protocol\":2,\"instance_id\":\"other\"}",
             "different version",
         ),
     ] {
@@ -163,12 +187,12 @@ fn foreign_and_incompatible_listeners_are_never_adopted() {
         let connections = if expected == "not a compatible" { 2 } else { 1 };
         let server = std::thread::spawn(move || {
             for _ in 0..connections {
-                let (mut stream, _) = listener.accept().unwrap();
+                let mut stream = accept_bounded(&listener);
                 let _ = read_headers(&mut stream);
                 stream
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
                         )
                         .as_bytes(),

@@ -1190,6 +1190,9 @@ fn clear_value_field(
     let Some(field) = schema.fields.get(selected) else {
         return false;
     };
+    if !field.optional {
+        return false;
+    }
     remove_value_field(value, field.name);
     true
 }

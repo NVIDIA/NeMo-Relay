@@ -269,6 +269,8 @@ pub(crate) fn validate(
             }
             let resolved = resolve_plugins_config(server.config.as_ref())?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &path)?;
+            validate_python_entrypoint_artifact(&manifest, &manifest_ref)
+                .map_err(CliError::Config)?;
             load_config_schema_for_manifest(&manifest, &manifest_ref)?;
             let policy =
                 evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
@@ -308,6 +310,8 @@ pub(crate) fn validate(
             let entry = find_registered_entry(&scopes, "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
+            validate_python_entrypoint_artifact(&manifest, &manifest_ref)
+                .map_err(CliError::Config)?;
             if let Some(schema) = load_config_schema_for_manifest(&manifest, &manifest_ref)? {
                 let config = host_config_by_id
                     .get(&plugin_id)

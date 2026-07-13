@@ -4,6 +4,8 @@
 //! Acquisition and liveness lease for a shared coding-agent gateway.
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use crate::bootstrap::{GatewayEndpoint, GatewaySpec};
@@ -47,11 +49,17 @@ impl GatewayPlan {
 
     pub(super) async fn acquire(mut self) -> Result<GatewayLease, CliError> {
         let endpoint = acquire_gateway(self.spec.clone(), self.generation_guard.take()).await?;
-        let monitor = tokio::spawn(async move { self.monitor(endpoint).await });
-        Ok(GatewayLease { monitor })
+        let shutdown = Arc::new(LeaseShutdown::default());
+        let monitor_shutdown = shutdown.clone();
+        let monitor = tokio::spawn(async move { self.monitor(endpoint, monitor_shutdown).await });
+        Ok(GatewayLease { monitor, shutdown })
     }
 
-    async fn monitor(self, endpoint: crate::bootstrap::GatewayEndpoint) -> Result<(), CliError> {
+    async fn monitor(
+        self,
+        endpoint: crate::bootstrap::GatewayEndpoint,
+        shutdown: Arc<LeaseShutdown>,
+    ) -> Result<(), CliError> {
         let health_spec = self.spec.clone();
         let restart_spec = self.spec.clone();
         let restart_generation = self.generation.clone();
@@ -75,6 +83,7 @@ impl GatewayPlan {
                     restart_spec.clone(),
                     restart_generation.clone(),
                     expected_instance,
+                    shutdown.clone(),
                 )
             },
             move || {
@@ -89,13 +98,17 @@ impl GatewayPlan {
 /// An active liveness lease. Dropping it stops heartbeats immediately.
 pub(super) struct GatewayLease {
     monitor: tokio::task::JoinHandle<Result<(), CliError>>,
+    shutdown: Arc<LeaseShutdown>,
 }
 
 impl GatewayLease {
     #[cfg(test)]
     pub(super) fn test_pending() -> Self {
         let monitor = tokio::spawn(std::future::pending::<Result<(), CliError>>());
-        Self { monitor }
+        Self {
+            monitor,
+            shutdown: Arc::new(LeaseShutdown::default()),
+        }
     }
 
     pub(super) async fn borrow(
@@ -147,7 +160,10 @@ impl GatewayLease {
                 }
             }
         });
-        Ok(Self { monitor })
+        Ok(Self {
+            monitor,
+            shutdown: Arc::new(LeaseShutdown::default()),
+        })
     }
 
     pub(super) async fn wait(&mut self) -> Result<(), CliError> {
@@ -174,7 +190,61 @@ async fn authenticated_instance_id(
 
 impl Drop for GatewayLease {
     fn drop(&mut self) {
+        self.shutdown.stop();
         self.monitor.abort();
+        self.shutdown.wait_for_recovery();
+    }
+}
+
+#[derive(Default)]
+struct LeaseShutdown {
+    stopped: AtomicBool,
+    recovery_count: Mutex<usize>,
+    recovery_finished: Condvar,
+}
+
+impl LeaseShutdown {
+    fn start_recovery(self: &Arc<Self>) -> Result<RecoveryGuard, CliError> {
+        let mut count = self
+            .recovery_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.stopped.load(Ordering::Acquire) {
+            return Err(CliError::Launch("gateway lease is shutting down".into()));
+        }
+        *count += 1;
+        Ok(RecoveryGuard(self.clone()))
+    }
+
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+
+    fn wait_for_recovery(&self) {
+        let mut count = self
+            .recovery_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *count != 0 {
+            count = self
+                .recovery_finished
+                .wait(count)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+}
+
+struct RecoveryGuard(Arc<LeaseShutdown>);
+
+impl Drop for RecoveryGuard {
+    fn drop(&mut self) {
+        let mut count = self
+            .0
+            .recovery_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *count = count.saturating_sub(1);
+        self.0.recovery_finished.notify_all();
     }
 }
 
@@ -195,8 +265,11 @@ async fn recover_gateway(
     spec: GatewaySpec,
     generation: Option<InstallGeneration>,
     expected_instance: String,
+    shutdown: Arc<LeaseShutdown>,
 ) -> Result<GatewayEndpoint, CliError> {
+    let recovery_guard = shutdown.start_recovery()?;
     tokio::task::spawn_blocking(move || {
+        let _recovery_guard = recovery_guard;
         let _generation_guard = generation
             .as_ref()
             .map(InstallGeneration::guard_current)
@@ -206,6 +279,15 @@ async fn recover_gateway(
     .await
     .map_err(|error| CliError::Launch(format!("gateway recovery task failed: {error}")))?
     .map_err(CliError::Launch)
+    .and_then(|endpoint| {
+        if shutdown.stopped.load(Ordering::Acquire) {
+            Err(CliError::Launch(
+                "gateway lease closed during recovery".into(),
+            ))
+        } else {
+            Ok(endpoint)
+        }
+    })
 }
 
 async fn verify_lifecycle_async(generation: Option<InstallGeneration>) -> Result<(), CliError> {

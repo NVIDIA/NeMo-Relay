@@ -5902,6 +5902,32 @@ async fn idle_timeout_waits_for_active_gateway_llm_call() {
 }
 
 #[tokio::test]
+async fn a_single_stale_retained_session_is_not_used_for_headerless_calls() {
+    let manager = SessionManager::new(session_test_config());
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::AgentStarted(session_event(
+                "stale-session",
+                "SessionStart",
+            ))],
+        )
+        .await
+        .unwrap();
+    let mut sessions = manager.inner.lock().await;
+    sessions.get_mut("stale-session").unwrap().last_activity =
+        Instant::now() - AGENT_IDLE_TIMEOUT - Duration::from_secs(1);
+
+    assert_eq!(single_active_session_id(&sessions), None);
+}
+
+#[test]
+fn weak_subagent_start_status_does_not_teach_request_affinity() {
+    assert!(!owner_status_teaches_request_affinity("subagent_start"));
+    assert!(owner_status_teaches_request_affinity("active_subagent"));
+}
+
+#[tokio::test]
 async fn gateway_shutdown_attempts_remaining_sessions_after_close_error() {
     let subscriber_name = "cli-close-all-deferred-error-test";
     let _ = deregister_subscriber(subscriber_name);

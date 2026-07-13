@@ -1233,12 +1233,13 @@ fn resolve_schema_chain<'a>(
         return Ok(schema);
     };
     let fragment = decode_reference_fragment(reference)?;
-    let canonical_reference = format!("#{fragment}");
-    if !references.insert(canonical_reference.clone()) {
-        return Err(ResolveError::Cycle(canonical_reference));
-    }
-    let target = resolve_fragment(root, &fragment)
+    let resource = active_schema_resource(root, schema).unwrap_or(root);
+    let target = resolve_fragment(resource, &fragment)
         .ok_or_else(|| ResolveError::Missing(reference.to_owned()))?;
+    let canonical_reference = format!("{:p}#{fragment}", resource);
+    if !references.insert(canonical_reference.clone()) {
+        return Err(ResolveError::Cycle(reference.to_owned()));
+    }
     resolve_schema_chain(root, target, references, reference_chain)
 }
 
@@ -1291,22 +1292,63 @@ fn resolve_fragment<'a>(root: &'a Value, fragment: &str) -> Option<&'a Value> {
     if fragment.starts_with('/') {
         return root.pointer(fragment);
     }
-    find_anchor(root, fragment)
+    find_anchor(root, fragment, true)
 }
 
-fn find_anchor<'a>(schema: &'a Value, anchor: &str) -> Option<&'a Value> {
+fn find_anchor<'a>(schema: &'a Value, anchor: &str, resource_root: bool) -> Option<&'a Value> {
     match schema {
         Value::Object(object) => {
+            if !resource_root && establishes_schema_resource(object) {
+                return None;
+            }
             if object.get("$anchor").and_then(Value::as_str) == Some(anchor)
                 || object.get("$id").and_then(Value::as_str) == Some(&format!("#{anchor}"))
             {
                 return Some(schema);
             }
-            object.values().find_map(|child| find_anchor(child, anchor))
+            object
+                .values()
+                .find_map(|child| find_anchor(child, anchor, false))
         }
-        Value::Array(values) => values.iter().find_map(|child| find_anchor(child, anchor)),
+        Value::Array(values) => values
+            .iter()
+            .find_map(|child| find_anchor(child, anchor, false)),
         _ => None,
     }
+}
+
+fn active_schema_resource<'a>(root: &'a Value, target: &Value) -> Option<&'a Value> {
+    fn locate<'a>(
+        current: &'a Value,
+        target: *const Value,
+        active: &'a Value,
+    ) -> Option<&'a Value> {
+        let active = match current {
+            Value::Object(object) if establishes_schema_resource(object) => current,
+            _ => active,
+        };
+        if std::ptr::eq(current, target) {
+            return Some(active);
+        }
+        match current {
+            Value::Object(object) => object
+                .values()
+                .find_map(|child| locate(child, target, active)),
+            Value::Array(values) => values
+                .iter()
+                .find_map(|child| locate(child, target, active)),
+            _ => None,
+        }
+    }
+
+    locate(root, std::ptr::from_ref(target), root)
+}
+
+fn establishes_schema_resource(object: &Map<String, Value>) -> bool {
+    object
+        .get("$id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.starts_with('#'))
 }
 
 #[cfg(test)]

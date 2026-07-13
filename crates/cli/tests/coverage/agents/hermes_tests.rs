@@ -364,7 +364,7 @@ fn manual_same_named_mcp_and_hooks_are_never_claimed() {
 }
 
 #[test]
-fn mismatched_generation_hook_does_not_prove_ownership() {
+fn modern_mcp_generation_proves_ownership_independently_of_hook_completeness() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
@@ -377,10 +377,15 @@ fn mismatched_generation_hook_does_not_prove_ownership() {
         &[],
     )
     .unwrap();
-    assert!(
+    assert_eq!(
         owned_install_command(&root, &relay, Some(&generation))
             .unwrap()
-            .is_none()
+            .as_deref(),
+        Some(
+            persistent_hook_command(&relay, &generation, "mcp-token")
+                .unwrap()
+                .as_str()
+        )
     );
 
     root["mcp_servers"][MCP_SERVER_NAME]["command"] = json!(temp.path().join("other/nemo-relay"));
@@ -621,6 +626,15 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
         1
     );
     assert_eq!(
+        config["hooks"]["on_session_start"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|group| group["command"] == json!(first_command))
+            .count(),
+        0
+    );
+    assert_eq!(
         config["mcp_servers"][MCP_SERVER_NAME]["env"][GENERATION_FILE_ENV],
         json!(paths.generation.display().to_string())
     );
@@ -699,7 +713,10 @@ fn diagnosis_rejects_a_stale_mcp_generation_identity() {
 
     let error = diagnose_persistent(&paths.config).unwrap_err();
 
-    assert!(error.contains("not a managed Relay MCP client"), "{error}");
+    assert!(
+        error.contains("expected generation identity is stale"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1091,20 +1108,14 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
     )
     .unwrap();
 
-    for paths in &roots[..1] {
+    for paths in [&roots[0], &roots[1], &roots[3]] {
         assert!(
             persistent_state_exists(&paths.config),
             "managed state at {} was not detected",
             paths.config.display()
         );
     }
-    for paths in &roots[1..] {
-        assert!(
-            !persistent_state_exists(&paths.config),
-            "ambiguous state at {} was claimed as managed",
-            paths.config.display()
-        );
-    }
+    assert!(!persistent_state_exists(&roots[2].config));
 }
 
 #[test]
@@ -1256,7 +1267,10 @@ fn hermes_diagnosis_validates_binary_bind_generation_and_environment() {
     )
     .unwrap();
     let error = diagnose_persistent(&paths.config).unwrap_err();
-    assert!(error.contains("not a managed Relay MCP client"), "{error}");
+    assert!(
+        error.contains("generation fence points at the wrong file"),
+        "{error}"
+    );
 
     let mut missing_environment = original;
     assert!(
@@ -1358,6 +1372,20 @@ fn hermes_uninstall_and_verification_reject_malformed_or_residual_state() {
         None,
     )
     .unwrap();
+
+    let mut mismatched_environment = config.clone();
+    let environment_name = expected_environment
+        .first()
+        .expect("persistent MCP environment is non-empty");
+    mismatched_environment["mcp_servers"][MCP_SERVER_NAME]["env"][environment_name] =
+        json!("unexpected-value");
+    std::fs::write(
+        &hermes_paths.config,
+        serde_yaml::to_string(&mismatched_environment).unwrap(),
+    )
+    .unwrap();
+    let error = diagnose_persistent(&hermes_paths.config).unwrap_err();
+    assert!(error.contains(environment_name), "{error}");
 
     install_persistent_with(
         hermes_paths.clone(),

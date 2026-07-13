@@ -1212,6 +1212,37 @@ fn reset_section_clears_optional_section_without_default() {
 }
 
 #[test]
+fn clear_value_field_refuses_required_fields() {
+    static FIELDS: [EditorFieldSpec; 2] = [
+        EditorFieldSpec {
+            name: "required",
+            label: "required",
+            kind: EditorFieldKind::String,
+            enum_values: &[],
+            optional: false,
+            nested_schema: None,
+            nested_default: None,
+        },
+        EditorFieldSpec {
+            name: "optional",
+            label: "optional",
+            kind: EditorFieldKind::String,
+            enum_values: &[],
+            optional: true,
+            nested_schema: None,
+            nested_default: None,
+        },
+    ];
+    let schema = EditorSchema { fields: &FIELDS };
+    let mut value = json!({"required": "keep", "optional": "remove"});
+
+    assert!(!clear_value_field(&mut value, &schema, 0));
+    assert_eq!(value["required"], json!("keep"));
+    assert!(clear_value_field(&mut value, &schema, 1));
+    assert!(value.get("optional").is_none());
+}
+
+#[test]
 fn nested_edit_empty_optional_section_without_default_clears_field() {
     let optional = optional_section_without_default("optional");
     let parent = optional_section_without_default("parent");

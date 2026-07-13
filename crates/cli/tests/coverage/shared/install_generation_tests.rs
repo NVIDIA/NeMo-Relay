@@ -392,6 +392,7 @@ fn legacy_sibling_lock_can_be_released_for_tree_move_and_reacquired_for_rollback
 
 #[test]
 fn relative_legacy_marker_reencodes_an_absolute_lock_for_rollback() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let current_dir = std::env::current_dir().unwrap();
     let dir = tempfile::Builder::new()
         .prefix(".relay-relative-generation-")

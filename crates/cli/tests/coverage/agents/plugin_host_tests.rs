@@ -382,6 +382,7 @@ struct HomeScope<'a> {
     prev_home: Option<std::ffi::OsString>,
     prev_userprofile: Option<std::ffi::OsString>,
     prev_codex_home: Option<std::ffi::OsString>,
+    prev_xdg_config_home: Option<std::ffi::OsString>,
 }
 
 impl<'a> HomeScope<'a> {
@@ -392,17 +393,20 @@ impl<'a> HomeScope<'a> {
         let prev_home = std::env::var_os("HOME");
         let prev_userprofile = std::env::var_os("USERPROFILE");
         let prev_codex_home = std::env::var_os("CODEX_HOME");
+        let prev_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
         // SAFETY: This test holds a process-wide mutex for the lifetime of the env override.
         unsafe {
             std::env::set_var("HOME", path);
             std::env::remove_var("USERPROFILE");
             std::env::remove_var("CODEX_HOME");
+            std::env::set_var("XDG_CONFIG_HOME", path.join(".config"));
         }
         Self {
             _guard: guard,
             prev_home,
             prev_userprofile,
             prev_codex_home,
+            prev_xdg_config_home,
         }
     }
 }
@@ -422,6 +426,10 @@ impl<'a> Drop for HomeScope<'a> {
             match self.prev_codex_home.take() {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
                 None => std::env::remove_var("CODEX_HOME"),
+            }
+            match self.prev_xdg_config_home.take() {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
             }
         }
     }
@@ -1158,6 +1166,24 @@ fn repeated_codex_install_does_not_overwrite_original_backup() {
         BootstrapChallengeKey::load()
             .unwrap()
             .verify_client_token(token)
+    );
+}
+
+#[test]
+fn codex_client_token_supports_regular_header_tables() {
+    let document = r#"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+
+[model_providers.nemo-relay-openai.http_headers]
+X-NeMo-Relay-Client-Token = "regular-table-token"
+"#
+    .parse::<DocumentMut>()
+    .unwrap();
+
+    assert_eq!(
+        codex_provider_client_token(&document),
+        Some("regular-table-token")
     );
 }
 
@@ -3593,16 +3619,35 @@ fn claude_backup_bootstraps_missing_settings_and_replaces_stale_backup() {
     let settings_path = dir.path().join(".claude").join("settings.json");
     let backup = backup_path(&settings_path);
     backup_claude_settings(&settings_path, false).unwrap();
-    assert_eq!(fs::read_to_string(&backup).unwrap(), "{}\n");
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(&backup).unwrap()).unwrap(),
+        json!({"__nemo_relay_original_settings_absent": true})
+    );
     fs::write(&settings_path, r#"{"env":{"ANTHROPIC_BASE_URL":"new"}}"#).unwrap();
     backup_claude_settings(&settings_path, false).unwrap();
-    assert_eq!(fs::read_to_string(&backup).unwrap(), "{}\n");
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(&backup).unwrap()).unwrap(),
+        json!({"__nemo_relay_original_settings_absent": true})
+    );
     backup_claude_settings(&settings_path, true).unwrap();
     assert!(
         fs::read_to_string(&backup)
             .unwrap()
             .contains("ANTHROPIC_BASE_URL")
     );
+}
+
+#[test]
+fn claude_restore_removes_settings_created_from_an_absent_original() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = dir.path().join(".claude/settings.json");
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    assert!(settings_path.exists());
+    restore_claude_provider(DEFAULT_URL).unwrap();
+
+    assert!(!settings_path.exists());
 }
 
 #[test]

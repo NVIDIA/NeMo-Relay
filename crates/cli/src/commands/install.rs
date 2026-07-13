@@ -96,10 +96,14 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
             "no supported Claude Code, Codex, or Hermes host CLI was detected".into(),
         ));
     }
+    let mut result = ExitCode::SUCCESS;
     for agent in agents {
-        crate::agents::install_integration(agent, request.clone())?;
+        let status = crate::agents::install_integration(agent, request.clone())?;
+        if status != ExitCode::SUCCESS {
+            result = status;
+        }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(result)
 }
 
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
@@ -116,8 +120,12 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
             "no installed Claude Code, Codex, or Hermes integration state was found".into(),
         ));
     }
+    let mut result = ExitCode::SUCCESS;
     for agent in agents {
-        crate::agents::uninstall_integration(agent, request.clone())?;
+        let status = crate::agents::uninstall_integration(agent, request.clone())?;
+        if status != ExitCode::SUCCESS {
+            result = status;
+        }
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(result)
 }

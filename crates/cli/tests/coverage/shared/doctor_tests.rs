@@ -10,13 +10,37 @@ use std::sync::{Arc, Mutex};
 
 use crate::configuration::ResolvedDynamicPluginConfig;
 
+fn accept_bounded(listener: &TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out accepting test connection"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => panic!("failed to accept test connection: {error}"),
+        }
+    }
+}
+
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let body = Arc::new(Mutex::new(String::new()));
     let thread_body = Arc::clone(&body);
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let mut stream = accept_bounded(&listener);
         let mut data = Vec::new();
         let mut buf = [0_u8; 1];
         while !data.ends_with(b"\r\n\r\n") {
@@ -1296,7 +1320,7 @@ async fn atof_http_and_websocket_probes_report_failure_branches() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let mut stream = accept_bounded(&listener);
         let mut buf = [0_u8; 1024];
         let _ = stream.read(&mut buf).unwrap();
         stream
@@ -1352,7 +1376,7 @@ async fn atof_http_and_websocket_timeout_errors_are_reported() {
     let http_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let http_url = format!("http://{}", http_listener.local_addr().unwrap());
     let http_handle = std::thread::spawn(move || {
-        let (_stream, _) = http_listener.accept().unwrap();
+        let _stream = accept_bounded(&http_listener);
         std::thread::sleep(std::time::Duration::from_millis(75));
     });
 
@@ -1384,7 +1408,7 @@ async fn atof_http_and_websocket_timeout_errors_are_reported() {
     let ws_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let ws_url = format!("ws://{}", ws_listener.local_addr().unwrap());
     let ws_handle = std::thread::spawn(move || {
-        let (_stream, _) = ws_listener.accept().unwrap();
+        let _stream = accept_bounded(&ws_listener);
         std::thread::sleep(std::time::Duration::from_millis(75));
     });
     let websocket_timeout = probe_atof_websocket(
@@ -1405,7 +1429,7 @@ async fn probe_http_named_warns_on_http_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        let mut stream = accept_bounded(&listener);
         let mut buf = [0_u8; 1024];
         let _ = stream.read(&mut buf).unwrap();
         stream
@@ -1424,7 +1448,7 @@ async fn http_probe_passes_success_and_ndjson_upload_success() {
     let success_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let success_url = format!("http://{}", success_listener.local_addr().unwrap());
     let success_handle = std::thread::spawn(move || {
-        let (mut stream, _) = success_listener.accept().unwrap();
+        let mut stream = accept_bounded(&success_listener);
         let mut buf = [0_u8; 1024];
         let _ = stream.read(&mut buf).unwrap();
         stream

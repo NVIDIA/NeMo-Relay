@@ -16,13 +16,25 @@ pub(crate) fn backup(path: &Path) -> Result<(), String> {
         return Ok(());
     }
     if path.exists() {
-        fs::copy(path, &backup).map_err(|error| {
-            format!(
-                "failed to back up {} to {}: {error}",
-                path.display(),
-                backup.display()
-            )
-        })?;
+        let bytes = fs::read(path)
+            .map_err(|error| format!("failed to read {} for backup: {error}", path.display()))?;
+        #[cfg(windows)]
+        {
+            let dacl = read_windows_dacl(path).map_err(|error| {
+                format!(
+                    "failed to read access control for {}: {error}",
+                    path.display()
+                )
+            })?;
+            atomic_write_with_windows_dacl(&backup, &bytes, &dacl)?;
+        }
+        #[cfg(not(windows))]
+        {
+            let permissions = fs::metadata(path)
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?
+                .permissions();
+            atomic_write_with_permissions(&backup, &bytes, Some(&permissions))?;
+        }
     }
     Ok(())
 }

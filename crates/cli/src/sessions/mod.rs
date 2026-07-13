@@ -652,6 +652,13 @@ impl Session {
             && now.duration_since(self.last_activity) >= timeout
     }
 
+    fn is_active_or_recent(&self, now: Instant) -> bool {
+        self.blocks_plugin_idle_shutdown()
+            || now
+                .checked_duration_since(self.last_activity)
+                .is_none_or(|elapsed| elapsed < AGENT_IDLE_TIMEOUT)
+    }
+
     // Runs one normalized hook event inside this session's scope stack. Dispatch stays synchronous
     // inside the scoped closure so lifecycle ordering from each hook request is preserved exactly.
     async fn apply(&mut self, event: NormalizedEvent) -> Result<(), CliError> {

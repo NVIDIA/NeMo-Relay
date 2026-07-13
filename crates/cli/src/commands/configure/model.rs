@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use clap::ValueEnum;
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::agents::CodingAgent;
@@ -12,7 +13,7 @@ use crate::error::CliError;
 use crate::plugins::{ConfigurationScope, PluginsEditRequest};
 
 /// Where the setup saves its output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum ConfigScope {
     /// `./.nemo-relay/config.toml` (walked-up workspace dir).
     Project,
@@ -217,26 +218,46 @@ pub(crate) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent
 /// the existing file and removes only `[agents.<agent>]`, leaving every other section intact.
 /// In both cases this targets the *project* layer; global and system layers are left to direct
 /// editing because they typically aren't owned by the wizard.
-pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
-    reset_project_config(agent_hint)
+pub(crate) fn reset(scope: ConfigScope, agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
+    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
+        let cwd = std::env::current_dir()?;
+        reset_config_path(
+            &cwd.join(".nemo-relay").join("config.toml"),
+            "project",
+            agent_hint,
+        )?;
+    }
+    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
+        let home = home_dir().ok_or_else(|| {
+            CliError::Config("cannot resolve the home directory for global reset".into())
+        })?;
+        reset_config_path(
+            &global_config_dir(&home).join("config.toml"),
+            "global",
+            agent_hint,
+        )?;
+    }
+    Ok(())
 }
 
-fn reset_project_config(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
-    let cwd = std::env::current_dir()?;
-    let path = cwd.join(".nemo-relay").join("config.toml");
+fn reset_config_path(
+    path: &Path,
+    scope: &str,
+    agent_hint: Option<CodingAgent>,
+) -> Result<(), CliError> {
     if !path.exists() {
-        println!("  No project config to reset at {}", path.display());
+        println!("  No {scope} config to reset at {}", path.display());
         return Ok(());
     }
     match agent_hint {
         None => {
-            std::fs::remove_file(&path)?;
+            std::fs::remove_file(path)?;
             println!("  ✓ Removed {}", path.display());
             println!("  Run `nemo-relay config` to set up again.");
         }
         Some(agent) => {
             let agent_key = agent_key_and_command(agent).0;
-            let raw = std::fs::read_to_string(&path)?;
+            let raw = std::fs::read_to_string(path)?;
             let mut doc: DocumentMut = raw.parse().map_err(|err| {
                 CliError::Config(format!("could not parse existing config: {err}"))
             })?;
@@ -263,7 +284,7 @@ fn reset_project_config(agent_hint: Option<CodingAgent>) -> Result<(), CliError>
             if agents.is_empty() {
                 doc.remove("agents");
             }
-            std::fs::write(&path, doc.to_string())?;
+            std::fs::write(path, doc.to_string())?;
             println!("  ✓ Removed `[agents.{agent_key}]` from {}", path.display());
         }
     }

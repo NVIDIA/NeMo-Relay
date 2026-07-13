@@ -13,6 +13,8 @@ use crate::filesystem::{
     FileSnapshot, backup, backup_path, remove_backup, restore_file_snapshot, snapshot_optional_file,
 };
 
+const ABSENT_SETTINGS_BACKUP_KEY: &str = "__nemo_relay_original_settings_absent";
+
 pub(crate) struct ClaudeSetupSnapshot {
     files: Vec<FileSnapshot>,
 }
@@ -80,7 +82,19 @@ pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
     if json_env_string(&settings, "ANTHROPIC_BASE_URL") == Some(gateway_url) {
         let backup_settings = read_json_object(&backup)?;
         restore_json_env_value(&mut settings, &backup_settings, "ANTHROPIC_BASE_URL")?;
-        write_json(&path, &settings)?;
+        if backup_settings.get(ABSENT_SETTINGS_BACKUP_KEY) == Some(&Value::Bool(true))
+            && settings.as_object().is_some_and(serde_json::Map::is_empty)
+        {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!("failed to remove {}: {error}", path.display()));
+                }
+            }
+        } else {
+            write_json(&path, &settings)?;
+        }
         remove_backup(&path)?;
         println!(
             "restored managed ANTHROPIC_BASE_URL in {} from {}",
@@ -166,8 +180,11 @@ pub(crate) fn backup_claude_settings(path: &Path, replace_existing: bool) -> Res
             fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
         }
-        fs::write(&backup_file, b"{}\n")
-            .map_err(|error| format!("failed to write {}: {error}", backup_file.display()))
+        fs::write(
+            &backup_file,
+            format!("{{\"{ABSENT_SETTINGS_BACKUP_KEY}\":true}}\n"),
+        )
+        .map_err(|error| format!("failed to write {}: {error}", backup_file.display()))
     }
 }
 

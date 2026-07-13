@@ -141,9 +141,17 @@ pub(crate) fn resolve(command: PricingResolveRequest) -> Result<(), CliError> {
 }
 
 fn read_pricing_catalog(path: &Path) -> Result<PricingCatalog, CliError> {
-    let raw = std::fs::read_to_string(path).map_err(|source| {
+    let bytes =
+        crate::filesystem::bounded::read_bounded_regular_file(path, "model pricing catalog")
+            .map_err(|source| {
+                CliError::Config(format!(
+                    "could not read model pricing catalog '{}': {source}",
+                    path.display()
+                ))
+            })?;
+    let raw = String::from_utf8(bytes).map_err(|source| {
         CliError::Config(format!(
-            "could not read model pricing catalog '{}': {source}",
+            "model pricing catalog '{}' is not valid UTF-8: {source}",
             path.display()
         ))
     })?;

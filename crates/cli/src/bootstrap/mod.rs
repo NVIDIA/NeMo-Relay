@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -341,7 +341,7 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
     ))
 }
 
-fn hand_off_to_reaper(child: Child) -> Result<(), String> {
+fn hand_off_to_reaper(child: detached::DetachedChild) -> Result<(), String> {
     hand_off_to_reaper_with(
         child,
         |slot| {
@@ -359,10 +359,10 @@ fn hand_off_to_reaper(child: Child) -> Result<(), String> {
     )
 }
 
-fn hand_off_to_reaper_with(
-    child: Child,
-    spawn: impl FnOnce(Arc<Mutex<Option<Child>>>) -> std::io::Result<()>,
-    terminate: impl FnOnce(&mut Child),
+fn hand_off_to_reaper_with<T>(
+    child: T,
+    spawn: impl FnOnce(Arc<Mutex<Option<T>>>) -> std::io::Result<()>,
+    terminate: impl FnOnce(&mut T),
 ) -> Result<(), String> {
     let slot = Arc::new(Mutex::new(Some(child)));
     if let Err(error) = spawn(Arc::clone(&slot)) {
@@ -375,10 +375,10 @@ fn hand_off_to_reaper_with(
     Ok(())
 }
 
-struct ArmedChild(Option<Child>);
+struct ArmedChild(Option<detached::DetachedChild>);
 
 impl ArmedChild {
-    fn new(child: Child) -> Self {
+    fn new(child: detached::DetachedChild) -> Self {
         Self(Some(child))
     }
 
@@ -389,7 +389,7 @@ impl ArmedChild {
             .try_wait()
     }
 
-    fn disarm(mut self) -> Child {
+    fn disarm(mut self) -> detached::DetachedChild {
         self.0.take().expect("armed gateway child is present")
     }
 }

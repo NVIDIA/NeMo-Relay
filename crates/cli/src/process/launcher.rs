@@ -637,6 +637,8 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
             section
                 .endpoint
                 .as_deref()
+                .map(sanitized_url)
+                .as_deref()
                 .unwrap_or("OTLP endpoint from environment/default")
         ));
     }
@@ -650,6 +652,8 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
             section
                 .endpoint
                 .as_deref()
+                .map(sanitized_url)
+                .as_deref()
                 .unwrap_or("OTLP endpoint from environment/default")
         ));
     }
@@ -661,7 +665,7 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
 // is omitted because it is only known once a session starts.
 fn atif_storage_destination(storage: &AtifStorageConfig) -> String {
     match storage {
-        AtifStorageConfig::Http(http) => http.endpoint.clone(),
+        AtifStorageConfig::Http(http) => sanitized_url(&http.endpoint),
         AtifStorageConfig::S3(s3) => {
             let prefix = s3.key_prefix.as_deref().unwrap_or("").trim_matches('/');
             if prefix.is_empty() {
@@ -671,6 +675,28 @@ fn atif_storage_destination(storage: &AtifStorageConfig) -> String {
             }
         }
     }
+}
+
+fn sanitized_url(value: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(value) else {
+        return "configured endpoint".into();
+    };
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    if url.query().is_some() {
+        let keys = url
+            .query_pairs()
+            .map(|(key, _)| key.into_owned())
+            .collect::<Vec<_>>();
+        url.set_query(None);
+        if !keys.is_empty() {
+            let mut query = url.query_pairs_mut();
+            for key in keys {
+                query.append_pair(&key, "[REDACTED]");
+            }
+        }
+    }
+    url.to_string()
 }
 
 fn current_output_directory() -> PathBuf {

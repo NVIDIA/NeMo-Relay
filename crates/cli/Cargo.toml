@@ -40,12 +40,16 @@ futures-util = "0.3"
 fs2 = "0.4"
 http = "1"
 http-body-util = "0.1"
+hyper = "1"
+hyper-util = { version = "0.1", features = ["tokio"] }
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
 jsonschema = { version = "0.46.6", default-features = false }
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls-native-roots", "stream"] }
 regex = "1"
+rcgen = "0.13"
 ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,6 +59,7 @@ strum = { version = "0.27", features = ["derive"] }
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 toml = "0.9"
 toml_edit = "0.23"
@@ -70,6 +75,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 shell-words = "1"
+syn = { version = "2", features = ["full", "visit"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }

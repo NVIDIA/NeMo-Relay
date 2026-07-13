@@ -155,7 +155,9 @@ pub(crate) fn managed_bootstrap_identity(
         .ok()
         .filter(|fingerprint| !fingerprint.is_empty())
     else {
-        return Ok(None);
+        return Err(CliError::Config(format!(
+            "{BOOTSTRAP_FINGERPRINT_ENV} must be set and non-empty when a managed readiness file is requested"
+        )));
     };
     let actual = persistent_bootstrap_fingerprint(resolved, active_dynamic_plugins)?;
     verify_managed_bootstrap_fingerprint(&expected, &actual)?;

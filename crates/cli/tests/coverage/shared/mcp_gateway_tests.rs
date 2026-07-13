@@ -48,6 +48,7 @@ async fn production_heartbeat_recovers_after_one_thirty_second_interval() {
         },
     ));
 
+    tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(30)).await;
     restarted_rx.await.unwrap();
     assert!(!monitor.is_finished());
@@ -256,10 +257,40 @@ async fn dropping_gateway_lease_aborts_its_monitor() {
     });
     started_rx.await.unwrap();
 
-    drop(GatewayLease { monitor });
+    drop(GatewayLease {
+        monitor,
+        shutdown: Arc::new(LeaseShutdown::default()),
+    });
 
     tokio::time::timeout(Duration::from_secs(1), dropped_rx)
         .await
         .expect("gateway monitor was not aborted when its lease dropped")
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_gateway_lease_waits_for_inflight_recovery() {
+    let shutdown = Arc::new(LeaseShutdown::default());
+    let recovery = shutdown.start_recovery().unwrap();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        release_rx.recv().unwrap();
+        drop(recovery);
+    });
+    let monitor = tokio::spawn(std::future::pending::<Result<(), CliError>>());
+    let lease = GatewayLease { monitor, shutdown };
+    let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+    let dropper = std::thread::spawn(move || {
+        drop(lease);
+        let _ = dropped_tx.send(());
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), dropped_rx)
+            .await
+            .is_err()
+    );
+    release_tx.send(()).unwrap();
+    dropper.join().unwrap();
+    worker.join().unwrap();
 }

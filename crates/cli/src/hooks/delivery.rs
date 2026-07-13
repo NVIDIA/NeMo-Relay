@@ -100,9 +100,17 @@ pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliE
         .map(|launch| &launch.gateway)
         .or(transparent_gateway.as_ref());
     if let Some(gateway) = verified_gateway {
-        let response =
-            send_verified_hook_forward_request(&command, gateway, &destination.gateway_url, input)
-                .await?;
+        let response = match send_verified_hook_forward_request(
+            &command,
+            gateway,
+            &destination.gateway_url,
+            input,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => return handle_hook_error(error, fail_closed),
+        };
         return handle_verified_hook_forward_response(response, fail_closed);
     }
 
@@ -111,7 +119,10 @@ pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliE
         destination.gateway_url.trim_end_matches('/'),
         command.agent.hook_path()
     );
-    let response = send_hook_forward_request(&command, &url, input).await?;
+    let response = match send_hook_forward_request(&command, &url, input).await {
+        Ok(response) => response,
+        Err(error) => return handle_hook_error(error, fail_closed),
+    };
     handle_hook_forward_response(response, fail_closed).await
 }
 

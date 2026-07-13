@@ -1097,12 +1097,19 @@ pub(crate) fn codex_provider_header<'a>(doc: &'a DocumentMut, name: &str) -> Opt
         .and_then(|provider| provider.get("http_headers"))?;
     headers
         .as_inline_table()
-        .and_then(|headers| headers.get(name))
-        .or_else(|| {
+        .and_then(|headers| {
             headers
-                .as_table()
-                .and_then(|headers| headers.get(name))
-                .and_then(Item::as_value)
+                .iter()
+                .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then_some(value))
+        })
+        .or_else(|| {
+            headers.as_table().and_then(|headers| {
+                headers.iter().find_map(|(key, item)| {
+                    key.eq_ignore_ascii_case(name)
+                        .then(|| item.as_value())
+                        .flatten()
+                })
+            })
         })
 }
 
@@ -1543,14 +1550,7 @@ pub(crate) fn codex_provider_installed(gateway_url: &str) -> bool {
 }
 
 pub(crate) fn codex_provider_client_token(doc: &DocumentMut) -> Option<&str> {
-    doc.get("model_providers")
-        .and_then(Item::as_table)
-        .and_then(|providers| providers.get("nemo-relay-openai"))
-        .and_then(Item::as_table)
-        .and_then(|provider| provider.get("http_headers"))
-        .and_then(Item::as_inline_table)
-        .and_then(|headers| headers.get(BOOTSTRAP_CLIENT_TOKEN_HEADER))
-        .and_then(TomlValue::as_str)
+    codex_provider_header(doc, BOOTSTRAP_CLIENT_TOKEN_HEADER).and_then(TomlValue::as_str)
 }
 
 pub(crate) fn codex_hooks_installed(path: &Path) -> Result<bool, String> {

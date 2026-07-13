@@ -482,6 +482,10 @@ fn absent_optional_plugin_config_is_ignored() {
 fn unreadable_config_errors_include_the_source_path() {
     use std::os::unix::fs::PermissionsExt;
 
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "").unwrap();
@@ -1595,11 +1599,8 @@ fn ordinary_server_ignores_managed_bootstrap_fingerprint_environment() {
         ready_file: Some(temp.path().join("managed.ready.json")),
         ..args
     };
-    assert!(
-        managed_bootstrap_identity(&managed_args, &resolved, &[])
-            .unwrap()
-            .is_none()
-    );
+    let error = managed_bootstrap_identity(&managed_args, &resolved, &[]).unwrap_err();
+    assert!(error.to_string().contains("must be set and non-empty"));
 }
 
 #[test]
@@ -1776,15 +1777,17 @@ fn bounded_identity_reader_reports_missing_unreadable_and_invalid_utf8_inputs() 
     );
 
     let unreadable = temp.path().join("unreadable");
-    std::fs::write(&unreadable, b"contents").unwrap();
-    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let unreadable_result = read_bounded_regular_file(&unreadable, "fixture");
-    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let unreadable_error = unreadable_result.unwrap_err();
-    assert!(
-        unreadable_error.contains("failed to read"),
-        "{unreadable_error}"
-    );
+    if unsafe { libc::geteuid() } != 0 {
+        std::fs::write(&unreadable, b"contents").unwrap();
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable_result = read_bounded_regular_file(&unreadable, "fixture");
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let unreadable_error = unreadable_result.unwrap_err();
+        assert!(
+            unreadable_error.contains("failed to read"),
+            "{unreadable_error}"
+        );
+    }
 
     let manifest = temp.path().join("invalid-utf8.toml");
     std::fs::write(&manifest, [0xff_u8]).unwrap();
@@ -2202,7 +2205,7 @@ fn bootstrap_file_digest_rejects_non_regular_and_oversized_inputs() {
     let file = std::fs::File::create(&oversized).unwrap();
     file.set_len(MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1).unwrap();
     let oversized = bootstrap_file_digest(&oversized, "test artifact").unwrap_err();
-    assert!(oversized.to_string().contains("identity budget"));
+    assert!(oversized.to_string().contains("exceeds"));
 }
 
 #[test]
@@ -2234,7 +2237,7 @@ manifest = "plugins/acme/relay-plugin.toml"
         .to_string();
 
     assert!(error.contains("dynamic plugin manifest"));
-    assert!(error.contains("identity budget"));
+    assert!(error.contains("byte limit"));
 }
 
 #[test]
@@ -2271,7 +2274,7 @@ startup = "required"
         .to_string();
 
     assert!(error.contains("dynamic plugin artifact"));
-    assert!(error.contains("identity budget"));
+    assert!(error.contains("byte limit"));
 }
 
 #[test]

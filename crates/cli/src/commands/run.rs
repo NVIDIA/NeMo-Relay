@@ -74,10 +74,7 @@ pub(super) async fn easy_path(
     // none of the normal discovery layers exists. Keep this interactive decision in the command
     // layer so process supervision receives a complete, agent-neutral run request.
     let explicit_config = inherited.config.as_deref();
-    let needs_setup = explicit_config.map_or_else(
-        || !crate::configuration::any_config_file_exists(),
-        |path| !path.exists(),
-    );
+    let needs_setup = explicit_config.is_none() && !crate::configuration::any_config_file_exists();
     if needs_setup {
         super::configure::run(Some(agent)).await?;
     }

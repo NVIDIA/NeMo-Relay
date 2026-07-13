@@ -195,6 +195,40 @@ fn resolves_percent_encoded_local_references() {
 }
 
 #[test]
+fn resolves_fragments_within_the_active_nested_schema_resource() {
+    let loaded = load(&json!({
+        "$schema": DRAFT2020,
+        "type": "object",
+        "$defs": {
+            "rootValue": {"$anchor": "value", "type": "integer"},
+            "child": {
+                "$id": "child.json",
+                "type": "object",
+                "$defs": {
+                    "text": {"$anchor": "value", "type": "string"}
+                },
+                "properties": {
+                    "name": {"$ref": "#value"}
+                }
+            }
+        },
+        "properties": {
+            "child": {"$ref": "#/$defs/child"}
+        }
+    }));
+
+    let child = loaded
+        .fields()
+        .iter()
+        .find(|field| field.key == "child")
+        .expect("child field");
+    assert!(matches!(child.kind, DynamicConfigFieldKind::Object { .. }));
+    loaded
+        .validate(&json!({"child": {"name": "relay"}}))
+        .expect("nested anchor resolves within child resource");
+}
+
+#[test]
 fn canonicalizes_reference_fragments_and_rejects_malformed_encoding() {
     let schema = json!({
         "$schema": DRAFT2020,

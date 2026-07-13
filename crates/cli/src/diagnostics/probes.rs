@@ -4,6 +4,7 @@
 //! Bounded filesystem and network diagnostic probes.
 
 use super::{Check, NETWORK_TIMEOUT, Status};
+use std::fs::OpenOptions;
 use std::path::Path;
 
 pub(super) fn check_directory(name: &'static str, path: &Path) -> Check {
@@ -34,13 +35,13 @@ pub(super) fn check_dir_writable(directory: &Path) -> Result<(), std::io::Error>
             "path is not a directory",
         ));
     }
-    if metadata.permissions().readonly() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "directory is read-only",
-        ));
-    }
-    Ok(())
+    let probe = directory.join(format!(".nemo-relay-write-probe-{}", uuid::Uuid::now_v7()));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)?;
+    drop(file);
+    std::fs::remove_file(probe)
 }
 
 pub(super) async fn probe_http_named(name: &'static str, url: &str) -> Check {

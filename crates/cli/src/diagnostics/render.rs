@@ -214,7 +214,12 @@ pub(super) fn format_human_host_plugins(out: &mut String, report: &DoctorReport)
 pub(super) fn format_human_checks(out: &mut String, title: &str, checks: &[Check]) {
     out.push_str(&format!("  {title}\n"));
     for check in checks {
-        out.push_str(&format!("    {:<22}  {}\n", check.name, check.details));
+        out.push_str(&format!(
+            "    {}  {:<22}  {}\n",
+            format_status(check.status),
+            check.name,
+            check.details
+        ));
     }
     out.push('\n');
 }

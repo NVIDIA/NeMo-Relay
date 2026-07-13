@@ -560,6 +560,18 @@ fn exporter_destinations_describe_atif_remote_storage_instead_of_local_path() {
 }
 
 #[test]
+fn exporter_destinations_redact_url_credentials_and_query_values() {
+    assert_eq!(
+        sanitized_url("https://user:secret@example.test/ingest?token=secret&tenant=acme"),
+        "https://example.test/ingest?token=%5BREDACTED%5D&tenant=%5BREDACTED%5D"
+    );
+    assert_eq!(
+        sanitized_url("not a url with secret"),
+        "configured endpoint"
+    );
+}
+
+#[test]
 fn exporter_destinations_cover_invalid_disabled_and_missing_plugin_configs() {
     let invalid_plugin = GatewayConfig {
         plugin_config: Some(json!({"components": "not-a-list"})),
@@ -865,22 +877,28 @@ fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config(
         ..ResolvedConfig::default()
     };
 
-    let first = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into()],
-        "http://127.0.0.1:4001",
-        &resolved,
-        false,
-    )
-    .unwrap();
-    let second = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into()],
-        "http://127.0.0.1:4002",
-        &resolved,
-        false,
-    )
-    .unwrap();
+    let resolved = std::sync::Arc::new(resolved);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let spawn = |url: &'static str| {
+        let resolved = resolved.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            PreparedAgentLaunch::new(
+                CodingAgent::Hermes,
+                vec!["hermes".into()],
+                url,
+                &resolved,
+                false,
+            )
+            .unwrap()
+        })
+    };
+    let first = spawn("http://127.0.0.1:4001");
+    let second = spawn("http://127.0.0.1:4002");
+    barrier.wait();
+    let first = first.join().unwrap();
+    let second = second.join().unwrap();
     let overlay = |run: &PreparedAgentLaunch| {
         run.env
             .iter()
@@ -1512,7 +1530,7 @@ fn fake_agent_command(temp: &Path, output: &Path) -> Vec<String> {
 #[tokio::test]
 async fn dry_run_does_not_spawn_agent() {
     let command = RunOverrides {
-        agent: Some(CodingAgent::Codex),
+        agent: None,
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
@@ -1520,7 +1538,7 @@ async fn dry_run_does_not_spawn_agent() {
         plugin_config_path: None,
         dry_run: true,
         print: false,
-        command: vec!["/path/that/does/not/exist".into()],
+        command: vec!["/path/that/does/not/exist/codex".into()],
     };
 
     let code = run(command, None).await.unwrap();

@@ -266,7 +266,9 @@ pub(crate) fn require_relay(
         return Ok(PathBuf::from(RELAY_COMMAND));
     }
     runner
-        .current_executable()
+        .resolve_executable(RELAY_COMMAND)?
+        .map(Ok)
+        .unwrap_or_else(|| runner.current_executable())
         .map(|path| path.canonicalize().unwrap_or(path))
         .map(crate::process::portable_executable_path)
 }

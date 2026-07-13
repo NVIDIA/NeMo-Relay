@@ -9,6 +9,46 @@ use std::time::Duration;
 
 use super::*;
 
+struct TestEnvironment {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl TestEnvironment {
+    fn isolated_home(path: &std::path::Path) -> Self {
+        let guard = crate::test_support::ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = ["XDG_CONFIG_HOME", "HOME"]
+            .into_iter()
+            .map(|name| (name, std::env::var_os(name)))
+            .collect();
+        // SAFETY: ENV_TEST_LOCK serializes process-wide environment changes.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", path);
+            std::env::set_var("HOME", path);
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for TestEnvironment {
+    fn drop(&mut self) {
+        for (name, value) in self.previous.drain(..) {
+            // SAFETY: ENV_TEST_LOCK remains held during restoration.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
+
 fn serve_once(response: &[u8]) -> (String, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
     let response = response.to_vec();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -123,4 +163,35 @@ fn loopback_helpers_normalize_localhost_and_ipv6_authorities() {
         "127.0.0.1:47632".parse().unwrap()
     );
     assert_eq!(loopback_authority("::1", 47632), "[::1]:47632");
+}
+
+#[test]
+fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = TestEnvironment::isolated_home(temp.path());
+    crate::configuration::BootstrapChallengeKey::load().unwrap();
+    crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
+    let (url, request, server) = serve_once(
+        b"HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n",
+    );
+
+    let error = post_verified(
+        &url,
+        "fingerprint",
+        "/hooks/codex",
+        &[],
+        b"secret-hook-payload",
+        Duration::from_secs(2),
+        1024,
+    )
+    .unwrap_err();
+
+    let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(
+        !request
+            .windows(19)
+            .any(|window| window == b"secret-hook-payload")
+    );
+    assert!(error.to_string().contains("authenticated Relay TLS tunnel"));
+    server.join().unwrap();
 }

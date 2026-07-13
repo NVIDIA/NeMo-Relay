@@ -217,29 +217,10 @@ pub(super) fn owned_install_command(
         {
             let command = persistent_hook_command(relay, Path::new(generation), token)
                 .map_err(CliError::Install)?;
-            return Ok(has_complete_hook_set(root, &command).then_some(command));
+            return Ok(Some(command));
         }
     }
     legacy_owned_command(root, relay)
-}
-
-fn has_complete_hook_set(root: &Value, command: &str) -> bool {
-    crate::agents::CodingAgent::Hermes
-        .hook_events()
-        .iter()
-        .all(|event| {
-            root.pointer(&format!("/hooks/{event}"))
-                .and_then(Value::as_array)
-                .is_some_and(|groups| {
-                    groups
-                        .iter()
-                        .filter(|entry| {
-                            entry.get("command").and_then(Value::as_str) == Some(command)
-                        })
-                        .count()
-                        == 1
-                })
-        })
 }
 
 fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, CliError> {

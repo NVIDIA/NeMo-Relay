@@ -3,7 +3,7 @@
 
 //! Idle-session sweeping and shutdown closure.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -83,14 +83,27 @@ pub(super) async fn close_idle_sessions_from_parts(
             retained_sessions.push((session_id, session));
         }
     }
+    let mut alignment_cleanup_sessions = HashSet::new();
     {
         let mut sessions = inner.lock().await;
-        sessions.extend(retained_sessions);
+        for (session_id, session) in retained_sessions {
+            if let Entry::Vacant(entry) = sessions.entry(session_id.clone()) {
+                entry.insert(session);
+                alignment_cleanup_sessions.insert(session_id);
+            }
+        }
+        for (session_id, _) in &closed_subagents {
+            if !sessions.contains_key(session_id) {
+                alignment_cleanup_sessions.insert(session_id.clone());
+            }
+        }
     }
     if !closed_subagents.is_empty() {
         let mut alignment_state = alignment.lock().await;
         for (session_id, subagent_id) in closed_subagents {
-            alignment_state.clear_for_ended_subagent(&session_id, &subagent_id);
+            if alignment_cleanup_sessions.contains(&session_id) {
+                alignment_state.clear_for_ended_subagent(&session_id, &subagent_id);
+            }
         }
     }
     first_error.map_or(Ok(closed_turns), Err)

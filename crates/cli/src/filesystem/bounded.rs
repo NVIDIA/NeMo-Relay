@@ -21,19 +21,19 @@ pub(crate) fn stream_bounded_regular_file(
     const BUFFER_BYTES: usize = 64 * 1024;
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         format!(
-            "failed to inspect {description} {} for persistent gateway identity: {error}",
+            "failed to inspect {description} {}: {error}",
             path.display()
         )
     })?;
     if !metadata.file_type().is_file() {
         return Err(format!(
-            "{description} {} must be a regular file for persistent gateway identity",
+            "{description} {} must be a regular file",
             path.display()
         ));
     }
     if metadata.len() > MAX_BOUNDED_FILE_BYTES {
         return Err(format!(
-            "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte persistent gateway identity budget",
+            "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte limit",
             path.display()
         ));
     }
@@ -44,46 +44,40 @@ pub(crate) fn stream_bounded_regular_file(
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let mut file = options.open(path).map_err(|error| {
-        format!(
-            "failed to read {description} {} for persistent gateway identity: {error}",
-            path.display()
-        )
-    })?;
+    let mut file = options
+        .open(path)
+        .map_err(|error| format!("failed to read {description} {}: {error}", path.display()))?;
     let opened_metadata = file.metadata().map_err(|error| {
         format!(
-            "failed to inspect {description} {} for persistent gateway identity: {error}",
+            "failed to inspect {description} {}: {error}",
             path.display()
         )
     })?;
     if !opened_metadata.file_type().is_file() {
         return Err(format!(
-            "{description} {} must be a regular file for persistent gateway identity",
+            "{description} {} must be a regular file",
             path.display()
         ));
     }
     if opened_metadata.len() > MAX_BOUNDED_FILE_BYTES {
         return Err(format!(
-            "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte persistent gateway identity budget",
+            "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte limit",
             path.display()
         ));
     }
     let mut buffer = [0_u8; BUFFER_BYTES];
     let mut total = 0_u64;
     loop {
-        let read = file.read(&mut buffer).map_err(|error| {
-            format!(
-                "failed to read {description} {} for persistent gateway identity: {error}",
-                path.display()
-            )
-        })?;
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {description} {}: {error}", path.display()))?;
         if read == 0 {
             break;
         }
         total = total.saturating_add(read as u64);
         if total > MAX_BOUNDED_FILE_BYTES {
             return Err(format!(
-                "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte persistent gateway identity budget",
+                "{description} {} exceeds the {MAX_BOUNDED_FILE_BYTES}-byte limit",
                 path.display()
             ));
         }

@@ -167,14 +167,25 @@ fn config_has_managed_state(config: &Value) -> bool {
 }
 
 fn allowlist_has_owned_command(allowlist: &Value, command: Option<&str>) -> bool {
-    command.is_some_and(|command| {
-        allowlist
-            .get("approvals")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|entry| entry.get("command").and_then(Value::as_str) == Some(command))
-    })
+    allowlist
+        .get("approvals")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("command").and_then(Value::as_str))
+        .any(|candidate| {
+            command == Some(candidate)
+                || (command.is_none() && is_persistent_relay_hook_command(candidate))
+        })
+}
+
+fn is_persistent_relay_hook_command(command: &str) -> bool {
+    command.contains("hook-forward")
+        && command.contains("hermes")
+        && command.contains("--gateway-url")
+        && command.contains(crate::bootstrap::DEFAULT_URL)
+        && command.contains("--generation-file")
+        && command.contains("--generation-token")
 }
 
 fn owned_command_from_config(config: &Value, generation: Option<&Path>) -> Option<String> {
@@ -234,9 +245,15 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
     let environment = env::vars_os()
         .filter_map(|(name, _)| name.into_string().ok())
         .collect::<Vec<_>>();
-    let missing = forwarded_environment_names(&environment, plugin_config.as_ref())
+    let environment = forwarded_environment_names(&environment, plugin_config.as_ref());
+    let expected = expected_mcp_server(&relay, &paths.generation, generation.token(), &environment);
+    let expected_env = expected
+        .get("env")
+        .and_then(Value::as_object)
+        .expect("expected MCP environment is an object");
+    let missing = environment
         .into_iter()
-        .filter(|name| !mcp_env.contains_key(name))
+        .filter(|name| mcp_env.get(name) != expected_env.get(name))
         .collect::<Vec<_>>();
     if !missing.is_empty() {
         return Err(format!(

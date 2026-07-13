@@ -74,20 +74,12 @@ pub(crate) fn post_verified(
     max_response_bytes: usize,
 ) -> Result<VerifiedHttpResponse, VerifiedHttpError> {
     let (host, port) = parse_loopback_url(url).map_err(VerifiedHttpError::after_payload)?;
-    let address = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|error| {
-            VerifiedHttpError::before_payload(format!(
-                "failed to resolve verified gateway {url}: {error}"
-            ))
-        })?
-        .next()
-        .ok_or_else(|| {
-            VerifiedHttpError::before_payload(format!(
-                "verified gateway {url} has no socket address"
-            ))
-        })?;
-    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|error| {
+    let addresses = (host.as_str(), port).to_socket_addrs().map_err(|error| {
+        VerifiedHttpError::before_payload(format!(
+            "failed to resolve verified gateway {url}: {error}"
+        ))
+    })?;
+    let mut stream = connect_loopback(addresses, timeout).map_err(|error| {
         VerifiedHttpError::before_payload(format!(
             "failed to connect to verified gateway {url}: {error}"
         ))
@@ -104,8 +96,13 @@ pub(crate) fn post_verified(
     })?;
 
     let key = BootstrapChallengeKey::load().map_err(|error| {
-        VerifiedHttpError::after_payload(format!(
+        VerifiedHttpError::before_payload(format!(
             "failed to load the Relay bootstrap challenge key: {error}"
+        ))
+    })?;
+    let tls_identity = crate::gateway::tls::RelayTlsIdentity::load().map_err(|error| {
+        VerifiedHttpError::before_payload(format!(
+            "failed to load pinned Relay TLS identity: {error}"
         ))
     })?;
     let mut nonce = [0_u8; 32];
@@ -117,18 +114,53 @@ pub(crate) fn post_verified(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let authority = loopback_authority(&host, port);
+    let tunnel = format!(
+        "GET /bootstrap/tunnel HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\n\r\n"
+    );
+    stream.write_all(tunnel.as_bytes()).map_err(|error| {
+        VerifiedHttpError::before_payload(format!(
+            "failed to request the Relay TLS tunnel: {error}"
+        ))
+    })?;
+    let (tunnel_headers, _) = read_http_message(&mut stream, 0).map_err(|error| {
+        VerifiedHttpError::before_payload(format!(
+            "failed to read the Relay TLS tunnel response: {error}"
+        ))
+    })?;
+    let proof_valid = http_header(&tunnel_headers, "x-nemo-relay-bootstrap-proof")
+        .is_some_and(|proof| key.verify(bootstrap_fingerprint, &nonce, proof));
+    if http_status(&tunnel_headers) != Some(101)
+        || !proof_valid
+        || http_header(&tunnel_headers, "upgrade") != Some("nemo-relay-tls")
+    {
+        return Err(VerifiedHttpError::before_payload(
+            "gateway did not establish an authenticated Relay TLS tunnel",
+        ));
+    }
+    let client_config = tls_identity
+        .client_config()
+        .map_err(VerifiedHttpError::before_payload)?;
+    let server_name = rustls::pki_types::ServerName::try_from("localhost").map_err(|error| {
+        VerifiedHttpError::before_payload(format!("invalid Relay TLS server name: {error}"))
+    })?;
+    let connection =
+        rustls::ClientConnection::new(client_config, server_name).map_err(|error| {
+            VerifiedHttpError::before_payload(format!("failed to create Relay TLS client: {error}"))
+        })?;
+    let mut stream = rustls::StreamOwned::new(connection, stream);
+
     let challenge = format!(
         "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
     );
     stream.write_all(challenge.as_bytes()).map_err(|error| {
         VerifiedHttpError::before_payload(format!(
-            "failed to send the Relay bootstrap challenge: {error}"
+            "Relay TLS handshake or health request failed: {error}"
         ))
     })?;
     let (health_headers, health_body) =
         read_http_message(&mut stream, 16 * 1024).map_err(|error| {
             VerifiedHttpError::before_payload(format!(
-                "failed to read the Relay bootstrap challenge response: {error}"
+                "failed to read health response through Relay TLS: {error}"
             ))
         })?;
     let (health, _) = classify_health_response(
@@ -230,7 +262,7 @@ pub(crate) fn probe_with_instance(
         return (RelayHealth::Unavailable, None);
     };
     let mut stream = None;
-    for addr in addrs {
+    for addr in addrs.filter(|addr| addr.ip().is_loopback()) {
         match TcpStream::connect_timeout(&addr, HEALTHZ_TIMEOUT) {
             Ok(candidate) => {
                 stream = Some(candidate);
@@ -290,12 +322,10 @@ pub(crate) fn probe_with_instance(
 
 pub(crate) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {
     let (host, port) = parse_loopback_url(url)?;
-    let address = (host.as_str(), port)
+    let addresses = (host.as_str(), port)
         .to_socket_addrs()
-        .map_err(|error| format!("failed to resolve managed sidecar {url}: {error}"))?
-        .next()
-        .ok_or_else(|| format!("managed sidecar {url} has no socket address"))?;
-    let mut stream = TcpStream::connect_timeout(&address, HEALTHZ_TIMEOUT)
+        .map_err(|error| format!("failed to resolve managed sidecar {url}: {error}"))?;
+    let mut stream = connect_loopback(addresses, HEALTHZ_TIMEOUT)
         .map_err(|error| format!("failed to connect to managed sidecar {url}: {error}"))?;
     stream
         .set_read_timeout(Some(HEALTHZ_TIMEOUT))
@@ -362,9 +392,7 @@ fn classify_health_response(
     {
         return (RelayHealth::Foreign, None);
     }
-    if body.get("version").and_then(Value::as_str) != Some(env!("CARGO_PKG_VERSION"))
-        || http_status(headers) == Some(409)
-    {
+    if http_status(headers) == Some(409) {
         return (RelayHealth::Incompatible, None);
     }
     if http_status(headers) != Some(200) || body.get("status").and_then(Value::as_str) != Some("ok")
@@ -389,8 +417,30 @@ fn classify_health_response(
     (RelayHealth::Compatible, Some(instance_id.to_owned()))
 }
 
+fn connect_loopback(
+    addresses: impl IntoIterator<Item = SocketAddr>,
+    timeout: Duration,
+) -> std::io::Result<TcpStream> {
+    let mut last_error = None;
+    for address in addresses
+        .into_iter()
+        .filter(|address| address.ip().is_loopback())
+    {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            "gateway URL resolved to no loopback socket addresses",
+        )
+    }))
+}
+
 fn read_http_message(
-    stream: &mut TcpStream,
+    stream: &mut impl Read,
     max_body_bytes: usize,
 ) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
     const MAX_HEADER_BYTES: usize = 16 * 1024;
@@ -422,6 +472,9 @@ fn read_http_message(
             std::io::ErrorKind::InvalidData,
             "chunked HTTP responses are not supported by the verified Relay transport",
         ));
+    }
+    if http_status(&headers) == Some(101) {
+        return Ok((headers, Vec::new()));
     }
     let content_length = http_header(&headers, "content-length")
         .ok_or_else(|| {

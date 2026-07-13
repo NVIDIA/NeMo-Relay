@@ -435,13 +435,13 @@ command = "codex"
     )
     .unwrap();
 
-    reset(Some(CodingAgent::ClaudeCode)).unwrap();
+    reset(ConfigScope::Project, Some(CodingAgent::ClaudeCode)).unwrap();
 
     let scoped = std::fs::read_to_string(&path).unwrap();
     assert!(!scoped.contains("[agents.claude]"));
     assert!(scoped.contains("[agents.codex]"));
 
-    reset(None).unwrap();
+    reset(ConfigScope::Project, None).unwrap();
 
     assert!(!path.exists());
 }
@@ -455,7 +455,7 @@ fn reset_removes_empty_agents_table_when_last_agent_is_removed() {
     let path = config_dir.join("config.toml");
     std::fs::write(&path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
 
-    reset(Some(CodingAgent::Codex)).unwrap();
+    reset(ConfigScope::Project, Some(CodingAgent::Codex)).unwrap();
 
     let contents = std::fs::read_to_string(&path).unwrap();
     assert!(!contents.contains("[agents]"));
@@ -467,8 +467,8 @@ fn reset_noops_when_project_config_is_missing() {
     let temp = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(temp.path());
 
-    reset(None).unwrap();
-    reset(Some(CodingAgent::Codex)).unwrap();
+    reset(ConfigScope::Project, None).unwrap();
+    reset(ConfigScope::Project, Some(CodingAgent::Codex)).unwrap();
 }
 
 #[test]
@@ -486,7 +486,7 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     let path = config_dir.join("config.toml");
     std::fs::write(&path, "agents = \"not-a-table\"\n").unwrap();
 
-    reset(Some(CodingAgent::Hermes)).unwrap();
+    reset(ConfigScope::Project, Some(CodingAgent::Hermes)).unwrap();
 
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -494,11 +494,45 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     );
 
     std::fs::write(&path, "not valid toml = [\n").unwrap();
-    let error = reset(Some(CodingAgent::Hermes)).unwrap_err().to_string();
+    let error = reset(ConfigScope::Project, Some(CodingAgent::Hermes))
+        .unwrap_err()
+        .to_string();
     assert!(
         error.contains("could not parse existing config"),
         "error was: {error}"
     );
+}
+
+#[test]
+fn reset_honors_global_and_both_scopes() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let home = temp.path().join("home");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let _cwd = CwdScope::enter(&project);
+    let _env = EnvScope::set(&[
+        ("HOME", Some(home.as_os_str())),
+        ("USERPROFILE", Some(home.as_os_str())),
+        ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
+    ]);
+
+    let project_path = project.join(".nemo-relay/config.toml");
+    let global_path = global_config_dir(&home).join("config.toml");
+    std::fs::create_dir_all(project_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+    std::fs::write(&project_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+    std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+
+    reset(ConfigScope::Global, None).unwrap();
+    assert!(project_path.exists());
+    assert!(!global_path.exists());
+
+    std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+    reset(ConfigScope::Both, None).unwrap();
+    assert!(!project_path.exists());
+    assert!(!global_path.exists());
 }
 
 #[test]

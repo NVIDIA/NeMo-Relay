@@ -54,7 +54,6 @@ impl OwnerRecord {
 
     fn valid_for(&self, url: &str) -> bool {
         self.service == "nemo-relay"
-            && self.version == env!("CARGO_PKG_VERSION")
             && self.bootstrap_protocol == BOOTSTRAP_PROTOCOL_VERSION
             && self.url == url
             && !self.shutdown_token.is_empty()
@@ -177,10 +176,12 @@ pub(crate) fn lock_endpoint_for(
     }
 }
 
-pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<Option<OwnerGuard>, String> {
+pub(crate) fn publish_owner_from_env(
+    address: SocketAddr,
+    shutdown_token: Option<&str>,
+) -> Result<Option<OwnerGuard>, String> {
     let state = env::var_os(BOOTSTRAP_STATE_DIR_ENV);
-    let token = env::var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN").ok();
-    if state.is_none() && token.is_none() {
+    if state.is_none() && shutdown_token.is_none() {
         return Ok(None);
     }
     let state = state
@@ -192,9 +193,11 @@ pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<Option<Owner
             state.display()
         ));
     }
-    let token = token.filter(|token| !token.is_empty()).ok_or_else(|| {
-        "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN is required for managed bootstrap".to_string()
-    })?;
+    let token = shutdown_token
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN is required for managed bootstrap".to_string()
+        })?;
     if !address.ip().is_loopback() {
         return Err(format!(
             "managed bootstrap ownership requires a loopback address, got {address}"
@@ -205,7 +208,7 @@ pub(crate) fn publish_owner_from_env(address: SocketAddr) -> Result<Option<Owner
     let fingerprint = env::var(crate::configuration::BOOTSTRAP_FINGERPRINT_ENV)
         .ok()
         .filter(|value| !value.is_empty());
-    let record = OwnerRecord::new(std::process::id(), &url, &token, fingerprint.as_deref());
+    let record = OwnerRecord::new(std::process::id(), &url, token, fingerprint.as_deref());
     let path = owner_path(&state, &url);
     write_owner_record(&path, &record)?;
     Ok(Some(OwnerGuard { path, record }))

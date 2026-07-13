@@ -51,6 +51,9 @@ impl Drop for EnvScope {
 }
 
 fn read_headers(stream: &mut std::net::TcpStream) -> String {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
     let mut bytes = Vec::new();
     let mut byte = [0_u8; 1];
     while !bytes.ends_with(b"\r\n\r\n") {
@@ -58,6 +61,27 @@ fn read_headers(stream: &mut std::net::TcpStream) -> String {
         bytes.push(byte[0]);
     }
     String::from_utf8(bytes).unwrap()
+}
+
+fn accept_bounded(listener: &TcpListener) -> std::net::TcpStream {
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false).unwrap();
+                return stream;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out accepting test connection"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("failed to accept test connection: {error}"),
+        }
+    }
 }
 
 fn header(request: &str, name: &str) -> String {
@@ -136,7 +160,7 @@ fn managed_owner_environment_is_validated_before_writing() {
             Some(OsStr::new("token")),
         ),
     ]);
-    let error = publish_owner_from_env(address).unwrap_err();
+    let error = publish_owner_from_env(address, Some("token")).unwrap_err();
     assert!(error.contains("absolute path"), "{error}");
     drop(_scope);
 
@@ -144,7 +168,7 @@ fn managed_owner_environment_is_validated_before_writing() {
         (BOOTSTRAP_STATE_DIR_ENV, Some(absolute)),
         ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
     ]);
-    let error = publish_owner_from_env(address).unwrap_err();
+    let error = publish_owner_from_env(address, None).unwrap_err();
     assert!(error.contains("SHUTDOWN_TOKEN"), "{error}");
     drop(_scope);
 
@@ -155,7 +179,8 @@ fn managed_owner_environment_is_validated_before_writing() {
             Some(OsStr::new("token")),
         ),
     ]);
-    let error = publish_owner_from_env("0.0.0.0:47632".parse().unwrap()).unwrap_err();
+    let error =
+        publish_owner_from_env("0.0.0.0:47632".parse().unwrap(), Some("token")).unwrap_err();
     assert!(error.contains("loopback"), "{error}");
 }
 
@@ -174,7 +199,9 @@ fn server_owner_guard_cleans_only_its_own_record() {
             Some(OsStr::new("fingerprint")),
         ),
     ]);
-    let guard = publish_owner_from_env(address).unwrap().unwrap();
+    let guard = publish_owner_from_env(address, Some("first-token"))
+        .unwrap()
+        .unwrap();
     let path = owner_path(dir.path(), "http://127.0.0.1:47632");
     assert!(path.exists());
 
@@ -231,7 +258,7 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
     write_owner_record(&path, &owner).unwrap();
 
     let server = std::thread::spawn(move || {
-        let (mut health, _) = listener.accept().unwrap();
+        let mut health = accept_bounded(&listener);
         let request = read_headers(&mut health);
         let nonce = header(&request, "x-nemo-relay-bootstrap-nonce");
         let proof = key.proof("fingerprint", &nonce);
@@ -250,7 +277,7 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
             )
             .unwrap();
 
-        let (mut shutdown, _) = listener.accept().unwrap();
+        let mut shutdown = accept_bounded(&listener);
         let request = read_headers(&mut shutdown);
         assert!(request.starts_with("POST /bootstrap/shutdown HTTP/1.1"));
         assert_eq!(

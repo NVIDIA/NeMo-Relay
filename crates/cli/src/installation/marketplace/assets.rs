@@ -92,18 +92,18 @@ pub(super) fn plugin_mcp_config(
     generation_fence: &Path,
     generation_token: &str,
 ) -> Result<Value, String> {
-    let generation_fence = absolute_or_self(generation_fence);
+    let generation_fence = absolute_or_self(generation_fence)?;
     let server = crate::mcp::persistent_server(relay, &generation_fence, generation_token);
     host.plugin_mcp_config(server)
 }
 
-fn absolute_or_self(path: &Path) -> std::path::PathBuf {
+fn absolute_or_self(path: &Path) -> Result<std::path::PathBuf, String> {
     if path.is_absolute() {
-        return path.to_owned();
+        return Ok(path.to_owned());
     }
     env::current_dir()
         .map(|current| current.join(path))
-        .unwrap_or_else(|_| path.to_owned())
+        .map_err(|error| format!("failed to resolve relative generation fence: {error}"))
 }
 
 pub(super) fn plugin_hooks(
@@ -112,6 +112,6 @@ pub(super) fn plugin_hooks(
     generation_fence: &Path,
     generation_token: &str,
 ) -> Result<Value, String> {
-    let generation_fence = absolute_or_self(generation_fence);
+    let generation_fence = absolute_or_self(generation_fence)?;
     host.plugin_hooks(relay, &generation_fence, generation_token)
 }

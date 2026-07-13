@@ -856,7 +856,7 @@ fn open_generation_lock_path(lock_path: &Path) -> Result<File, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     options.open(lock_path).map_err(|error| {
         format!(

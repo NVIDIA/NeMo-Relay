@@ -99,6 +99,7 @@ pub(super) fn validate_python_entrypoint_artifact(
         )
     })?;
     if callable.is_empty()
+        || callable.contains(':')
         || module.is_empty()
         || module
             .split('.')
@@ -447,6 +448,7 @@ fn digest_environment_directory(
         let source_metadata = std::fs::metadata(&source)
             .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
         if source_metadata.is_dir() {
+            update_tree_digest(digest, b'd', &relative, &[]);
             digest_environment_directory(
                 &source,
                 &relative,
@@ -475,12 +477,34 @@ fn digest_environment_directory(
                 crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES
             ));
         }
-        digest.update(relative.to_string_lossy().as_bytes());
-        digest.update([0]);
-        digest.update(&bytes);
+        update_tree_digest(digest, b'f', &relative, &bytes);
     }
     ancestors.pop();
     Ok(())
+}
+
+fn update_tree_digest(digest: &mut Sha256, entry_type: u8, path: &Path, payload: &[u8]) {
+    let path = raw_path_bytes(path);
+    digest.update([entry_type]);
+    digest.update((path.len() as u64).to_le_bytes());
+    digest.update(&path);
+    digest.update((payload.len() as u64).to_le_bytes());
+    digest.update(payload);
+}
+
+#[cfg(unix)]
+fn raw_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn raw_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
 }
 
 pub(super) fn remove_managed_environment(

@@ -5,6 +5,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -398,6 +399,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
     let hermes = bin.join("hermes");
     std::fs::write(&hermes, "#!/bin/sh\necho 'Hermes Agent v0.18.2 (test)'\n").unwrap();
     std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(gateway_bin(), bin.join("nemo-relay")).unwrap();
     let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))
@@ -485,6 +487,7 @@ fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
         .env("HOME", &home)
         .env("HERMES_HOME", &hermes_home)
         .env("XDG_CONFIG_HOME", &xdg)
+        .env("PATH", &path)
         .output()
         .unwrap();
     assert!(
@@ -642,6 +645,31 @@ fn fake_bootstrap_proof(key: &[u8], fingerprint: &str, nonce: &str) -> String {
     )
 }
 
+fn write_test_tls_identity(bootstrap_dir: &Path) -> Arc<rustls::ServerConfig> {
+    let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    std::fs::create_dir_all(bootstrap_dir).unwrap();
+    std::fs::write(
+        bootstrap_dir.join("hook-tls-identity.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "certificate_der": certified.cert.der().to_vec(),
+            "private_key_der": certified.key_pair.serialize_der(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    Arc::new(
+        rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![certified.cert.der().clone()],
+                rustls::pki_types::PrivateKeyDer::Pkcs8(
+                    rustls::pki_types::PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()),
+                ),
+            )
+            .unwrap(),
+    )
+}
+
 fn run_fake_bootstrap_listener(proof: FakeBootstrapProof) -> (Output, Vec<String>) {
     run_fake_bootstrap_listener_with_options(proof, None, false)
 }
@@ -677,6 +705,7 @@ fn run_fake_bootstrap_listener_with_options(
         .join("nemo-relay")
         .join("bootstrap")
         .join("fingerprint-hmac.key");
+    let tls = write_test_tls_identity(key_path.parent().unwrap());
     let server = thread::spawn(move || {
         while !server_stopped.load(Ordering::Relaxed) {
             let (mut stream, _) = match listener.accept() {
@@ -704,6 +733,41 @@ fn run_fake_bootstrap_listener_with_options(
                     FakeBootstrapProof::Wrong => {
                         "X-NeMo-Relay-Bootstrap-Proof: hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000\r\n".into()
                     }
+                    FakeBootstrapProof::Valid => format!(
+                        "X-NeMo-Relay-Bootstrap-Proof: {}\r\n",
+                        fake_bootstrap_proof(
+                            &std::fs::read(&key_path).unwrap(),
+                            fingerprint,
+                            nonce
+                        )
+                    ),
+                };
+                let body = format!(
+                    r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
+                    env!("CARGO_PKG_VERSION")
+                );
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\n{proof_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                continue;
+            }
+            if request.starts_with("GET /bootstrap/tunnel ") {
+                let fingerprint =
+                    bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint")
+                        .unwrap();
+                let nonce =
+                    bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce").unwrap();
+                let proof_header = match proof {
+                    FakeBootstrapProof::Missing => String::new(),
+                    FakeBootstrapProof::Wrong => {
+                        "X-NeMo-Relay-Bootstrap-Proof: hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000\r\n".into()
+                    }
                     FakeBootstrapProof::Valid => {
                         let key = std::fs::read(&key_path).unwrap();
                         format!(
@@ -712,26 +776,39 @@ fn run_fake_bootstrap_listener_with_options(
                         )
                     }
                 };
-                let body = format!(
-                    r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-                    env!("CARGO_PKG_VERSION")
-                );
-                let keep_alive = matches!(proof, FakeBootstrapProof::Valid)
-                    && bootstrap_request_header(&request, "connection")
-                        .is_some_and(|value| value.eq_ignore_ascii_case("keep-alive"));
                 stream
                     .write_all(
                         format!(
-                            "HTTP/1.1 200 OK\r\n{proof_header}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n{body}",
-                            body.len(),
-                            if keep_alive { "keep-alive" } else { "close" }
+                            "HTTP/1.1 101 Switching Protocols\r\n{proof_header}Connection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
                         )
                         .as_bytes(),
                     )
                     .unwrap();
-                if keep_alive {
-                    let request = read_http_request(&mut stream);
-                    server_requests.lock().unwrap().push(request);
+                if matches!(proof, FakeBootstrapProof::Valid) {
+                    let connection = rustls::ServerConnection::new(tls.clone()).unwrap();
+                    let mut stream = rustls::StreamOwned::new(connection, stream);
+                    let health = read_http_request(&mut stream);
+                    server_requests.lock().unwrap().push(health);
+                    let body = format!(
+                        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
+                        env!("CARGO_PKG_VERSION")
+                    );
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                                fake_bootstrap_proof(
+                                    &std::fs::read(&key_path).unwrap(),
+                                    fingerprint,
+                                    nonce
+                                ),
+                                body.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .unwrap();
+                    let hook = read_http_request(&mut stream);
+                    server_requests.lock().unwrap().push(hook);
                     if let Some(delay) = hook_delay {
                         thread::sleep(delay);
                     }
@@ -3199,7 +3276,9 @@ while True:
         let deadline = Instant::now() + Duration::from_secs(10);
         while !pids.is_file() {
             if Instant::now() >= deadline {
-                let _ = relay.kill();
+                // SAFETY: Relay's PID is live and owned by this test; SIGTERM exercises its
+                // registered cleanup path so any partially started descendants are reaped.
+                let _ = unsafe { libc::kill(relay.id() as i32, libc::SIGTERM) };
                 let output = relay.wait_with_output().unwrap();
                 panic!(
                     "agent PID file was not created for {signal_name}; stderr: {}",
@@ -3319,27 +3398,63 @@ fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_clos
     std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
     let key = [0x5a_u8; 32];
     std::fs::write(&key_path, key).unwrap();
+    write_test_tls_identity(key_path.parent().unwrap());
     let stopped = Arc::new(AtomicBool::new(false));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let server_stopped = stopped.clone();
     let server_requests = requests.clone();
     let server = thread::spawn(move || -> Result<usize, String> {
         listener.set_nonblocking(true).unwrap();
-        for phase in 0..2 {
-            let deadline = Instant::now() + Duration::from_secs(4);
-            let (mut stream, _) = loop {
-                if server_stopped.load(Ordering::Relaxed) {
-                    return Err(format!(
-                        "hook-forward exited before authenticated health phase {phase}"
-                    ));
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let (mut stream, _) = loop {
+            if server_stopped.load(Ordering::Relaxed) {
+                return Err("hook-forward exited before authenticated tunnel".into());
+            }
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err("timed out waiting for authenticated tunnel".into());
+                    }
+                    thread::sleep(Duration::from_millis(5));
                 }
+                Err(error) => return Err(format!("bootstrap listener failed: {error}")),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = read_http_request(&mut stream);
+        server_requests.lock().unwrap().push(request.clone());
+        if request.starts_with("GET /healthz ") {
+            let fingerprint =
+                bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint")
+                    .ok_or_else(|| "health probe omitted its fingerprint".to_string())?;
+            let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce")
+                .ok_or_else(|| "health probe omitted its nonce".to_string())?;
+            let proof = fake_bootstrap_proof(&key, fingerprint, nonce);
+            let body = format!(
+                r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"phase-health"}}"#,
+                env!("CARGO_PKG_VERSION")
+            );
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .map_err(|error| format!("health response failed: {error}"))?;
+            drop(stream);
+            let next_deadline = Instant::now() + Duration::from_secs(4);
+            stream = loop {
                 match listener.accept() {
-                    Ok(connection) => break connection,
+                    Ok((stream, _)) => break stream,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        if Instant::now() >= deadline {
-                            return Err(format!(
-                                "timed out waiting for authenticated health phase {phase}"
-                            ));
+                        if Instant::now() >= next_deadline {
+                            return Err("timed out waiting for authenticated tunnel".into());
                         }
                         thread::sleep(Duration::from_millis(5));
                     }
@@ -3350,41 +3465,28 @@ fn cli_forward_only_never_reconnects_payload_after_authenticated_connection_clos
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
-            let request = read_http_request(&mut stream);
+            request = read_http_request(&mut stream);
             server_requests.lock().unwrap().push(request.clone());
-            if request.starts_with("POST ") {
-                return Err(format!(
-                    "received lifecycle payload before authenticated health phase {phase}"
-                ));
-            }
-            if !request.starts_with("GET /healthz ") {
-                return Err(format!(
-                    "unexpected request during authenticated health phase {phase}: {request}"
-                ));
-            }
-            let fingerprint =
-                bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint")
-                    .ok_or_else(|| format!("health phase {phase} omitted its fingerprint"))?;
-            let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce")
-                .ok_or_else(|| format!("health phase {phase} omitted its nonce"))?;
-            let proof = fake_bootstrap_proof(&key, fingerprint, nonce);
-            let body = format!(
-                r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"phase-{phase}"}}"#,
-                env!("CARGO_PKG_VERSION")
-            );
-            let connection = if phase == 0 { "close" } else { "keep-alive" };
-            stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .map_err(|error| format!("health phase {phase} response failed: {error}"))?;
-            // After proving identity on the second connection, close it before reading a body.
-            // The same listening port now behaves as the replacement foreign process.
         }
+        if !request.starts_with("GET /bootstrap/tunnel ") {
+            return Err(format!("unexpected tunnel request: {request}"));
+        }
+        let fingerprint = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-fingerprint")
+            .ok_or_else(|| "tunnel omitted its fingerprint".to_string())?;
+        let nonce = bootstrap_request_header(&request, "x-nemo-relay-bootstrap-nonce")
+            .ok_or_else(|| "tunnel omitted its nonce".to_string())?;
+        let proof = fake_bootstrap_proof(&key, fingerprint, nonce);
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 101 Switching Protocols\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nConnection: upgrade\r\nUpgrade: nemo-relay-tls\r\nContent-Length: 0\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .map_err(|error| format!("tunnel response failed: {error}"))?;
+        // Close after proving Relay identity but before completing TLS. A replacement listener on
+        // the same port must never receive the lifecycle payload on a fresh connection.
+        drop(stream);
         let replacement_deadline = Instant::now() + Duration::from_secs(12);
         while !server_stopped.load(Ordering::Relaxed) && Instant::now() < replacement_deadline {
             match listener.accept() {
@@ -3505,7 +3607,7 @@ fn cli_transparent_run_suppresses_persistent_hooks_and_rejects_a_foreign_gateway
         String::from_utf8_lossy(&owned.stderr)
     );
     let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(request.starts_with("GET /healthz "));
+    assert!(request.starts_with("GET /bootstrap/tunnel "));
     assert!(!request.contains(r#"{"session_id":"owned"}"#));
 }
 
@@ -3675,7 +3777,7 @@ fn spawn_single_request_server(
     (format!("http://{address}"), receiver)
 }
 
-fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+fn read_http_request(stream: &mut impl Read) -> String {
     let mut buffer = Vec::new();
     let mut scratch = [0; 1024];
     loop {

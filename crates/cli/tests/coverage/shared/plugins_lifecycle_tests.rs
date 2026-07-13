@@ -1682,6 +1682,15 @@ fn python_entrypoint_validation_reports_each_authored_contract_error() {
         .unwrap_err();
     assert!(error.contains("module:function form"), "{error}");
 
+    let mut extra_separator = manifest.clone();
+    let DynamicPluginManifestLoad::Worker(load) = &mut extra_separator.load else {
+        panic!("fixture must be a worker plugin");
+    };
+    load.entrypoint = Some("plugin:main:extra".into());
+    let error = environment::validate_python_entrypoint_artifact(&extra_separator, &manifest_ref)
+        .unwrap_err();
+    assert!(error.contains("module:function form"), "{error}");
+
     let mut empty_module = manifest.clone();
     let DynamicPluginManifestLoad::Worker(load) = &mut empty_module.load else {
         panic!("fixture must be a worker plugin");

@@ -19,34 +19,63 @@ fn test_http_client() -> Client {
 
 #[test]
 fn removes_hop_by_hop_headers() {
-    assert!(!should_forward_request_header(&HeaderName::from_static(
-        "connection"
-    )));
-    assert!(!should_forward_request_header(&HeaderName::from_static(
-        "host"
-    )));
-    assert!(!should_forward_request_header(&HeaderName::from_static(
-        crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER
-    )));
-    assert!(should_forward_request_header(&HeaderName::from_static(
-        "authorization"
-    )));
-    assert!(!should_record_header(&HeaderName::from_static(
-        "authorization"
-    )));
-    assert!(!should_record_header(&HeaderName::from_static("x-api-key")));
-    assert!(!should_record_header(&HeaderName::from_static(
-        "anthropic-api-key"
-    )));
+    let headers = HeaderMap::new();
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static("connection"),
+        &headers
+    ));
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static("host"),
+        &headers
+    ));
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER),
+        &headers
+    ));
+    assert!(should_forward_request_header(
+        &HeaderName::from_static("authorization"),
+        &headers
+    ));
+    assert!(!should_record_header(
+        &HeaderName::from_static("authorization"),
+        &headers
+    ));
+    assert!(!should_record_header(
+        &HeaderName::from_static("x-api-key"),
+        &headers
+    ));
+    assert!(!should_record_header(
+        &HeaderName::from_static("anthropic-api-key"),
+        &headers
+    ));
     // Additional credential aliases must not appear in observability metadata:
     // `cookie` carries session credentials; `api-key` is the generic alias used by some providers
     // (e.g., Azure OpenAI). Without these, secrets would leak into `LlmRequest.headers` and any
     // downstream exporter that mirrors them (ATIF, OpenInference span attributes).
-    assert!(!should_record_header(&HeaderName::from_static("cookie")));
-    assert!(!should_record_header(&HeaderName::from_static("api-key")));
-    assert!(should_record_header(&HeaderName::from_static(
-        "x-request-id"
-    )));
+    assert!(!should_record_header(
+        &HeaderName::from_static("cookie"),
+        &headers
+    ));
+    assert!(!should_record_header(
+        &HeaderName::from_static("api-key"),
+        &headers
+    ));
+    assert!(should_record_header(
+        &HeaderName::from_static("x-request-id"),
+        &headers
+    ));
+
+    let mut connection_headers = HeaderMap::new();
+    connection_headers.insert(
+        header::CONNECTION,
+        HeaderValue::from_static("x-private, upgrade"),
+    );
+    connection_headers.insert("x-private", HeaderValue::from_static("secret"));
+    assert!(!should_forward_request_header(
+        &HeaderName::from_static("x-private"),
+        &connection_headers
+    ));
+    assert!(!response_headers(&connection_headers).contains_key("x-private"));
 }
 
 #[tokio::test]
@@ -818,6 +847,8 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
+        bootstrap_tls: None,
+        local_address: None,
     };
     let request = Request::builder()
         .method(Method::POST)
@@ -852,6 +883,8 @@ async fn models_rejects_non_get_requests_directly() {
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
         bootstrap_shutdown: None,
         instance_id: "test-instance".into(),
+        bootstrap_tls: None,
+        local_address: None,
     };
     let request = Request::builder()
         .method(Method::POST)

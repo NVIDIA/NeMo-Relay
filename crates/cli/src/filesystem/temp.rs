@@ -17,6 +17,20 @@ pub(crate) fn private_temp_dir(parent: &Path, prefix: &str) -> Result<PathBuf, C
     #[cfg(not(unix))]
     let builder = std::fs::DirBuilder::new();
     builder.create(&path)?;
+    #[cfg(windows)]
+    if let Err(error) = crate::filesystem::protect_private_windows_path(&path) {
+        let cleanup = std::fs::remove_dir(&path);
+        return Err(CliError::Io(match cleanup {
+            Ok(()) => error,
+            Err(cleanup_error) => std::io::Error::new(
+                cleanup_error.kind(),
+                format!(
+                    "{error}; additionally failed to remove {}: {cleanup_error}",
+                    path.display()
+                ),
+            ),
+        }));
+    }
     Ok(path)
 }
 
