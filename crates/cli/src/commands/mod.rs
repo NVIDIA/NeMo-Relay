@@ -4,7 +4,7 @@
 //! Command parsing, dispatch, rendering, and exit-code ownership.
 
 mod completions;
-mod configuration;
+mod configure;
 mod diagnostics;
 mod hook_forward;
 mod install;
@@ -73,7 +73,7 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
         Command::Hermes(command) => run::easy_path(CodingAgent::Hermes, command, server).await,
         Command::Mcp => mcp::execute(server).await,
-        Command::Config(command) => configuration::execute(command).await,
+        Command::Config(command) => configure::execute(command).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
         Command::Doctor(command) => diagnostics::execute(command).await,

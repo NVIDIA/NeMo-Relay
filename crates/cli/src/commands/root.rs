@@ -4,7 +4,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 use super::completions::CompletionsCommand;
-use super::configuration::ConfigCommand;
+use super::configure::ConfigCommand;
 use super::diagnostics::{AgentsCommand, DoctorCommand};
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};

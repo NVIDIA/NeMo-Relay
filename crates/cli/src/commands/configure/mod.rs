@@ -12,6 +12,8 @@ use crate::error::CliError;
 pub(crate) struct ConfigCommand {
     #[arg(value_enum)]
     pub(crate) agent: Option<AgentArg>,
+    /// Reset Relay configuration for the selected scope. Persistent Hermes integration state is
+    /// managed separately with `nemo-relay uninstall hermes`.
     #[arg(long)]
     pub(crate) reset: bool,
 }
