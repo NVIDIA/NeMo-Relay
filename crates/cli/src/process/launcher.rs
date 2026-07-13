@@ -17,11 +17,10 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::configuration::{
-    AgentConfigs, CodingAgent, GatewayConfig, RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID,
-    ResolvedConfig, any_config_file_exists, resolve_run_config,
+    AgentConfigs, CodingAgent, GatewayConfig, ResolvedConfig, any_config_file_exists,
+    resolve_run_config,
 };
 use crate::error::CliError;
-use crate::hooks::{generated_hooks, transparent_hook_forward_command};
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 use crate::server::GatewayOverrides;
@@ -466,7 +465,7 @@ impl PreparedAgentLaunch {
             CodingAgent::ClaudeCode => {
                 crate::agents::claude::launch::prepare(&mut run, gateway_url, dry_run)?
             }
-            CodingAgent::Codex => run.prepare_codex(gateway_url)?,
+            CodingAgent::Codex => crate::agents::codex::launch::prepare(&mut run, gateway_url)?,
             CodingAgent::Hermes => {
                 if dry_run {
                     run.prepare_hermes_dry(resolved.agents.hermes.hooks_path.as_deref())?;
@@ -482,58 +481,6 @@ impl PreparedAgentLaunch {
     // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // current supported Codex releases. The centralized host policy validates the version first.
-    fn prepare_codex(&mut self, gateway_url: &str) -> Result<(), CliError> {
-        // Codex resolves auth via `CodexAuth::from_auth_dot_json` (`codex-rs/login/src/auth/
-        // manager.rs`): `auth_mode=ApiKey` uses `OPENAI_API_KEY`, `auth_mode=Chatgpt` uses the
-        // OAuth token from `~/.codex/auth.json`. With `requires_openai_auth=true` the provider
-        // config tells Codex to attach whichever credential it has. The gateway then either
-        // substitutes `OPENAI_API_KEY` (routing to `api.openai.com`) or forwards the JWT as-is
-        // (routing to `chatgpt.com/backend-api/codex`). Warn when neither source is present.
-        let has_openai_key = std::env::var("OPENAI_API_KEY")
-            .ok()
-            .is_some_and(|v| !v.is_empty());
-        // Codex persists OAuth tokens to `~/.codex/auth.json` via `AuthDotJson` in
-        // `codex-rs/login/src/auth/storage.rs`. Check for the file rather than parsing it —
-        // Codex handles token refresh itself at runtime.
-        let has_codex_auth = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(|h| {
-                std::path::PathBuf::from(h)
-                    .join(".codex/auth.json")
-                    .exists()
-            })
-            .unwrap_or(false);
-        if !has_openai_key && !has_codex_auth {
-            eprintln!(
-                "warning: No OpenAI credentials found. Either export OPENAI_API_KEY \
-                 (e.g. `export OPENAI_API_KEY=sk-...`), log in to codex (`codex --login`), \
-                 or pass `--openai-base-url` to an upstream that needs no key."
-            );
-        }
-        let hook_command = transparent_hook_forward_command(
-            &transparent_hook_executable(),
-            CodingAgent::Codex,
-            gateway_url,
-        )
-        .map_err(CliError::Launch)?;
-        let hook_groups = generated_hooks(CodingAgent::Codex, &hook_command);
-        let mut args = vec![
-            "--config".to_string(),
-            "features.hooks=true".to_string(),
-            "--config".to_string(),
-            "model_provider=\"nemo-relay-openai\"".to_string(),
-            "--config".to_string(),
-            codex_gateway_provider_config(gateway_url),
-        ];
-        for (event, groups) in hook_groups["hooks"].as_object().into_iter().flatten() {
-            args.push("--config".to_string());
-            args.push(format!("hooks.{event}={}", hook_groups_toml(groups)));
-        }
-        args.push("--config".to_string());
-        args.push(codex_session_hook_state_override(&hook_groups)?);
-        insert_after_host(&mut self.argv, self.host_index, args);
-        Ok(())
-    }
 
     // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. A
     // process-private HERMES_HOME exposes dynamic hooks without rewriting user configuration.
@@ -688,149 +635,6 @@ impl PreparedAgentLaunch {
 // Session hook definitions and their exact trust state share Codex's process-local CLI layer. This
 // authorizes only the generated Relay command without rewriting the active user profile or using
 // the process-wide hook-trust bypass.
-fn codex_session_hook_state_override(generated: &Value) -> Result<String, CliError> {
-    let events = generated
-        .get("hooks")
-        .and_then(Value::as_object)
-        .ok_or_else(|| CliError::Launch("generated Codex hooks were malformed".into()))?;
-    let mut states = Vec::new();
-    for (event, groups) in events {
-        let groups = groups.as_array().ok_or_else(|| {
-            CliError::Launch(format!(
-                "generated Codex {event} hook groups were malformed"
-            ))
-        })?;
-        let event_key = codex_hook_event_key(event);
-        for (group_index, group) in groups.iter().enumerate() {
-            let group = group.as_object().ok_or_else(|| {
-                CliError::Launch(format!("generated Codex {event} hook group was malformed"))
-            })?;
-            let handlers = group
-                .get("hooks")
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    CliError::Launch(format!(
-                        "generated Codex {event} hook handlers were malformed"
-                    ))
-                })?;
-            for (handler_index, handler) in handlers.iter().enumerate() {
-                let hash = codex_command_hook_hash(&event_key, group, handler)?;
-                let key = format!(
-                    "/<session-flags>/config.toml:{event_key}:{group_index}:{handler_index}"
-                );
-                states.push(format!(
-                    "{}={{trusted_hash={},enabled=true}}",
-                    toml_string(&key),
-                    toml_string(&hash)
-                ));
-                for plugin_id in [RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID] {
-                    let key = format!(
-                        "{plugin_id}:hooks/hooks.json:{event_key}:{group_index}:{handler_index}"
-                    );
-                    states.push(format!("{}={{enabled=false}}", toml_string(&key)));
-                }
-            }
-        }
-    }
-    Ok(format!("hooks.state={{{}}}", states.join(",")))
-}
-
-fn codex_hook_event_key(event: &str) -> String {
-    let mut normalized = String::with_capacity(event.len() + 2);
-    for (index, character) in event.chars().enumerate() {
-        if character.is_ascii_uppercase() {
-            if index > 0 {
-                normalized.push('_');
-            }
-            normalized.push(character.to_ascii_lowercase());
-        } else {
-            normalized.push(character);
-        }
-    }
-    normalized
-}
-
-fn codex_command_hook_hash(
-    event_key: &str,
-    group: &serde_json::Map<String, Value>,
-    handler: &Value,
-) -> Result<String, CliError> {
-    use sha2::{Digest, Sha256};
-
-    let handler = handler.as_object().ok_or_else(|| {
-        CliError::Launch(format!(
-            "generated Codex {event_key} command hook was malformed"
-        ))
-    })?;
-    if handler.get("type").and_then(Value::as_str) != Some("command") {
-        return Err(CliError::Launch(format!(
-            "generated Codex {event_key} hook was not a command"
-        )));
-    }
-    let command = handler
-        .get(if cfg!(windows) {
-            "commandWindows"
-        } else {
-            "command"
-        })
-        .or_else(|| handler.get("command"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            CliError::Launch(format!(
-                "generated Codex {event_key} hook command was missing"
-            ))
-        })?;
-    let timeout = handler
-        .get("timeout")
-        .and_then(Value::as_u64)
-        .unwrap_or(600)
-        .max(1);
-    let mut normalized_handler = serde_json::Map::new();
-    normalized_handler.insert("type".into(), Value::String("command".into()));
-    normalized_handler.insert("command".into(), Value::String(command.into()));
-    normalized_handler.insert("timeout".into(), Value::Number(timeout.into()));
-    normalized_handler.insert("async".into(), Value::Bool(false));
-    if let Some(status) = handler.get("statusMessage").and_then(Value::as_str) {
-        normalized_handler.insert("statusMessage".into(), Value::String(status.into()));
-    }
-    let mut identity = serde_json::Map::new();
-    identity.insert("event_name".into(), Value::String(event_key.into()));
-    if let Some(matcher) = group.get("matcher").and_then(Value::as_str) {
-        identity.insert("matcher".into(), Value::String(matcher.into()));
-    }
-    identity.insert(
-        "hooks".into(),
-        Value::Array(vec![Value::Object(normalized_handler)]),
-    );
-    let canonical = canonical_json(Value::Object(identity));
-    let bytes = serde_json::to_vec(&canonical)
-        .map_err(|error| CliError::Launch(format!("failed to hash Codex hook: {error}")))?;
-    let digest = Sha256::digest(bytes);
-    Ok(format!(
-        "sha256:{}",
-        digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
-}
-
-fn canonical_json(value: Value) -> Value {
-    match value {
-        Value::Object(object) => {
-            let mut entries = object.into_iter().collect::<Vec<_>>();
-            entries.sort_by(|left, right| left.0.cmp(&right.0));
-            Value::Object(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (key, canonical_json(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(values) => Value::Array(values.into_iter().map(canonical_json).collect()),
-        other => other,
-    }
-}
 
 /// Renders a bordered status frame for daemon and transparent-run startup output.
 pub(crate) fn render_status_frame(lines: &[String], color: bool) -> String {
@@ -998,26 +802,6 @@ async fn wait_for_health(gateway_url: &str, bootstrap_fingerprint: &str) -> Resu
     )))
 }
 
-fn codex_gateway_provider_config(gateway_url: &str) -> String {
-    // `wire_api="responses"` is the only value codex 0.130+ accepts; the `chat` value was
-    // removed (codex#7782). Codex transparent run therefore only works against upstreams that
-    // implement `/v1/responses` (api.openai.com or a Responses-compatible proxy). For other
-    // upstreams the user falls back to daemon mode and points codex directly at its configured
-    // upstream — we observe hooks but not LLM calls.
-    //
-    // `requires_openai_auth=true` so Codex's `resolve_provider_auth` (`codex-rs/model-provider/
-    // src/auth.rs`) attaches credentials via `BearerAuthProvider`. When the auth mode is
-    // `Chatgpt` the token is an OAuth JWT or Codex access token; when `ApiKey` it is the
-    // `OPENAI_API_KEY` value.
-    // The gateway inspects the inbound `Authorization` header: if `OPENAI_API_KEY` is set in the
-    // environment the ChatGPT token is replaced (see `alignment::gateway_forward_headers` and
-    // `gateway.rs::inject_provider_auth`); otherwise it is forwarded to the ChatGPT backend.
-    format!(
-        "model_providers.nemo-relay-openai={{name=\"NeMo Relay OpenAI\",base_url={},wire_api=\"responses\",requires_openai_auth=true,supports_websockets=false}}",
-        toml_string(gateway_url)
-    )
-}
-
 // Appends one horizontal border line in NVIDIA green when color is enabled, otherwise plain
 // ASCII-compatible box-drawing.
 fn push_status_border(
@@ -1041,12 +825,6 @@ fn push_status_border(
 // `PATH`, which would cause hooks to exit with status 127 (command not found). Falls back
 // to the bare name when `current_exe` is unavailable so behavior degrades to the previous
 // install-style assumption rather than failing to launch.
-fn transparent_hook_executable() -> PathBuf {
-    std::env::current_exe()
-        .map(|path| path.canonicalize().unwrap_or(path))
-        .map(crate::agents::portable_executable_path)
-        .unwrap_or_else(|_| PathBuf::from("nemo-relay"))
-}
 
 // Appends the running gateway binary's directory to the child agent PATH. Transparent hooks use
 // the absolute executable path when possible, but adding the directory also covers hook loaders or
@@ -1073,14 +851,6 @@ fn path_with_transparent_hook_dir() -> Option<String> {
 // The invocation resolver determines this index before pass-through arguments are appended. Using
 // it here prevents a prompt token named `codex` or `claude` from becoming an accidental insertion
 // target while preserving configured wrapper prefixes.
-fn insert_after_host(
-    argv: &mut Vec<String>,
-    host_index: usize,
-    args: impl IntoIterator<Item = String>,
-) {
-    debug_assert!(host_index < argv.len());
-    argv.splice(host_index + 1..host_index + 1, args);
-}
 
 // Creates a per-process Hermes home whose user state points at the original profile while the
 // config and hook approval files remain private to this transparent run. Hermes has no standalone
@@ -1226,28 +996,8 @@ fn hermes_hooks_path(configured: Option<&Path>) -> Result<PathBuf, CliError> {
 
 // Converts JSON hook groups into inline TOML arrays for Codex `--config` flags. The function
 // preserves matchers when present and assumes generated hook groups contain one command hook.
-fn hook_groups_toml(value: &Value) -> String {
-    let mut groups = Vec::new();
-    for group in value.as_array().into_iter().flatten() {
-        let matcher = group
-            .get("matcher")
-            .and_then(Value::as_str)
-            .map(|matcher| format!("matcher={},", toml_string(matcher)))
-            .unwrap_or_default();
-        let command = group["hooks"][0]["command"].as_str().unwrap_or_default();
-        groups.push(format!(
-            "{{{matcher}hooks=[{{type=\"command\",command={},timeout=30}}]}}",
-            toml_string(command)
-        ));
-    }
-    format!("[{}]", groups.join(","))
-}
 
 // Escapes a Rust string as a TOML basic string for inline Codex configuration values.
-fn toml_string(value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{escaped}\"")
-}
 
 // Creates a uniquely named directory under the OS temp directory. UUIDv7 avoids collisions
 // between concurrent transparent runs without keeping persistent coordination state.

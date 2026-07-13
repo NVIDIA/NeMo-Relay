@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::configuration::{AgentCommandConfig, GatewayConfig};
+use crate::hooks::generated_hooks;
 use std::ffi::OsString;
 use std::sync::Mutex;
 
@@ -373,11 +374,12 @@ fn codex_session_hook_trust_matches_codex_discovery_identity() {
         .unwrap();
     let handler = &group["hooks"].as_array().unwrap()[0];
     assert_eq!(
-        codex_command_hook_hash("user_prompt_submit", group, handler).unwrap(),
+        crate::agents::codex::launch::command_hook_hash("user_prompt_submit", group, handler)
+            .unwrap(),
         "sha256:83a9834ee494ffbd4acc85377c579d2c954f9797a9b8832924a326a6a44b0660"
     );
 
-    let state = codex_session_hook_state_override(&generated).unwrap();
+    let state = crate::agents::codex::launch::session_hook_state_override(&generated).unwrap();
     assert_eq!(
         state.matches("trusted_hash=\"sha256:").count(),
         generated["hooks"].as_object().unwrap().len()
@@ -609,7 +611,7 @@ fn insert_after_host_uses_the_authoritative_executable_index() {
         "--".to_string(),
         "codex".to_string(),
     ];
-    insert_after_host(&mut argv, 1, ["--config".to_string()]);
+    crate::process::insert_after_host(&mut argv, 1, ["--config".to_string()]);
     assert_eq!(
         argv,
         vec!["wrapper", "codex", "--config", "exec", "--", "codex"]
@@ -1326,7 +1328,7 @@ fn codex_session_hook_state_rejects_every_malformed_generated_shape() {
         ),
     ];
     for (generated, expected) in malformed {
-        let error = codex_session_hook_state_override(&generated)
+        let error = crate::agents::codex::launch::session_hook_state_override(&generated)
             .unwrap_err()
             .to_string();
         assert!(error.contains(expected), "{error}");
@@ -1347,7 +1349,8 @@ fn codex_session_hook_state_rejects_every_malformed_generated_shape() {
     });
     let group = generated["hooks"]["PreToolUse"][0].as_object().unwrap();
     let handler = &group["hooks"].as_array().unwrap()[0];
-    let hash = codex_command_hook_hash("pre_tool_use", group, handler).unwrap();
+    let hash =
+        crate::agents::codex::launch::command_hook_hash("pre_tool_use", group, handler).unwrap();
 
     let normalized_handler = json!({
         "type": "command",
@@ -1357,14 +1360,16 @@ fn codex_session_hook_state_rejects_every_malformed_generated_shape() {
     });
     assert_eq!(
         hash,
-        codex_command_hook_hash("pre_tool_use", group, &normalized_handler).unwrap()
+        crate::agents::codex::launch::command_hook_hash("pre_tool_use", group, &normalized_handler)
+            .unwrap()
     );
 
     let mut without_matcher = group.clone();
     without_matcher.remove("matcher");
     assert_ne!(
         hash,
-        codex_command_hook_hash("pre_tool_use", &without_matcher, handler).unwrap()
+        crate::agents::codex::launch::command_hook_hash("pre_tool_use", &without_matcher, handler)
+            .unwrap()
     );
 
     let mut without_status = normalized_handler;
@@ -1374,10 +1379,11 @@ fn codex_session_hook_state_rejects_every_malformed_generated_shape() {
         .remove("statusMessage");
     assert_ne!(
         hash,
-        codex_command_hook_hash("pre_tool_use", group, &without_status).unwrap()
+        crate::agents::codex::launch::command_hook_hash("pre_tool_use", group, &without_status)
+            .unwrap()
     );
 
-    let state = codex_session_hook_state_override(&generated).unwrap();
+    let state = crate::agents::codex::launch::session_hook_state_override(&generated).unwrap();
     assert!(state.contains("pre_tool_use"));
     assert!(state.contains("trusted_hash"));
     assert!(state.contains("enabled=false"));
@@ -1415,14 +1421,14 @@ fn hook_write_helpers_cover_toml_escaping() {
             .contains("hooks")
     );
 
-    let groups = hook_groups_toml(&json!([{
+    let groups = crate::agents::codex::launch::hook_groups_toml(&json!([{
         "matcher": "Shell\"Run",
         "hooks": [{"command": "nemo-relay \"quoted\""}]
     }]));
     assert!(groups.contains("matcher=\"Shell\\\"Run\""));
     assert!(groups.contains("command=\"nemo-relay \\\"quoted\\\"\""));
 
-    let escaped = toml_string(r#"C:\tmp\"quoted""#);
+    let escaped = crate::agents::codex::launch::toml_string(r#"C:\tmp\"quoted""#);
     assert!(escaped.starts_with('"'));
     assert!(escaped.ends_with('"'));
     assert!(escaped.contains(r#"C:\\tmp\\"#));

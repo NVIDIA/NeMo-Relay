@@ -9,6 +9,7 @@ mod prepared;
 mod types;
 
 pub(crate) use prepared::PreparedAgentLaunch;
+pub(crate) use prepared::insert_after_host;
 pub(crate) use types::RunOverrides;
 
 use std::ffi::{OsStr, OsString};

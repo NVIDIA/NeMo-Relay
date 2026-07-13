@@ -11,3 +11,12 @@ pub(crate) struct PreparedAgentLaunch {
     pub(crate) temp_dirs: Vec<PathBuf>,
     pub(crate) notes: Vec<String>,
 }
+
+pub(crate) fn insert_after_host(
+    argv: &mut Vec<String>,
+    host_index: usize,
+    values: impl IntoIterator<Item = String>,
+) {
+    debug_assert!(host_index < argv.len());
+    argv.splice(host_index + 1..host_index + 1, values);
+}

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::agents::CodingAgent;
 use crate::error::CliError;
 use crate::hooks::{generated_hooks, transparent_hook_forward_command};
-use crate::process::PreparedAgentLaunch;
+use crate::process::{PreparedAgentLaunch, insert_after_host};
 
 pub(crate) fn prepare(
     launch: &mut PreparedAgentLaunch,
@@ -155,17 +155,6 @@ fn transparent_hook_executable() -> PathBuf {
         .map(|path| path.canonicalize().unwrap_or(path))
         .map(crate::agents::portable_executable_path)
         .unwrap_or_else(|_| PathBuf::from("nemo-relay"))
-}
-
-fn insert_after_host(
-    argv: &mut Vec<String>,
-    host_index: usize,
-    values: impl IntoIterator<Item = String>,
-) {
-    argv.splice(
-        host_index.saturating_add(1)..host_index.saturating_add(1),
-        values,
-    );
 }
 
 pub(crate) fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
