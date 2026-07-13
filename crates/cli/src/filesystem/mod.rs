@@ -6,6 +6,7 @@
 mod atomic;
 pub(crate) mod bounded;
 mod locks;
+mod snapshots;
 pub(crate) mod temp;
 
 #[cfg(test)]
@@ -17,6 +18,9 @@ pub(crate) use atomic::{
     read_windows_dacl, windows_path_is_private,
 };
 pub(crate) use locks::{LockAttempt, try_lock_exclusive, try_lock_shared, unlock_file};
+pub(crate) use snapshots::{
+    FileSnapshot, backup, backup_path, remove_backup, restore_file_snapshot, snapshot_optional_file,
+};
 
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/file_io_tests.rs"]

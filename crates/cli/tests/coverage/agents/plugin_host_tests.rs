@@ -18,6 +18,7 @@ use toml_edit::{DocumentMut, Item, Value as TomlValue};
 
 use super::*;
 use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
+use crate::filesystem::{backup, backup_path, restore_file_snapshot, snapshot_optional_file};
 
 const TEST_PLUGIN_GENERATION: &str = "test-generation";
 

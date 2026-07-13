@@ -20,10 +20,12 @@ use crate::hooks::merge_hooks;
 
 use super::app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
 use crate::agents::shared::host::{
-    FileSnapshot, atomic_write, atomic_write_private, backup, backup_path, current_exe,
-    ensure_table, home_dir, portable_executable_path, read_json_object, remove_backup,
-    restore_file_snapshot, shell_quote, shell_quote_arg_for_platform, snapshot_optional_file,
+    atomic_write, atomic_write_private, current_exe, ensure_table, home_dir,
+    portable_executable_path, read_json_object, shell_quote, shell_quote_arg_for_platform,
     write_json,
+};
+use crate::filesystem::{
+    FileSnapshot, backup, backup_path, remove_backup, restore_file_snapshot, snapshot_optional_file,
 };
 
 pub(crate) const CODEX_PLUGIN_ID: &str = RELAY_PLUGIN_ID;

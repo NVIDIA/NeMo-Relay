@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::agents::shared::host::{
-    FileSnapshot, backup, backup_path, home_dir, read_json_object, remove_backup,
-    restore_file_snapshot, snapshot_optional_file, write_json,
+use crate::agents::shared::host::{home_dir, read_json_object, write_json};
+use crate::filesystem::{
+    FileSnapshot, backup, backup_path, remove_backup, restore_file_snapshot, snapshot_optional_file,
 };
 
 pub(crate) struct ClaudeSetupSnapshot {
