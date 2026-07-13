@@ -309,9 +309,8 @@ pub(crate) fn install_integration(
 ) -> Result<std::process::ExitCode, crate::error::CliError> {
     match agent {
         CodingAgent::Hermes => hermes::install::install(command),
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            crate::installation::marketplace::install(agent, command)
-        }
+        CodingAgent::Codex => codex::install::install(command),
+        CodingAgent::ClaudeCode => claude::install::install(command),
     }
 }
 
@@ -321,9 +320,8 @@ pub(crate) fn uninstall_integration(
 ) -> Result<std::process::ExitCode, crate::error::CliError> {
     match agent {
         CodingAgent::Hermes => hermes::install::uninstall(command),
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            crate::installation::marketplace::uninstall(agent, command)
-        }
+        CodingAgent::Codex => codex::install::uninstall(command),
+        CodingAgent::ClaudeCode => claude::install::uninstall(command),
     }
 }
 
