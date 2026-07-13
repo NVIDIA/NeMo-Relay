@@ -3,15 +3,16 @@
 
 use std::process::ExitCode;
 
+use super::arguments::{EasyPathCommand, RunCommand, ServerArgs};
 use crate::agents::CodingAgent;
-use crate::configuration::{EasyPathCommand, RunCommand, ServerArgs};
 use crate::error::CliError;
 
 pub(super) async fn execute(
     command: RunCommand,
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
-    crate::process::launcher::run(command, Some(server)).await
+    let inherited = server.to_runtime();
+    crate::process::launcher::run(command.into_runtime(), Some(&inherited)).await
 }
 
 pub(super) async fn easy_path(
@@ -19,5 +20,6 @@ pub(super) async fn easy_path(
     command: EasyPathCommand,
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
-    crate::process::launcher::easy_path(agent, command, Some(server)).await
+    let inherited = server.to_runtime();
+    crate::process::launcher::easy_path(agent, command.command, Some(&inherited)).await
 }

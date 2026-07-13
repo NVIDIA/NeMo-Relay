@@ -8,15 +8,12 @@ pub(crate) mod host;
 pub(crate) mod install;
 pub(crate) mod shared;
 
-use clap::ValueEnum;
 use semver::Version;
 
 /// Coding-agent hosts supported by the CLI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
-#[value(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CodingAgent {
     /// `claude-code` remains an input alias for older Relay configuration.
-    #[value(name = "claude", alias = "claude-code")]
     ClaudeCode,
     Codex,
     Hermes,

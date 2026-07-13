@@ -3,13 +3,13 @@
 
 use std::process::ExitCode;
 
-use crate::configuration::DoctorCommand;
+use super::arguments::DoctorCommand;
 use crate::error::CliError;
 
 pub(super) async fn execute(command: DoctorCommand) -> Result<ExitCode, CliError> {
     if let Some(plugin) = command.plugin {
-        crate::agents::install::doctor(plugin, command.install_dir, command.json)
+        crate::agents::install::doctor(plugin.into(), command.install_dir, command.json)
     } else {
-        crate::diagnostics::run_doctor(command.agent, command.json).await
+        crate::diagnostics::run_doctor(command.agent.map(Into::into), command.json).await
     }
 }

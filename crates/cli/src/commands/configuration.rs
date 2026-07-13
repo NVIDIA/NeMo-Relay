@@ -3,14 +3,15 @@
 
 use std::process::ExitCode;
 
-use crate::configuration::ConfigCommand;
+use super::arguments::ConfigCommand;
 use crate::error::CliError;
 
 pub(super) async fn execute(command: ConfigCommand) -> Result<ExitCode, CliError> {
+    let agent = command.agent.map(Into::into);
     if command.reset {
-        crate::configuration::wizard::reset(command.agent)?;
+        crate::configuration::wizard::reset(agent)?;
     } else {
-        crate::configuration::wizard::run(command.agent).await?;
+        crate::configuration::wizard::run(agent).await?;
     }
     Ok(ExitCode::SUCCESS)
 }

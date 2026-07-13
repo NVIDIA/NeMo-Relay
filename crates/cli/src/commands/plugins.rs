@@ -3,26 +3,39 @@
 
 use std::process::ExitCode;
 
-use crate::configuration::{PluginsCommand, PluginsSubcommand, ServerArgs};
+use super::arguments::{PluginsCommand, PluginsSubcommand, ServerArgs};
 use crate::error::CliError;
 
 pub(super) fn execute(command: PluginsCommand, server: &ServerArgs) -> Result<ExitCode, CliError> {
+    let server = server.to_runtime();
     let json_context = command
         .command
         .json_context()
         .map(|context| (context.command, context.target.map(str::to_owned)));
     let json = json_context.is_some();
     let result = match command.command {
-        PluginsSubcommand::Edit(command) => crate::plugins::edit(command),
-        PluginsSubcommand::Add(command) => crate::plugins::lifecycle::add(command, server),
-        PluginsSubcommand::Validate(command) => {
-            crate::plugins::lifecycle::validate(command, server)
+        PluginsSubcommand::Edit(command) => crate::plugins::edit(command.into_runtime()),
+        PluginsSubcommand::Add(command) => {
+            crate::plugins::lifecycle::add(command.into_runtime(), &server)
         }
-        PluginsSubcommand::List(command) => crate::plugins::lifecycle::list(command, server),
-        PluginsSubcommand::Inspect(command) => crate::plugins::lifecycle::inspect(command, server),
-        PluginsSubcommand::Enable(command) => crate::plugins::lifecycle::enable(command, server),
-        PluginsSubcommand::Disable(command) => crate::plugins::lifecycle::disable(command, server),
-        PluginsSubcommand::Remove(command) => crate::plugins::lifecycle::remove(command, server),
+        PluginsSubcommand::Validate(command) => {
+            crate::plugins::lifecycle::validate(command.into_runtime(), &server)
+        }
+        PluginsSubcommand::List(command) => {
+            crate::plugins::lifecycle::list(command.into_runtime(), &server)
+        }
+        PluginsSubcommand::Inspect(command) => {
+            crate::plugins::lifecycle::inspect(command.into_runtime(), &server)
+        }
+        PluginsSubcommand::Enable(command) => {
+            crate::plugins::lifecycle::enable(command.into_runtime(), &server)
+        }
+        PluginsSubcommand::Disable(command) => {
+            crate::plugins::lifecycle::disable(command.into_runtime(), &server)
+        }
+        PluginsSubcommand::Remove(command) => {
+            crate::plugins::lifecycle::remove(command.into_runtime(), &server)
+        }
     };
     match result {
         Ok(()) => Ok(ExitCode::SUCCESS),

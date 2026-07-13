@@ -3,9 +3,9 @@
 
 use std::process::ExitCode;
 
-use crate::configuration::ServerArgs;
+use super::arguments::ServerArgs;
 use crate::error::CliError;
 
 pub(super) async fn execute(server: &ServerArgs) -> Result<ExitCode, CliError> {
-    crate::mcp::run(server).await
+    crate::mcp::run(&server.to_runtime()).await
 }

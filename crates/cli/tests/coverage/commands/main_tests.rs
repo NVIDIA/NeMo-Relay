@@ -5,7 +5,7 @@ use clap::Parser;
 use std::ffi::OsString;
 
 use super::*;
-use crate::configuration::{
+use crate::commands::arguments::{
     CompletionsCommand, PluginsCommand, PluginsEditCommand, PluginsInspectCommand,
     PluginsListCommand, PluginsSubcommand, PluginsValidateCommand, PricingSubcommand,
     PricingValidateCommand, ServerArgs,

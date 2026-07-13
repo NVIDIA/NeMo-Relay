@@ -14,14 +14,14 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
-use crate::configuration::ServerArgs;
+use crate::configuration::GatewayOverrides;
 use crate::error::CliError;
 use crate::installation::generation::{GENERATION_FILE_ENV, GENERATION_TOKEN_ENV};
 
 pub(crate) const SERVER_NAME: &str = "nemo-relay";
 const LAUNCH_ARGS: &[&str] = &["mcp"];
 
-pub(crate) async fn run(server_args: &ServerArgs) -> Result<ExitCode, CliError> {
+pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliError> {
     if transparent_run_active() {
         // An installed plugin can still be enabled inside `nemo-relay run`. In that process the
         // wrapper already owns a healthy dynamic gateway, so this MCP instance authenticates and

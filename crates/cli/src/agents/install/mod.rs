@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::configuration::{CodingAgent, InstallCommand, IntegrationHost, UninstallCommand};
+use crate::configuration::{CodingAgent, InstallRequest, IntegrationHost, UninstallRequest};
 use crate::error::CliError;
 use crate::installation::generation::{
     GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration,
@@ -237,7 +237,7 @@ fn failed_host_plugin_readiness(
     readiness
 }
 
-pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
+pub(crate) fn install(command: InstallRequest) -> Result<ExitCode, CliError> {
     let operation_lock_dir = if command.dry_run {
         PathBuf::new()
     } else {
@@ -264,7 +264,7 @@ pub(crate) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
     )
 }
 
-pub(crate) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
+pub(crate) fn uninstall(command: UninstallRequest) -> Result<ExitCode, CliError> {
     let operation_lock_dir = if command.dry_run {
         PathBuf::new()
     } else {

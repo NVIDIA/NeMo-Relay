@@ -406,7 +406,7 @@ command = "hermes --yolo chat"
 "#,
     )
     .unwrap();
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: None,
         config: Some(path),
         openai_base_url: None,
@@ -441,7 +441,7 @@ command = "hermes --yolo chat"
 fn explicit_config_must_exist() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("missing-config.toml");
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: None,
         config: Some(path.clone()),
         openai_base_url: None,
@@ -478,7 +478,7 @@ fn unreadable_config_errors_include_the_source_path() {
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "").unwrap();
     std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o000)).unwrap();
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: None,
         config: Some(config_path.clone()),
         openai_base_url: None,
@@ -535,7 +535,7 @@ fn legacy_observability_config_sections_fail_clearly() {
     ] {
         let path = temp.path().join(name);
         std::fs::write(&path, contents).unwrap();
-        let command = RunCommand {
+        let command = RunOverrides {
             agent: None,
             config: Some(path),
             openai_base_url: None,
@@ -588,7 +588,7 @@ mode = "overwrite"
 "#,
     )
     .unwrap();
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
@@ -1414,9 +1414,9 @@ config = { version = 1, components = [] }
 "#,
     )
     .unwrap();
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -1435,7 +1435,7 @@ fn plugin_config_path_overrides_sibling_plugin_file() {
     std::fs::write(&config_path, "").unwrap();
     std::fs::write(&sibling_path, "version = 1\n").unwrap();
     std::fs::write(&override_path, "version = 2\n").unwrap();
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
@@ -1467,7 +1467,7 @@ openai_base_url = "http://file-openai"
 "#,
     )
     .unwrap();
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: Some(path),
         openai_base_url: Some("http://cli-openai".into()),
@@ -1497,12 +1497,12 @@ openai_base_url = "http://file-openai"
 "#,
     )
     .unwrap();
-    let server = ServerArgs {
+    let server = GatewayOverrides {
         config: Some(path),
         openai_base_url: Some("http://top-level-openai".into()),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: None,
         openai_base_url: None,
@@ -1527,7 +1527,7 @@ fn server_resolution_applies_all_server_overrides() {
     let _scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
         bind: Some("127.0.0.1:0".parse().unwrap()),
         openai_base_url: Some("http://cli-openai".into()),
@@ -1564,10 +1564,10 @@ fn ordinary_server_ignores_managed_bootstrap_fingerprint_environment() {
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
 
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
         bind: Some("127.0.0.1:0".parse().unwrap()),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
     let resolved = resolve_server_config(&args).unwrap();
 
@@ -1583,7 +1583,7 @@ fn ordinary_server_ignores_managed_bootstrap_fingerprint_environment() {
     );
 
     scope.set_bootstrap_fingerprint("");
-    let managed_args = ServerArgs {
+    let managed_args = GatewayOverrides {
         ready_file: Some(temp.path().join("managed.ready.json")),
         ..args
     };
@@ -1805,9 +1805,9 @@ fn persistent_server_resolution_excludes_project_config_and_fingerprints_credent
     )
     .unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         bind: Some("127.0.0.1:47632".parse().unwrap()),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     unsafe { std::env::set_var("OPENAI_API_KEY", "credential-one") };
@@ -1845,15 +1845,15 @@ fn managed_bootstrap_canonicalizes_unset_and_zero_padded_default_idle_timeout() 
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
-    let parent = resolve_persistent_server_config(&ServerArgs::default()).unwrap();
+    let parent = resolve_persistent_server_config(&GatewayOverrides::default()).unwrap();
     let expected = parent.bootstrap_fingerprint.unwrap();
     scope.set_bootstrap_fingerprint(&expected);
     unsafe {
         std::env::set_var(PLUGIN_IDLE_TIMEOUT_ENV, "0300");
     }
-    let child_args = ServerArgs {
+    let child_args = GatewayOverrides {
         ready_file: Some(temp.path().join("managed.ready.json")),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
     let child = resolve_server_config(&child_args).unwrap();
     let active = active_dynamic_plugin_components(None, &child).unwrap();
@@ -1881,7 +1881,7 @@ fn plugin_launch_carries_effective_hook_limit_below_and_above_default() {
         )
         .unwrap();
         let launch =
-            crate::bootstrap::resolve_plugin_gateway(&ServerArgs::default(), bind).unwrap();
+            crate::bootstrap::resolve_plugin_gateway(&GatewayOverrides::default(), bind).unwrap();
         assert_eq!(launch.max_hook_payload_bytes, limit);
     }
 }
@@ -2074,7 +2074,7 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
     .unwrap();
 
     crate::plugins::lifecycle::reset_test_python_environment_digest_calls();
-    let before = resolve_persistent_server_config(&ServerArgs::default()).unwrap();
+    let before = resolve_persistent_server_config(&GatewayOverrides::default()).unwrap();
     assert_eq!(
         crate::plugins::lifecycle::test_python_environment_digest_calls(),
         0,
@@ -2098,7 +2098,7 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
         b"fixture = 'mutated'\n",
     )
     .unwrap();
-    let after = resolve_persistent_server_config(&ServerArgs::default()).unwrap();
+    let after = resolve_persistent_server_config(&GatewayOverrides::default()).unwrap();
     assert_eq!(
         crate::plugins::lifecycle::test_python_environment_digest_calls(),
         0,
@@ -2143,9 +2143,9 @@ fn managed_server_rejects_config_and_artifact_changes_after_parent_resolution() 
     let expected =
         persistent_bootstrap_fingerprint(&resolved, std::slice::from_ref(&active)).unwrap();
     scope.set_bootstrap_fingerprint(&expected);
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         ready_file: Some(temp.path().join("managed.ready.json")),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let identity = managed_bootstrap_identity(&args, &resolved, std::slice::from_ref(&active))
@@ -2221,7 +2221,7 @@ manifest = "plugins/acme/relay-plugin.toml"
         .set_len(MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
         .unwrap();
 
-    let error = resolve_persistent_server_config(&ServerArgs::default())
+    let error = resolve_persistent_server_config(&GatewayOverrides::default())
         .unwrap_err()
         .to_string();
 
@@ -2258,7 +2258,7 @@ startup = "required"
         .set_len(MAX_BOOTSTRAP_IDENTITY_FILE_BYTES + 1)
         .unwrap();
 
-    let error = resolve_persistent_server_config(&ServerArgs::default())
+    let error = resolve_persistent_server_config(&GatewayOverrides::default())
         .unwrap_err()
         .to_string();
 
@@ -2280,9 +2280,9 @@ fn bootstrap_hmac_key_rejects_corrupt_persistent_state() {
 
 #[test]
 fn persistent_server_resolution_rejects_project_specific_flags() {
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(PathBuf::from("project-config.toml")),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     assert!(
@@ -2315,9 +2315,9 @@ allowed = false
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2354,9 +2354,9 @@ startup = "required"
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
 
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2422,9 +2422,9 @@ attestation = "signature_required"
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
 
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2494,9 +2494,9 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_wrong_truste
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
 
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2566,9 +2566,9 @@ fn server_resolution_fails_when_required_enabled_dynamic_plugin_has_malformed_si
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
 
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2631,9 +2631,9 @@ fn gateway_body_limit_file_values_must_be_nonzero() {
         ),
     ] {
         std::fs::write(&path, format!("[gateway]\n{field} = 0\n")).unwrap();
-        let args = ServerArgs {
+        let args = GatewayOverrides {
             config: Some(path.clone()),
-            ..ServerArgs::default()
+            ..GatewayOverrides::default()
         };
 
         let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2648,7 +2648,7 @@ fn run_resolution_applies_all_run_overrides() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
     std::fs::write(&config_path, "").unwrap();
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: Some("http://run-openai".into()),
@@ -2689,7 +2689,7 @@ allowed = false
     )
     .unwrap();
     write_dynamic_plugin_state(&plugins_toml_path, "acme.worker", true);
-    let command = RunCommand {
+    let command = RunOverrides {
         agent: Some(CodingAgent::Codex),
         config: Some(config_path),
         openai_base_url: None,
@@ -2713,9 +2713,9 @@ fn malformed_shared_config_reports_context() {
     let temp = tempfile::tempdir().unwrap();
     let invalid_toml = temp.path().join("invalid.toml");
     std::fs::write(&invalid_toml, "server = [").unwrap();
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(invalid_toml),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2724,9 +2724,9 @@ fn malformed_shared_config_reports_context() {
 
     let invalid_shape = temp.path().join("invalid-shape.toml");
     std::fs::write(&invalid_shape, "upstream = \"not-a-table\"").unwrap();
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(invalid_shape),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();
@@ -2736,9 +2736,9 @@ fn malformed_shared_config_reports_context() {
     let plugin_config = temp.path().join("config-with-invalid-plugins.toml");
     std::fs::write(&plugin_config, "").unwrap();
     std::fs::write(temp.path().join("plugins.toml"), "version = [").unwrap();
-    let args = ServerArgs {
+    let args = GatewayOverrides {
         config: Some(plugin_config),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = resolve_server_config(&args).unwrap_err().to_string();

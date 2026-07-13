@@ -15,8 +15,8 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::configuration::{
-    AgentConfigs, CodingAgent, EasyPathCommand, GatewayConfig, RELAY_PLUGIN_ID,
-    RELAY_SOURCE_PLUGIN_ID, ResolvedConfig, RunCommand, ServerArgs, any_config_file_exists,
+    AgentConfigs, CodingAgent, GatewayConfig, GatewayOverrides, RELAY_PLUGIN_ID,
+    RELAY_SOURCE_PLUGIN_ID, ResolvedConfig, RunOverrides, any_config_file_exists,
     resolve_run_config,
 };
 use crate::error::CliError;
@@ -31,8 +31,8 @@ use crate::server;
 /// server shut down. The child's exit status is preserved when it fits in `ExitCode`; otherwise the
 /// launcher reports generic failure.
 pub(crate) async fn run(
-    command: RunCommand,
-    inherited: Option<&ServerArgs>,
+    command: RunOverrides,
+    inherited: Option<&GatewayOverrides>,
 ) -> Result<ExitCode, CliError> {
     let run = TransparentRun::new(command, inherited).await?;
     run.print_if_requested();
@@ -43,13 +43,13 @@ pub(crate) async fn run(
 ///
 /// If no config file is present at any discovery layer, this fires the interactive setup inline
 /// (`crate::configuration::wizard::run`) which writes a `config.toml`, then proceeds to launch the agent. When
-/// config IS present, the easy path constructs a synthetic `RunCommand` and delegates to the
+/// config IS present, the easy path constructs a synthetic `RunOverrides` and delegates to the
 /// same transparent-run pipeline `nemo-relay run` uses — same observability wiring, same agent
 /// argv resolution, same lifecycle management.
 pub(crate) async fn easy_path(
     agent: CodingAgent,
-    command: EasyPathCommand,
-    inherited: Option<&ServerArgs>,
+    command: Vec<String>,
+    inherited: Option<&GatewayOverrides>,
 ) -> Result<ExitCode, CliError> {
     // Explicit `--config <path>` short-circuits the discovery-based setup trigger: when the
     // user has pointed at a specific file, that file is the contract — fire setup only if it
@@ -67,7 +67,7 @@ pub(crate) async fn easy_path(
         // cancelled), surface that directly.
         crate::configuration::wizard::run(Some(agent)).await?;
     }
-    let synthetic = RunCommand {
+    let synthetic = RunOverrides {
         agent: Some(agent),
         // Forward the explicit config path so `run` parses the same file the user asked for,
         // rather than re-discovering from defaults.
@@ -78,7 +78,7 @@ pub(crate) async fn easy_path(
         plugin_config_path: None,
         dry_run: false,
         print: false,
-        command: command.command,
+        command,
     };
     run(synthetic, inherited).await
 }
@@ -97,7 +97,10 @@ struct TransparentRun {
 impl TransparentRun {
     // Resolves configuration, binds the ephemeral listener, and builds agent-specific launch wiring
     // without starting the gateway or spawning the child command.
-    async fn new(command: RunCommand, inherited: Option<&ServerArgs>) -> Result<Self, CliError> {
+    async fn new(
+        command: RunOverrides,
+        inherited: Option<&GatewayOverrides>,
+    ) -> Result<Self, CliError> {
         let dry_run = command.dry_run;
         let print = command.print;
         let explicit_config = command
@@ -249,7 +252,7 @@ struct AgentInvocation {
 }
 
 fn resolve_agent_invocation(
-    command: &RunCommand,
+    command: &RunOverrides,
     agents: &AgentConfigs,
 ) -> Result<AgentInvocation, CliError> {
     if let Some(agent) = command.agent {
@@ -287,7 +290,7 @@ fn resolve_agent_invocation(
 
 #[cfg(test)]
 fn resolve_agent_and_argv(
-    command: &RunCommand,
+    command: &RunOverrides,
     agents: &AgentConfigs,
 ) -> Result<(CodingAgent, Vec<String>), CliError> {
     resolve_agent_invocation(command, agents).map(|invocation| (invocation.agent, invocation.argv))

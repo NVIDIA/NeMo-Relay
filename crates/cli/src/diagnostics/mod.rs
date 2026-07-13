@@ -26,8 +26,9 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use uuid::Uuid;
 
 use crate::configuration::{
-    AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
-    ServerArgs, default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
+    AgentConfigs, CodingAgent, DynamicPluginHostConfigStatus, GatewayConfig, GatewayOverrides,
+    ResolvedConfig, default_plugin_config_paths, effective_plugin_toml_sources,
+    resolve_server_config,
 };
 use crate::error::CliError;
 
@@ -130,7 +131,7 @@ pub(crate) struct AgentInfo {
 pub(crate) async fn collect_report(
     target_agent: Option<CodingAgent>,
 ) -> Result<DoctorReport, CliError> {
-    let (resolved, resolution) = match resolve_server_config(&ServerArgs::default()) {
+    let (resolved, resolution) = match resolve_server_config(&GatewayOverrides::default()) {
         Ok(resolved) => (
             resolved,
             Check {
@@ -1506,7 +1507,7 @@ pub(crate) fn format_json(report: &DoctorReport) -> Result<String, CliError> {
 /// Runs `agents` — a thin wrapper over `collect_agents` that emits only the agent list. Shares
 /// the same JSON schema as `doctor.agents` for consistency.
 pub(crate) async fn agents_report() -> Vec<AgentInfo> {
-    let resolved = resolve_server_config(&ServerArgs::default()).unwrap_or_default();
+    let resolved = resolve_server_config(&GatewayOverrides::default()).unwrap_or_default();
     collect_agents(None, &resolved).await
 }
 

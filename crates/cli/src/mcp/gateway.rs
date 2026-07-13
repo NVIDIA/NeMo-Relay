@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::bootstrap::{GatewayEndpoint, GatewaySpec};
-use crate::configuration::ServerArgs;
+use crate::configuration::GatewayOverrides;
 use crate::error::CliError;
 use crate::installation::generation::{ActiveGenerationGuard, InstallGeneration};
 
@@ -23,7 +23,7 @@ pub(super) struct GatewayPlan {
 }
 
 impl GatewayPlan {
-    pub(super) async fn resolve(server_args: &ServerArgs) -> Result<Self, CliError> {
+    pub(super) async fn resolve(server_args: &GatewayOverrides) -> Result<Self, CliError> {
         let captured = tokio::task::spawn_blocking(InstallGeneration::capture_guarded_from_env)
             .await
             .map_err(|error| {

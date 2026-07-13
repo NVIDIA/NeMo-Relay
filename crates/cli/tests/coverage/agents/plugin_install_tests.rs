@@ -1986,7 +1986,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     std::fs::create_dir_all(&empty_path).unwrap();
     let _path = PathScope::set_isolated(&empty_path, &dir.path().join("home"));
 
-    let install_error = install(crate::configuration::InstallCommand {
+    let install_error = install(crate::configuration::InstallRequest {
         host: IntegrationHost::All,
         install_dir: Some(dir.path().join("install")),
         force: false,
@@ -2000,7 +2000,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         "error was: {install_error}"
     );
 
-    let uninstall_error = uninstall(crate::configuration::UninstallCommand {
+    let uninstall_error = uninstall(crate::configuration::UninstallRequest {
         host: IntegrationHost::All,
         install_dir: Some(dir.path().join("install")),
         dry_run: false,
@@ -2032,7 +2032,7 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     );
 
     assert_eq!(
-        install(crate::configuration::InstallCommand {
+        install(crate::configuration::InstallRequest {
             host: IntegrationHost::Codex,
             install_dir: Some(dir.path().join("dry-run-install")),
             force: false,

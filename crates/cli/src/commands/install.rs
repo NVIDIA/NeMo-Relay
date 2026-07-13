@@ -3,13 +3,13 @@
 
 use std::process::ExitCode;
 
-use crate::configuration::{InstallCommand, UninstallCommand};
+use super::arguments::{InstallCommand, UninstallCommand};
 use crate::error::CliError;
 
 pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
-    crate::agents::install::install(command)
+    crate::agents::install::install(command.into_runtime())
 }
 
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
-    crate::agents::install::uninstall(command)
+    crate::agents::install::uninstall(command.into_runtime())
 }

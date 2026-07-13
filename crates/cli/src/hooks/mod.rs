@@ -12,7 +12,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
 use crate::configuration::{
-    CodingAgent, GATEWAY_URL_ENV, GatewayMode, HookForwardCommand, TRANSPARENT_RUN_ENV,
+    CodingAgent, GATEWAY_URL_ENV, GatewayMode, HookForwardRequest, TRANSPARENT_RUN_ENV,
 };
 use crate::error::CliError;
 use crate::installation::generation::InstallGeneration;
@@ -26,7 +26,7 @@ const MAX_HOOK_RESPONSE_BYTES: usize = 1024 * 1024;
 /// Empty stdin is normalized to `{}` so hooks that provide no payload still generate observable
 /// marks. Delivery failures are fail-open by default to avoid blocking coding agents, but
 /// `--fail-closed` converts missing URLs, HTTP failures, and upstream errors into process errors.
-pub(crate) async fn hook_forward(command: HookForwardCommand) -> Result<(), CliError> {
+pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliError> {
     // A transparent wrapper can coexist with any installed Relay plugin. Its process marker makes
     // persistent plugin hooks inert, while only the wrapper-owned command carries
     // `--transparent-run` and forwards to the process-private gateway. This avoids rewriting host
@@ -166,7 +166,7 @@ enum HookGatewayLifecycle {
 
 // Installed hooks use the shared fixed gateway that MCP owns. Transparent runs set the dynamic
 // environment URL and already own that gateway's lifecycle.
-fn hook_destination(command: &HookForwardCommand) -> HookDestination {
+fn hook_destination(command: &HookForwardRequest) -> HookDestination {
     resolve_hook_destination(
         command.gateway_url.clone(),
         std::env::var(GATEWAY_URL_ENV).ok(),
@@ -256,7 +256,7 @@ fn transparent_gateway_spec(gateway_url: &str) -> Result<crate::bootstrap::Gatew
 }
 
 async fn send_verified_hook_forward_request(
-    command: &HookForwardCommand,
+    command: &HookForwardRequest,
     gateway: &crate::bootstrap::GatewaySpec,
     gateway_url: &str,
     input: String,
@@ -301,7 +301,7 @@ async fn send_verified_hook_forward_request(
 // Sends the hook payload with gateway-specific headers translated from CLI flags. The reqwest
 // transport result is returned separately so response handling can preserve fail-open semantics.
 async fn send_hook_forward_request(
-    command: &HookForwardCommand,
+    command: &HookForwardRequest,
     url: &str,
     input: String,
 ) -> Result<Result<reqwest::Response, reqwest::Error>, CliError> {

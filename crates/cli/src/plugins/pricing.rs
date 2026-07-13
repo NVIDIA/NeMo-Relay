@@ -13,8 +13,8 @@ use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
 use serde_json::Value;
 
 use crate::configuration::{
-    PricingAddSourceCommand, PricingInitCommand, PricingResolveCommand, PricingScopeArgs,
-    PricingValidateCommand, ServerArgs, resolve_server_config,
+    GatewayOverrides, PricingAddSourceCommand, PricingInitCommand, PricingResolveCommand,
+    PricingScopeArgs, PricingValidateCommand, resolve_server_config,
 };
 use crate::error::CliError;
 use crate::plugins::config_io::{PluginConfigDocument, TargetScope, target_path, validate_config};
@@ -165,7 +165,7 @@ struct ResolvedPricing {
 }
 
 fn pricing_catalog_sources_from_current_config() -> Result<Vec<PricingCatalogSource>, CliError> {
-    let resolved = resolve_server_config(&ServerArgs::default())?;
+    let resolved = resolve_server_config(&GatewayOverrides::default())?;
     let Some(plugin_config) = resolved.gateway.plugin_config else {
         return Ok(vec![]);
     };

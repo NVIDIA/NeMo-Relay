@@ -18,9 +18,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::configuration::{
-    MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, PluginsAddCommand, PluginsDisableCommand,
+    GatewayOverrides, MAX_BOOTSTRAP_IDENTITY_FILE_BYTES, PluginsAddCommand, PluginsDisableCommand,
     PluginsEnableCommand, PluginsInspectCommand, PluginsListCommand, PluginsRemoveCommand,
-    PluginsValidateCommand, ResolvedConfig, ResolvedDynamicPluginConfig, ServerArgs,
+    PluginsValidateCommand, ResolvedConfig, ResolvedDynamicPluginConfig,
     load_bounded_dynamic_plugin_manifest_bytes, read_bounded_regular_file, resolve_plugins_config,
 };
 use crate::error::{CliError, PluginLifecycleFailureKind};
@@ -76,13 +76,13 @@ pub(crate) fn test_python_environment_digest_calls() -> usize {
     self::environment::environment_tree_digest_calls()
 }
 
-pub(crate) fn add(command: PluginsAddCommand, server: &ServerArgs) -> Result<(), CliError> {
+pub(crate) fn add(command: PluginsAddCommand, server: &GatewayOverrides) -> Result<(), CliError> {
     add_with_environment_runner(command, server, &ProcessPythonEnvironmentCommandRunner)
 }
 
 fn add_with_environment_runner(
     command: PluginsAddCommand,
-    server: &ServerArgs,
+    server: &GatewayOverrides,
     environment_runner: &impl PythonEnvironmentCommandRunner,
 ) -> Result<(), CliError> {
     const COMMAND: &str = "plugins add";
@@ -247,7 +247,7 @@ pub(crate) fn enforce_required_dynamic_plugin_startup(
 
 pub(crate) fn validate(
     command: PluginsValidateCommand,
-    server: &ServerArgs,
+    server: &GatewayOverrides,
 ) -> Result<(), CliError> {
     match PluginTarget::parse(&command.target) {
         PluginTarget::Path(path) => {
@@ -350,7 +350,7 @@ pub(crate) fn validate(
     }
 }
 
-pub(crate) fn list(command: PluginsListCommand, server: &ServerArgs) -> Result<(), CliError> {
+pub(crate) fn list(command: PluginsListCommand, server: &GatewayOverrides) -> Result<(), CliError> {
     let resolved = resolve_plugins_config(server.config.as_ref())?;
     let host_config_by_id = host_config_by_id(&resolved);
     let scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
@@ -387,7 +387,10 @@ pub(crate) fn list(command: PluginsListCommand, server: &ServerArgs) -> Result<(
     Ok(())
 }
 
-pub(crate) fn inspect(command: PluginsInspectCommand, server: &ServerArgs) -> Result<(), CliError> {
+pub(crate) fn inspect(
+    command: PluginsInspectCommand,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
     let resolved = resolve_plugins_config(server.config.as_ref())?;
     let host_config_by_id = host_config_by_id(&resolved);
     let scopes = load_and_hydrate_scopes(server.config.as_ref(), &resolved)?;
@@ -417,15 +420,24 @@ pub(crate) fn inspect(command: PluginsInspectCommand, server: &ServerArgs) -> Re
     Ok(())
 }
 
-pub(crate) fn enable(command: PluginsEnableCommand, server: &ServerArgs) -> Result<(), CliError> {
+pub(crate) fn enable(
+    command: PluginsEnableCommand,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
     mutate_enabled_state(command.id, server, true)
 }
 
-pub(crate) fn disable(command: PluginsDisableCommand, server: &ServerArgs) -> Result<(), CliError> {
+pub(crate) fn disable(
+    command: PluginsDisableCommand,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
     mutate_enabled_state(command.id, server, false)
 }
 
-pub(crate) fn remove(command: PluginsRemoveCommand, server: &ServerArgs) -> Result<(), CliError> {
+pub(crate) fn remove(
+    command: PluginsRemoveCommand,
+    server: &GatewayOverrides,
+) -> Result<(), CliError> {
     let mut scopes = load_scoped_registries(server.config.as_ref())?;
     if find_record_by_id(&scopes, &command.id)?.is_none() {
         let resolved = resolve_plugins_config(server.config.as_ref())?;
@@ -1744,7 +1756,7 @@ fn active_dynamic_plugin_components_from_scopes(
 
 fn mutate_enabled_state(
     plugin_id: String,
-    server: &ServerArgs,
+    server: &GatewayOverrides,
     enabled: bool,
 ) -> Result<(), CliError> {
     let command = if enabled {

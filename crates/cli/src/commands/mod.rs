@@ -3,6 +3,7 @@
 
 //! Command parsing, dispatch, rendering, and exit-code ownership.
 
+pub(crate) mod arguments;
 mod completions;
 mod configuration;
 mod diagnostics;
@@ -17,9 +18,10 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::configuration::{Cli, CodingAgent, Command, ServerArgs};
+use self::arguments::{Cli, Command, ServerArgs};
 #[cfg(test)]
-use crate::configuration::{CompletionsCommand, PluginsCommand, PricingCommand};
+use self::arguments::{CompletionsCommand, PluginsCommand, PricingCommand};
+use crate::agents::CodingAgent;
 use crate::{
     configuration as runtime_configuration, diagnostics as runtime_diagnostics, error, server,
 };
@@ -83,6 +85,7 @@ fn generate_completions_to(
 }
 
 async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliError> {
+    let runtime_args = server_args.to_runtime();
     // Bare `nemo-relay` with no subcommand:
     // - If the user passed any daemon-specific flag (`--bind`, upstream URLs, ATIF dir,
     //   OpenInference endpoint), they obviously want the long-running gateway daemon —
@@ -91,14 +94,14 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     // - Otherwise — no flags, no subcommand — use the first-run path only when no config
     //   exists. Once configured, bare `nemo-relay` becomes a quick health check; explicit
     //   `nemo-relay config` remains the reconfiguration path.
-    if server_args.requested_daemon_mode() {
-        let resolved = runtime_configuration::resolve_server_config(server_args)?;
+    if runtime_args.requested_daemon_mode() {
+        let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
         let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
-            server_args.config.as_ref(),
+            runtime_args.config.as_ref(),
             &resolved,
         )?;
         let managed_bootstrap = runtime_configuration::managed_bootstrap_identity(
-            server_args,
+            &runtime_args,
             &resolved,
             &dynamic_plugins,
         )?;
@@ -106,7 +109,7 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
             resolved.gateway,
             dynamic_plugins,
             managed_bootstrap,
-            server_args.ready_file.as_deref(),
+            runtime_args.ready_file.as_deref(),
         )
         .await?;
         Ok(ExitCode::SUCCESS)

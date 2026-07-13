@@ -89,7 +89,7 @@ impl Drop for TransparentRunEnvironment {
 async fn transparent_mcp_requires_the_wrapper_gateway_url() {
     let _environment = TransparentRunEnvironment::without_gateway();
 
-    let error = run(&crate::configuration::ServerArgs::default())
+    let error = run(&crate::configuration::GatewayOverrides::default())
         .await
         .unwrap_err()
         .to_string();

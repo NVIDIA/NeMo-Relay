@@ -73,7 +73,7 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     })
     .await
     .expect("wrapper gateway did not become healthy");
-    let command = HookForwardCommand {
+    let command = HookForwardRequest {
         agent: CodingAgent::Codex,
         gateway_url: Some(gateway_url.clone()),
         generation_file: None,

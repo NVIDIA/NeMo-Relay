@@ -9,8 +9,9 @@ use std::{
 
 use super::*;
 use crate::configuration::{
-    PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand, PluginsInspectCommand,
-    PluginsListCommand, PluginsRemoveCommand, PluginsScopeArgs, PluginsValidateCommand, ServerArgs,
+    GatewayOverrides, PluginsAddCommand, PluginsDisableCommand, PluginsEnableCommand,
+    PluginsInspectCommand, PluginsListCommand, PluginsRemoveCommand, PluginsScopeArgs,
+    PluginsValidateCommand,
 };
 use crate::error::PluginLifecycleFailureKind;
 use base64::Engine;
@@ -622,7 +623,7 @@ fn tracked_native_plugin_example_satisfies_default_trust_policy() {
             },
             path: plugin_dir,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -652,7 +653,7 @@ fn tracked_native_plugin_example_rejects_tampered_artifact() {
             },
             path: plugin_dir,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
     )
     .unwrap_err();
 
@@ -1759,7 +1760,7 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
             },
             path: plugin_dir.clone(),
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -1798,7 +1799,7 @@ fn add_rejects_unreadable_declared_config_schema() {
             },
             path: plugin_dir,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -1829,7 +1830,7 @@ fn validate_path_rejects_invalid_declared_config_schema() {
             target: plugin_dir.to_string_lossy().into_owned(),
             json: false,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -1854,7 +1855,7 @@ fn validate_id_checks_resolved_host_config_against_declared_schema() {
             "properties": {"port": {"type": "integer"}}
         }),
     );
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
     add(
         PluginsAddCommand {
             scope: PluginsScopeArgs {
@@ -1900,7 +1901,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_python_dynamic_manifest(&plugin_dir, "  acme.python  ");
     let runner = FakePythonEnvironmentRunner::default();
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
 
     add_with_environment_runner(
         PluginsAddCommand {
@@ -2060,7 +2061,7 @@ fn add_rolls_back_python_environment_when_installation_fails() {
             },
             path: plugin_dir,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
         &runner,
     )
     .expect_err("pip failure should abort plugin registration");
@@ -2094,7 +2095,7 @@ fn enable_rejects_missing_managed_python_environment() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_python_dynamic_manifest(&plugin_dir, "acme.python-missing");
     let runner = FakePythonEnvironmentRunner::default();
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddCommand {
             scope: PluginsScopeArgs {
@@ -2153,7 +2154,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_python_dynamic_manifest(&plugin_dir, "acme.python-outside");
     let runner = FakePythonEnvironmentRunner::default();
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddCommand {
             scope: PluginsScopeArgs {
@@ -2235,7 +2236,7 @@ fn add_requires_manifest_root_for_python_workers() {
             },
             path: plugin_dir,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
         &runner,
     )
     .expect_err("Python plugins without manifest_root should fail");
@@ -2277,7 +2278,7 @@ fn add_rejects_python_entrypoint_module_that_is_not_integrity_checked_artifact()
             },
             path: plugin_dir,
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
         &runner,
     )
     .expect_err("an unsigned sibling module must not become the executed entrypoint");
@@ -2374,7 +2375,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_python_dynamic_manifest(&plugin_dir, "acme.python-retry");
     let runner = FakePythonEnvironmentRunner::default();
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddCommand {
             scope: PluginsScopeArgs {
@@ -2470,7 +2471,7 @@ fn active_dynamic_plugin_components_project_enabled_native_records_only() {
     let plugin_dir = temp.path().join("plugins").join("native");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_native_dynamic_manifest(&plugin_dir, "acme.native");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -2517,7 +2518,7 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
     let plugin_dir = temp.path().join("plugins").join("worker");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -2560,7 +2561,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
     let plugin_dir = temp.path().join("plugins").join("worker");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.worker");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -2622,7 +2623,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
             },
             path: plugin_dir.clone(),
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -2634,7 +2635,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
             },
             path: plugin_dir,
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2653,9 +2654,9 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
     let config_path = config_dir.join("gateway.toml");
     std::fs::write(&config_path, "").unwrap();
 
-    let server = ServerArgs {
+    let server = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     let error = add(
@@ -2700,7 +2701,7 @@ allowed = false
             },
             path: plugin_dir,
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap_err();
 
@@ -2774,7 +2775,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
             },
             path: plugin_dir,
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -2846,7 +2847,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
             },
             path: plugin_dir,
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -2895,7 +2896,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
             target: "missing.plugin".into(),
             json: false,
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2906,7 +2907,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
             id: "missing.plugin".into(),
             json: false,
         },
-        &crate::configuration::ServerArgs::default(),
+        &crate::configuration::GatewayOverrides::default(),
     )
     .unwrap_err()
     .to_string();
@@ -2915,7 +2916,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
     assert_eq!(
         list(
             PluginsListCommand::default(),
-            &crate::configuration::ServerArgs::default()
+            &crate::configuration::GatewayOverrides::default()
         )
         .unwrap(),
         ()
@@ -2930,7 +2931,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -3027,9 +3028,9 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
     let config_path = config_dir.join("gateway.toml");
     std::fs::write(&config_path, "").unwrap();
 
-    let server = ServerArgs {
+    let server = GatewayOverrides {
         config: Some(config_path),
-        ..ServerArgs::default()
+        ..GatewayOverrides::default()
     };
 
     add(
@@ -3144,7 +3145,7 @@ fn manually_configured_python_worker_cannot_enable_without_lifecycle_add() {
         PluginsEnableCommand {
             id: "acme.python-direct".into(),
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
     )
     .expect_err("manually configured Python workers must not activate");
     let (_, _, kind, code, message) = error
@@ -3251,7 +3252,7 @@ fn hydrate_persists_updated_policy_and_error_state() {
             },
             path: plugin_dir.clone(),
         },
-        &ServerArgs::default(),
+        &GatewayOverrides::default(),
     )
     .unwrap();
 
@@ -3516,7 +3517,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.enable-blocked");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -3597,7 +3598,7 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -3646,7 +3647,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.validate-blocked");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -3789,7 +3790,7 @@ fn add_can_revive_tombstoned_records() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.revive");
-    let server = crate::configuration::ServerArgs::default();
+    let server = crate::configuration::GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -3840,7 +3841,7 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.json");
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -3974,7 +3975,7 @@ fn remove_tolerates_unreadable_non_target_manifest_entries() {
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&broken_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.guardrail");
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -4101,7 +4102,7 @@ fn inspect_redacts_host_config_values() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.redacted");
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
 
     add(
         PluginsAddCommand {
@@ -4181,7 +4182,7 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.empty-config");
-    let server = ServerArgs::default();
+    let server = GatewayOverrides::default();
 
     add(
         PluginsAddCommand {

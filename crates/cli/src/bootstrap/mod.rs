@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::configuration::{ServerArgs, resolve_persistent_server_config};
+use crate::configuration::{GatewayOverrides, resolve_persistent_server_config};
 use crate::error::CliError;
 use crate::gateway::client::{
     self as gateway_client, RelayHealth, VerifiedHttpError, VerifiedHttpResponse, loopback_bind,
@@ -451,7 +451,7 @@ pub(crate) struct PluginGatewaySpec {
 }
 
 pub(crate) fn resolve_plugin_gateway(
-    server_args: &ServerArgs,
+    server_args: &GatewayOverrides,
     bind: SocketAddr,
 ) -> Result<PluginGatewaySpec, CliError> {
     let mut persistent_args = server_args.clone();

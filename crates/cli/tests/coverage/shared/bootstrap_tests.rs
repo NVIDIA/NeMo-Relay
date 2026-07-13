@@ -216,7 +216,7 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
         ("USERPROFILE", None),
     ]);
     let bind = DEFAULT_BIND.parse().unwrap();
-    let resolved = resolve_plugin_gateway(&ServerArgs::default(), bind).unwrap();
+    let resolved = resolve_plugin_gateway(&GatewayOverrides::default(), bind).unwrap();
 
     assert_eq!(resolved.gateway.bind(), bind);
     assert_eq!(
