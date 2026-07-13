@@ -154,10 +154,13 @@ pub struct TargetBinding {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProtocolDefaults {
     /// OpenAI Chat fallback target.
+    #[serde(default)]
     pub openai_chat: String,
     /// OpenAI Responses fallback target.
+    #[serde(default)]
     pub openai_responses: String,
     /// Anthropic Messages fallback target.
+    #[serde(default)]
     pub anthropic_messages: String,
 }
 
@@ -1276,7 +1279,7 @@ fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
             ));
         }
     }
-    for protocol in default_enabled_protocols() {
+    for &protocol in &config.enabled_inbound_profiles {
         let id = config.default_targets.target(protocol);
         let target = config
             .targets
