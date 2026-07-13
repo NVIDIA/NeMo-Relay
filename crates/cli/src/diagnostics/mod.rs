@@ -9,9 +9,11 @@
 //! - `DoctorReport` is the resulting pure data shape.
 //! - `format_human(&report)` / `format_json(&report)` render the report.
 
+mod environment;
 mod model;
 mod render;
 
+use environment::collect_environment;
 pub(crate) use model::*;
 use render::*;
 
@@ -103,29 +105,6 @@ pub(crate) async fn collect_report(
         observability: collect_observability(&resolved.gateway).await,
         completions: collect_completions(home.as_deref()),
     })
-}
-
-fn collect_environment() -> EnvironmentInfo {
-    EnvironmentInfo {
-        os: format!("{} {}", std::env::consts::OS, os_version()),
-        arch: std::env::consts::ARCH,
-        shell: std::env::var("SHELL").ok().and_then(|path| {
-            std::path::Path::new(&path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        }),
-    }
-}
-
-fn os_version() -> String {
-    // `uname -r` works on macOS/Linux; on Windows we just report the OS name with no detail.
-    if cfg!(windows) {
-        return String::new();
-    }
-    match std::process::Command::new("uname").arg("-r").output() {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        _ => String::new(),
-    }
 }
 
 fn collect_configuration(
