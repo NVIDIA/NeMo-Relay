@@ -2313,6 +2313,20 @@ fn tagged_list_items_use_list_metadata_instead_of_a_field_kind() {
 }
 
 #[test]
+fn collection_shortcuts_reset_to_defaults_and_clear_to_empty() {
+    let default = json!(["llm.chunk"]);
+
+    assert_eq!(
+        collection_shortcut_value(Some(&default), json!([]), MenuShortcut::Reset),
+        default
+    );
+    assert_eq!(
+        collection_shortcut_value(Some(&default), json!([]), MenuShortcut::Clear),
+        json!([])
+    );
+}
+
+#[test]
 fn target_path_resolves_project_and_global_without_user_env() {
     let _cwd = crate::test_support::CwdTestScope::locked();
     let cwd = std::env::current_dir().unwrap();

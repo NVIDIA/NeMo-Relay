@@ -830,11 +830,15 @@ where
         let item = field.list_item.ok_or_else(|| {
             CliError::Config(format!("{} does not describe its list entries", field.name))
         })?;
-        let mut items = current.unwrap_or_else(|| json!([]));
+        let default = section_field_default(section, *field);
+        let mut items = current
+            .or_else(|| default.clone())
+            .unwrap_or_else(|| json!([]));
         if edit_list_value(
             theme,
             &format!("{}.{}", section.name, field.name),
             &mut items,
+            default,
             item,
         )? {
             set_section_field(config, section, field.name, items)?;
@@ -842,11 +846,15 @@ where
         return Ok(());
     }
     if field.kind == EditorFieldKind::StringMap {
-        let mut entries = current.unwrap_or_else(|| json!({}));
+        let default = section_field_default(section, *field);
+        let mut entries = current
+            .or_else(|| default.clone())
+            .unwrap_or_else(|| json!({}));
         if edit_string_map_value(
             theme,
             &format!("{}.{}", section.name, field.name),
             &mut entries,
+            default,
         )? {
             set_section_field(config, section, field.name, entries)?;
         }
@@ -896,10 +904,11 @@ fn edit_list_value(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
+    default: Option<Value>,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<bool, CliError> {
     if !value.is_array() {
-        *value = json!([]);
+        *value = default.clone().unwrap_or_else(|| json!([]));
     }
     let original = value.clone();
     let mut selected_index = 0;
@@ -937,8 +946,8 @@ fn edit_list_value(
             }
             MenuResponse::Cancel | MenuResponse::Selected(_) => return Ok(*value != original),
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
-            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
-                *value = json!([])
+            MenuResponse::Shortcut(shortcut @ (MenuShortcut::Reset | MenuShortcut::Clear), _) => {
+                *value = collection_shortcut_value(default.as_ref(), json!([]), shortcut)
             }
             MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
                 println!("  Preview and save are available from the main plugins.toml menu.");
@@ -951,9 +960,10 @@ fn edit_string_map_value(
     theme: &ColorfulTheme,
     prompt: &str,
     value: &mut Value,
+    default: Option<Value>,
 ) -> Result<bool, CliError> {
     if !value.is_object() {
-        *value = json!({});
+        *value = default.clone().unwrap_or_else(|| json!({}));
     }
     let original = value.clone();
     let mut selected_index = 0;
@@ -996,8 +1006,8 @@ fn edit_string_map_value(
             }
             MenuResponse::Cancel | MenuResponse::Selected(_) => return Ok(*value != original),
             MenuResponse::Shortcut(MenuShortcut::Help, _) => print_editor_help(),
-            MenuResponse::Shortcut(MenuShortcut::Reset | MenuShortcut::Clear, _) => {
-                *value = json!({})
+            MenuResponse::Shortcut(shortcut @ (MenuShortcut::Reset | MenuShortcut::Clear), _) => {
+                *value = collection_shortcut_value(default.as_ref(), json!({}), shortcut)
             }
             MenuResponse::Shortcut(MenuShortcut::Preview | MenuShortcut::Save, _) => {
                 println!("  Preview and save are available from the main plugins.toml menu.");
@@ -1131,10 +1141,10 @@ fn edit_editor_item(
             let nested = item.list_item.ok_or_else(|| {
                 CliError::Config("nested list item has no entry description".into())
             })?;
-            let _ = edit_list_value(theme, prompt, value, nested)?;
+            let _ = edit_list_value(theme, prompt, value, None, nested)?;
         }
         EditorFieldKind::StringMap => {
-            let _ = edit_string_map_value(theme, prompt, value)?;
+            let _ = edit_string_map_value(theme, prompt, value, None)?;
         }
         kind => {
             let field = EditorFieldSpec {
@@ -1175,6 +1185,18 @@ fn tagged_union_discriminator(
         .flatten()
 }
 
+fn collection_shortcut_value(
+    default: Option<&Value>,
+    empty: Value,
+    shortcut: MenuShortcut,
+) -> Value {
+    match shortcut {
+        MenuShortcut::Reset => default.cloned().unwrap_or(empty),
+        MenuShortcut::Clear => empty,
+        _ => unreachable!("only reset and clear shortcuts are collection shortcuts"),
+    }
+}
+
 fn edit_config_field<T>(
     theme: &ColorfulTheme,
     config: &mut T,
@@ -1200,16 +1222,22 @@ where
         let item = field.list_item.ok_or_else(|| {
             CliError::Config(format!("{} does not describe its list entries", field.name))
         })?;
-        let mut items = config_field_value(config, field.name)?.unwrap_or_else(|| json!([]));
-        if edit_list_value(theme, field.name, &mut items, item)? {
+        let default = default_config_field_value::<T>(field).or_else(|| field.default_value());
+        let mut items = config_field_value(config, field.name)?
+            .or_else(|| default.clone())
+            .unwrap_or_else(|| json!([]));
+        if edit_list_value(theme, field.name, &mut items, default, item)? {
             set_struct_field(config, field.name, items)?;
         }
         return Ok(());
     }
 
     if field.kind == EditorFieldKind::StringMap {
-        let mut entries = config_field_value(config, field.name)?.unwrap_or_else(|| json!({}));
-        if edit_string_map_value(theme, field.name, &mut entries)? {
+        let default = default_config_field_value::<T>(field).or_else(|| field.default_value());
+        let mut entries = config_field_value(config, field.name)?
+            .or_else(|| default.clone())
+            .unwrap_or_else(|| json!({}));
+        if edit_string_map_value(theme, field.name, &mut entries, default)? {
             set_struct_field(config, field.name, entries)?;
         }
         return Ok(());
@@ -1451,16 +1479,33 @@ fn edit_value_field(
         let item = field.list_item.ok_or_else(|| {
             CliError::Config(format!("{} does not describe its list entries", field.name))
         })?;
-        let mut items = value_field_value(value, field.name).unwrap_or_else(|| json!([]));
-        if edit_list_value(theme, &format!("{prompt}.{}", field.name), &mut items, item)? {
+        let field_default = value_field_default(default, field);
+        let mut items = value_field_value(value, field.name)
+            .or_else(|| field_default.clone())
+            .unwrap_or_else(|| json!([]));
+        if edit_list_value(
+            theme,
+            &format!("{prompt}.{}", field.name),
+            &mut items,
+            field_default,
+            item,
+        )? {
             set_value_field(value, field.name, items);
         }
         return Ok(());
     }
 
     if field.kind == EditorFieldKind::StringMap {
-        let mut entries = value_field_value(value, field.name).unwrap_or_else(|| json!({}));
-        if edit_string_map_value(theme, &format!("{prompt}.{}", field.name), &mut entries)? {
+        let field_default = value_field_default(default, field);
+        let mut entries = value_field_value(value, field.name)
+            .or_else(|| field_default.clone())
+            .unwrap_or_else(|| json!({}));
+        if edit_string_map_value(
+            theme,
+            &format!("{prompt}.{}", field.name),
+            &mut entries,
+            field_default,
+        )? {
             set_value_field(value, field.name, entries);
         }
         return Ok(());
