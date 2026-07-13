@@ -1880,7 +1880,8 @@ fn plugin_launch_carries_effective_hook_limit_below_and_above_default() {
             format!("[gateway]\nmax_hook_payload_bytes = {limit}\n"),
         )
         .unwrap();
-        let launch = crate::sidecar::resolve_plugin_gateway(&ServerArgs::default(), bind).unwrap();
+        let launch =
+            crate::bootstrap::resolve_plugin_gateway(&ServerArgs::default(), bind).unwrap();
         assert_eq!(launch.max_hook_payload_bytes, limit);
     }
 }

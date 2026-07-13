@@ -299,7 +299,7 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
         loop {
             let probe_url = url.clone();
             if tokio::task::spawn_blocking(move || {
-                crate::sidecar::healthz_compatible(&probe_url, fingerprint)
+                crate::gateway::client::healthz_compatible(&probe_url, fingerprint)
             })
             .await
             .unwrap()
@@ -326,7 +326,7 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
                 let observed_tx = observed_tx.clone();
                 async move {
                     let healthy = tokio::task::spawn_blocking(move || {
-                        crate::sidecar::healthz_compatible(&url, fingerprint)
+                        crate::gateway::client::healthz_compatible(&url, fingerprint)
                     })
                     .await
                     .map_err(|error| {
@@ -347,7 +347,7 @@ async fn heartbeat_keeps_a_compatible_gateway_session_alive() {
             move |address, _expected_instance| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://unexpected-restart".into(),
                         instance_id: "unexpected".into(),
@@ -401,7 +401,7 @@ async fn borrowed_transparent_gateway_is_authenticated_and_monitored() {
             let probe_url = url.clone();
             let probe_fingerprint = fingerprint.clone();
             if tokio::task::spawn_blocking(move || {
-                crate::sidecar::healthz_compatible(&probe_url, &probe_fingerprint)
+                crate::gateway::client::healthz_compatible(&probe_url, &probe_fingerprint)
             })
             .await
             .unwrap()
@@ -464,7 +464,7 @@ async fn heartbeat_performs_one_restart_and_tracks_the_recovered_gateway() {
                 let restart_calls = restart_calls.clone();
                 async move {
                     restart_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://recovered-gateway".into(),
                         instance_id: "recovered".into(),
@@ -518,7 +518,7 @@ async fn heartbeat_ignores_isolated_transient_health_failures() {
             move |address, _expected_instance| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://gateway".into(),
                         instance_id: "gateway".into(),
@@ -553,7 +553,7 @@ async fn heartbeat_rediscovery_consumes_the_shared_restart_allowance() {
                 let restart_calls = restart_calls.clone();
                 async move {
                     let attempt = restart_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://gateway".into(),
                         instance_id: format!("gateway-{attempt}"),
@@ -600,7 +600,7 @@ async fn heartbeat_attempts_at_most_one_successful_restart() {
                 let restart_calls = restart_calls.clone();
                 async move {
                     restart_calls.fetch_add(1, Ordering::SeqCst);
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://still-unhealthy".into(),
                         instance_id: "still-unhealthy".into(),
@@ -654,7 +654,7 @@ async fn old_mcp_maintenance_loop_exits_when_install_generation_is_replaced() {
             move |address, _expected_instance| {
                 restart_calls.fetch_add(1, Ordering::SeqCst);
                 async move {
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://unexpected-restart".into(),
                         instance_id: "unexpected".into(),
@@ -764,7 +764,7 @@ fn persistent_mcp_server_contract_is_host_neutral_and_generation_fenced() {
     assert_eq!(server["args"], json!(["mcp"]));
     assert_eq!(
         server["env"]["NEMO_RELAY_GATEWAY_BIND"],
-        crate::sidecar::DEFAULT_BIND
+        crate::bootstrap::DEFAULT_BIND
     );
     assert_eq!(
         server["env"]["NEMO_RELAY_MCP_GENERATION_FILE"],

@@ -377,7 +377,7 @@ async fn healthz_returns_ok() {
     assert_eq!(body["version"], json!(env!("CARGO_PKG_VERSION")));
     assert_eq!(
         body["bootstrap_protocol"],
-        json!(crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION)
+        json!(crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION)
     );
     assert!(
         body["instance_id"]
@@ -576,7 +576,7 @@ fn readiness_file_is_published_atomically_with_gateway_identity() {
     assert_eq!(ready["version"], json!(env!("CARGO_PKG_VERSION")));
     assert_eq!(
         ready["bootstrap_protocol"],
-        json!(crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION)
+        json!(crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION)
     );
     assert_eq!(ready["instance_id"], json!("test-instance"));
     assert!(!path.with_extension("json.tmp").exists());

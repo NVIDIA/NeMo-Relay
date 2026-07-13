@@ -34,7 +34,7 @@ use shared::{current_exe, healthz, print_check, print_info};
 use crate::configuration::CodingAgent;
 
 #[cfg(test)]
-pub(super) use crate::sidecar::DEFAULT_URL;
+pub(super) use crate::bootstrap::DEFAULT_URL;
 
 pub(crate) fn install_codex_plugin_with_generation(
     gateway_url: &str,
@@ -50,7 +50,7 @@ pub(crate) fn install_codex_plugin_with_generation(
 }
 
 pub(crate) fn stop_plugin_gateway() -> Result<(), String> {
-    crate::sidecar::stop_owned_sidecar_and_reset(crate::sidecar::DEFAULT_URL)
+    crate::bootstrap::state::stop_owned_and_reset(crate::bootstrap::DEFAULT_URL)
 }
 
 pub(crate) fn uninstall_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Result<(), String> {
@@ -209,9 +209,9 @@ fn doctor_ok(
 }
 
 #[cfg(test)]
-use crate::hooks::generated_hooks;
+use crate::bootstrap::*;
 #[cfg(test)]
-use crate::sidecar::*;
+use crate::hooks::generated_hooks;
 #[cfg(test)]
 use claude::*;
 #[cfg(test)]

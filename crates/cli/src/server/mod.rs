@@ -251,7 +251,7 @@ async fn serve_listener_with_dynamic_inner(
         identity.verify_current()?;
     }
     let _owner =
-        crate::sidecar::publish_sidecar_owner_from_env(local_address).map_err(CliError::Launch)?;
+        crate::bootstrap::state::publish_owner_from_env(local_address).map_err(CliError::Launch)?;
     if let Some(path) = ready_file {
         write_ready_file(path, local_address, &instance_id)?;
     }
@@ -520,7 +520,7 @@ async fn healthz(State(state): State<AppState>, headers: HeaderMap) -> Response 
             "status": if compatible { "ok" } else { "incompatible" },
             "service": "nemo-relay",
             "version": env!("CARGO_PKG_VERSION"),
-            "bootstrap_protocol": crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION,
+            "bootstrap_protocol": crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION,
             "instance_id": state.instance_id,
         })),
     )
@@ -532,7 +532,7 @@ fn write_ready_file(path: &Path, bind: SocketAddr, instance_id: &str) -> Result<
         "address": bind,
         "service": "nemo-relay",
         "version": env!("CARGO_PKG_VERSION"),
-        "bootstrap_protocol": crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION,
+        "bootstrap_protocol": crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION,
         "instance_id": instance_id,
     }))
     .map_err(|error| CliError::Launch(format!("failed to encode readiness file: {error}")))?;

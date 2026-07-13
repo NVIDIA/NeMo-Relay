@@ -66,7 +66,7 @@ pub(crate) fn persistent_server(
         "command": relay,
         "args": LAUNCH_ARGS,
         "env": {
-            "NEMO_RELAY_GATEWAY_BIND": crate::sidecar::DEFAULT_BIND,
+            "NEMO_RELAY_GATEWAY_BIND": crate::bootstrap::DEFAULT_BIND,
             (GENERATION_FILE_ENV): generation_file,
             (GENERATION_TOKEN_ENV): generation_token
         }
@@ -81,7 +81,7 @@ fn transparent_run_active() -> bool {
 }
 
 fn default_mcp_bind() -> SocketAddr {
-    crate::sidecar::DEFAULT_BIND
+    crate::bootstrap::DEFAULT_BIND
         .parse()
         .expect("default MCP gateway bind is valid")
 }

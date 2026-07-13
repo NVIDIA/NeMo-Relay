@@ -23,6 +23,7 @@ use super::files::{
     acquire_install_lock, read_optional_utf8, remove_optional_file, replace_optional_file,
 };
 use super::trust::{json_bytes, parse_json_object, trusted_hooks, verify_trust};
+use crate::bootstrap::DEFAULT_BIND;
 use crate::configuration::CodingAgent;
 use crate::error::CliError;
 use crate::filesystem::atomic_write;
@@ -31,7 +32,6 @@ use crate::installation::generation::GENERATION_FILE_NAME;
 use crate::installation::generation::{
     GENERATION_FILE_ENV, GENERATION_TOKEN_ENV, GenerationRetirement, InstallGeneration,
 };
-use crate::sidecar::DEFAULT_BIND;
 
 /// Hermes host configuration is user-owned even when Relay itself uses project configuration.
 /// Project-specific Relay behavior remains available through transparent `nemo-relay run`.

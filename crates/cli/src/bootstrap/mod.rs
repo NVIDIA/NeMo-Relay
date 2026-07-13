@@ -3,9 +3,7 @@
 
 //! Thin bootstrap coordinator for the existing Relay gateway server.
 
-mod health;
-mod process;
-mod state;
+pub(crate) mod state;
 
 use std::env;
 use std::ffi::OsString;
@@ -21,32 +19,28 @@ use serde::Deserialize;
 
 use crate::configuration::{ServerArgs, resolve_persistent_server_config};
 use crate::error::CliError;
-use health::{RelayHealth, probe_with_instance as probe_relay_health_with_instance};
-pub(crate) use health::{
-    VerifiedHttpError, VerifiedHttpResponse, authenticated_instance_id, healthz,
-    healthz_compatible, loopback_bind,
+use crate::gateway::client::{
+    self as gateway_client, RelayHealth, VerifiedHttpError, VerifiedHttpResponse, loopback_bind,
+    probe_with_instance as probe_relay_health_with_instance,
 };
+use crate::process::detached;
 #[cfg(test)]
-pub(crate) use process::{
+pub(crate) use detached::{
     WINDOWS_CREATE_BREAKAWAY_FROM_JOB, WINDOWS_CREATE_NEW_PROCESS_GROUP, WINDOWS_CREATE_NO_WINDOW,
     WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK, WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
-    windows_creation_flags as windows_sidecar_creation_flags,
+    windows_creation_flags as windows_detached_creation_flags,
 };
-pub(crate) use state::BOOTSTRAP_STATE_DIR_ENV;
 #[cfg(test)]
-pub(crate) use state::lock_name as sidecar_lock_name;
-pub(crate) use state::{
-    publish_owner_from_env as publish_sidecar_owner_from_env, state_dir as sidecar_state_dir,
-    stop_owned_and_reset as stop_owned_sidecar_and_reset,
-};
+pub(crate) use state::lock_name as bootstrap_lock_name;
+use state::{BOOTSTRAP_STATE_DIR_ENV, state_dir as bootstrap_state_dir};
 
 pub(crate) const DEFAULT_BIND: &str = "127.0.0.1:47632";
 pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:47632";
 pub(crate) const HEALTHZ_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const BOOTSTRAP_PROTOCOL_VERSION: u64 = 2;
 
-pub(super) const SIDECAR_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
-const SIDECAR_START_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const BOOTSTRAP_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
+const BOOTSTRAP_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GatewayEndpoint {
@@ -104,7 +98,7 @@ impl GatewaySpec {
     }
 
     pub(crate) fn healthy_instance(&self, url: &str) -> Option<String> {
-        health::compatible_instance_id(url, self.bootstrap_fingerprint.as_deref())
+        gateway_client::compatible_instance_id(url, self.bootstrap_fingerprint.as_deref())
     }
 
     pub(crate) fn existing_healthy_instance(&self, url: &str) -> Result<Option<String>, String> {
@@ -128,7 +122,7 @@ impl GatewaySpec {
         let Some(fingerprint) = self.bootstrap_fingerprint.as_deref() else {
             return Err(VerifiedHttpError::missing_fingerprint());
         };
-        health::post_verified(
+        gateway_client::post_verified(
             url,
             fingerprint,
             path,
@@ -161,7 +155,7 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
         }
     }
 
-    let state = sidecar_state_dir()?;
+    let state = bootstrap_state_dir()?;
     state::create_private_dir(&state)?;
     let _startup_lock = state::lock_endpoint(&state, &url)?;
     if spec.bind.port() == 0 {
@@ -177,7 +171,7 @@ fn acquire_gateway(spec: &GatewaySpec) -> Result<GatewayEndpoint, String> {
 
 fn recover_gateway(spec: &GatewaySpec, expected_instance: &str) -> Result<GatewayEndpoint, String> {
     let requested_url = format!("http://{}", spec.bind);
-    let state = sidecar_state_dir()?;
+    let state = bootstrap_state_dir()?;
     state::create_private_dir(&state)?;
     let _startup_lock = state::lock_endpoint(&state, &requested_url)?;
 
@@ -302,11 +296,11 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
             command.current_dir(config_dir);
         }
     }
-    process::configure_detached(&mut command);
-    let child = process::spawn_detached(&mut command)
+    detached::configure_detached(&mut command);
+    let child = detached::spawn_detached(&mut command)
         .map_err(|error| format!("failed to spawn nemo-relay gateway: {error}"))?;
     let mut child = ArmedChild::new(child);
-    let deadline = Instant::now() + SIDECAR_START_TIMEOUT;
+    let deadline = Instant::now() + BOOTSTRAP_START_TIMEOUT;
     while Instant::now() < deadline {
         if let Some(endpoint) = read_ready_file(&ready_path)?
             && (endpoint.address == spec.bind
@@ -360,7 +354,7 @@ fn hand_off_to_reaper(child: Child) -> Result<(), String> {
                 })
                 .map(|_| ())
         },
-        process::terminate_tree,
+        detached::terminate_tree,
     )
 }
 
@@ -402,7 +396,7 @@ impl ArmedChild {
 impl Drop for ArmedChild {
     fn drop(&mut self) {
         if let Some(mut child) = self.0.take() {
-            process::terminate_tree(&mut child);
+            detached::terminate_tree(&mut child);
         }
     }
 }
@@ -532,5 +526,5 @@ pub(crate) fn plugin_heartbeat_interval() -> Result<Duration, String> {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/shared/sidecar_tests.rs"]
+#[path = "../../tests/coverage/shared/bootstrap_tests.rs"]
 mod tests;

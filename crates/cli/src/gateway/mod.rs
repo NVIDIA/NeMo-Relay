@@ -1285,6 +1285,7 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
     )
 }
 
+pub(crate) mod client;
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/gateway_tests.rs"]
 mod tests;

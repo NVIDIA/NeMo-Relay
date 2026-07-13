@@ -272,14 +272,14 @@ fn binary_override_is_explicit_and_validated() {
 #[test]
 fn windows_detachment_requests_only_supported_breakaway_flags() {
     let base = WINDOWS_CREATE_NEW_PROCESS_GROUP | WINDOWS_CREATE_NO_WINDOW;
-    assert_eq!(windows_sidecar_creation_flags(false, None), (base, false));
+    assert_eq!(windows_detached_creation_flags(false, None), (base, false));
     assert_eq!(
-        windows_sidecar_creation_flags(true, Some(WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK)),
+        windows_detached_creation_flags(true, Some(WINDOWS_JOB_OBJECT_LIMIT_BREAKAWAY_OK)),
         (base | WINDOWS_CREATE_BREAKAWAY_FROM_JOB, false)
     );
     assert_eq!(
-        windows_sidecar_creation_flags(true, Some(WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)),
+        windows_detached_creation_flags(true, Some(WINDOWS_JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK)),
         (base, false)
     );
-    assert_eq!(windows_sidecar_creation_flags(true, Some(0)), (base, true));
+    assert_eq!(windows_detached_creation_flags(true, Some(0)), (base, true));
 }

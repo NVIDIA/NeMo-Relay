@@ -10,12 +10,13 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table};
 
+pub(super) use crate::bootstrap::current_exe;
 pub(super) use crate::filesystem::{
     atomic_write, atomic_write_private, atomic_write_with_permissions,
 };
 #[cfg(windows)]
 use crate::filesystem::{atomic_write_with_windows_dacl, read_windows_dacl};
-pub(super) use crate::sidecar::{current_exe, healthz};
+pub(super) use crate::gateway::client::healthz;
 
 pub(crate) fn shell_quote(path: &Path) -> String {
     shell_quote_for_platform(path, cfg!(windows))

@@ -203,7 +203,7 @@ pub(super) fn owned_install_command(
     let env = server.get("env").and_then(Value::as_object);
     if server.get("args") == Some(&json!(["mcp"]))
         && env.and_then(|env| env.get("NEMO_RELAY_GATEWAY_BIND"))
-            == Some(&json!(crate::sidecar::DEFAULT_BIND))
+            == Some(&json!(crate::bootstrap::DEFAULT_BIND))
     {
         let generation = env
             .and_then(|env| env.get(crate::installation::generation::GENERATION_FILE_ENV))

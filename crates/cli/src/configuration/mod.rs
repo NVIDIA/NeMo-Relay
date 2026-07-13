@@ -877,11 +877,11 @@ fn persistent_bootstrap_fingerprint(
         .map(dynamic_plugin_bootstrap_identity)
         .collect::<Result<Vec<_>, _>>()?;
     let gateway = &resolved.gateway;
-    let idle_timeout_secs = crate::sidecar::plugin_idle_timeout()
+    let idle_timeout_secs = crate::bootstrap::plugin_idle_timeout()
         .map_err(CliError::Config)?
         .as_secs();
     let document = serde_json::json!({
-        "bootstrap_protocol": crate::sidecar::BOOTSTRAP_PROTOCOL_VERSION,
+        "bootstrap_protocol": crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION,
         "relay_version": env!("CARGO_PKG_VERSION"),
         "openai_base_url": gateway.openai_base_url,
         "anthropic_base_url": gateway.anthropic_base_url,

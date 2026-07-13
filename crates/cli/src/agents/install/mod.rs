@@ -46,7 +46,7 @@ use state::{
     remove_path, state_path, write_state, write_state_for_host,
 };
 
-pub(super) use crate::sidecar::DEFAULT_URL as DEFAULT_GATEWAY_URL;
+pub(super) use crate::bootstrap::DEFAULT_URL as DEFAULT_GATEWAY_URL;
 pub(super) const MARKETPLACE_NAME: &str = "nemo-relay-local";
 pub(super) const PLUGIN_NAME: &str = "nemo-relay-plugin";
 pub(super) const RELAY_COMMAND: &str = "nemo-relay";

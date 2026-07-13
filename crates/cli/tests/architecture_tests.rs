@@ -36,6 +36,8 @@ fn retired_top_level_agent_modules_do_not_return() {
         "plugin_install",
         "hermes.rs",
         "coding_agent.rs",
+        "sidecar",
+        "sidecar.rs",
     ] {
         assert!(!src.join(path).exists(), "retired module returned: {path}");
     }

@@ -189,13 +189,13 @@ fn resolve_hook_destination(
         return HookDestination {
             gateway_url: command_url
                 .or(environment_url)
-                .unwrap_or_else(|| crate::sidecar::DEFAULT_URL.into()),
+                .unwrap_or_else(|| crate::bootstrap::DEFAULT_URL.into()),
             lifecycle: HookGatewayLifecycle::Transparent,
         };
     }
     if forward_only {
         return HookDestination {
-            gateway_url: command_url.unwrap_or_else(|| crate::sidecar::DEFAULT_URL.into()),
+            gateway_url: command_url.unwrap_or_else(|| crate::bootstrap::DEFAULT_URL.into()),
             lifecycle: HookGatewayLifecycle::Existing,
         };
     }
@@ -212,13 +212,13 @@ fn resolve_hook_destination(
         };
     }
     HookDestination {
-        gateway_url: crate::sidecar::DEFAULT_URL.into(),
+        gateway_url: crate::bootstrap::DEFAULT_URL.into(),
         lifecycle: HookGatewayLifecycle::Existing,
     }
 }
 
 async fn wait_for_existing_gateway(
-    gateway: crate::sidecar::GatewaySpec,
+    gateway: crate::bootstrap::GatewaySpec,
     gateway_url: String,
 ) -> Result<(), CliError> {
     tokio::task::spawn_blocking(move || {
@@ -243,25 +243,27 @@ async fn wait_for_existing_gateway(
     .map_err(CliError::Launch)
 }
 
-fn recovery_plan(gateway_url: &str) -> Result<crate::sidecar::PluginGatewaySpec, CliError> {
-    let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
-    crate::sidecar::resolve_plugin_gateway(&Default::default(), bind)
+fn recovery_plan(gateway_url: &str) -> Result<crate::bootstrap::PluginGatewaySpec, CliError> {
+    let bind = crate::gateway::client::loopback_bind(gateway_url).map_err(CliError::Install)?;
+    crate::bootstrap::resolve_plugin_gateway(&Default::default(), bind)
 }
 
-fn transparent_gateway_spec(gateway_url: &str) -> Result<crate::sidecar::GatewaySpec, CliError> {
-    let bind = crate::sidecar::loopback_bind(gateway_url).map_err(CliError::Install)?;
-    Ok(crate::sidecar::GatewaySpec::new(bind).with_fingerprint(
+fn transparent_gateway_spec(gateway_url: &str) -> Result<crate::bootstrap::GatewaySpec, CliError> {
+    let bind = crate::gateway::client::loopback_bind(gateway_url).map_err(CliError::Install)?;
+    Ok(crate::bootstrap::GatewaySpec::new(bind).with_fingerprint(
         crate::configuration::transparent_gateway_fingerprint(gateway_url),
     ))
 }
 
 async fn send_verified_hook_forward_request(
     command: &HookForwardCommand,
-    gateway: &crate::sidecar::GatewaySpec,
+    gateway: &crate::bootstrap::GatewaySpec,
     gateway_url: &str,
     input: String,
-) -> Result<Result<crate::sidecar::VerifiedHttpResponse, crate::sidecar::VerifiedHttpError>, CliError>
-{
+) -> Result<
+    Result<crate::gateway::client::VerifiedHttpResponse, crate::gateway::client::VerifiedHttpError>,
+    CliError,
+> {
     let headers = gateway_headers(
         command.profile.as_deref(),
         command.session_metadata.as_deref(),
@@ -351,7 +353,10 @@ async fn handle_hook_forward_response(
 }
 
 fn handle_verified_hook_forward_response(
-    response: Result<crate::sidecar::VerifiedHttpResponse, crate::sidecar::VerifiedHttpError>,
+    response: Result<
+        crate::gateway::client::VerifiedHttpResponse,
+        crate::gateway::client::VerifiedHttpError,
+    >,
     fail_closed: bool,
 ) -> Result<(), CliError> {
     match response {
@@ -515,7 +520,7 @@ fn persistent_hook_arguments(
         "hook-forward".into(),
         agent.as_arg().into(),
         "--gateway-url".into(),
-        crate::sidecar::DEFAULT_URL.into(),
+        crate::bootstrap::DEFAULT_URL.into(),
         "--generation-file".into(),
         generation_file.display().to_string(),
         "--generation-token".into(),

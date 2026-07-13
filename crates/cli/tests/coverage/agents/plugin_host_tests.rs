@@ -3432,7 +3432,7 @@ fn shared_defaults_cover_idle_lifecycle_and_lock_names() {
         plugin_heartbeat_interval().unwrap(),
         Duration::from_secs(30)
     );
-    assert_eq!(sidecar_lock_name(""), "unknown");
+    assert_eq!(bootstrap_lock_name(""), "unknown");
 }
 
 #[test]

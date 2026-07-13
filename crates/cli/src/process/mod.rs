@@ -3,6 +3,7 @@
 
 //! Shared coding-agent command parsing, discovery, and process construction.
 
+pub(crate) mod detached;
 pub(crate) mod launcher;
 
 use std::ffi::{OsStr, OsString};

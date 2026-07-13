@@ -40,7 +40,7 @@ impl EnvScope {
 
     fn without_managed_bootstrap() -> Self {
         Self::set(&[
-            (crate::sidecar::BOOTSTRAP_STATE_DIR_ENV, None),
+            (crate::bootstrap::state::BOOTSTRAP_STATE_DIR_ENV, None),
             ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
             (crate::configuration::BOOTSTRAP_FINGERPRINT_ENV, None),
         ])

@@ -5,6 +5,7 @@
 
 mod agents;
 mod banner;
+mod bootstrap;
 mod commands;
 mod completions_install;
 mod configuration;
@@ -22,7 +23,6 @@ mod process;
 mod server;
 mod sessions;
 mod setup;
-mod sidecar;
 
 #[cfg(test)]
 #[path = "../tests/coverage/shared/hook_assertions.rs"]

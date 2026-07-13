@@ -61,7 +61,7 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
             let url = gateway_url.clone();
             let fingerprint = fingerprint.clone();
             if tokio::task::spawn_blocking(move || {
-                crate::sidecar::healthz_compatible(&url, &fingerprint)
+                crate::gateway::client::healthz_compatible(&url, &fingerprint)
             })
             .await
             .unwrap()
@@ -170,7 +170,7 @@ fn explicit_persistent_destinations_ignore_ambient_urls() {
     assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
 
     let destination = resolve_hook_destination(None, Some("http://dynamic".into()), true, false);
-    assert_eq!(destination.gateway_url, crate::sidecar::DEFAULT_URL);
+    assert_eq!(destination.gateway_url, crate::bootstrap::DEFAULT_URL);
     assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
 
     let destination = resolve_hook_destination(Some("http://embedded".into()), None, false, true);
@@ -178,14 +178,14 @@ fn explicit_persistent_destinations_ignore_ambient_urls() {
     assert_eq!(destination.lifecycle, HookGatewayLifecycle::Transparent);
 
     let destination = resolve_hook_destination(None, None, false, false);
-    assert_eq!(destination.gateway_url, crate::sidecar::DEFAULT_URL);
+    assert_eq!(destination.gateway_url, crate::bootstrap::DEFAULT_URL);
     assert_eq!(destination.lifecycle, HookGatewayLifecycle::Existing);
 }
 
 #[test]
 fn verified_hook_response_rejects_invalid_status_and_fail_open_http_errors() {
     let error = handle_verified_hook_forward_response(
-        Ok(crate::sidecar::VerifiedHttpResponse {
+        Ok(crate::gateway::client::VerifiedHttpResponse {
             status: 0,
             body: Vec::new(),
         }),
@@ -474,14 +474,14 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
         claude["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(format!(
             "nemo-relay hook-forward claude --gateway-url {} --forward-only",
-            crate::sidecar::DEFAULT_URL
+            crate::bootstrap::DEFAULT_URL
         ))
     );
     assert_eq!(
         codex["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(format!(
             "nemo-relay hook-forward codex --gateway-url {} --forward-only",
-            crate::sidecar::DEFAULT_URL
+            crate::bootstrap::DEFAULT_URL
         ))
     );
     assert_eq!(
@@ -490,7 +490,7 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
             CodingAgent::ClaudeCode,
             &format!(
                 "nemo-relay hook-forward claude --gateway-url {} --forward-only",
-                crate::sidecar::DEFAULT_URL
+                crate::bootstrap::DEFAULT_URL
             ),
         )["hooks"]
     );
@@ -500,7 +500,7 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
             CodingAgent::Codex,
             &format!(
                 "nemo-relay hook-forward codex --gateway-url {} --forward-only",
-                crate::sidecar::DEFAULT_URL
+                crate::bootstrap::DEFAULT_URL
             ),
         )["hooks"]
     );

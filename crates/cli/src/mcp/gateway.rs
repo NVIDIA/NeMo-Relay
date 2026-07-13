@@ -6,10 +6,10 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use crate::bootstrap::{GatewayEndpoint, GatewaySpec};
 use crate::configuration::ServerArgs;
 use crate::error::CliError;
 use crate::installation::generation::{ActiveGenerationGuard, InstallGeneration};
-use crate::sidecar::{GatewayEndpoint, GatewaySpec};
 
 const UNHEALTHY_CONFIRMATIONS: u8 = 3;
 const UNHEALTHY_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(50);
@@ -34,9 +34,9 @@ impl GatewayPlan {
             .map(|(generation, guard)| (Some(generation), Some(guard)))
             .unwrap_or((None, None));
         let bind = server_args.bind.unwrap_or_else(super::default_mcp_bind);
-        let launch = crate::sidecar::resolve_plugin_gateway(server_args, bind)?;
+        let launch = crate::bootstrap::resolve_plugin_gateway(server_args, bind)?;
         let heartbeat_interval =
-            crate::sidecar::plugin_heartbeat_interval().map_err(CliError::Launch)?;
+            crate::bootstrap::plugin_heartbeat_interval().map_err(CliError::Launch)?;
         Ok(Self {
             spec: launch.gateway,
             heartbeat_interval,
@@ -51,7 +51,7 @@ impl GatewayPlan {
         Ok(GatewayLease { monitor })
     }
 
-    async fn monitor(self, endpoint: crate::sidecar::GatewayEndpoint) -> Result<(), CliError> {
+    async fn monitor(self, endpoint: crate::bootstrap::GatewayEndpoint) -> Result<(), CliError> {
         let health_spec = self.spec.clone();
         let restart_spec = self.spec.clone();
         let restart_generation = self.generation.clone();
@@ -162,7 +162,7 @@ async fn authenticated_instance_id(
     bootstrap_fingerprint: String,
 ) -> Result<Option<String>, CliError> {
     tokio::task::spawn_blocking(move || {
-        crate::sidecar::authenticated_instance_id(&gateway_url, &bootstrap_fingerprint)
+        crate::gateway::client::authenticated_instance_id(&gateway_url, &bootstrap_fingerprint)
     })
     .await
     .map_err(|error| {
@@ -275,7 +275,7 @@ where
 {
     maintain_gateway_instances_with_generation(
         bind,
-        crate::sidecar::GatewayEndpoint {
+        crate::bootstrap::GatewayEndpoint {
             address: bind,
             url: gateway_url,
             instance_id: "test-initial-instance".into(),
@@ -297,7 +297,7 @@ where
 
 async fn maintain_gateway_instances_with_generation<H, HFuture, R, RFuture, G, GFuture>(
     bind: SocketAddr,
-    mut endpoint: crate::sidecar::GatewayEndpoint,
+    mut endpoint: crate::bootstrap::GatewayEndpoint,
     heartbeat_interval: Duration,
     mut healthy: H,
     mut restart: R,

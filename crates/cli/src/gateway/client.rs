@@ -13,10 +13,10 @@ use serde_json::Value;
 
 use crate::configuration::BootstrapChallengeKey;
 
-use super::{BOOTSTRAP_PROTOCOL_VERSION, HEALTHZ_TIMEOUT};
+use crate::bootstrap::{BOOTSTRAP_PROTOCOL_VERSION, HEALTHZ_TIMEOUT};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RelayHealth {
+pub(crate) enum RelayHealth {
     Compatible,
     Incompatible,
     Foreign,
@@ -47,7 +47,7 @@ impl VerifiedHttpError {
         }
     }
 
-    pub(super) fn missing_fingerprint() -> Self {
+    pub(crate) fn missing_fingerprint() -> Self {
         Self::after_payload("managed Relay gateway is missing its bootstrap fingerprint")
     }
 }
@@ -205,11 +205,11 @@ pub(crate) fn authenticated_instance_id(url: &str, bootstrap_fingerprint: &str) 
     compatible_instance_id(url, Some(bootstrap_fingerprint))
 }
 
-pub(super) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHealth {
+pub(crate) fn probe(url: &str, bootstrap_fingerprint: Option<&str>) -> RelayHealth {
     probe_with_instance(url, bootstrap_fingerprint).0
 }
 
-pub(super) fn compatible_instance_id(
+pub(crate) fn compatible_instance_id(
     url: &str,
     bootstrap_fingerprint: Option<&str>,
 ) -> Option<String> {
@@ -219,7 +219,7 @@ pub(super) fn compatible_instance_id(
         .flatten()
 }
 
-pub(super) fn probe_with_instance(
+pub(crate) fn probe_with_instance(
     url: &str,
     bootstrap_fingerprint: Option<&str>,
 ) -> (RelayHealth, Option<String>) {
@@ -288,7 +288,7 @@ pub(super) fn probe_with_instance(
     )
 }
 
-pub(super) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {
+pub(crate) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {
     let (host, port) = parse_loopback_url(url)?;
     let address = (host.as_str(), port)
         .to_socket_addrs()
@@ -517,5 +517,5 @@ pub(crate) fn loopback_authority(host: &str, port: u16) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/shared/sidecar_health_tests.rs"]
+#[path = "../../tests/coverage/shared/gateway_client_tests.rs"]
 mod tests;

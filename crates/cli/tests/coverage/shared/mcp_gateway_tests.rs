@@ -39,7 +39,7 @@ async fn production_heartbeat_recovers_after_one_thirty_second_interval() {
                 if let Some(sender) = sender {
                     let _ = sender.send(());
                 }
-                Ok(crate::sidecar::GatewayEndpoint {
+                Ok(crate::bootstrap::GatewayEndpoint {
                     address,
                     url: "http://recovered".into(),
                     instance_id: "recovered".into(),
@@ -63,7 +63,7 @@ async fn lifecycle_retirement_is_checked_before_a_healthy_heartbeat() {
     let health_calls_for_probe = health_calls.clone();
     let monitor = tokio::spawn(maintain_gateway_instances_with_generation(
         "127.0.0.1:47632".parse().unwrap(),
-        crate::sidecar::GatewayEndpoint {
+        crate::bootstrap::GatewayEndpoint {
             address: "127.0.0.1:47632".parse().unwrap(),
             url: "http://gateway".into(),
             instance_id: "first".into(),
@@ -96,7 +96,7 @@ async fn lifecycle_retirement_during_health_is_checked_before_adoption() {
     let retired_for_verification = retired.clone();
     let monitor = tokio::spawn(maintain_gateway_instances_with_generation(
         "127.0.0.1:47632".parse().unwrap(),
-        crate::sidecar::GatewayEndpoint {
+        crate::bootstrap::GatewayEndpoint {
             address: "127.0.0.1:47632".parse().unwrap(),
             url: "http://gateway".into(),
             instance_id: "first".into(),
@@ -177,7 +177,7 @@ async fn concurrent_clients_consume_the_same_replacement_allowance() {
         let observed_replacement = observed_replacement.clone();
         monitors.push(tokio::spawn(maintain_gateway_instances_with_generation(
             "127.0.0.1:47632".parse().unwrap(),
-            crate::sidecar::GatewayEndpoint {
+            crate::bootstrap::GatewayEndpoint {
                 address: "127.0.0.1:47632".parse().unwrap(),
                 url: "http://gateway".into(),
                 instance_id: "first".into(),
@@ -200,7 +200,7 @@ async fn concurrent_clients_consume_the_same_replacement_allowance() {
                         *current = Some("second".into());
                         restart_count.fetch_add(1, Ordering::SeqCst);
                     }
-                    Ok(crate::sidecar::GatewayEndpoint {
+                    Ok(crate::bootstrap::GatewayEndpoint {
                         address,
                         url: "http://gateway".into(),
                         instance_id: current.clone().unwrap(),

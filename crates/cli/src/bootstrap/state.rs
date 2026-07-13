@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::filesystem::{LockAttempt, atomic_write, try_lock_exclusive};
 
-use super::health::{RelayHealth, probe, request_shutdown};
-use super::{BOOTSTRAP_PROTOCOL_VERSION, SIDECAR_LOCK_TIMEOUT};
+use super::{BOOTSTRAP_LOCK_TIMEOUT, BOOTSTRAP_PROTOCOL_VERSION};
+use crate::gateway::client::{RelayHealth, probe, request_shutdown};
 
 pub(crate) const BOOTSTRAP_STATE_DIR_ENV: &str = "NEMO_RELAY_BOOTSTRAP_STATE_DIR";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -137,7 +137,7 @@ pub(super) fn write_recovery(
 }
 
 pub(crate) fn lock_endpoint(state: &Path, url: &str) -> Result<fs::File, String> {
-    lock_endpoint_for(state, url, SIDECAR_LOCK_TIMEOUT)
+    lock_endpoint_for(state, url, BOOTSTRAP_LOCK_TIMEOUT)
 }
 
 pub(crate) fn lock_endpoint_for(
@@ -323,5 +323,5 @@ pub(crate) fn lock_name(url: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/shared/sidecar_state_tests.rs"]
+#[path = "../../tests/coverage/shared/bootstrap_state_tests.rs"]
 mod tests;

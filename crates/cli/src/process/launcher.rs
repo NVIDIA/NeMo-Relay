@@ -1125,7 +1125,7 @@ async fn wait_for_health(gateway_url: &str, bootstrap_fingerprint: &str) -> Resu
         let gateway_url = gateway_url.to_string();
         let bootstrap_fingerprint = bootstrap_fingerprint.to_string();
         if tokio::task::spawn_blocking(move || {
-            crate::sidecar::healthz_compatible(&gateway_url, &bootstrap_fingerprint)
+            crate::gateway::client::healthz_compatible(&gateway_url, &bootstrap_fingerprint)
         })
         .await
         .map_err(|error| CliError::Launch(format!("gateway readiness task failed: {error}")))?

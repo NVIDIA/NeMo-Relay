@@ -134,7 +134,7 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
             "hook-forward",
             "hermes",
             "--gateway-url",
-            crate::sidecar::DEFAULT_URL,
+            crate::bootstrap::DEFAULT_URL,
             "--generation-file",
             r"C:\Temp\generation",
             "--generation-token",
