@@ -38,6 +38,16 @@ struct BackgroundTaskPlugin {
 }
 struct PanickingPlugin;
 struct FailingDeregisterPlugin;
+struct PluginMutationOwnerCleanup;
+
+impl Drop for PluginMutationOwnerCleanup {
+    fn drop(&mut self) {
+        let mut owner = PLUGIN_MUTATION_OWNER
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *owner = PluginMutationOwner::Idle;
+    }
+}
 
 static RECORDED_NAMES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static PARTIAL_FAIL_ROLLBACKS: AtomicUsize = AtomicUsize::new(0);
@@ -1236,6 +1246,7 @@ fn test_checked_teardown_reports_unremoved_registrations() {
 #[test]
 fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
     let _guard = lock_runtime_owner();
+    let owner_cleanup = PluginMutationOwnerCleanup;
     reset_global();
     store_active_plugin_configuration(
         PluginConfig::default(),
@@ -1265,13 +1276,14 @@ fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
         Err(PluginError::Conflict(_))
     ));
 
-    *PLUGIN_MUTATION_OWNER.lock().unwrap() = PluginMutationOwner::Idle;
+    drop(owner_cleanup);
     reset_global();
 }
 
 #[test]
 fn test_legacy_replace_retains_mutation_owner_after_incomplete_teardown() {
     let _guard = lock_runtime_owner();
+    let owner_cleanup = PluginMutationOwnerCleanup;
     reset_global();
     register_plugin(Arc::new(FailingDeregisterPlugin)).unwrap();
     register_plugin(Arc::new(ReplacementPlugin)).unwrap();
@@ -1304,7 +1316,7 @@ fn test_legacy_replace_retains_mutation_owner_after_incomplete_teardown() {
     );
     assert!(active_plugin_report().is_none());
 
-    *PLUGIN_MUTATION_OWNER.lock().unwrap() = PluginMutationOwner::Idle;
+    drop(owner_cleanup);
     reset_global();
 }
 
