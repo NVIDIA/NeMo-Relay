@@ -3,11 +3,10 @@
 
 //! Canonical coding-agent identity and compatibility policy.
 
-pub(crate) mod adapters;
-pub(crate) mod alignment;
 pub(crate) mod hermes;
 pub(crate) mod host;
 pub(crate) mod install;
+pub(crate) mod shared;
 
 use clap::ValueEnum;
 use semver::Version;

@@ -26,7 +26,7 @@ use nemo_relay::codec::traits::LlmResponseCodec;
 use nemo_relay::error::FlowError;
 use serde_json::{Map, Value, json};
 
-use crate::agents::alignment::{self, GatewayRouteKind};
+use crate::agents::shared::alignment::{self, GatewayRouteKind};
 use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, header_string};
 use crate::error::CliError;
 use crate::server::AppState;

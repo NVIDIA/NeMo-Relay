@@ -192,7 +192,7 @@ fn register_filtered_session_subscriber(
 }
 
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
-    let outcome = crate::agents::adapters::codex::adapt(payload, headers);
+    let outcome = crate::agents::shared::adapters::codex::adapt(payload, headers);
     manager.apply_events(headers, outcome.events).await.unwrap();
 }
 
@@ -549,7 +549,7 @@ async fn drive_hermes_orphan_subagent_stop(
             "session_id": session_id
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, headers);
         manager.apply_events(headers, outcome.events).await.unwrap();
     }
 }
@@ -637,7 +637,7 @@ async fn drive_hermes_subagent_child_session(
             "session_id": parent_session_id
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, headers);
         manager.apply_events(headers, outcome.events).await.unwrap();
     }
 }
@@ -1552,7 +1552,7 @@ async fn hermes_subagent_start_does_not_reparent_active_child_session() {
             }
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
@@ -2455,7 +2455,7 @@ async fn hermes_exact_api_hooks_write_atif_request_response_and_cost() {
             "session_id": "hermes-exact-atif"
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
@@ -2559,7 +2559,7 @@ async fn hermes_api_request_error_writes_atif_error_step_and_fidelity() {
             "session_id": "hermes-error"
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
@@ -2670,7 +2670,7 @@ async fn hermes_lossy_api_hooks_write_atif_fidelity_markers() {
             "session_id": "hermes-lossy-atif"
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
@@ -2737,7 +2737,7 @@ async fn hermes_uncorrelatable_pre_tool_call_does_not_create_shutdown_trajectory
             "session_id": "hermes-main"
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
@@ -2817,7 +2817,7 @@ async fn hermes_turn_end_snapshots_atif_without_boundary_system_step() {
             "session_id": "hermes-clean"
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
@@ -2872,14 +2872,14 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
             }
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await
             .unwrap();
     }
 
-    let pre_tool = crate::agents::adapters::hermes::adapt(
+    let pre_tool = crate::agents::shared::adapters::hermes::adapt(
         json!({
             "hook_event_name": "pre_tool_call",
             "session_id": "hermes-main",
@@ -2911,7 +2911,7 @@ async fn hermes_task_id_tool_hooks_reuse_api_session() {
         );
     }
 
-    let post_tool = crate::agents::adapters::hermes::adapt(
+    let post_tool = crate::agents::shared::adapters::hermes::adapt(
         json!({
             "hook_event_name": "post_tool_call",
             "session_id": "hermes-main",
@@ -3032,7 +3032,7 @@ async fn hermes_post_tool_call_writes_atif_observation_with_source_call_id() {
             "session_id": "hermes-tool-result"
         }),
     ] {
-        let outcome = crate::agents::adapters::hermes::adapt(payload, &headers);
+        let outcome = crate::agents::shared::adapters::hermes::adapt(payload, &headers);
         manager
             .apply_events(&headers, outcome.events)
             .await

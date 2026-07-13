@@ -11,7 +11,7 @@ use axum::http::HeaderMap;
 use nemo_relay::api::llm::LlmRequest;
 use serde_json::Value;
 
-use crate::agents::alignment::json_string_at;
+use crate::agents::shared::alignment::json_string_at;
 use crate::configuration::header_string;
 use crate::events::{AgentKind, ToolEvent};
 

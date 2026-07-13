@@ -29,7 +29,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::agents::adapters::{claude_code, codex, hermes};
+use crate::agents::shared::adapters::{claude_code, codex, hermes};
 use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
 };

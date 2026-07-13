@@ -4,7 +4,7 @@
 use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
 
-use crate::agents::adapters::{
+use crate::agents::shared::adapters::{
     AdapterOutcome, ClassificationRules, HERMES_PAYLOAD_EXTRACTOR, classify, common_session_event,
     event_name, metadata, normalize_name, session_id,
 };

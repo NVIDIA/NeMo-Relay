@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#[path = "claude/adapter.rs"]
+#[path = "../claude/adapter.rs"]
 pub(crate) mod claude_code;
-#[path = "codex/adapter.rs"]
+#[path = "../codex/adapter.rs"]
 pub(crate) mod codex;
-#[path = "hermes/adapter.rs"]
+#[path = "../hermes/adapter.rs"]
 pub(crate) mod hermes;
 
 pub(crate) const SKILL_LOAD_SOURCE_KEY: &str = "skill_load_source";
@@ -985,5 +985,5 @@ fn normalize_name(name: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/agents/adapters_tests.rs"]
+#[path = "../../../tests/coverage/agents/adapters_tests.rs"]
 mod tests;

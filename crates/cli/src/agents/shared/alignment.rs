@@ -19,11 +19,11 @@ pub(crate) use crate::events::json_path::{
 };
 use crate::events::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
 
-#[path = "claude/alignment.rs"]
+#[path = "../claude/alignment.rs"]
 pub(crate) mod claude_code;
-#[path = "codex/alignment.rs"]
+#[path = "../codex/alignment.rs"]
 pub(crate) mod codex;
-#[path = "hermes/alignment.rs"]
+#[path = "../hermes/alignment.rs"]
 pub(crate) mod hermes;
 
 const REQUEST_AFFINITY_KEY_MIN_CHARS: usize = 24;
@@ -1170,5 +1170,5 @@ pub(crate) fn merge_metadata(left: Value, right: Value) -> Value {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/agents/alignment_tests.rs"]
+#[path = "../../../tests/coverage/agents/alignment_tests.rs"]
 mod tests;

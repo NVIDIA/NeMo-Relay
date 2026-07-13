@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader};
 use axum::http::HeaderMap;
 use serde_json::{Map, Value, json};
 
-use crate::agents::alignment::{
+use crate::agents::shared::alignment::{
     GatewayRouteKind, SessionAlias, insert_optional, json_string_at, merge_metadata,
 };
 use crate::events::{AgentKind, SessionEvent, SubagentEvent};

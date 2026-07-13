@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::agents::adapters::{claude_code, codex, hermes};
+use crate::agents::shared::adapters::{claude_code, codex, hermes};
 
 #[test]
 fn maps_claude_canonical_tool_payload() {

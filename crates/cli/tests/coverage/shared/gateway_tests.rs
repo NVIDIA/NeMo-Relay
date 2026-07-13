@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::agents::alignment::GatewayRouteKind;
+use crate::agents::shared::alignment::GatewayRouteKind;
 use crate::configuration::GatewayConfig;
 use crate::server::AppState;
 use crate::sessions::{LlmGatewayStart, SessionManager};
