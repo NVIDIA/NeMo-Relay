@@ -254,7 +254,7 @@ fn prepares_codex_config_overrides() {
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Codex,
         vec!["codex".into()],
         "http://127.0.0.1:1234",
@@ -353,7 +353,7 @@ fn prepares_codex_with_hooks_when_auth_missing() {
         ..ResolvedConfig::default()
     };
 
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Codex,
         vec!["codex".into()],
         "http://127.0.0.1:1234",
@@ -408,7 +408,7 @@ fn codex_preserves_profiles_and_prompt_arguments_without_temporary_config() {
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Codex,
         vec![
             "codex".into(),
@@ -695,7 +695,7 @@ fn prepares_claude_dry_run_without_writing_plugin() {
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::ClaudeCode,
         vec!["claude".into()],
         "http://127.0.0.1:1234",
@@ -721,7 +721,7 @@ fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable()
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::ClaudeCode,
         vec![
             "wrapper".into(),
@@ -774,7 +774,7 @@ fn prepares_hermes_hook_environment() {
         dynamic_plugins: Vec::new(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Hermes,
         vec!["hermes".into(), "chat".into()],
         "http://127.0.0.1:1234",
@@ -863,7 +863,7 @@ fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config(
         ..ResolvedConfig::default()
     };
 
-    let first = PreparedRun::new(
+    let first = PreparedAgentLaunch::new(
         CodingAgent::Hermes,
         vec!["hermes".into()],
         "http://127.0.0.1:4001",
@@ -871,7 +871,7 @@ fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config(
         false,
     )
     .unwrap();
-    let second = PreparedRun::new(
+    let second = PreparedAgentLaunch::new(
         CodingAgent::Hermes,
         vec!["hermes".into()],
         "http://127.0.0.1:4002",
@@ -879,7 +879,7 @@ fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config(
         false,
     )
     .unwrap();
-    let overlay = |run: &PreparedRun| {
+    let overlay = |run: &PreparedAgentLaunch| {
         run.env
             .iter()
             .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
@@ -959,7 +959,7 @@ fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
         ..ResolvedConfig::default()
     };
 
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Hermes,
         vec!["hermes".into()],
         "http://127.0.0.1:1234",
@@ -1041,7 +1041,7 @@ hooks:
         ..ResolvedConfig::default()
     };
 
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Hermes,
         vec!["hermes".into(), "chat".into()],
         "http://s",
@@ -1087,7 +1087,7 @@ fn prepares_claude_temp_plugin() {
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::ClaudeCode,
         vec!["claude".into()],
         "http://127.0.0.1:1234",
@@ -1144,7 +1144,7 @@ fn claude_transparent_run_preserves_user_settings_and_prompt_boundary() {
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::ClaudeCode,
         vec![
             "claude".into(),
@@ -1206,7 +1206,9 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
         "claude".into(),
         "--settings={\"model\":\"kept\",\"env\":{\"PRIVATE\":\"yes\"}}".into(),
     ];
-    let overlay = claude_settings_overlay(&inline, 0, "http://127.0.0.1:4321").unwrap();
+    let overlay =
+        crate::agents::claude::launch::settings_overlay(&inline, 0, "http://127.0.0.1:4321")
+            .unwrap();
     assert_eq!(overlay["model"], "kept");
     assert_eq!(overlay["env"]["PRIVATE"], "yes");
     assert_eq!(
@@ -1220,12 +1222,17 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
         "--settings".into(),
         "prompt-value".into(),
     ];
-    let overlay = claude_settings_overlay(&after_separator, 0, "http://127.0.0.1:4321").unwrap();
+    let overlay = crate::agents::claude::launch::settings_overlay(
+        &after_separator,
+        0,
+        "http://127.0.0.1:4321",
+    )
+    .unwrap();
     assert_eq!(overlay.as_object().unwrap().len(), 1);
 
     let missing = vec!["claude".into(), "--settings".into(), "--".into()];
     assert!(
-        claude_settings_overlay(&missing, 0, "http://127.0.0.1:4321")
+        crate::agents::claude::launch::settings_overlay(&missing, 0, "http://127.0.0.1:4321")
             .unwrap_err()
             .to_string()
             .contains("missing its value")
@@ -1233,7 +1240,7 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
 
     let malformed_env = vec!["claude".into(), "--settings={\"env\":true}".into()];
     assert!(
-        claude_settings_overlay(&malformed_env, 0, "http://127.0.0.1:4321")
+        crate::agents::claude::launch::settings_overlay(&malformed_env, 0, "http://127.0.0.1:4321")
             .unwrap_err()
             .to_string()
             .contains("field `env` must be a JSON object")
@@ -1247,7 +1254,7 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
         format!("--settings={}", non_object_path.display()),
     ];
     assert!(
-        claude_settings_overlay(&non_object, 0, "http://127.0.0.1:4321")
+        crate::agents::claude::launch::settings_overlay(&non_object, 0, "http://127.0.0.1:4321")
             .unwrap_err()
             .to_string()
             .contains("must contain a JSON object")
@@ -1255,7 +1262,7 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
 
     let empty_inline = vec!["claude".into(), "--settings=".into()];
     assert!(
-        claude_settings_overlay(&empty_inline, 0, "http://127.0.0.1:4321")
+        crate::agents::claude::launch::settings_overlay(&empty_inline, 0, "http://127.0.0.1:4321")
             .unwrap_err()
             .to_string()
             .contains("missing its value")
@@ -1271,7 +1278,7 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
             .to_string(),
     ];
     assert!(
-        claude_settings_overlay(&missing_file, 0, "http://127.0.0.1:4321")
+        crate::agents::claude::launch::settings_overlay(&missing_file, 0, "http://127.0.0.1:4321")
             .unwrap_err()
             .to_string()
             .contains("failed to read Claude Code settings")
@@ -1279,10 +1286,14 @@ fn claude_settings_overlay_handles_inline_json_and_rejects_malformed_sources() {
 
     let malformed_json = vec!["claude".into(), "--settings={not-json".into()];
     assert!(
-        claude_settings_overlay(&malformed_json, 0, "http://127.0.0.1:4321")
-            .unwrap_err()
-            .to_string()
-            .contains("failed to parse Claude Code --settings JSON")
+        crate::agents::claude::launch::settings_overlay(
+            &malformed_json,
+            0,
+            "http://127.0.0.1:4321"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("failed to parse Claude Code --settings JSON")
     );
 }
 
@@ -1379,7 +1390,7 @@ fn claude_prompt_named_like_the_host_does_not_capture_relay_flags() {
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::ClaudeCode,
         vec!["claude".into(), "--".into(), "claude".into()],
         "http://127.0.0.1:1234",
@@ -1397,7 +1408,7 @@ fn hook_write_helpers_cover_toml_escaping() {
     let temp = tempfile::tempdir().unwrap();
     let written_hooks = temp.path().join("written/hooks.json");
     std::fs::create_dir_all(written_hooks.parent().unwrap()).unwrap();
-    write_hooks(&written_hooks, json!({"hooks": []})).unwrap();
+    crate::agents::claude::launch::write_hooks(&written_hooks, json!({"hooks": []})).unwrap();
     assert!(
         std::fs::read_to_string(&written_hooks)
             .unwrap()
@@ -1593,7 +1604,7 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
     make_executable(&script);
     let overlay = temp.path().join("private-overlay");
     std::fs::create_dir_all(&overlay).unwrap();
-    let prepared = PreparedRun {
+    let prepared = PreparedAgentLaunch {
         argv: vec![
             script.display().to_string(),
             wrapper_pid_path.display().to_string(),
@@ -1659,7 +1670,7 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
         agents: AgentConfigs::default(),
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::ClaudeCode,
         vec!["claude".into()],
         "http://127.0.0.1:1234",
@@ -1717,7 +1728,7 @@ async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
         },
         ..ResolvedConfig::default()
     };
-    let prepared = PreparedRun::new(
+    let prepared = PreparedAgentLaunch::new(
         CodingAgent::Hermes,
         vec!["hermes".into(), "chat".into()],
         "http://127.0.0.1:1234",

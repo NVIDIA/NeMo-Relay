@@ -7,6 +7,7 @@ use super::AgentDescriptor;
 
 pub(super) mod assets;
 pub(super) mod host;
+pub(crate) mod launch;
 
 pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     argument: "claude",

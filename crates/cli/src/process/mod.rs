@@ -5,8 +5,10 @@
 
 pub(crate) mod detached;
 pub(crate) mod launcher;
+mod prepared;
 mod types;
 
+pub(crate) use prepared::PreparedAgentLaunch;
 pub(crate) use types::RunOverrides;
 
 use std::ffi::{OsStr, OsString};

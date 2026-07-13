@@ -9,7 +9,9 @@ use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -24,7 +26,7 @@ use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
 use crate::server::GatewayOverrides;
 
-use super::RunOverrides;
+use super::{PreparedAgentLaunch, RunOverrides};
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
@@ -87,7 +89,7 @@ pub(crate) async fn easy_path(
 
 struct TransparentRun {
     agent: CodingAgent,
-    prepared: PreparedRun,
+    prepared: PreparedAgentLaunch,
     resolved: ResolvedConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     listener: TcpListener,
@@ -129,7 +131,8 @@ impl TransparentRun {
         let gateway_url = format!("http://{address}");
         resolved.gateway.bind = address;
 
-        let prepared = PreparedRun::from_invocation(invocation, &gateway_url, &resolved, dry_run)?;
+        let prepared =
+            PreparedAgentLaunch::from_invocation(invocation, &gateway_url, &resolved, dry_run)?;
         Ok(Self {
             agent,
             prepared,
@@ -176,7 +179,7 @@ async fn execute_live_run(
     listener: TcpListener,
     gateway_config: GatewayConfig,
     gateway_url: &str,
-    prepared: PreparedRun,
+    prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
     execute_live_run_with_dynamic(listener, gateway_config, Vec::new(), gateway_url, prepared).await
 }
@@ -186,7 +189,7 @@ async fn execute_live_run_with_dynamic(
     gateway_config: GatewayConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     gateway_url: &str,
-    prepared: PreparedRun,
+    prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
     let bootstrap_fingerprint = crate::configuration::transparent_gateway_fingerprint(gateway_url);
     let running_server = RunningGateway::start(
@@ -206,7 +209,7 @@ async fn execute_live_run_with_dynamic(
 }
 
 async fn supervise_prepared_run(
-    prepared: &PreparedRun,
+    prepared: &PreparedAgentLaunch,
     mut running_server: RunningGateway,
 ) -> Result<ExitCode, CliError> {
     let mut child = match prepared.spawn().await {
@@ -352,14 +355,6 @@ fn configured_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<Vec<S
     (!argv.is_empty()).then_some(argv)
 }
 
-struct PreparedRun {
-    argv: Vec<String>,
-    host_index: usize,
-    env: Vec<(String, String)>,
-    temp_dirs: Vec<PathBuf>,
-    notes: Vec<String>,
-}
-
 struct RunningGateway {
     shutdown_tx: oneshot::Sender<()>,
     task: JoinHandle<Result<(), CliError>>,
@@ -404,7 +399,7 @@ impl RunningGateway {
     }
 }
 
-impl PreparedRun {
+impl PreparedAgentLaunch {
     fn from_invocation(
         invocation: AgentInvocation,
         gateway_url: &str,
@@ -469,11 +464,7 @@ impl PreparedRun {
         }
         match agent {
             CodingAgent::ClaudeCode => {
-                if dry_run {
-                    run.prepare_claude_dry(gateway_url)?;
-                } else {
-                    run.prepare_claude(gateway_url)?;
-                }
+                crate::agents::claude::launch::prepare(&mut run, gateway_url, dry_run)?
             }
             CodingAgent::Codex => run.prepare_codex(gateway_url)?,
             CodingAgent::Hermes => {
@@ -485,74 +476,6 @@ impl PreparedRun {
             }
         }
         Ok(run)
-    }
-
-    // Records the Claude Code argv/env changes that would be made during a real run. The temporary
-    // plugin path is symbolic so printed dry-run output is deterministic and non-mutating.
-    fn prepare_claude_dry(&mut self, gateway_url: &str) -> Result<(), CliError> {
-        insert_after_host(
-            &mut self.argv,
-            self.host_index,
-            [
-                "--plugin-dir".into(),
-                "<temporary-claude-plugin-dir>".into(),
-                "--settings".into(),
-                "<temporary-claude-settings>".into(),
-            ],
-        );
-        self.env
-            .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
-        self.notes
-            .push("would generate a temporary Claude Code plugin directory".into());
-        Ok(())
-    }
-
-    // Creates a temporary Claude Code plugin containing gateway hooks and a process-private
-    // settings overlay. Claude applies the first `--settings` argument, so the overlay preserves
-    // the caller's first explicit settings source while overriding only the gateway URL.
-    fn prepare_claude(&mut self, gateway_url: &str) -> Result<(), CliError> {
-        let root = temp_dir("nemo-relay-claude-plugin")?;
-        std::fs::create_dir_all(root.join(".claude-plugin"))?;
-        std::fs::create_dir_all(root.join("hooks"))?;
-        std::fs::write(
-            root.join(".claude-plugin/plugin.json"),
-            serde_json::to_vec_pretty(&json!({
-                "name": "nemo-relay-cli",
-                "version": env!("CARGO_PKG_VERSION"),
-                "description": "Temporary NeMo Relay gateway hooks"
-            }))
-            .map_err(|error| CliError::Launch(error.to_string()))?,
-        )?;
-        let hook_command = transparent_hook_forward_command(
-            &transparent_hook_executable(),
-            CodingAgent::ClaudeCode,
-            gateway_url,
-        )
-        .map_err(CliError::Launch)?;
-        write_hooks(
-            &root.join("hooks/hooks.json"),
-            generated_hooks(CodingAgent::ClaudeCode, &hook_command),
-        )?;
-        let settings_path = root.join("settings.json");
-        let settings = claude_settings_overlay(&self.argv, self.host_index, gateway_url)?;
-        let settings_bytes = serde_json::to_vec_pretty(&settings)
-            .map_err(|error| CliError::Launch(error.to_string()))?;
-        crate::filesystem::atomic_write_private(&settings_path, &settings_bytes)
-            .map_err(CliError::Launch)?;
-        insert_after_host(
-            &mut self.argv,
-            self.host_index,
-            [
-                "--plugin-dir".into(),
-                root.display().to_string(),
-                "--settings".into(),
-                settings_path.display().to_string(),
-            ],
-        );
-        self.env
-            .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
-        self.temp_dirs.push(root);
-        Ok(())
     }
 
     // Injects Codex hook and provider configuration through repeated `--config` flags. Codex
@@ -762,76 +685,6 @@ impl PreparedRun {
 
 // Claude Code honors only the first `--settings` source. Preserve that source in the generated
 // overlay so inserting Relay's process-private gateway setting cannot discard user configuration.
-fn claude_settings_overlay(
-    argv: &[String],
-    host_index: usize,
-    gateway_url: &str,
-) -> Result<Value, CliError> {
-    let mut settings = match first_claude_settings(argv, host_index)? {
-        Some(source) => read_claude_settings(source)?,
-        None => json!({}),
-    };
-    let object = settings.as_object_mut().ok_or_else(|| {
-        CliError::Launch("Claude Code --settings must contain a JSON object".into())
-    })?;
-    let environment = object.entry("env").or_insert_with(|| json!({}));
-    let environment = environment.as_object_mut().ok_or_else(|| {
-        CliError::Launch("Claude Code --settings field `env` must be a JSON object".into())
-    })?;
-    environment.insert(
-        "ANTHROPIC_BASE_URL".into(),
-        Value::String(gateway_url.into()),
-    );
-    Ok(settings)
-}
-
-fn first_claude_settings(argv: &[String], host_index: usize) -> Result<Option<&str>, CliError> {
-    let boundary = argv
-        .iter()
-        .skip(host_index + 1)
-        .position(|argument| argument == "--")
-        .map_or(argv.len(), |offset| host_index + 1 + offset);
-    let mut index = host_index + 1;
-    while index < boundary {
-        if argv[index] == "--settings" {
-            if index + 1 >= boundary || argv[index + 1].is_empty() {
-                return Err(CliError::Launch(
-                    "Claude Code --settings is missing its value".into(),
-                ));
-            }
-            return Ok(Some(argv[index + 1].as_str()));
-        }
-        if let Some(source) = argv[index].strip_prefix("--settings=") {
-            if source.is_empty() {
-                return Err(CliError::Launch(
-                    "Claude Code --settings is missing its value".into(),
-                ));
-            }
-            return Ok(Some(source));
-        }
-        index += 1;
-    }
-    Ok(None)
-}
-
-fn read_claude_settings(source: &str) -> Result<Value, CliError> {
-    let raw = if source.trim_start().starts_with('{') {
-        source.to_string()
-    } else {
-        std::fs::read_to_string(source).map_err(|error| {
-            CliError::Launch(format!(
-                "failed to read Claude Code settings {}: {error}",
-                Path::new(source).display()
-            ))
-        })?
-    };
-    serde_json::from_str(&raw).map_err(|error| {
-        CliError::Launch(format!(
-            "failed to parse Claude Code --settings JSON: {error}"
-        ))
-    })
-}
-
 // Session hook definitions and their exact trust state share Codex's process-local CLI layer. This
 // authorizes only the generated Relay command without rewriting the active user profile or using
 // the process-wide hook-trust bypass.
@@ -1227,16 +1080,6 @@ fn insert_after_host(
 ) {
     debug_assert!(host_index < argv.len());
     argv.splice(host_index + 1..host_index + 1, args);
-}
-
-// Writes pretty JSON hook config to a path whose parent has already been created by the caller.
-// Serialization errors are converted to launch errors to keep temporary setup failures contextual.
-fn write_hooks(path: &Path, hooks: Value) -> Result<(), CliError> {
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(&hooks).map_err(|error| CliError::Launch(error.to_string()))?,
-    )?;
-    Ok(())
 }
 
 // Creates a per-process Hermes home whose user state points at the original profile while the
