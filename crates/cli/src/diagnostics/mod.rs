@@ -9,8 +9,10 @@
 //! - `DoctorReport` is the resulting pure data shape.
 //! - `format_human(&report)` / `format_json(&report)` render the report.
 
+mod model;
 mod render;
 
+pub(crate) use model::*;
 use render::*;
 
 use std::path::{Path, PathBuf};
@@ -23,7 +25,6 @@ use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -39,94 +40,10 @@ use crate::server::GatewayOverrides;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
 const PRICING_PLUGIN_KIND: &str = "pricing";
 
-/// Outcome of one check inside the doctor report. The `details` field carries human-readable
-/// supplementary text; the `status` is the bottom-line signal callers (and CI) use to decide
-/// pass/fail.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(crate) struct Check {
-    pub name: &'static str,
-    pub status: Status,
-    pub details: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Status {
-    Pass,
-    Warn,
-    Fail,
-    /// The check ran but no relevant state was detected — purely informational (e.g. an agent
-    /// not on $PATH). Renders as a dot; not counted toward exit code.
-    Info,
-}
-
-/// Snapshot of the running system that the doctor renders. Stable schema, versioned via
-/// `schema_version`. Adding fields is non-breaking; removing or renaming requires a bump.
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct DoctorReport {
-    pub schema_version: u32,
-    pub binary_version: &'static str,
-    pub target_agent: Option<String>,
-    pub environment: EnvironmentInfo,
-    pub configuration: ConfigurationInfo,
-    pub agents: Vec<AgentInfo>,
-    pub host_plugins: Vec<crate::installation::marketplace::HostPluginReadiness>,
-    pub observability: Vec<Check>,
-    pub completions: Vec<Check>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct EnvironmentInfo {
-    pub os: String,
-    pub arch: &'static str,
-    pub shell: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct ConfigurationInfo {
-    pub workspace: ConfigLayer,
-    pub global: ConfigLayer,
-    pub system: ConfigLayer,
-    pub plugin_configs: Vec<ConfigLayer>,
-    pub plugin_resolution: Check,
-    pub resolution: Check,
-    pub default_agent: Option<String>,
-    pub configured_agents: Vec<String>,
-    pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
-}
-
 struct PluginConfigurationDiagnostics {
     sources: Vec<PathBuf>,
     error: Option<String>,
     resolution: Check,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct DynamicPluginReferenceInfo {
-    pub plugin_id: String,
-    pub manifest_ref: String,
-    pub source: PathBuf,
-    pub host_config_status: DynamicPluginHostConfigStatus,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct ConfigLayer {
-    pub path: PathBuf,
-    pub status: Status,
-    pub active: bool,
-    pub details: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct AgentInfo {
-    pub name: &'static str,
-    pub status: Status,
-    pub configured: bool,
-    pub command: String,
-    pub path: Option<PathBuf>,
-    pub version: Option<String>,
-    /// Free-form annotation, e.g. "hooks: installed" once we wire up hook detection.
-    pub annotation: String,
 }
 
 /// Drives all checks and produces a single `DoctorReport`. Network probes are bounded by a
