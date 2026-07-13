@@ -69,8 +69,7 @@ impl Drop for LoggingRuntime {
 ///
 /// Stderr is always enabled. Explicit file sinks fail startup if they cannot be opened.
 ///
-/// Verbosity is owned by `[logging].level` (a minimum severity threshold). Call sites may emit any
-/// level; less-severe records are discarded. `RUST_LOG` is intentionally not consulted.
+/// Verbosity comes from `[logging].level`: records below that minimum severity are discarded.
 pub(crate) fn init_logging(config: &LoggingConfig) -> Result<LoggingRuntime, CliError> {
     let root_relay_id = Uuid::now_v7().to_string();
     let (logger, thread_pools) = build_logger(config, root_relay_id.clone())?;
@@ -79,10 +78,7 @@ pub(crate) fn init_logging(config: &LoggingConfig) -> Result<LoggingRuntime, Cli
     // the receiver logger.
     let _ = spdlog::init_log_crate_proxy();
     spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
-    // No env-filter / RUST_LOG: Relay config alone owns operational verbosity.
     spdlog::log_crate_proxy().set_filter(None);
-    // `log::set_max_level` is poorly named: it installs the minimum severity threshold from
-    // config (e.g. Info keeps error/warn/info and drops debug/trace).
     log::set_max_level(log_level_filter(config.level));
 
     Ok(LoggingRuntime {
@@ -205,8 +201,8 @@ fn build_logger(
 }
 
 fn resolve_log_path(path: &Path) -> Result<PathBuf, CliError> {
-    // Least astonishment for CLIs: relative paths are relative to process CWD (same as opening
-    // `./foo` yourself). Absolute paths are unchanged. No `~` or env expansion.
+    // Relative paths resolve against process CWD. Absolute paths are unchanged. No `~` or env
+    // expansion.
     if path.as_os_str().is_empty() {
         return Err(CliError::Config(
             "logging sink path must not be empty".into(),

@@ -588,7 +588,7 @@ pub(crate) struct ResolvedConfig {
 /// less severe than this threshold are discarded. Per-file sinks may raise their own minimum.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LoggingConfig {
-    /// Minimum severity for operational logs (not a "maximum" in everyday language).
+    /// Minimum severity for operational logs.
     pub(crate) level: LogLevel,
     pub(crate) stderr_format: LogFormat,
     pub(crate) sinks: Vec<LogSinkConfig>,
@@ -666,7 +666,7 @@ pub(crate) enum LogSinkConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileLogSinkConfig {
     pub(crate) path: PathBuf,
-    /// Minimum severity for this file sink (may be stricter than the global `logging.level`).
+    /// Minimum severity for this file sink.
     pub(crate) level: LogLevel,
     pub(crate) format: LogFormat,
     /// Max records waiting for disk write (async queue bound).

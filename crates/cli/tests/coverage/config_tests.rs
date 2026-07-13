@@ -113,6 +113,12 @@ fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
     temp.path().join("config.toml")
 }
 
+// Escapes a path for embedding in a TOML basic string (Windows `\U` sequences are invalid otherwise).
+fn toml_basic_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
 fn write_dynamic_manifest(dir: &std::path::Path, plugin_id: &str) -> std::path::PathBuf {
     write_dynamic_manifest_with_options(dir, plugin_id, &["plugin_worker"], None)
 }
@@ -1979,18 +1985,18 @@ level = "debug"
 stderr_format = "human"
 
 [[logging.sinks]]
-path = "{}"
+path = {}
 level = "trace"
 format = "jsonl"
 queue_capacity = 32
 flush_interval_millis = 250
 
 [[logging.sinks]]
-path = "{}"
+path = {}
 format = "human"
 "#,
-            log_a.display(),
-            log_b.display()
+            toml_basic_string(log_a.to_string_lossy().as_ref()),
+            toml_basic_string(log_b.to_string_lossy().as_ref())
         ),
     )
     .unwrap();
