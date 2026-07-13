@@ -3,6 +3,8 @@
 
 //! Canonical coding-agent identity and compatibility policy.
 
+pub(crate) mod claude;
+pub(crate) mod codex;
 pub(crate) mod hermes;
 pub(crate) mod host;
 pub(crate) mod install;
@@ -20,7 +22,7 @@ pub(crate) enum CodingAgent {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct AgentDescriptor {
+pub(super) struct AgentDescriptor {
     argument: &'static str,
     install_argument: &'static str,
     label: &'static str,
@@ -28,114 +30,18 @@ struct AgentDescriptor {
     hook_path: &'static str,
     version_product: &'static str,
     minimum_version: (u64, u64, u64),
-    version_format: VersionFormat,
     hook_events: &'static [&'static str],
     direct_hook_entries: bool,
 }
-
-#[derive(Debug, Clone, Copy)]
-enum VersionFormat {
-    Codex,
-    ClaudeCode,
-    Hermes,
-}
-
-// Claude Code validates plugin hooks.json against a strict event-name whitelist. Every event in
-// this descriptor must therefore exist in the prescribed minimum Claude Code release.
-const CLAUDE_CODE_HOOK_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "UserPromptExpansion",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "PermissionRequest",
-    "SubagentStart",
-    "SubagentStop",
-    "Notification",
-    "Stop",
-    "PreCompact",
-    "PostCompact",
-    "SessionEnd",
-];
-
-const CODEX_HOOK_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PostToolUse",
-    "PermissionRequest",
-    "SubagentStart",
-    "SubagentStop",
-    "Stop",
-    "PreCompact",
-    "PostCompact",
-];
-
-const HERMES_HOOK_EVENTS: &[&str] = &[
-    "on_session_start",
-    "on_session_end",
-    "on_session_finalize",
-    "on_session_reset",
-    "pre_llm_call",
-    "post_llm_call",
-    "pre_api_request",
-    "post_api_request",
-    // Observer-only failure telemetry closes failed provider attempts.
-    "api_request_error",
-    "pre_tool_call",
-    "post_tool_call",
-    "subagent_start",
-    "subagent_stop",
-];
-
-const CLAUDE_CODE: AgentDescriptor = AgentDescriptor {
-    argument: "claude",
-    install_argument: "claude-code",
-    label: "Claude Code",
-    executable: "claude",
-    hook_path: "/hooks/claude-code",
-    version_product: "Claude Code",
-    minimum_version: (2, 1, 121),
-    version_format: VersionFormat::ClaudeCode,
-    hook_events: CLAUDE_CODE_HOOK_EVENTS,
-    direct_hook_entries: false,
-};
-
-const CODEX: AgentDescriptor = AgentDescriptor {
-    argument: "codex",
-    install_argument: "codex",
-    label: "Codex",
-    executable: "codex",
-    hook_path: "/hooks/codex",
-    version_product: "codex-cli",
-    minimum_version: (0, 143, 0),
-    version_format: VersionFormat::Codex,
-    hook_events: CODEX_HOOK_EVENTS,
-    direct_hook_entries: false,
-};
-
-const HERMES: AgentDescriptor = AgentDescriptor {
-    argument: "hermes",
-    install_argument: "hermes",
-    label: "Hermes Agent",
-    executable: "hermes",
-    hook_path: "/hooks/hermes",
-    version_product: "Hermes Agent",
-    minimum_version: (0, 18, 2),
-    version_format: VersionFormat::Hermes,
-    hook_events: HERMES_HOOK_EVENTS,
-    direct_hook_entries: true,
-};
 
 impl CodingAgent {
     pub(crate) const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::Hermes];
 
     const fn descriptor(self) -> AgentDescriptor {
         match self {
-            Self::ClaudeCode => CLAUDE_CODE,
-            Self::Codex => CODEX,
-            Self::Hermes => HERMES,
+            Self::ClaudeCode => claude::DESCRIPTOR,
+            Self::Codex => codex::DESCRIPTOR,
+            Self::Hermes => hermes::DESCRIPTOR,
         }
     }
 
@@ -210,16 +116,11 @@ impl CodingAgent {
     }
 
     fn parse_version(self, raw: &str) -> Option<Version> {
-        let descriptor = self.descriptor();
-        let token = match descriptor.version_format {
-            VersionFormat::Codex => raw.strip_prefix("codex-cli ")?,
-            VersionFormat::ClaudeCode => raw.strip_suffix(" (Claude Code)")?,
-            VersionFormat::Hermes => raw
-                .strip_prefix("Hermes Agent v")?
-                .split_whitespace()
-                .next()?,
-        };
-        Version::parse(token).ok()
+        match self {
+            Self::ClaudeCode => claude::parse_version(raw),
+            Self::Codex => codex::parse_version(raw),
+            Self::Hermes => hermes::parse_version(raw),
+        }
     }
 
     /// Infers a host from an executable basename.
