@@ -28,8 +28,6 @@ pub enum EditorFieldKind {
     Json,
     /// A collection whose entries are edited recursively.
     List,
-    /// A tagged object whose variant is selected from a discriminator field.
-    TaggedUnion,
     /// Nested configuration section.
     Section,
 }
@@ -207,7 +205,6 @@ macro_rules! editor_config {
     (@kind StringMap) => { $crate::config_editor::EditorFieldKind::StringMap };
     (@kind Json) => { $crate::config_editor::EditorFieldKind::Json };
     (@kind List) => { $crate::config_editor::EditorFieldKind::List };
-    (@kind TaggedUnion) => { $crate::config_editor::EditorFieldKind::TaggedUnion };
     (@kind Section) => { $crate::config_editor::EditorFieldKind::Section };
 
     (@values) => { &[] };

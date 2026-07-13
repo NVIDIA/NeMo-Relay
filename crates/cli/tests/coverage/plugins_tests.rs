@@ -6,7 +6,9 @@ use crate::config::{
     PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
     user_plugin_config_path,
 };
-use nemo_relay::config_editor::{EditorConfig, EditorSchema};
+use nemo_relay::config_editor::{
+    EditorConfig, EditorListItemSpec, EditorSchema, EditorVariantSpec,
+};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay::plugins::nemo_guardrails::component::{
@@ -2274,6 +2276,40 @@ fn parse_float_value_rejects_non_finite_numbers() {
         );
         assert!(error.contains(value), "error was: {error}");
     }
+}
+
+fn tagged_list_item_schema() -> &'static EditorSchema {
+    static SCHEMA: EditorSchema = EditorSchema { fields: &[] };
+    &SCHEMA
+}
+
+fn tagged_list_item_default() -> Value {
+    json!({ "kind": "example" })
+}
+
+static TAGGED_LIST_ITEM_VARIANTS: [EditorVariantSpec; 1] = [EditorVariantSpec {
+    label: "Example",
+    tag: "example",
+    schema: tagged_list_item_schema,
+    default: tagged_list_item_default,
+}];
+
+static TAGGED_LIST_ITEM: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: None,
+    default: None,
+    discriminator: Some("kind"),
+    variants: &TAGGED_LIST_ITEM_VARIANTS,
+    list_item: None,
+};
+
+#[test]
+fn tagged_list_items_use_list_metadata_instead_of_a_field_kind() {
+    assert_eq!(tagged_union_discriminator(&TAGGED_LIST_ITEM), Some("kind"));
+    assert_eq!(
+        editor_item_label(&json!({ "kind": "example" }), &TAGGED_LIST_ITEM),
+        "example"
+    );
 }
 
 #[test]

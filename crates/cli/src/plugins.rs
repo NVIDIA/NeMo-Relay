@@ -1081,7 +1081,7 @@ fn new_editor_item(
     theme: &ColorfulTheme,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<Value, CliError> {
-    if item.kind == EditorFieldKind::TaggedUnion {
+    if tagged_union_discriminator(item).is_some() {
         let variant = Select::with_theme(theme)
             .with_prompt("Item type")
             .items(
@@ -1105,6 +1105,20 @@ fn edit_editor_item(
     value: &mut Value,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> Result<(), CliError> {
+    if let Some(discriminator) = tagged_union_discriminator(item) {
+        let tag = value
+            .get(discriminator)
+            .and_then(Value::as_str)
+            .ok_or_else(|| CliError::Config("tagged list item has no discriminator".into()))?;
+        let variant = item
+            .variants
+            .iter()
+            .find(|variant| variant.tag == tag)
+            .ok_or_else(|| CliError::Config(format!("unknown list item type {tag:?}")))?;
+        edit_value_section(theme, prompt, value, (variant.schema)(), None)?;
+        return Ok(());
+    }
+
     match item.kind {
         EditorFieldKind::Section => {
             let schema = item
@@ -1112,19 +1126,6 @@ fn edit_editor_item(
                 .ok_or_else(|| CliError::Config("list item has no schema".into()))?(
             );
             edit_value_section(theme, prompt, value, schema, None)?;
-        }
-        EditorFieldKind::TaggedUnion => {
-            let tag = item
-                .discriminator
-                .and_then(|key| value.get(key))
-                .and_then(Value::as_str)
-                .ok_or_else(|| CliError::Config("tagged list item has no discriminator".into()))?;
-            let variant = item
-                .variants
-                .iter()
-                .find(|variant| variant.tag == tag)
-                .ok_or_else(|| CliError::Config(format!("unknown list item type {tag:?}")))?;
-            edit_value_section(theme, prompt, value, (variant.schema)(), None)?;
         }
         EditorFieldKind::List => {
             let nested = item.list_item.ok_or_else(|| {
@@ -1156,14 +1157,22 @@ fn editor_item_label(
     value: &Value,
     item: &nemo_relay::config_editor::EditorListItemSpec,
 ) -> String {
-    if item.kind == EditorFieldKind::TaggedUnion {
+    if let Some(discriminator) = tagged_union_discriminator(item) {
         return value
-            .get(item.discriminator.unwrap_or("type"))
+            .get(discriminator)
             .and_then(Value::as_str)
             .unwrap_or("invalid")
             .to_string();
     }
     display_value(value)
+}
+
+fn tagged_union_discriminator(
+    item: &nemo_relay::config_editor::EditorListItemSpec,
+) -> Option<&'static str> {
+    (!item.variants.is_empty())
+        .then_some(item.discriminator)
+        .flatten()
 }
 
 fn edit_config_field<T>(
@@ -1684,7 +1693,7 @@ fn prompt_value(
             "{} is a nested section and cannot be edited as a scalar",
             field.name
         ))),
-        EditorFieldKind::List | EditorFieldKind::TaggedUnion => Err(CliError::Config(format!(
+        EditorFieldKind::List => Err(CliError::Config(format!(
             "{} is a structured value and cannot be edited as a scalar",
             field.name
         ))),
