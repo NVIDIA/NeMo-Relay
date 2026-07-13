@@ -9,8 +9,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::configuration::IntegrationHost;
 use crate::hooks::generated_hooks;
+use crate::installation::IntegrationHost;
 use crate::installation::generation::{
     write_new_generation_with_token_at, write_staged_generation_with_token,
 };

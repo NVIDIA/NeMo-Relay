@@ -42,7 +42,7 @@ pub(crate) enum IntegrationHost {
     All,
 }
 
-impl From<IntegrationHost> for crate::configuration::IntegrationHost {
+impl From<IntegrationHost> for crate::installation::IntegrationHost {
     fn from(value: IntegrationHost) -> Self {
         match value {
             IntegrationHost::Codex => Self::Codex,
@@ -54,8 +54,8 @@ impl From<IntegrationHost> for crate::configuration::IntegrationHost {
 }
 
 impl InstallCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::InstallRequest {
-        crate::configuration::InstallRequest {
+    pub(crate) fn into_runtime(self) -> crate::installation::InstallRequest {
+        crate::installation::InstallRequest {
             host: self.host.into(),
             install_dir: self.install_dir,
             force: self.force,
@@ -66,8 +66,8 @@ impl InstallCommand {
 }
 
 impl UninstallCommand {
-    pub(crate) fn into_runtime(self) -> crate::configuration::UninstallRequest {
-        crate::configuration::UninstallRequest {
+    pub(crate) fn into_runtime(self) -> crate::installation::UninstallRequest {
+        crate::installation::UninstallRequest {
             host: self.host.into(),
             install_dir: self.install_dir,
             dry_run: self.dry_run,

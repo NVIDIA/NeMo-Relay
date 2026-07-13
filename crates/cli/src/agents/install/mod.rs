@@ -18,11 +18,13 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::configuration::{CodingAgent, InstallRequest, IntegrationHost, UninstallRequest};
+use crate::configuration::CodingAgent;
 use crate::error::CliError;
+use crate::installation::IntegrationHost;
 use crate::installation::generation::{
     GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration,
 };
+use crate::installation::{InstallRequest, UninstallRequest};
 
 use host::{
     CommandRunner, RealCommandRunner, host_registration_report, require_host_cli, require_relay,

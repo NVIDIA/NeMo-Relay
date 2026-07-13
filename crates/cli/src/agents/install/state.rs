@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::configuration::IntegrationHost;
+use crate::installation::IntegrationHost;
 use crate::installation::generation::GENERATION_FILE_NAME;
 
 use super::PLUGIN_NAME;

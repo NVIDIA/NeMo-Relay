@@ -11,7 +11,7 @@ use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
-use crate::configuration::IntegrationHost;
+use crate::installation::IntegrationHost;
 
 use super::state::PluginInstallOptions;
 use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
