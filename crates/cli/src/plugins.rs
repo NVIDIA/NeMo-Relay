@@ -1010,6 +1010,11 @@ fn edit_string_map_value(
                     println!("  Entry key must not be empty.");
                     continue;
                 }
+                let key = key.trim().to_owned();
+                if string_map_entry_exists(value, &key) {
+                    println!("  Entry already exists; select it to edit.");
+                    continue;
+                }
                 let entry: String = Input::with_theme(theme)
                     .with_prompt("Entry value")
                     .interact_text()
@@ -1017,7 +1022,7 @@ fn edit_string_map_value(
                 value
                     .as_object_mut()
                     .expect("string map value is an object")
-                    .insert(key.trim().to_owned(), Value::String(entry));
+                    .insert(key, Value::String(entry));
             }
             MenuResponse::Selected(index) if index <= keys.len() => {
                 edit_existing_string_map_entry(theme, prompt, value, &keys[index - 1])?;
@@ -1032,6 +1037,12 @@ fn edit_string_map_value(
             }
         }
     }
+}
+
+fn string_map_entry_exists(value: &Value, key: &str) -> bool {
+    value
+        .as_object()
+        .is_some_and(|entries| entries.contains_key(key.trim()))
 }
 
 fn edit_existing_string_map_entry(

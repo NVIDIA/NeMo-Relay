@@ -2354,6 +2354,14 @@ fn collection_shortcuts_reset_to_defaults_and_clear_to_empty() {
 }
 
 #[test]
+fn string_map_add_rejects_an_existing_trimmed_key() {
+    let entries = json!({ "existing": "value" });
+
+    assert!(string_map_entry_exists(&entries, " existing "));
+    assert!(!string_map_entry_exists(&entries, "new"));
+}
+
+#[test]
 fn target_path_resolves_project_and_global_without_user_env() {
     let _cwd = crate::test_support::CwdTestScope::locked();
     let cwd = std::env::current_dir().unwrap();
