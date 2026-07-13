@@ -10,28 +10,41 @@ use crate::error::CliError;
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct HookForwardCommand {
+    /// Coding agent whose canonical lifecycle payload is read from standard input.
     #[arg(value_enum)]
     pub(crate) agent: AgentArg,
+    /// Base URL of the Relay gateway that receives the lifecycle payload.
     #[arg(long)]
     pub(crate) gateway_url: Option<String>,
+    /// Installer-owned generation marker used to reject stale persistent hooks.
     #[arg(long, hide = true)]
     pub(crate) generation_file: Option<PathBuf>,
+    /// Expected identity of the installer-owned generation marker.
     #[arg(long, hide = true)]
     pub(crate) generation_token: Option<String>,
+    /// Forward to an existing compatible gateway without an install-generation fence.
+    ///
+    /// Intended for source plugins and custom automation. This mode verifies the gateway but
+    /// never launches or recovers Relay.
     #[arg(long, conflicts_with_all = ["generation_file", "generation_token"])]
     pub(crate) forward_only: bool,
+    /// Mark a hook as owned by a process-private `nemo-relay run` gateway.
     #[arg(
         long,
         hide = true,
         conflicts_with_all = ["generation_file", "generation_token", "forward_only"]
     )]
     pub(crate) transparent_run: bool,
+    /// Configuration profile recorded with the forwarded session metadata.
     #[arg(long)]
     pub(crate) profile: Option<String>,
+    /// JSON value added to the forwarded session metadata.
     #[arg(long)]
     pub(crate) session_metadata: Option<String>,
+    /// Expected gateway behavior recorded with the forwarded session metadata.
     #[arg(long, value_enum)]
     pub(crate) gateway_mode: Option<GatewayModeArg>,
+    /// Return a failure when the payload cannot be delivered or Relay rejects it.
     #[arg(long)]
     pub(crate) fail_closed: bool,
 }

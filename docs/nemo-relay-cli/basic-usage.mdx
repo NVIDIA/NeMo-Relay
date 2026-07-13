@@ -359,11 +359,19 @@ to the matching endpoint, and prints the endpoint response. It fails open by
 default so observability outages do not block the coding agent. Add
 `--fail-closed` only when policy requires hook delivery to block the agent.
 
-Optional flags map to gateway headers:
+Available flags:
 
+- `--gateway-url <url>` selects the Relay gateway that receives the payload.
+- `--forward-only` allows source plugins and custom automation to use an
+  existing compatible gateway without an installer-owned generation fence. It
+  verifies the gateway but never launches or recovers Relay. Generated
+  installed hooks use a private generation fence instead.
 - `--session-metadata` sets `x-nemo-relay-session-metadata`.
 - `--profile` sets `x-nemo-relay-config-profile`.
 - `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
+- `--fail-closed` returns a failure when delivery fails or Relay rejects the
+  hook. Without it, forwarding fails open so an observability outage does not
+  block the coding agent.
 
 ## Agent Guides
 

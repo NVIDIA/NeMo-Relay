@@ -257,11 +257,18 @@ hook command status to the host.
 
 Useful `hook-forward` options:
 
+- `--gateway-url <url>` selects the Relay gateway that receives the payload.
+- `--forward-only` allows a source plugin or custom automation to use an
+  existing compatible gateway without an installer-owned generation fence. It
+  verifies the gateway but never launches or recovers Relay. Generated
+  installed hooks use a private generation fence instead.
 - `--session-metadata '<json>'` adds structured metadata to the agent begin
   event.
 - `--profile <name>` records a configuration profile in session metadata.
 - `--gateway-mode hook-only|passthrough|required` records the expected gateway
   behavior in session metadata.
+- `--fail-closed` returns a failure when delivery fails or Relay rejects the
+  hook instead of allowing the coding agent to continue.
 
 ## LLM Gateway
 
