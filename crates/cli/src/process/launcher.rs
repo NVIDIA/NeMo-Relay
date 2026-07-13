@@ -759,40 +759,6 @@ fn path_with_transparent_hook_dir() -> Option<String> {
 // it here prevents a prompt token named `codex` or `claude` from becoming an accidental insertion
 // target while preserving configured wrapper prefixes.
 
-// Creates a per-process Hermes home whose user state points at the original profile while the
-// config and hook approval files remain private to this transparent run. Hermes has no standalone
-// config-file override, so `HERMES_HOME` is its supported process-scoped configuration boundary.
-
-#[cfg(windows)]
-fn create_windows_junction(source: &Path, destination: &Path) -> Result<(), CliError> {
-    use std::os::windows::process::CommandExt;
-
-    // Directory junctions do not require Developer Mode or SeCreateSymbolicLinkPrivilege. Paths
-    // travel through environment variables so the fixed cmd program never interpolates user
-    // content into shell syntax; delayed expansion is disabled for literal exclamation marks.
-    let mut command = std::process::Command::new(
-        std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe")),
-    );
-    command.args(["/d", "/e:on", "/v:off", "/s", "/c"]);
-    // `cmd.exe` parses the command after `/c` itself rather than with the Windows CRT rules used
-    // by `Command::arg`. The outer quote pair is required so the inner path quotes survive `/s`.
-    command
-        .raw_arg(r#""mklink /J "%NEMO_RELAY_JUNCTION_DEST%" "%NEMO_RELAY_JUNCTION_SOURCE%" >nul""#);
-    let status = command
-        .env("NEMO_RELAY_JUNCTION_SOURCE", source)
-        .env("NEMO_RELAY_JUNCTION_DEST", destination)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(CliError::Launch(format!(
-            "failed to create Hermes state junction {} -> {}: {status}",
-            destination.display(),
-            source.display()
-        )))
-    }
-}
-
 // Chooses the Hermes config used as the source for a transparent-run overlay. If setup recorded a
 // specific path, reuse it; otherwise fall back to the active Hermes home.
 

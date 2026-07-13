@@ -2905,7 +2905,7 @@ delay_after_continue = False
 
 def handle_continue(_signal, _frame):
     if delay_after_continue:
-        print("AGENT_BG_DELAY", flush=True)
+        os.write(sys.stdout.fileno(), b"AGENT_BG_DELAY\n")
         time.sleep(1.5)
 
 signal.signal(signal.SIGCONT, handle_continue)

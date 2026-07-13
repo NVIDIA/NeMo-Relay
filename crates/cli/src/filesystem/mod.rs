@@ -11,11 +11,13 @@ pub(crate) mod temp;
 
 #[cfg(test)]
 pub(crate) use atomic::fail_next_atomic_write;
+#[cfg(all(test, windows))]
+pub(crate) use atomic::windows_path_is_private;
 pub(crate) use atomic::{atomic_write, atomic_write_private, atomic_write_with_permissions};
 #[cfg(windows)]
 pub(crate) use atomic::{
     atomic_write_with_windows_dacl, open_private_windows_file, protect_private_windows_path,
-    read_windows_dacl, windows_path_is_private,
+    read_windows_dacl,
 };
 pub(crate) use locks::{LockAttempt, try_lock_exclusive, try_lock_shared, unlock_file};
 pub(crate) use snapshots::{
