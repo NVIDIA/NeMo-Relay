@@ -154,6 +154,14 @@ impl crate::installation::marketplace::state::MarketplaceHostIdentity for Coding
         self.label()
     }
 
+    fn executable(self) -> &'static str {
+        self.executable()
+    }
+
+    fn validate_version_output(self, output: &str) -> Result<(), String> {
+        self.validate_version_output(output).map(|_| ())
+    }
+
     fn marketplace_manifest_relative(self) -> &'static [&'static str] {
         match self {
             Self::Codex => &[".agents", "plugins", "marketplace.json"],

@@ -13,11 +13,11 @@ use serde_json::json;
 
 use crate::agents::CodingAgent;
 
-use super::state::PluginInstallOptions;
+use super::state::{MarketplaceHostIdentity, PluginInstallOptions};
 use super::{MARKETPLACE_NAME, PLUGIN_NAME, RELAY_COMMAND};
 
 pub(super) fn run_host_marketplace_registration(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     marketplace_root: &Path,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
@@ -99,7 +99,7 @@ pub(super) fn run_host_plugin_removal(
 }
 
 pub(super) fn run_host_marketplace_removal(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
@@ -342,7 +342,7 @@ pub(crate) fn validate_relay_mcp(
 }
 
 pub(crate) fn require_host_cli(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
@@ -357,16 +357,15 @@ pub(crate) fn require_host_cli(
 }
 
 pub(crate) fn validate_host_version(
-    host: CodingAgent,
+    host: impl MarketplaceHostIdentity,
     options: &PluginInstallOptions,
     runner: &dyn CommandRunner,
 ) -> Result<(), String> {
     if options.dry_run {
         return Ok(());
     }
-    let agent = host;
-    let output = run_capture_command(agent.executable(), &["--version".into()], options, runner)?;
-    agent.validate_version_output(&output.stdout).map(|_| ())
+    let output = run_capture_command(host.executable(), &["--version".into()], options, runner)?;
+    host.validate_version_output(&output.stdout)
 }
 
 pub(super) fn run_command(

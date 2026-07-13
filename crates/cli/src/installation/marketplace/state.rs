@@ -18,6 +18,8 @@ use super::PLUGIN_NAME;
 pub(crate) trait MarketplaceHostIdentity: Copy {
     fn install_arg(self) -> &'static str;
     fn label(self) -> &'static str;
+    fn executable(self) -> &'static str;
+    fn validate_version_output(self, output: &str) -> Result<(), String>;
     fn marketplace_manifest_relative(self) -> &'static [&'static str];
     fn plugin_manifest_relative(self) -> &'static [&'static str];
     fn marketplace_manifest(self, marketplace: &str, plugin: &str) -> Value;
