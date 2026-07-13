@@ -3,7 +3,6 @@
 
 //! Host setup, restore, and doctor delegation.
 
-use crate::agents as host;
 use crate::agents::CodingAgent;
 use serde_json::Value;
 use std::path::Path;
@@ -87,21 +86,7 @@ pub(super) fn run_plugin_doctor_json(
 }
 
 pub(super) fn setup_action_description(host: CodingAgent, action: &str) -> String {
-    match (host, action) {
-        (CodingAgent::Codex, "configure") => {
-            "configure Codex provider and trust plugin-owned hooks".into()
-        }
-        (CodingAgent::Codex, "restore") => "remove Codex provider and plugin hook trust".into(),
-        (CodingAgent::Codex, "doctor") => "check Codex provider and plugin-owned hooks".into(),
-        (CodingAgent::ClaudeCode, "configure") => {
-            "enable Claude Code provider routing through NeMo Relay".into()
-        }
-        (CodingAgent::ClaudeCode, "restore") => {
-            "restore Claude Code provider routing from NeMo Relay backup".into()
-        }
-        (CodingAgent::ClaudeCode, "doctor") => "check Claude Code provider routing".into(),
-        (_, _) => unreachable!("unsupported setup action"),
-    }
+    crate::agents::setup_action_description(host, action)
 }
 
 pub(super) trait PluginSetupRunner {
@@ -159,39 +144,19 @@ pub(super) trait PluginSetupRunner {
 
 pub(super) struct RealPluginSetupRunner;
 
-pub(super) enum PluginSetupSnapshot {
-    Codex(host::CodexSetupSnapshot),
-    Claude(host::ClaudeSetupSnapshot),
-    #[cfg(test)]
-    Mock,
-}
+pub(super) use crate::agents::SetupSnapshot as PluginSetupSnapshot;
 
 impl PluginSetupRunner for RealPluginSetupRunner {
     fn snapshot(&self, host: CodingAgent) -> Result<Option<PluginSetupSnapshot>, String> {
-        match host {
-            CodingAgent::Codex => host::snapshot_codex_setup()
-                .map(PluginSetupSnapshot::Codex)
-                .map(Some),
-            CodingAgent::ClaudeCode => host::snapshot_claude_setup()
-                .map(PluginSetupSnapshot::Claude)
-                .map(Some),
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before plugin setup")
-            }
-        }
+        crate::agents::snapshot_setup(host).map(Some)
     }
 
     fn restore_snapshot(&self, snapshot: &PluginSetupSnapshot) -> Result<(), String> {
-        match snapshot {
-            PluginSetupSnapshot::Codex(snapshot) => host::restore_codex_setup(snapshot),
-            PluginSetupSnapshot::Claude(snapshot) => host::restore_claude_setup(snapshot),
-            #[cfg(test)]
-            PluginSetupSnapshot::Mock => Ok(()),
-        }
+        crate::agents::restore_setup_snapshot(snapshot)
     }
 
     fn refresh_gateway(&self) -> Result<(), String> {
-        host::stop_plugin_gateway()
+        crate::agents::stop_plugin_gateway()
     }
 
     fn setup(
@@ -210,17 +175,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         plugin_root: &Path,
         generation_token: Option<&str>,
     ) -> Result<(), String> {
-        match host {
-            CodingAgent::Codex => host::install_codex_plugin_with_generation(
-                gateway_url,
-                plugin_root,
-                generation_token,
-            ),
-            CodingAgent::ClaudeCode => host::enable_claude_provider(gateway_url),
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before plugin setup")
-            }
-        }
+        crate::agents::setup_marketplace_plugin(host, gateway_url, plugin_root, generation_token)
     }
 
     fn uninstall(
@@ -229,13 +184,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<(), String> {
-        match host {
-            CodingAgent::Codex => host::uninstall_codex_plugin(gateway_url, plugin_root),
-            CodingAgent::ClaudeCode => host::restore_claude_provider(gateway_url),
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before plugin uninstall")
-            }
-        }
+        crate::agents::uninstall_marketplace_plugin(host, gateway_url, plugin_root)
     }
 
     fn doctor(
@@ -254,20 +203,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         plugin_root: &Path,
         generation_token: Option<&str>,
     ) -> Result<(), String> {
-        match host {
-            CodingAgent::Codex => host::doctor_plugin_with_generation(
-                CodingAgent::Codex,
-                gateway_url,
-                plugin_root,
-                generation_token,
-            ),
-            CodingAgent::ClaudeCode => {
-                host::doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root)
-            }
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before plugin doctor")
-            }
-        }
+        crate::agents::doctor_marketplace_plugin(host, gateway_url, plugin_root, generation_token)
     }
 
     fn doctor_json(
@@ -276,17 +212,7 @@ impl PluginSetupRunner for RealPluginSetupRunner {
         gateway_url: &str,
         plugin_root: &Path,
     ) -> Result<Value, String> {
-        match host {
-            CodingAgent::Codex => {
-                host::doctor_plugin_json(CodingAgent::Codex, gateway_url, plugin_root)
-            }
-            CodingAgent::ClaudeCode => {
-                host::doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
-            }
-            CodingAgent::Hermes => {
-                unreachable!("all is expanded before plugin doctor")
-            }
-        }
+        crate::agents::doctor_marketplace_plugin_json(host, gateway_url, plugin_root)
     }
 }
 

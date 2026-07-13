@@ -202,6 +202,107 @@ pub(crate) fn prepare_launch(
     }
 }
 
+pub(crate) enum SetupSnapshot {
+    Codex(CodexSetupSnapshot),
+    Claude(ClaudeSetupSnapshot),
+    #[cfg(test)]
+    Mock,
+}
+
+pub(crate) fn setup_action_description(agent: CodingAgent, action: &str) -> String {
+    match (agent, action) {
+        (CodingAgent::Codex, "configure") => {
+            "configure Codex provider and trust plugin-owned hooks".into()
+        }
+        (CodingAgent::Codex, "restore") => "remove Codex provider and plugin hook trust".into(),
+        (CodingAgent::Codex, "doctor") => "check Codex provider and plugin-owned hooks".into(),
+        (CodingAgent::ClaudeCode, "configure") => {
+            "enable Claude Code provider routing through NeMo Relay".into()
+        }
+        (CodingAgent::ClaudeCode, "restore") => {
+            "restore Claude Code provider routing from NeMo Relay backup".into()
+        }
+        (CodingAgent::ClaudeCode, "doctor") => "check Claude Code provider routing".into(),
+        _ => unreachable!("unsupported setup action"),
+    }
+}
+
+pub(crate) fn snapshot_setup(agent: CodingAgent) -> Result<SetupSnapshot, String> {
+    match agent {
+        CodingAgent::Codex => snapshot_codex_setup().map(SetupSnapshot::Codex),
+        CodingAgent::ClaudeCode => snapshot_claude_setup().map(SetupSnapshot::Claude),
+        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
+    }
+}
+
+pub(crate) fn restore_setup_snapshot(snapshot: &SetupSnapshot) -> Result<(), String> {
+    match snapshot {
+        SetupSnapshot::Codex(snapshot) => restore_codex_setup(snapshot),
+        SetupSnapshot::Claude(snapshot) => restore_claude_setup(snapshot),
+        #[cfg(test)]
+        SetupSnapshot::Mock => Ok(()),
+    }
+}
+
+pub(crate) fn setup_marketplace_plugin(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
+    match agent {
+        CodingAgent::Codex => {
+            install_codex_plugin_with_generation(gateway_url, plugin_root, generation_token)
+        }
+        CodingAgent::ClaudeCode => enable_claude_provider(gateway_url),
+        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
+    }
+}
+
+pub(crate) fn uninstall_marketplace_plugin(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+) -> Result<(), String> {
+    match agent {
+        CodingAgent::Codex => uninstall_codex_plugin(gateway_url, plugin_root),
+        CodingAgent::ClaudeCode => restore_claude_provider(gateway_url),
+        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
+    }
+}
+
+pub(crate) fn doctor_marketplace_plugin(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+    generation_token: Option<&str>,
+) -> Result<(), String> {
+    match agent {
+        CodingAgent::Codex => doctor_plugin_with_generation(
+            CodingAgent::Codex,
+            gateway_url,
+            plugin_root,
+            generation_token,
+        ),
+        CodingAgent::ClaudeCode => doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root),
+        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
+    }
+}
+
+pub(crate) fn doctor_marketplace_plugin_json(
+    agent: CodingAgent,
+    gateway_url: &str,
+    plugin_root: &Path,
+) -> Result<Value, String> {
+    match agent {
+        CodingAgent::Codex => doctor_plugin_json(CodingAgent::Codex, gateway_url, plugin_root),
+        CodingAgent::ClaudeCode => {
+            doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
+        }
+        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
+    }
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;
