@@ -1962,21 +1962,6 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         .is_empty()
     );
 
-    let doctor_error = doctor(&[], Some(dir.path().join("install")), true)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        doctor_error.contains("no installed Claude Code, Codex, or Hermes integration state"),
-        "error was: {doctor_error}"
-    );
-    let doctor_human_error = doctor(&[], Some(dir.path().join("install")), false)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        doctor_human_error.contains("no installed Claude Code, Codex, or Hermes integration state"),
-        "error was: {doctor_human_error}"
-    );
-
     assert_eq!(
         install(
             CodingAgent::Codex,
@@ -1991,13 +1976,10 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
         std::process::ExitCode::SUCCESS
     );
 
-    let codex_doctor_error = doctor(
-        &[CodingAgent::Codex],
-        Some(dir.path().join("install")),
-        false,
-    )
-    .unwrap_err()
-    .to_string();
+    let doctor_options = plugin_doctor_options(Some(dir.path().join("install")));
+    let codex_doctor_error = crate::agents::doctor_integration(CodingAgent::Codex, &doctor_options)
+        .unwrap_err()
+        .to_string();
     assert!(
         codex_doctor_error.contains("nemo-relay install codex --force"),
         "error was: {codex_doctor_error}"
@@ -2005,12 +1987,6 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
 
     assert_eq!(CodingAgent::Codex.as_arg(), "codex");
     assert_eq!(CodingAgent::Codex.label(), "Codex");
-    print_json(&json!({"ok": true})).unwrap();
-    assert_eq!(
-        with_schema(json!({"ok": true})),
-        json!({"ok": true, "schema_version": 1})
-    );
-    assert_eq!(with_schema(json!("not-an-object")), json!("not-an-object"));
     assert_eq!(CodingAgent::Codex.executable(), "codex");
 }
 

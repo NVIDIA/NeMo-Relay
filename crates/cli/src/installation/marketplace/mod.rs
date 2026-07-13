@@ -287,12 +287,8 @@ pub(crate) fn uninstall(
     run_for_host(host, &options, uninstall_host)
 }
 
-pub(crate) fn doctor(
-    hosts: &[CodingAgent],
-    install_dir: Option<PathBuf>,
-    json: bool,
-) -> Result<ExitCode, CliError> {
-    let options = PluginInstallOptions {
+pub(crate) fn plugin_doctor_options(install_dir: Option<PathBuf>) -> PluginInstallOptions {
+    PluginInstallOptions {
         install_dir: install_dir
             .unwrap_or_else(default_install_dir)
             .canonicalize_or_self(),
@@ -300,26 +296,15 @@ pub(crate) fn doctor(
         force: false,
         dry_run: false,
         skip_doctor: true,
-    };
-    if hosts.is_empty() {
-        return Err(CliError::Install(
-            "no installed Claude Code, Codex, or Hermes integration state was found".into(),
-        ));
     }
-    if json {
-        return doctor_json(hosts, &options);
-    }
-    for &host in hosts {
-        run_for_host(
-            host,
-            &options,
-            |host, options, runner, setup_runner| match host {
-                CodingAgent::Hermes => crate::agents::hermes::install::doctor(options, runner),
-                _ => doctor_host(host, options, runner, setup_runner),
-            },
-        )?;
-    }
-    Ok(ExitCode::SUCCESS)
+}
+
+pub(crate) fn doctor_marketplace_integration(
+    host: impl MarketplaceHost,
+    options: &PluginInstallOptions,
+) -> Result<(), CliError> {
+    run_for_host(host, options, doctor_host)?;
+    Ok(())
 }
 
 fn run_for_host<H, F>(
@@ -342,44 +327,13 @@ where
     Ok(ExitCode::SUCCESS)
 }
 
-fn doctor_json(
-    hosts: &[CodingAgent],
+pub(crate) fn doctor_marketplace_report(
+    host: impl MarketplaceHost,
     options: &PluginInstallOptions,
-) -> Result<ExitCode, CliError> {
+) -> Result<Value, CliError> {
     let runner = RealCommandRunner;
-    let reports = hosts
-        .iter()
-        .copied()
-        .map(|host| match host {
-            CodingAgent::Hermes => {
-                crate::agents::hermes::install::doctor_json_value(options, &runner)
-            }
-            _ => {
-                let setup_runner = HostPluginSetupRunner::new(host);
-                doctor_host_json_value(host, options, &runner, &setup_runner)
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(CliError::Install)?;
-    let ready = reports
-        .iter()
-        .all(|report| report.get("ok").and_then(Value::as_bool) == Some(true));
-    if hosts.len() > 1 {
-        print_json(&json!({
-            "schema_version": 1,
-            "plugins": reports
-        }))
-    } else {
-        print_json(&with_schema(
-            reports.into_iter().next().expect("hosts is not empty"),
-        ))
-    }
-    .map_err(CliError::Install)?;
-    Ok(if ready {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
+    let setup_runner = HostPluginSetupRunner::new(host);
+    doctor_host_json_value(host, options, &runner, &setup_runner).map_err(CliError::Install)
 }
 
 pub(crate) fn default_marketplace_install_dir() -> PathBuf {
@@ -2122,19 +2076,6 @@ fn run_host_unregistration(
         write_state_for_host(host, state, install_dir, options)?;
     }
     Ok(())
-}
-
-fn print_json(value: &Value) -> Result<(), String> {
-    let rendered = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
-    println!("{rendered}");
-    Ok(())
-}
-
-fn with_schema(mut value: Value) -> Value {
-    if let Some(object) = value.as_object_mut() {
-        object.insert("schema_version".into(), json!(1));
-    }
-    value
 }
 
 #[cfg(test)]

@@ -543,6 +543,37 @@ pub(crate) fn installed_integrations(
         .collect()
 }
 
+pub(crate) fn doctor_integration(
+    agent: CodingAgent,
+    options: &crate::installation::marketplace::state::PluginInstallOptions,
+) -> Result<(), crate::error::CliError> {
+    match agent {
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            crate::installation::marketplace::doctor_marketplace_integration(agent, options)
+        }
+        CodingAgent::Hermes => {
+            let runner = crate::installation::marketplace::host::RealCommandRunner;
+            hermes::install::doctor(options, &runner).map_err(crate::error::CliError::Install)
+        }
+    }
+}
+
+pub(crate) fn doctor_integration_report(
+    agent: CodingAgent,
+    options: &crate::installation::marketplace::state::PluginInstallOptions,
+) -> Result<serde_json::Value, crate::error::CliError> {
+    match agent {
+        CodingAgent::Codex | CodingAgent::ClaudeCode => {
+            crate::installation::marketplace::doctor_marketplace_report(agent, options)
+        }
+        CodingAgent::Hermes => {
+            let runner = crate::installation::marketplace::host::RealCommandRunner;
+            hermes::install::doctor_json_value(options, &runner)
+                .map_err(crate::error::CliError::Install)
+        }
+    }
+}
+
 pub(crate) use claude::host::{ClaudeSetupSnapshot, restore_claude_setup, snapshot_claude_setup};
 pub(crate) use codex::host::{CodexSetupSnapshot, restore_codex_setup, snapshot_codex_setup};
 pub(crate) use shared::host::portable_executable_path;
