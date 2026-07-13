@@ -31,9 +31,11 @@ use crate::agents::shared::alignment::{
 use crate::configuration::{GatewayConfig, SessionConfig};
 use crate::error::CliError;
 mod correlation;
+mod idle;
 mod types;
 
 use correlation::*;
+use idle::*;
 pub(crate) use types::*;
 
 use crate::events::{
@@ -43,8 +45,6 @@ use crate::events::{
 const LLM_HINT_TTL: Duration = Duration::from_secs(300);
 const TOOL_HINT_TTL: Duration = Duration::from_secs(300);
 const LAST_OWNER_TTL: Duration = Duration::from_secs(300);
-const AGENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-const AGENT_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub(crate) struct SessionManager {
@@ -56,7 +56,7 @@ pub(crate) struct SessionManager {
     default_config: GatewayConfig,
 }
 
-struct Session {
+pub(super) struct Session {
     agent_kind: AgentKind,
     session_id: String,
     scope_stack: ScopeStackHandle,
@@ -696,84 +696,6 @@ async fn promote_pending_subagent(
     let alias = pending.alias_for_child_session(child_session_id.clone());
     alignment_state.insert_alias(child_session_id, alias.clone());
     Ok(Some(alias))
-}
-
-async fn close_sessions_for_shutdown(
-    sessions: &mut [Session],
-    reason: &str,
-) -> Result<(), CliError> {
-    let mut first_error = None;
-    for session in sessions {
-        if let Err(error) = session.close_for_shutdown(reason).await
-            && first_error.is_none()
-        {
-            first_error = Some(error);
-        }
-    }
-    first_error.map_or(Ok(()), Err)
-}
-
-async fn close_idle_sessions_from_parts(
-    inner: &Arc<Mutex<HashMap<String, Session>>>,
-    alignment: &Arc<Mutex<SessionAlignmentState>>,
-    now: Instant,
-    timeout: Duration,
-    reason: &str,
-) -> Result<usize, CliError> {
-    let mut idle_sessions = Vec::new();
-    {
-        let mut sessions = inner.lock().await;
-        let ids = sessions
-            .iter()
-            .filter_map(|(session_id, session)| {
-                session
-                    .is_idle_for(now, timeout)
-                    .then_some(session_id.clone())
-            })
-            .collect::<Vec<_>>();
-        for session_id in ids {
-            if let Some(session) = sessions.remove(&session_id) {
-                idle_sessions.push((session_id, session));
-            }
-        }
-    }
-    if idle_sessions.is_empty() {
-        return Ok(0);
-    }
-    let mut closed_turns = 0;
-    let mut closed_subagents = Vec::new();
-    let mut retained_sessions = Vec::new();
-    let mut first_error = None;
-    for (session_id, mut session) in idle_sessions {
-        let stack = session.scope_stack.clone();
-        let result = TASK_SCOPE_STACK
-            .scope(stack, async { session.close_turn_for_reason(reason).await })
-            .await;
-        match result {
-            Ok(subagent_ids) => {
-                closed_turns += 1;
-                for subagent_id in subagent_ids {
-                    closed_subagents.push((session_id.clone(), subagent_id));
-                }
-            }
-            Err(error) if first_error.is_none() => first_error = Some(error),
-            Err(_) => {}
-        }
-        if !session.is_empty() {
-            retained_sessions.push((session_id, session));
-        }
-    }
-    {
-        let mut sessions = inner.lock().await;
-        sessions.extend(retained_sessions);
-    }
-    if !closed_subagents.is_empty() {
-        let mut alignment_state = alignment.lock().await;
-        for (session_id, subagent_id) in closed_subagents {
-            alignment_state.clear_for_ended_subagent(&session_id, &subagent_id);
-        }
-    }
-    first_error.map_or(Ok(closed_turns), Err)
 }
 
 fn route_event_for_session(
