@@ -41,6 +41,8 @@ fn projects_typed_json_and_copies_configured_aliases() {
         Some(&serde_json::json!({
             "tenant": "acme",
             "attempt": 2,
+            "enabled": true,
+            "unset": null,
             "tags": ["a", "b"],
             "context": {"region": "us-east-1"},
             "request": {"id": "nested-id"},
@@ -68,6 +70,11 @@ fn projects_typed_json_and_copies_configured_aliases() {
         values.get("nemo_relay.start.metadata.attempt"),
         Some(&"2".to_string())
     );
+    assert_eq!(
+        values.get("nemo_relay.start.metadata.enabled"),
+        Some(&"true".to_string())
+    );
+    assert!(!values.contains_key("nemo_relay.start.metadata.unset"));
     assert_eq!(
         values.get("nemo_relay.start.metadata.tags"),
         Some(&"[\"a\",\"b\"]".to_string())
@@ -108,5 +115,8 @@ fn rejects_invalid_attribute_mappings() {
             OtlpAttributeMapping::new("two", " duplicate "),
         ])
         .is_err()
+    );
+    assert!(
+        super::validate_attribute_mappings(&[OtlpAttributeMapping::new("key", "   ")]).is_err()
     );
 }
