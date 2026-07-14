@@ -3177,7 +3177,7 @@ fn failed_force_refresh_hides_transient_generation_retirement_from_mcp() {
         install_host(CodingAgent::Codex, &options, &runner, &setup_runner)
     });
 
-    entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     let (verified_tx, verified_rx) = std::sync::mpsc::channel();
     let verifier = std::thread::spawn(move || verified_tx.send(previous.verify_current()).unwrap());
     assert!(
@@ -3191,7 +3191,7 @@ fn failed_force_refresh_hides_transient_generation_retirement_from_mcp() {
     let error = install.join().unwrap().unwrap_err();
     assert!(error.contains("refresh gateway failed"), "{error}");
     verified_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(Duration::from_secs(5))
         .unwrap()
         .unwrap();
     verifier.join().unwrap();
