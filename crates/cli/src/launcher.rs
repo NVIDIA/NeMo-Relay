@@ -22,9 +22,9 @@ use crate::config::{
 };
 use crate::error::CliError;
 use crate::installer::{generated_hooks, hook_forward_command, merge_hermes_config};
-use crate::logging::LoggingRuntime;
 use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
 use crate::server;
+use nemo_relay::logging::LoggingRuntime;
 
 /// Runs a child coding-agent command behind an ephemeral local gateway.
 ///
@@ -113,7 +113,7 @@ impl TransparentRun {
         let logging = if dry_run {
             None
         } else {
-            Some(crate::logging::init_logging(&resolved.logging)?)
+            Some(nemo_relay::logging::init_logging(&resolved.logging)?)
         };
         let dynamic_plugins = if dry_run {
             Vec::new()

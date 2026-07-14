@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use super::*;
-use crate::config::{FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig};
+use crate::logging::{
+    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, build_logger,
+    format_event_for_test, init_logging,
+};
 use serde_json::Value;
 use spdlog::Level;
 use std::path::PathBuf;
@@ -137,12 +139,8 @@ fn file_sink_receives_jsonl_and_preserves_existing_content() {
             ..FileLogSinkConfig::default()
         })],
     };
-    let runtime = build_logger_for_test(&config).unwrap();
+    let runtime = init_logging(&config).unwrap();
     let root = runtime.root_relay_id().to_owned();
-    // Install only for this locked integration path so structured KVs reach the file sink.
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&runtime.logger)));
-    log::set_max_level(log::LevelFilter::Info);
 
     log::info!(
         target: "nemo_relay.server",
@@ -197,10 +195,7 @@ fn sink_level_filter_drops_events_below_sink_minimum() {
             ..FileLogSinkConfig::default()
         })],
     };
-    let runtime = build_logger_for_test(&config).unwrap();
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&runtime.logger)));
-    log::set_max_level(log::LevelFilter::Debug);
+    let runtime = init_logging(&config).unwrap();
 
     log::info!(
         target: "nemo_relay.server",
@@ -269,12 +264,17 @@ fn init_logging_rejects_duplicate_resolved_paths() {
 
 #[test]
 fn init_logging_rejects_dot_slash_duplicate_relative_paths() {
-    let _env = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
-    let _cwd = crate::test_support::CwdTestScope::enter(temp.path());
+    let previous_cwd = std::env::current_dir().unwrap();
+    struct RestoreCwd(PathBuf);
+    impl Drop for RestoreCwd {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.0);
+        }
+    }
+    let _restore_cwd = RestoreCwd(previous_cwd);
+    std::env::set_current_dir(temp.path()).unwrap();
 
     let config = LoggingConfig {
         sinks: vec![
@@ -313,10 +313,7 @@ fn shutdown_drains_async_file_sink_without_waiting() {
             ..FileLogSinkConfig::default()
         })],
     };
-    let runtime = build_logger_for_test(&config).unwrap();
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&runtime.logger)));
-    log::set_max_level(log::LevelFilter::Info);
+    let runtime = init_logging(&config).unwrap();
 
     log::info!(
         target: "nemo_relay.server",
@@ -370,7 +367,7 @@ fn human_and_jsonl_share_root_id_across_destinations_in_formatter() {
 #[test]
 fn stderr_only_logger_builds_without_file_sinks() {
     let _lock = lock_logging_tests();
-    let runtime = build_logger_for_test(&default_config()).unwrap();
+    let runtime = init_logging(&default_config()).unwrap();
     runtime.shutdown();
 }
 
@@ -392,10 +389,7 @@ fn global_level_filter_drops_events_below_process_minimum() {
             ..FileLogSinkConfig::default()
         })],
     };
-    let runtime = build_logger_for_test(&config).unwrap();
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&runtime.logger)));
-    log::set_max_level(log::LevelFilter::Warn);
+    let runtime = init_logging(&config).unwrap();
 
     log::info!(
         target: "nemo_relay.server",
@@ -417,9 +411,6 @@ fn global_level_filter_drops_events_below_process_minimum() {
 
 #[test]
 fn relative_sink_path_resolves_against_process_cwd() {
-    let _env = crate::test_support::ENV_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
     let previous_cwd = std::env::current_dir().unwrap();
@@ -444,10 +435,7 @@ fn relative_sink_path_resolves_against_process_cwd() {
         })],
     };
     let expected = temp.path().join("relay.log.jsonl");
-    let runtime = build_logger_for_test(&config).unwrap();
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&runtime.logger)));
-    log::set_max_level(log::LevelFilter::Info);
+    let runtime = init_logging(&config).unwrap();
 
     log::info!(
         target: "nemo_relay.server",
@@ -489,11 +477,8 @@ fn multiple_file_sinks_receive_same_event() {
             }),
         ],
     };
-    let runtime = build_logger_for_test(&config).unwrap();
+    let runtime = init_logging(&config).unwrap();
     let root = runtime.root_relay_id().to_owned();
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&runtime.logger)));
-    log::set_max_level(log::LevelFilter::Info);
 
     log::info!(
         target: "nemo_relay.server",

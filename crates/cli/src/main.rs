@@ -14,7 +14,6 @@ mod gateway;
 mod installer;
 mod json_path;
 mod launcher;
-mod logging;
 mod model;
 mod model_pricing;
 mod plugin_install;
@@ -195,7 +194,7 @@ async fn run_default(server_args: &ServerArgs) -> Result<ExitCode, error::CliErr
     //   `nemo-relay config` remains the reconfiguration path.
     if server_args.requested_daemon_mode() {
         let resolved = config::resolve_server_config(server_args)?;
-        let _logging = logging::init_logging(&resolved.logging)?;
+        let _logging = nemo_relay::logging::init_logging(&resolved.logging)?;
         let dynamic_plugins = plugins::lifecycle::active_dynamic_plugin_components(
             server_args.config.as_ref(),
             &resolved,

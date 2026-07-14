@@ -43,7 +43,6 @@ http = "1"
 http-body-util = "0.1"
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
 jsonschema = { version = "0.46.6", default-features = false }
-log = { version = "0.4", features = ["kv"] }
 percent-encoding = "2"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "json", "rustls-tls-native-roots", "stream"] }
 regex = "1"
@@ -58,7 +57,6 @@ tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-threa
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 toml = "0.9"
 toml_edit = "0.23"
-spdlog-rs = { version = "0.5", features = ["log", "multi-thread"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
