@@ -87,7 +87,7 @@ class AtofConfig:
     """Multi-sink raw ATOF export settings."""
 
     enabled: bool = False
-    sinks: list["AtofFileSinkConfig | AtofStreamSinkConfig"] | None = None
+    sinks: list[AtofFileSinkConfig | AtofStreamSinkConfig] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF config to the canonical JSON object shape."""
