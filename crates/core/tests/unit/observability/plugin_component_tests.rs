@@ -325,6 +325,27 @@ fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
                 .message
                 .contains("attribute mapping key must not be blank")
     }));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "policy": {"unknown_field": "error"},
+        "opentelemetry": {
+            "attribute_mappings": [{
+                "key": "nemo_relay.start.metadata.tenant",
+                "alias": "tenant.id"
+            }]
+        },
+        "openinference": {
+            "attribute_mappings": [{
+                "key": "openinference.metadata.tenant",
+                "alias": "tenant.id"
+            }]
+        }
+    })));
+    assert!(
+        !report.has_errors(),
+        "valid attribute mappings must not be reported as unknown: {:?}",
+        report.diagnostics
+    );
 }
 
 #[cfg(feature = "schema")]
