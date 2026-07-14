@@ -80,7 +80,7 @@ fn register_adds_plugin_management_bindings() {
             "_PluginHostActivation",
             "validate_plugin_config",
             "initialize_plugins",
-            "activate_dynamic_plugins",
+            "initialize_with_dynamic_plugins",
             "clear_plugin_configuration",
             "active_plugin_report",
             "list_plugin_kinds",

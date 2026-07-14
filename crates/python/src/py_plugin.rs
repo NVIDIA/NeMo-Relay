@@ -921,10 +921,10 @@ impl Drop for PyPluginHostActivation {
     }
 }
 
-/// Load and initialize an owned dynamic plugin host.
-#[pyfunction(name = "activate_dynamic_plugins")]
+/// Initialize registered components with an owned dynamic plugin host.
+#[pyfunction(name = "initialize_with_dynamic_plugins")]
 #[pyo3(signature = (config: "object", dynamic_plugins: "object") -> "object", text_signature = "(config: object, dynamic_plugins: object) -> object")]
-fn activate_dynamic_plugins_py<'py>(
+fn initialize_with_dynamic_plugins_py<'py>(
     py: Python<'py>,
     config: &Bound<'_, PyAny>,
     dynamic_plugins: &Bound<'_, PyAny>,
@@ -1001,7 +1001,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginHostActivation>()?;
     m.add_function(wrap_pyfunction!(validate_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
-    m.add_function(wrap_pyfunction!(activate_dynamic_plugins_py, m)?)?;
+    m.add_function(wrap_pyfunction!(initialize_with_dynamic_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
     m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;
     m.add_function(wrap_pyfunction!(list_plugin_kinds_py, m)?)?;

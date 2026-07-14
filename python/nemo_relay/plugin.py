@@ -33,9 +33,6 @@ from nemo_relay import (
 )
 from nemo_relay._native import _PluginHostActivation as _NativePluginHostActivation
 from nemo_relay._native import (
-    activate_dynamic_plugins as _activate_dynamic_plugins,
-)
-from nemo_relay._native import (
     active_plugin_report as _active_plugin_report,
 )
 from nemo_relay._native import (
@@ -46,6 +43,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     initialize_plugins as _initialize_plugins,
+)
+from nemo_relay._native import (
+    initialize_with_dynamic_plugins as _initialize_with_dynamic_plugins,
 )
 from nemo_relay._native import (
     list_plugin_kinds as _list_plugin_kinds,
@@ -431,11 +431,11 @@ async def initialize(config: PluginConfig | JsonObject) -> ConfigReport:
     return cast(ConfigReport, await _initialize_plugins(_normalize_object(config)))
 
 
-async def activate_dynamic_plugins(
+async def initialize_with_dynamic_plugins(
     config: PluginConfig | JsonObject,
     dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject],
 ) -> PluginHostActivation:
-    """Load dynamic plugins and activate their components as one owned host.
+    """Initialize registered components with dynamic plugins as one owned host.
 
     Args:
         config: Base plugin configuration layered over the discovered
@@ -450,11 +450,11 @@ async def activate_dynamic_plugins(
     Behavior:
         Only one dynamic plugin host may be active in a process. Errors roll
         back partial loads. The returned object must remain alive until agent
-        work is complete. Use :func:`initialize` when no dynamic plugins are
-        configured.
+        work is complete. This is the owned initialization path when dynamic
+        plugins are configured; use :func:`initialize` for static-only config.
     """
     normalized_plugins = [_normalize_object(spec) for spec in dynamic_plugins]
-    native = await _activate_dynamic_plugins(_normalize_object(config), normalized_plugins)
+    native = await _initialize_with_dynamic_plugins(_normalize_object(config), normalized_plugins)
     return PluginHostActivation(native)
 
 
@@ -565,7 +565,7 @@ __all__ = [
     "PluginContext",
     "PluginHostActivation",
     "Plugin",
-    "activate_dynamic_plugins",
+    "initialize_with_dynamic_plugins",
     "clear",
     "initialize",
     "deregister",

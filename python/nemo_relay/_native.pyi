@@ -2270,8 +2270,8 @@ class _PluginHostActivation:
         """Clear and unload this activation; repeated calls are safe."""
         ...
 
-def activate_dynamic_plugins(config: object, dynamic_plugins: object) -> Awaitable[_PluginHostActivation]:
-    """Load dynamic plugins and activate their components as one owned host.
+def initialize_with_dynamic_plugins(config: object, dynamic_plugins: object) -> Awaitable[_PluginHostActivation]:
+    """Initialize registered components with dynamic plugins as one owned host.
 
     Args:
         config: Base plugin configuration object.

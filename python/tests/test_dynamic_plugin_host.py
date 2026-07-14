@@ -274,7 +274,7 @@ async def test_initialize_omits_raw_plugin_config_nulls_but_preserves_component_
 
 async def test_empty_dynamic_specs_preserve_static_initialization_path():
     with pytest.raises(ValueError, match="at least one dynamic plugin"):
-        await plugin.activate_dynamic_plugins(plugin.PluginConfig(), [])
+        await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), [])
 
     assert plugin.report() is None
     report = await plugin.initialize(plugin.PluginConfig())
@@ -285,7 +285,7 @@ async def test_empty_dynamic_specs_preserve_static_initialization_path():
 async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
     native_dynamic_plugin: _BuiltPlugin,
 ):
-    activation = await plugin.activate_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
+    activation = await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
     assert activation.is_active
     assert activation.report == {"diagnostics": []}
 
@@ -342,7 +342,7 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
     plugin.register(static_kind, cast(plugin.Plugin, FileStaticPlugin()))
     activation = None
     try:
-        activation = await plugin.activate_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
+        activation = await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
         result = await tools.execute("python-file-static-base", {"input": True}, lambda args: args)
         assert result["file_static_base"] is True
         assert result["native_plugin_tool_execution"] is True
@@ -371,7 +371,7 @@ async def test_concurrent_close_waiters_share_cancellation_resistant_teardown(
             context.register_subscriber("block_teardown", block)
 
     plugin.register(plugin_kind, cast(plugin.Plugin, BlockingSubscriberPlugin()))
-    activation = await plugin.activate_dynamic_plugins(
+    activation = await plugin.initialize_with_dynamic_plugins(
         {
             "version": 1,
             "components": [{"kind": plugin_kind, "config": {}}],
@@ -410,10 +410,10 @@ async def test_activation_reports_conflicts_and_rolls_back_partial_loads(
     native_dynamic_plugin: _BuiltPlugin,
     tmp_path: Path,
 ):
-    activation = await plugin.activate_dynamic_plugins({}, [native_dynamic_plugin.spec()])
+    activation = await plugin.initialize_with_dynamic_plugins({}, [native_dynamic_plugin.spec()])
     try:
         with pytest.raises(RuntimeError, match="active dynamic plugin host"):
-            await plugin.activate_dynamic_plugins({}, [native_dynamic_plugin.spec()])
+            await plugin.initialize_with_dynamic_plugins({}, [native_dynamic_plugin.spec()])
         with pytest.raises(RuntimeError, match="active dynamic plugin host"):
             await plugin.initialize({})
         with pytest.raises(RuntimeError, match="active dynamic plugin host"):
@@ -427,16 +427,16 @@ async def test_activation_reports_conflicts_and_rolls_back_partial_loads(
         manifest_ref=str(tmp_path / "missing-relay-plugin.toml"),
     )
     with pytest.raises(FileNotFoundError, match="missing-relay-plugin.toml"):
-        await plugin.activate_dynamic_plugins({}, [native_dynamic_plugin.spec(), missing])
+        await plugin.initialize_with_dynamic_plugins({}, [native_dynamic_plugin.spec(), missing])
 
     assert "fixture_native" not in plugin.list_kinds()
-    retry = await plugin.activate_dynamic_plugins({}, [native_dynamic_plugin.spec()])
+    retry = await plugin.initialize_with_dynamic_plugins({}, [native_dynamic_plugin.spec()])
     await retry.close()
 
 
 async def test_invalid_dynamic_inputs_raise_normal_python_exceptions(native_dynamic_plugin: _BuiltPlugin):
     with pytest.raises(ValueError, match="unknown variant"):
-        await plugin.activate_dynamic_plugins(
+        await plugin.initialize_with_dynamic_plugins(
             {},
             [
                 {
@@ -448,13 +448,13 @@ async def test_invalid_dynamic_inputs_raise_normal_python_exceptions(native_dyna
         )
 
     with pytest.raises(ValueError, match="fixture rejection requested"):
-        await plugin.activate_dynamic_plugins({}, [native_dynamic_plugin.spec(reject=True)])
+        await plugin.initialize_with_dynamic_plugins({}, [native_dynamic_plugin.spec(reject=True)])
 
     assert "fixture_native" not in plugin.list_kinds()
 
 
 async def test_native_activation_finalizer_releases_callbacks(native_dynamic_plugin: _BuiltPlugin):
-    activation = await plugin.activate_dynamic_plugins({}, [native_dynamic_plugin.spec()])
+    activation = await plugin.initialize_with_dynamic_plugins({}, [native_dynamic_plugin.spec()])
     assert "fixture_native" in plugin.list_kinds()
 
     del activation
@@ -492,7 +492,7 @@ async def test_worker_activation_finalizer_never_waits_on_python_thread(
         )
     )
 
-    activation = await plugin.activate_dynamic_plugins(
+    activation = await plugin.initialize_with_dynamic_plugins(
         {},
         [_BuiltPlugin("fixture_worker", "worker", manifest).spec()],
     )
@@ -533,7 +533,7 @@ async def test_worker_activation_finalizer_never_waits_on_python_thread(
 
 
 async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_plugin: _BuiltPlugin):
-    activation = await plugin.activate_dynamic_plugins({}, [worker_dynamic_plugin.spec()])
+    activation = await plugin.initialize_with_dynamic_plugins({}, [worker_dynamic_plugin.spec()])
     try:
         result = await tools.execute("python-worker-fixture", {"input": True}, lambda args: {"args": args})
         assert result["worker_plugin_tool_execution"] is True
