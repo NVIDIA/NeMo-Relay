@@ -207,6 +207,9 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
             header(&request, "x-nemo-relay-bootstrap-token"),
             "shutdown-token"
         );
+        // Close the listener before acknowledging shutdown so the verifier's
+        // immediate health probe cannot race this fixture's teardown.
+        drop(listener);
         shutdown
             .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .unwrap();
