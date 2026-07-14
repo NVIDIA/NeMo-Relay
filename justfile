@@ -468,6 +468,7 @@ local_dependencies = (
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
+    "nemo-relay-switchyard",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
