@@ -31,6 +31,14 @@ Load dynamic plugins and activate them with `config` as one transaction.
 
 The supplied base configuration may contain statically registered components. Dynamic components are appended after them in specification order. At least one dynamic plugin is required; static-only callers should use the regular plugin initialization API. The returned activation must remain alive for as long as code may invoke plugin-provided callbacks.
 
+#### `activate_with_discovered_config`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn activate_with_discovered_config&lt;I&gt;(\n    config: <a href=\"../struct-pluginconfig\">PluginConfig</a>,\n    dynamic_plugins: I,\n) -&gt; <a href=\"../type-result\">Result</a>&lt;(Self, <a href=\"../struct-configreport\">ConfigReport</a>)&gt;where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"struct-dynamicpluginactivationspec\">DynamicPluginActivationSpec</a>&gt;,"}} /></pre>
+
+Load dynamic plugins after layering `config` over discovered `plugins.toml` files.
+
+This is the harness-native entrypoint for language and FFI bindings. File discovery and merging happen once before activation, and the explicit `config` has higher precedence. Hosts such as the Relay CLI that already resolved plugin configuration should call [`Self::activate`](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-pluginhostactivation) instead.
+
 #### `is_active`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_active(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
