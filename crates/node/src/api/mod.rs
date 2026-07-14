@@ -98,7 +98,9 @@ fn install_well_known_symbol_methods(exports: JsObject, env: Env) -> napi::Resul
     let symbol = symbol.coerce_to_object()?;
     let async_dispose: JsSymbol = symbol.get_named_property("asyncDispose")?;
     let close: JsFunction = prototype.get_named_property("close")?;
-    prototype.set_property(async_dispose, close)
+    prototype.set_property(async_dispose, close)?;
+    prototype.delete_named_property("[Symbol.asyncDispose]")?;
+    Ok(())
 }
 
 fn parse_string_map(
@@ -4217,7 +4219,10 @@ impl DynamicPluginActivation {
         )
     }
 
-    /// Delegate structured `await using` cleanup to `close()`.
+    /// Supply the structured disposal signature to napi-rs declaration generation.
+    ///
+    /// Module initialization installs `close()` under the actual well-known
+    /// symbol and removes this string-named declaration shim from the prototype.
     #[napi(js_name = "[Symbol.asyncDispose]", ts_return_type = "Promise<void>")]
     pub fn async_dispose(&self, env: Env) -> napi::Result<JsObject> {
         self.close(env)

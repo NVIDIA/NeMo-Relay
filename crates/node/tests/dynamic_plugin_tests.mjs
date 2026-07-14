@@ -295,6 +295,7 @@ enabled = true
       disposedActivation = activation;
 
       assert.equal(activation[Symbol.asyncDispose], lib.DynamicPluginActivation.prototype.close);
+      assert.equal('[Symbol.asyncDispose]' in lib.DynamicPluginActivation.prototype, false);
       const toolResult = await executeTool('node_native_async_dispose_tool');
       assert.equal(toolResult.native_plugin_tool_execution, true);
       throw new Error('managed activation scope failed');
