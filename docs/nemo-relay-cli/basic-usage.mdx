@@ -150,8 +150,9 @@ block the gateway or agent on slow disk I/O.
 
 ```toml
 [logging]
-level = "info"              # minimum severity: error | warn | info | debug | trace
-stderr_format = "human"     # human | jsonl
+level = "info"                # minimum severity: error | warn | info | debug | trace
+stderr_format = "human"       # human | jsonl
+max_queue_capacity = 1048576  # optional; safety ceiling for each sink's queue_capacity
 
 [[logging.sinks]]
 path = ".nemo-relay/logs/relay.log.jsonl"  # required; relative paths use process CWD
@@ -159,7 +160,7 @@ format = "jsonl"            # optional; default jsonl (human | jsonl)
 level = "debug"             # optional; defaults to [logging].level
 
 # Advanced async file delivery (optional; omit to use defaults):
-queue_capacity = 1024           # max records waiting for disk write (must be > 0)
+queue_capacity = 1024           # max records waiting for disk write; 0 < value <= max_queue_capacity
 flush_interval_millis = 1000    # periodic flush; 0 = flush only on shutdown
 ```
 
