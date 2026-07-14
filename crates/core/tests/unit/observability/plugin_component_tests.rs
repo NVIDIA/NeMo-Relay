@@ -372,6 +372,7 @@ fn schema_contains_every_supported_observability_option() {
         "type",
         "url",
         "field_name_policy",
+        "header_env",
         "agent_name",
         "agent_version",
         "model_name",

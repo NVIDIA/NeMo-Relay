@@ -481,7 +481,14 @@ class TestAtofExporterType:
         assert config.timeout_millis == 1000
         assert config.field_name_policy == "replace_dots"
 
-    def test_endpoint_field_name_policy_is_validated(self, tmp_path):
+    def test_stream_sink_requires_url(self):
+        config = AtofExporterConfig()
+        config.sink_type = "stream"
+
+        with pytest.raises(ValueError, match="stream sink requires url"):
+            AtofExporter(config)
+
+    def test_endpoint_field_name_policy_is_validated(self):
         config = AtofExporterConfig()
         config.sink_type = "stream"
         config.url = "http://localhost:8080/events"

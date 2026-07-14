@@ -285,18 +285,26 @@ impl PyAtofExporterConfig {
                 .with_output_directory(PathBuf::from(self.output_directory.clone()))
                 .with_mode(self.mode.clone().into())
                 .with_filename(self.filename.clone())),
-            "stream" => PyAtofEndpointConfig {
-                url: self.url.clone(),
-                transport: self.transport.clone(),
-                headers: self.headers.clone(),
-                header_env: self.header_env.clone(),
-                timeout_millis: self.timeout_millis,
-                field_name_policy: self.field_name_policy.clone(),
+            "stream" => {
+                if self.url.trim().is_empty() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "stream sink requires url",
+                    ));
+                }
+                PyAtofEndpointConfig {
+                    url: self.url.clone(),
+                    transport: self.transport.clone(),
+                    headers: self.headers.clone(),
+                    header_env: self.header_env.clone(),
+                    timeout_millis: self.timeout_millis,
+                    field_name_policy: self.field_name_policy.clone(),
+                }
+                .to_rust_config()
+                .map(|sink| {
+                    nemo_relay::observability::atof::AtofExporterConfig::new()
+                        .with_stream_sink(sink)
+                })
             }
-            .to_rust_config()
-            .map(|sink| {
-                nemo_relay::observability::atof::AtofExporterConfig::new().with_stream_sink(sink)
-            }),
             _ => Err(pyo3::exceptions::PyValueError::new_err(
                 "sink_type must be 'file' or 'stream'",
             )),

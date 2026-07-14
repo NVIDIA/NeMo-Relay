@@ -305,7 +305,10 @@ impl AtofExporterConfig {
         Self::default()
     }
 
-    /// Override the output directory.
+    /// Override the file sink output directory.
+    ///
+    /// This has no effect after selecting a stream sink with
+    /// [`Self::with_stream_sink`] or [`Self::with_endpoint`].
     pub fn with_output_directory(mut self, output_directory: impl Into<PathBuf>) -> Self {
         if let AtofSinkConfig::File(file) = &mut self.sink {
             file.output_directory = output_directory.into();
@@ -313,7 +316,10 @@ impl AtofExporterConfig {
         self
     }
 
-    /// Override the output mode.
+    /// Override the file sink output mode.
+    ///
+    /// This has no effect after selecting a stream sink with
+    /// [`Self::with_stream_sink`] or [`Self::with_endpoint`].
     pub fn with_mode(mut self, mode: AtofExporterMode) -> Self {
         if let AtofSinkConfig::File(file) = &mut self.sink {
             file.mode = mode;
@@ -321,7 +327,10 @@ impl AtofExporterConfig {
         self
     }
 
-    /// Override the output filename.
+    /// Override the file sink output filename.
+    ///
+    /// This has no effect after selecting a stream sink with
+    /// [`Self::with_stream_sink`] or [`Self::with_endpoint`].
     pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
         if let AtofSinkConfig::File(file) = &mut self.sink {
             file.filename = filename.into();

@@ -52,13 +52,11 @@ func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {}
 
 // MarshalJSON serializes the fixed file sink discriminator.
 func (config ObservabilityAtofFileSinkConfig) MarshalJSON() ([]byte, error) {
-	type fileSinkJSON struct {
-		Type            string `json:"type"`
-		OutputDirectory string `json:"output_directory,omitempty"`
-		Filename        string `json:"filename,omitempty"`
-		Mode            string `json:"mode,omitempty"`
-	}
-	return json.Marshal(fileSinkJSON{"file", config.OutputDirectory, config.Filename, config.Mode})
+	type alias ObservabilityAtofFileSinkConfig
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{Type: "file", alias: alias(config)})
 }
 
 // ObservabilityAtofStreamSinkConfig configures one remote ATOF destination.
@@ -75,16 +73,11 @@ func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {}
 
 // MarshalJSON serializes the fixed stream sink discriminator.
 func (config ObservabilityAtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
-	type streamSinkJSON struct {
-		Type            string            `json:"type"`
-		URL             string            `json:"url"`
-		Transport       string            `json:"transport,omitempty"`
-		Headers         map[string]string `json:"headers,omitempty"`
-		HeaderEnv       map[string]string `json:"header_env,omitempty"`
-		TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
-		FieldNamePolicy string            `json:"field_name_policy,omitempty"`
-	}
-	return json.Marshal(streamSinkJSON{"stream", config.URL, config.Transport, config.Headers, config.HeaderEnv, config.TimeoutMillis, config.FieldNamePolicy})
+	type alias ObservabilityAtofStreamSinkConfig
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{Type: "stream", alias: alias(config)})
 }
 
 // ObservabilityAtofEndpoint configures one streaming destination for raw ATOF events.
