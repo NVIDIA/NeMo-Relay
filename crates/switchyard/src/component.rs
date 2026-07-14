@@ -217,9 +217,9 @@ pub struct SwitchyardConfig {
     pub targets: BTreeMap<String, TargetBinding>,
     /// Trusted per-protocol fallbacks.
     pub default_targets: ProtocolDefaults,
-    /// Optional explicit ATOF endpoint used by CLI cross-validation.
+    /// Named observability ATOF endpoint used by history-backed profiles.
     #[serde(default)]
-    pub atof_endpoint_url: Option<String>,
+    pub atof_endpoint_name: Option<String>,
 }
 
 impl Default for SwitchyardConfig {
@@ -244,7 +244,7 @@ impl Default for SwitchyardConfig {
                 openai_responses: String::new(),
                 anthropic_messages: String::new(),
             },
-            atof_endpoint_url: None,
+            atof_endpoint_name: None,
         }
     }
 }
@@ -269,7 +269,7 @@ nemo_relay::editor_config! {
         enabled_inbound_profiles => { label: "Enabled inbound profiles", kind: Json },
         targets => { label: "Backend target bindings", kind: Json },
         default_targets => { label: "Trusted protocol defaults", kind: Json },
-        atof_endpoint_url => { label: "ATOF endpoint URL", kind: String, optional: true }
+        atof_endpoint_name => { label: "ATOF endpoint name", kind: String, optional: true }
     }
 }
 
@@ -401,10 +401,9 @@ pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(
     if switchyard.context_mode != ContextMode::AtofRequired {
         return Ok(());
     }
-    let required_url = match &switchyard.atof_endpoint_url {
-        Some(url) => url.clone(),
-        None => derived_atof_url(&switchyard.decision_api_url)?,
-    };
+    let required_name = switchyard.atof_endpoint_name.as_deref().ok_or_else(|| {
+        "atof_required Switchyard profiles require atof_endpoint_name".to_string()
+    })?;
     let observability = config
         .components
         .iter()
@@ -419,47 +418,53 @@ pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(
         .ok_or_else(|| {
             "atof_required Switchyard profiles require an enabled ATOF endpoint".to_string()
         })?;
-    let endpoint = endpoints
+    let matching_endpoints = endpoints
         .iter()
-        .find(|endpoint| {
-            endpoint.get("url").and_then(Json::as_str) == Some(required_url.as_str())
-                && endpoint
-                    .get("transport")
-                    .and_then(Json::as_str)
-                    .unwrap_or("http_post")
-                    == "http_post"
-        })
-        .ok_or_else(|| {
-            format!("atof_required Switchyard profile requires HTTP ATOF endpoint {required_url}")
-        })?;
+        .filter(|endpoint| endpoint.get("name").and_then(Json::as_str) == Some(required_name))
+        .collect::<Vec<_>>();
+    let endpoint = match matching_endpoints.as_slice() {
+        [endpoint] => *endpoint,
+        [] => {
+            return Err(format!(
+                "atof_required Switchyard profile requires named ATOF endpoint {required_name:?}"
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "ATOF endpoint name {required_name:?} must resolve to exactly one endpoint"
+            ));
+        }
+    };
+    if endpoint
+        .get("transport")
+        .and_then(Json::as_str)
+        .unwrap_or("http_post")
+        != "http_post"
+    {
+        return Err(format!(
+            "Switchyard ATOF endpoint {required_name:?} must use transport = http_post"
+        ));
+    }
     if endpoint
         .get("field_name_policy")
         .and_then(Json::as_str)
         .unwrap_or("preserve")
         != "preserve"
     {
-        return Err("Switchyard ATOF endpoint must use field_name_policy = preserve".into());
+        return Err(format!(
+            "Switchyard ATOF endpoint {required_name:?} must use field_name_policy = preserve"
+        ));
     }
     if endpoint
         .get("header_env")
         .and_then(Json::as_object)
         .is_none_or(Map::is_empty)
     {
-        return Err(
-            "Switchyard ATOF endpoint authentication must use at least one environment-referenced header"
-                .into(),
-        );
+        return Err(format!(
+            "Switchyard ATOF endpoint {required_name:?} authentication must use at least one environment-referenced header"
+        ));
     }
     Ok(())
-}
-
-fn derived_atof_url(decision_api_url: &str) -> Result<String, String> {
-    let mut url = reqwest::Url::parse(decision_api_url)
-        .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
-    url.set_path("/v1/atof/events");
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
 fn parse_config(config: &Map<String, Json>) -> Result<SwitchyardConfig, String> {
@@ -1236,6 +1241,18 @@ fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
     }
     if config.recent_message_count == 0 {
         return Err("recent_message_count must be greater than zero".into());
+    }
+    let atof_endpoint_name = config.atof_endpoint_name.as_deref();
+    if config.context_mode == ContextMode::AtofRequired && atof_endpoint_name.is_none() {
+        return Err("atof_required Switchyard profiles require atof_endpoint_name".into());
+    }
+    if let Some(name) = atof_endpoint_name {
+        if name.trim().is_empty() {
+            return Err("atof_endpoint_name must be non-empty when configured".into());
+        }
+        if name != name.trim() {
+            return Err("atof_endpoint_name must not have leading or trailing whitespace".into());
+        }
     }
     let url = reqwest::Url::parse(&config.decision_api_url)
         .map_err(|error| format!("decision_api_url is invalid: {error}"))?;

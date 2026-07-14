@@ -187,6 +187,9 @@ impl Default for AtofSectionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtofEndpointSectionConfig {
+    /// Optional stable name used by other components to reference this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Endpoint URL.
     pub url: String,
     /// Transport: `http_post`, `websocket`, or `ndjson`.
@@ -1790,7 +1793,40 @@ fn validate_atof_values(
             "ATOF mode must be 'append' or 'overwrite'".to_string(),
         );
     }
+    let mut endpoint_names = HashSet::new();
     for (index, endpoint) in section.endpoints.iter().enumerate() {
+        if let Some(name) = endpoint.name.as_deref() {
+            if name.trim().is_empty() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atof".to_string()),
+                    Some(format!("endpoints[{index}].name")),
+                    format!("ATOF endpoints[{index}].name must be non-empty"),
+                );
+            } else if name != name.trim() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atof".to_string()),
+                    Some(format!("endpoints[{index}].name")),
+                    format!(
+                        "ATOF endpoints[{index}].name must not have leading or trailing whitespace"
+                    ),
+                );
+            } else if !endpoint_names.insert(name) {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atof".to_string()),
+                    Some(format!("endpoints[{index}].name")),
+                    format!("ATOF endpoint name {name:?} must be unique"),
+                );
+            }
+        }
         validate_atof_endpoint_values(diagnostics, policy, index, endpoint);
     }
 }

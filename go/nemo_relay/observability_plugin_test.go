@@ -36,6 +36,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
 	atof.Endpoints = []ObservabilityAtofEndpoint{{
+		Name:            "archive",
 		URL:             "http://localhost:8080/events",
 		Transport:       "http_post",
 		Headers:         map[string]string{"X-Test": "yes"},
@@ -85,15 +86,15 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("expected serialized ATOF endpoints, got %#v", atofConfig)
 	}
 	firstEndpoint, ok := endpoints[0].(map[string]any)
-	if !ok || firstEndpoint["field_name_policy"] != "replace_dots" {
+	if !ok || firstEndpoint["name"] != "archive" || firstEndpoint["field_name_policy"] != "replace_dots" {
 		t.Fatalf("expected serialized ATOF endpoint field name policy, got %#v", endpoints)
 	}
 	serialized, err := json.Marshal(wrapped)
 	if err != nil {
 		t.Fatalf("marshal observability component failed: %v", err)
 	}
-	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
-		t.Fatalf("expected field_name_policy in serialized component, got %s", serialized)
+	if !strings.Contains(string(serialized), `"name":"archive"`) || !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
+		t.Fatalf("expected named ATOF endpoint in serialized component, got %s", serialized)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
 	if wrapped.Config["opentelemetry"].(map[string]any)["mark_projection"] != "tool" {

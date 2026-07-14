@@ -13,6 +13,7 @@ decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
 decision_profile_id = "remote-stage-router"
 request_materialization = "summary_only"
 context_mode = "atof_required"
+atof_endpoint_name = "switchyard"
 decision_timeout_millis = 1000
 max_retries = 3
 recent_message_count = 8
@@ -58,6 +59,7 @@ enabled = true
 mode = "append"
 
 [[components.config.atof.endpoints]]
+name = "switchyard"
 url = "http://127.0.0.1:4000/v1/atof/events"
 transport = "http_post"
 field_name_policy = "preserve"

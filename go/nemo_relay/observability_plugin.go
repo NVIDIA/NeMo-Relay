@@ -41,6 +41,7 @@ type ObservabilityAtofConfig struct {
 
 // ObservabilityAtofEndpoint configures one streaming destination for raw ATOF events.
 type ObservabilityAtofEndpoint struct {
+	Name            string            `json:"name,omitempty"`
 	URL             string            `json:"url"`
 	Transport       string            `json:"transport,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`

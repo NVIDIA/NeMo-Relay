@@ -13,6 +13,7 @@ decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
 decision_profile_id = "hermes-ollama-stage-router"
 request_materialization = "full_body"
 context_mode = "atof_required"
+atof_endpoint_name = "switchyard"
 decision_timeout_millis = 120000
 max_retries = 3
 recent_message_count = 8
@@ -60,6 +61,7 @@ output_directory = "."
 filename = "trajectory.atof.jsonl"
 
 [[components.config.atof.endpoints]]
+name = "switchyard"
 url = "http://127.0.0.1:4000/v1/atof/events"
 transport = "http_post"
 field_name_policy = "preserve"

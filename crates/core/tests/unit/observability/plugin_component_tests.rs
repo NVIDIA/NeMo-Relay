@@ -205,9 +205,10 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(atof.filename.is_none());
 
     let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "endpoints": [{"url": "http://localhost/events"}]
+        "endpoints": [{"name": "switchyard", "url": "http://localhost/events"}]
     }))
     .unwrap();
+    assert_eq!(parsed_atof.endpoints[0].name.as_deref(), Some("switchyard"));
     assert_eq!(parsed_atof.endpoints[0].transport, "http_post");
     assert_eq!(parsed_atof.endpoints[0].field_name_policy, "preserve");
 
@@ -305,6 +306,7 @@ fn schema_contains_every_supported_observability_option() {
         "filename",
         "mode",
         "endpoints",
+        "name",
         "agent_name",
         "agent_version",
         "model_name",
@@ -570,7 +572,10 @@ fn atof_endpoint_validation_rejects_bad_values() {
                 {"url": "http://localhost/events", "transport": "bogus"},
                 {"url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
                 {"url": "not a url", "transport": "http_post"},
-                {"url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"}
+                {"url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"},
+                {"name": "switchyard", "url": "http://localhost/first"},
+                {"name": "switchyard", "url": "http://localhost/second"},
+                {"name": " ", "url": "http://localhost/blank"}
             ]
         }
     })));
@@ -607,6 +612,18 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("endpoints[4].field_name_policy") })
     );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[6].name") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("endpoints[7].name") })
+    );
 }
 
 #[test]
@@ -616,6 +633,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
     let config = build_atof_endpoint_config(
         2,
         AtofEndpointSectionConfig {
+            name: Some("switchyard".into()),
             url: "ws://127.0.0.1:47632/events".into(),
             transport: "websocket".into(),
             headers: headers.clone(),
@@ -648,6 +666,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
     let error = build_atof_endpoint_config(
         3,
         AtofEndpointSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
@@ -662,6 +681,7 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
     let error = build_atof_endpoint_config(
         4,
         AtofEndpointSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "http_post".into(),
             headers: std::collections::HashMap::new(),
