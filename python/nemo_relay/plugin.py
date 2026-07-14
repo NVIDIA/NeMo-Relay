@@ -209,24 +209,33 @@ class _SupportsToDict(Protocol):
     def to_dict(self) -> JsonObject: ...
 
 
-def _normalize(value: object) -> Json:
+def _normalize(value: object, *, preserve_nulls: bool = False) -> Json:
     if hasattr(value, "to_dict"):
         return cast(_SupportsToDict, value).to_dict()
     if is_dataclass(value) and not isinstance(value, type):
         return {
-            field_info.name: _normalize(field_value)
+            field_info.name: _normalize(field_value, preserve_nulls=preserve_nulls)
             for field_info in fields(value)
-            if (field_value := getattr(value, field_info.name)) is not None
+            for field_value in [getattr(value, field_info.name)]
+            if preserve_nulls or field_value is not None
         }
     if isinstance(value, list):
-        return [_normalize(item) for item in value]
+        return [_normalize(item, preserve_nulls=preserve_nulls) for item in value]
     if isinstance(value, dict):
-        return {cast(str, key): _normalize(val) for key, val in value.items()}
+        return {
+            cast(str, key): _normalize(val, preserve_nulls=preserve_nulls or key == "config")
+            for key, val in value.items()
+            if preserve_nulls or val is not None
+        }
     return cast(Json, value)
 
 
 def _normalize_object(value: object) -> JsonObject:
     return cast(JsonObject, _normalize(value))
+
+
+def _normalize_component_config(value: object) -> JsonObject:
+    return cast(JsonObject, _normalize(value, preserve_nulls=True))
 
 
 @dataclass(slots=True)
@@ -280,7 +289,7 @@ class ComponentSpec:
         return {
             "kind": self.kind,
             "enabled": self.enabled,
-            "config": _normalize_object(self.config),
+            "config": _normalize_component_config(self.config),
         }
 
 
@@ -336,7 +345,7 @@ class DynamicPluginActivationSpec:
             "plugin_id": self.plugin_id,
             "kind": self.kind,
             "manifest_ref": self.manifest_ref,
-            "config": _normalize_object(self.config),
+            "config": _normalize_component_config(self.config),
         }
         if self.environment_ref is not None:
             value["environment_ref"] = self.environment_ref

@@ -197,6 +197,81 @@ def test_dynamic_plugin_activation_spec_preserves_nested_json_nulls():
     }
 
 
+def test_validate_omits_raw_plugin_config_nulls_but_preserves_component_config_nulls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: list[object] = []
+
+    def validate(config: object) -> object:
+        captured.append(config)
+        return {"diagnostics": []}
+
+    monkeypatch.setattr(plugin, "_validate_plugin_config", validate)
+
+    assert plugin.validate(
+        {
+            "version": None,
+            "policy": {"unknown_component": None},
+            "components": [
+                {
+                    "kind": "example",
+                    "enabled": None,
+                    "config": {"top_level": None, "nested": {"value": None}},
+                }
+            ],
+        }
+    ) == {"diagnostics": []}
+    assert captured == [
+        {
+            "policy": {},
+            "components": [
+                {
+                    "kind": "example",
+                    "config": {"top_level": None, "nested": {"value": None}},
+                }
+            ],
+        }
+    ]
+
+
+def test_validate_raw_plugin_config_nulls_as_omitted_fields():
+    assert plugin.validate({"version": None, "components": None, "policy": None}) == {"diagnostics": []}
+
+
+async def test_initialize_omits_raw_plugin_config_nulls_but_preserves_component_config_nulls(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: list[object] = []
+
+    async def initialize(config: object) -> object:
+        captured.append(config)
+        return {"diagnostics": []}
+
+    monkeypatch.setattr(plugin, "_initialize_plugins", initialize)
+
+    assert await plugin.initialize(
+        {
+            "version": None,
+            "components": [
+                {
+                    "kind": "example",
+                    "config": {"top_level": None, "items": [None, {"value": None}]},
+                }
+            ],
+        }
+    ) == {"diagnostics": []}
+    assert captured == [
+        {
+            "components": [
+                {
+                    "kind": "example",
+                    "config": {"top_level": None, "items": [None, {"value": None}]},
+                }
+            ],
+        }
+    ]
+
+
 async def test_empty_dynamic_specs_preserve_static_initialization_path():
     with pytest.raises(ValueError, match="at least one dynamic plugin"):
         await plugin.activate_dynamic_plugins(plugin.PluginConfig(), [])
