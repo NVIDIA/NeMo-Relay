@@ -88,7 +88,7 @@ function initialize(config) {
  */
 
 /**
- * Load and activate explicitly resolved dynamic plugins.
+ * Initialize with explicitly resolved dynamic plugins.
  *
  * @param {object} config - Base configuration layered over discovered `plugins.toml` files.
  * @param {DynamicPluginActivationSpec[]} specs - Non-empty native-library or worker plugin specifications.
@@ -98,8 +98,8 @@ function initialize(config) {
  * and call `close()` or use `await using` for deterministic teardown. Use
  * `initialize()` for a static-only configuration.
  */
-function activateDynamicPlugins(config, specs) {
-  return lib.activateDynamicPlugins(config, specs);
+function initializeWithDynamicPlugins(config, specs) {
+  return lib.initializeWithDynamicPlugins(config, specs);
 }
 
 /**
@@ -185,7 +185,7 @@ module.exports = {
   ComponentSpec,
   validate,
   initialize,
-  activateDynamicPlugins,
+  initializeWithDynamicPlugins,
   clear,
   report,
   listKinds,

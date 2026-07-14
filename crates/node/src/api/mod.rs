@@ -4236,7 +4236,7 @@ impl Drop for DynamicPluginActivation {
     }
 }
 
-/// Load and activate explicitly resolved dynamic plugins.
+/// Initialize with explicitly resolved dynamic plugins.
 ///
 /// `config` is layered over discovered `plugins.toml` files and may contain
 /// statically registered components; dynamic components are activated after
@@ -4245,7 +4245,7 @@ impl Drop for DynamicPluginActivation {
 /// all loaded libraries and worker processes. Its validation report is available
 /// through the `report` property.
 #[napi]
-pub async fn activate_dynamic_plugins(
+pub async fn initialize_with_dynamic_plugins(
     config: Json,
     specs: Json,
 ) -> napi::Result<DynamicPluginActivation> {

@@ -327,7 +327,7 @@ export declare function validate(config: PluginConfig): ConfigReport;
  */
 export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
 /**
- * Load and activate explicitly resolved dynamic plugins.
+ * Initialize with explicitly resolved dynamic plugins.
  *
  * The returned object owns loaded libraries and worker processes. Keep it
  * alive while plugin callbacks may run and call `close()` for deterministic
@@ -339,7 +339,7 @@ export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
  * @remarks File-configured static components initialize before dynamic
  * components. Use `initialize()` for a static-only configuration.
  */
-export declare function activateDynamicPlugins(
+export declare function initializeWithDynamicPlugins(
   config: PluginConfig,
   specs: DynamicPluginActivationSpec[],
 ): Promise<DynamicPluginActivation>;

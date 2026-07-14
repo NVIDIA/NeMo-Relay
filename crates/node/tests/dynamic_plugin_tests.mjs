@@ -196,7 +196,7 @@ after(() => {
 describe('dynamic plugin host', () => {
   it('rejects empty specs without taking over static initialization', async () => {
     await assert.rejects(
-      () => plugin.activateDynamicPlugins({ version: 1, components: [] }, []),
+      () => plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, []),
       /at least one dynamic plugin/i,
     );
 
@@ -234,7 +234,7 @@ enabled = true
     try {
       process.chdir(projectRoot);
       process.env.XDG_CONFIG_HOME = isolatedUserConfig;
-      activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+      activation = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
         activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
       ]);
       const result = await executeTool('node_static_and_dynamic_tool');
@@ -253,7 +253,7 @@ enabled = true
   });
 
   it('owns native managed callbacks until idempotent close', async () => {
-    const activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+    const activation = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
       activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
     ]);
     try {
@@ -289,7 +289,7 @@ enabled = true
   it('supports structured async disposal when the managed scope throws', async () => {
     let disposedActivation;
     await assert.rejects(async () => {
-      await using activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+      await using activation = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
         activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
       ]);
       disposedActivation = activation;
@@ -308,7 +308,7 @@ enabled = true
   });
 
   it('owns worker managed callbacks until close', async () => {
-    const activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+    const activation = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
       activationSpec('fixture_worker', 'worker', workerManifestRef),
     ]);
     try {
@@ -339,7 +339,7 @@ enabled = true
       const pidFile = path.join(tempRoot, 'concurrent-close-worker.pid');
       const wrapper = writeWorkerWrapper(workerBinary, pidFile, 'concurrent-close-worker');
       const manifestRef = writeWorkerManifest(wrapper, 'concurrent-close-worker');
-      const activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+      const activation = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
         activationSpec('fixture_worker', 'worker', manifestRef),
       ]);
       const workerPid = Number(readFileSync(pidFile, 'utf8'));
@@ -394,7 +394,7 @@ enabled = true
     const missingManifest = path.join(tempRoot, 'missing', 'relay-plugin.toml');
     await assert.rejects(
       () =>
-        plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+        plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
           activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
           activationSpec('missing_native', 'rust_dynamic', missingManifest),
         ]),
@@ -408,13 +408,13 @@ enabled = true
 
     await assert.rejects(
       () =>
-        plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+        plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
           activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef, { reject: true }),
         ]),
       /fixture rejection requested/i,
     );
 
-    const recovered = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+    const recovered = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
       activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
     ]);
     await recovered.close();
@@ -428,7 +428,7 @@ enabled = true
       const plugin = require(${JSON.stringify(pluginModule)});
       const config = { version: 1, components: [] };
       const specs = [${JSON.stringify(activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef))}];
-      let activation = await plugin.activateDynamicPlugins(config, specs);
+      let activation = await plugin.initializeWithDynamicPlugins(config, specs);
       const weak = new WeakRef(activation);
       activation = null;
       let collected = false;
@@ -450,7 +450,7 @@ enabled = true
         global.gc();
         await new Promise((resolve) => setImmediate(resolve));
         try {
-          replacement = await plugin.activateDynamicPlugins(config, specs);
+          replacement = await plugin.initializeWithDynamicPlugins(config, specs);
           break;
         } catch (error) {
           lastError = error;
@@ -485,7 +485,7 @@ enabled = true
         const plugin = require(${JSON.stringify(pluginModule)});
         const config = { version: 1, components: [] };
         const specs = [${JSON.stringify(activationSpec('fixture_worker', 'worker', manifestRef))}];
-        let activation = await plugin.activateDynamicPlugins(config, specs);
+        let activation = await plugin.initializeWithDynamicPlugins(config, specs);
         const weak = new WeakRef(activation);
         activation = null;
         await new Promise((resolve) => setImmediate(resolve));
@@ -522,7 +522,7 @@ enabled = true
         for (let index = 0; index < 500; index += 1) {
           await new Promise((resolve) => setTimeout(resolve, 10));
           try {
-            replacement = await plugin.activateDynamicPlugins(config, specs);
+            replacement = await plugin.initializeWithDynamicPlugins(config, specs);
             break;
           } catch (error) {
             lastError = error;
