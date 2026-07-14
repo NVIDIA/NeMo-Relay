@@ -58,6 +58,14 @@ fn projects_typed_json_and_copies_configured_aliases() {
         )],
     );
 
+    assert_eq!(
+        attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "nemo_relay.start.metadata.enabled")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::Bool(true))
+    );
+
     let values = attributes
         .iter()
         .map(|attribute| (attribute.key.as_str(), attribute.value.to_string()))
@@ -69,10 +77,6 @@ fn projects_typed_json_and_copies_configured_aliases() {
     assert_eq!(
         values.get("nemo_relay.start.metadata.attempt"),
         Some(&"2".to_string())
-    );
-    assert_eq!(
-        values.get("nemo_relay.start.metadata.enabled"),
-        Some(&"true".to_string())
     );
     assert!(!values.contains_key("nemo_relay.start.metadata.unset"));
     assert_eq!(
