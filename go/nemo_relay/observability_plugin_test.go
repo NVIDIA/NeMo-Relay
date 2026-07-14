@@ -35,7 +35,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if atof.Enabled || len(atof.Sinks) != 0 {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
-	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofStreamSinkConfig{
+	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofEndpoint{
 		Name:            "archive",
 		URL:             "http://localhost:8080/events",
 		Transport:       "http_post",
