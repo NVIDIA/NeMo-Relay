@@ -28,6 +28,7 @@ describe('OpenTelemetrySubscriber', () => {
       resourceAttributes: {
         'deployment.environment': 'test',
       },
+      attributeMappings: [{ key: 'nemo_relay.start.data.tenant', alias: 'tenant.id' }],
     });
 
     const name = uniqueId('node_otel');
@@ -63,6 +64,13 @@ describe('OpenTelemetrySubscriber', () => {
           },
         }),
       /resourceAttributes must be an object of string values/i,
+    );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          attributeMappings: [{ key: '', alias: 'tenant.id' }],
+        }),
+      /attribute mapping key must not be blank/i,
     );
   });
 

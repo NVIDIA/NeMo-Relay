@@ -109,6 +109,22 @@ fn parse_string_map(
     Ok(out)
 }
 
+fn parse_attribute_mappings(
+    value: Option<Vec<OtlpAttributeMapping>>,
+) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+    let mappings = value
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mapping| nemo_relay::observability::OtlpAttributeMapping {
+            key: mapping.key,
+            alias: mapping.alias,
+        })
+        .collect::<Vec<_>>();
+    nemo_relay::observability::validate_attribute_mappings(&mappings)
+        .map_err(napi::Error::from_reason)?;
+    Ok(mappings)
+}
+
 fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
     let mut metadata = serde_json::Map::new();
     metadata.insert(
@@ -168,6 +184,7 @@ fn build_otel_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
+    config = config.with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
 
     Ok(config)
 }
@@ -277,6 +294,7 @@ fn build_openinference_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
+    config = config.with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
 
     Ok(config)
 }
@@ -3449,6 +3467,17 @@ pub struct OpenTelemetryConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Typed projected attributes copied to aliases.
+    pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
+}
+
+/// Typed projected attribute copy configuration.
+#[napi(object)]
+pub struct OtlpAttributeMapping {
+    /// Fully-qualified projected attribute to copy.
+    pub key: String,
+    /// Additional attribute name receiving the copied value.
+    pub alias: String,
 }
 
 /// Mutable configuration object for `OpenInferenceSubscriber`.
@@ -3473,6 +3502,8 @@ pub struct OpenInferenceConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Typed projected attributes copied to aliases.
+    pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
 }
 
 /// OpenTelemetry-backed event subscriber.

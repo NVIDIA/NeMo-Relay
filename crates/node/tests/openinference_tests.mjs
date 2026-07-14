@@ -32,6 +32,7 @@ describe('OpenInferenceSubscriber', () => {
       resourceAttributes: {
         'deployment.environment': 'test',
       },
+      attributeMappings: [{ key: 'openinference.metadata.tenant', alias: 'tenant.id' }],
     });
 
     const name = unique('node_openinference');
@@ -67,6 +68,13 @@ describe('OpenInferenceSubscriber', () => {
           },
         }),
       /resourceAttributes must be an object of string values/i,
+    );
+    assert.throws(
+      () =>
+        new OpenInferenceSubscriber({
+          attributeMappings: [{ key: '', alias: 'tenant.id' }],
+        }),
+      /attribute mapping key must not be blank/i,
     );
   });
 

@@ -31,6 +31,7 @@ describe('observability plugin helpers', () => {
       enabled: false,
       mark_projection: 'inherit',
       mark_exclude_names: ['llm.chunk'],
+      attribute_mappings: [],
       transport: 'http_binary',
       headers: {},
       resource_attributes: {},

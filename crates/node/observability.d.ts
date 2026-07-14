@@ -58,6 +58,7 @@ export interface OtlpConfig {
   enabled?: boolean;
   mark_projection?: 'inherit' | 'event' | 'tool';
   mark_exclude_names?: string[];
+  attribute_mappings?: OtlpAttributeMapping[];
   transport?: 'http_binary' | 'grpc' | string;
   endpoint?: string;
   headers?: Record<string, string>;
@@ -67,6 +68,12 @@ export interface OtlpConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
+}
+
+/** Copy a projected OTLP attribute to an additional attribute name. */
+export interface OtlpAttributeMapping {
+  key: string;
+  alias: string;
 }
 
 export interface Config {

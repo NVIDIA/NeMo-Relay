@@ -40,6 +40,7 @@ class TestObservabilityConfigHelpers:
             "enabled": False,
             "mark_projection": "inherit",
             "mark_exclude_names": ["llm.chunk"],
+            "attribute_mappings": [],
             "transport": "http_binary",
             "headers": {},
             "resource_attributes": {},

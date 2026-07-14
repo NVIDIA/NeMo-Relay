@@ -200,6 +200,13 @@ fn typed_editor_model_contains_observability_sections() {
             .iter()
             .any(|field| field.name == "endpoint")
     );
+    let attribute_mappings = openinference.field("attribute_mappings").unwrap();
+    assert_eq!(attribute_mappings.kind, EditorFieldKind::List);
+    let mapping = attribute_mappings.list_item.unwrap();
+    assert_eq!(mapping.kind, EditorFieldKind::Section);
+    let mapping_schema = mapping.schema.unwrap()();
+    assert_eq!(mapping_schema.fields[0].name, "key");
+    assert_eq!(mapping_schema.fields[1].name, "alias");
 }
 
 #[test]

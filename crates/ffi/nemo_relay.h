@@ -1322,6 +1322,26 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *transport,
                                                   struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates a new OpenTelemetry subscriber with typed attribute mappings.
+ *
+ * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const char *transport,
+                                                                          const char *endpoint,
+                                                                          const char *headers_json,
+                                                                          const char *resource_attributes_json,
+                                                                          const char *service_name,
+                                                                          const char *service_namespace,
+                                                                          const char *service_version,
+                                                                          const char *instrumentation_scope,
+                                                                          uint64_t timeout_millis,
+                                                                          const char *attribute_mappings_json,
+                                                                          struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Registers the OpenTelemetry subscriber as an event subscriber.
  *
  * # Safety
@@ -1374,6 +1394,26 @@ NemoRelayStatus nemo_relay_openinference_subscriber_create(const char *transport
                                                            const char *instrumentation_scope,
                                                            uint64_t timeout_millis,
                                                            struct FfiOpenInferenceSubscriber **out);
+
+/**
+ * Creates a new OpenInference subscriber with typed attribute mappings.
+ *
+ * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char *transport,
+                                                                                   const char *endpoint,
+                                                                                   const char *headers_json,
+                                                                                   const char *resource_attributes_json,
+                                                                                   const char *service_name,
+                                                                                   const char *service_namespace,
+                                                                                   const char *service_version,
+                                                                                   const char *instrumentation_scope,
+                                                                                   uint64_t timeout_millis,
+                                                                                   const char *attribute_mappings_json,
+                                                                                   struct FfiOpenInferenceSubscriber **out);
 
 /**
  * Registers the OpenInference subscriber as an event subscriber.

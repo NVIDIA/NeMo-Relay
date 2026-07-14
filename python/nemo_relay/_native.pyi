@@ -964,6 +964,14 @@ class OpenTelemetryConfig:
     def resource_attributes(self, value: dict[str, str]) -> None:
         """Replace additional OpenTelemetry resource attributes."""
         ...
+    @property
+    def attribute_mappings(self) -> list[dict[str, str]]:
+        """Return typed projected-attribute aliases."""
+        ...
+    @attribute_mappings.setter
+    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
+        """Replace typed projected-attribute aliases."""
+        ...
     def set_header(self, key: str, value: str) -> None:
         """Set one exporter header key/value pair."""
         ...
@@ -1035,6 +1043,14 @@ class OpenInferenceConfig:
     @resource_attributes.setter
     def resource_attributes(self, value: dict[str, str]) -> None:
         """Replace additional OpenInference resource attributes."""
+        ...
+    @property
+    def attribute_mappings(self) -> list[dict[str, str]]:
+        """Return typed projected-attribute aliases."""
+        ...
+    @attribute_mappings.setter
+    def attribute_mappings(self, value: list[dict[str, str]]) -> None:
+        """Replace typed projected-attribute aliases."""
         ...
     def set_header(self, key: str, value: str) -> None:
         """Set one exporter header key/value pair."""

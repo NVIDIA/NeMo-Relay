@@ -45,6 +45,10 @@ func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {
 	config.Timeout = 1250 * time.Millisecond
 	config.Headers["authorization"] = "Bearer token"
 	config.ResourceAttributes["deployment.environment"] = "test"
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "nemo_relay.start.data.tenant",
+		Alias: "tenant.id",
+	}}
 
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {

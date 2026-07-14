@@ -688,6 +688,111 @@ fn subscriber_registration_and_provider_lifecycle_methods_work() {
 }
 
 #[test]
+fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenInferenceSubscriber::from_tracer_provider_with_attribute_mappings(
+        provider,
+        "mapping-scope",
+        [
+            crate::observability::OtlpAttributeMapping::new(
+                "nemo_relay.start.data.tenant",
+                "tenant.id",
+            ),
+            crate::observability::OtlpAttributeMapping::new(
+                "nemo_relay.end.data.tenant",
+                "nemo_relay.start.data.tenant",
+            ),
+            crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
+        ],
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    let uuid = Uuid::now_v7();
+    callback(&make_start_event(
+        uuid,
+        None,
+        "mapped-scope",
+        ScopeType::Agent,
+        Some(json!({"tenant": 7})),
+    ));
+    callback(&make_end_event(
+        uuid,
+        None,
+        "mapped-scope",
+        ScopeType::Agent,
+        Some(json!({"tenant": 8})),
+    ));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mapped-scope")
+        .unwrap();
+    assert_eq!(
+        span.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "nemo_relay.start.data.tenant")
+            .count(),
+        1
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "tenant.id")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::I64(7))
+    );
+    assert!(
+        !span
+            .attributes
+            .iter()
+            .any(|attribute| attribute.key.as_str() == "ignored.alias")
+    );
+}
+
+#[test]
+fn mapped_orphan_mark_alias_cannot_replace_intrinsic_mark_fields() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenInferenceSubscriber::from_tracer_provider_with_attribute_mappings(
+        provider,
+        "mapping-scope",
+        [crate::observability::OtlpAttributeMapping::new(
+            "nemo_relay.mark.data.value",
+            "nemo_relay.mark.orphan",
+        )],
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    callback(&make_mark_event(
+        None,
+        "mapped-orphan-mark",
+        Some(json!({"value": "not-an-orphan-flag"})),
+    ));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:mapped-orphan-mark")
+        .unwrap();
+    assert_eq!(
+        span.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
+            .count(),
+        1
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::Bool(true))
+    );
+}
+
+#[test]
 fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_global();
@@ -743,8 +848,8 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
     assert!(!attributes.contains_key("nemo_relay.start.data_json"));
     assert!(!attributes.contains_key("nemo_relay.start.metadata_json"));
     assert_eq!(
-        attributes.get("nemo_relay.start.input_json"),
-        Some(&"{\"task\":\"scope-start\"}".to_string())
+        attributes.get("nemo_relay.start.input.task"),
+        Some(&"scope-start".to_string())
     );
     assert_eq!(
         attributes.get("input.value"),
@@ -755,18 +860,22 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
         Some(&"{\"status\":\"done\"}".to_string())
     );
     assert_eq!(
-        attributes.get("metadata"),
+        attributes.get("openinference.metadata.phase"),
+        Some(&"start".to_string())
+    );
+    assert_eq!(
+        attributes.get(oi::METADATA.as_str()),
         Some(&"{\"phase\":\"start\"}".to_string())
     );
 
     let event_attributes = attr_map(&span.events.events[0].attributes);
     assert_eq!(
-        event_attributes.get("nemo_relay.mark.data_json"),
-        Some(&"{\"step\":1}".to_string())
+        event_attributes.get("nemo_relay.mark.data.step"),
+        Some(&"1".to_string())
     );
     assert_eq!(
-        event_attributes.get("nemo_relay.mark.metadata_json"),
-        Some(&"{\"source\":\"rust-test\"}".to_string())
+        event_attributes.get("nemo_relay.mark.metadata.source"),
+        Some(&"rust-test".to_string())
     );
 }
 
@@ -867,12 +976,12 @@ fn records_span_start_mark_and_end() {
         Some(&root_uuid.to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.start.input_json"),
-        Some(&"{\"query\":\"hello\"}".to_string())
+        attributes.get("nemo_relay.start.input.query"),
+        Some(&"hello".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.end.output_json"),
-        Some(&"{\"result\":\"ok\"}".to_string())
+        attributes.get("nemo_relay.end.output.result"),
+        Some(&"ok".to_string())
     );
 }
 
@@ -942,21 +1051,13 @@ fn openclaw_model_timing_marks_attach_to_parent_spans() {
         ambiguous_attributes.get("nemo_relay.mark.parent_uuid"),
         Some(&root_uuid.to_string())
     );
-    let ambiguous_data: serde_json::Value = serde_json::from_str(
-        ambiguous_attributes
-            .get("nemo_relay.mark.data_json")
-            .unwrap(),
-    )
-    .unwrap();
     assert_eq!(
-        ambiguous_data,
-        json!({
-            "runId": "run-1",
-            "sessionId": "session-1",
-            "provider": "openai",
-            "model": "gpt-4",
-            "candidateCount": 2
-        })
+        ambiguous_attributes.get("nemo_relay.mark.data.runId"),
+        Some(&"run-1".to_string())
+    );
+    assert_eq!(
+        ambiguous_attributes.get("nemo_relay.mark.data.candidateCount"),
+        Some(&"2".to_string())
     );
     assert!(!ambiguous_attributes.contains_key("nemo_relay.mark.metadata_json"));
 
@@ -965,22 +1066,13 @@ fn openclaw_model_timing_marks_attach_to_parent_spans() {
         unpaired_attributes.get("nemo_relay.mark.parent_uuid"),
         Some(&root_uuid.to_string())
     );
-    let unpaired_data: serde_json::Value = serde_json::from_str(
-        unpaired_attributes
-            .get("nemo_relay.mark.data_json")
-            .unwrap(),
-    )
-    .unwrap();
     assert_eq!(
-        unpaired_data,
-        json!({
-            "runId": "run-1",
-            "callId": "call-1",
-            "provider": "openai",
-            "model": "gpt-4",
-            "durationMs": 42,
-            "outcome": "completed"
-        })
+        unpaired_attributes.get("nemo_relay.mark.data.runId"),
+        Some(&"run-1".to_string())
+    );
+    assert_eq!(
+        unpaired_attributes.get("nemo_relay.mark.data.durationMs"),
+        Some(&"42".to_string())
     );
     assert!(!unpaired_attributes.contains_key("nemo_relay.mark.metadata_json"));
 }
@@ -1159,7 +1251,7 @@ fn llm_input_value_omits_request_headers() {
     let attributes = attr_map(&spans[0].attributes);
     assert_attr(&attributes, "input.value", "user: hi");
     assert_attr(&attributes, "input.mime_type", "text/plain");
-    assert!(!attributes.contains_key("nemo_relay.start.input_json"));
+    assert!(!attributes.contains_key("nemo_relay.start.input.content"));
     assert!(!attributes["input.value"].contains("authorization"));
     assert!(!attributes["input.value"].contains("secret-token"));
     // The provider-shaped request is decoded through the codec layer, so
@@ -1867,11 +1959,12 @@ fn output_value_prefers_display_content() {
         Some(&"text/plain".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.end.output_json"),
-        Some(
-            &"{\"content\":\"Tool edit completed.\",\"details\":{\"diff\":\"-old\\n+new\"}}"
-                .to_string()
-        )
+        attributes.get("nemo_relay.end.output.content"),
+        Some(&"Tool edit completed.".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.end.output.details"),
+        Some(&"{\"diff\":\"-old\\n+new\"}".to_string())
     );
     assert!(!attributes.contains_key("nemo_relay.end.data_json"));
 }
@@ -2304,16 +2397,16 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         Some(&"tool".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.mark.data_json"),
-        Some(&"{\"count\":3}".to_string())
+        attributes.get("nemo_relay.mark.data.count"),
+        Some(&"3".to_string())
     );
     assert_eq!(
         attributes.get("nemo_relay.mark.category"),
         Some(&"custom".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.mark.category_profile_json"),
-        Some(&"{\"subtype\":\"example.compaction\"}".to_string())
+        attributes.get("nemo_relay.mark.category_profile.subtype"),
+        Some(&"example.compaction".to_string())
     );
     assert!(!attributes.contains_key("nemo_relay.mark.orphan"));
 }
@@ -2675,6 +2768,12 @@ fn semantic_scope_type_and_input_value_follow_event_variants() {
     );
     assert_eq!(semantic_scope_type(&remote_tool), Some(ScopeType::Tool));
     assert_eq!(span_kind(&remote_tool), SpanKind::Client);
+    let remote_tool_attributes = attr_map(&start_attributes(&remote_tool));
+    assert_eq!(
+        remote_tool_attributes.get("nemo_relay.handle_attributes"),
+        Some(&"[\"remote\"]".to_string())
+    );
+    assert!(!remote_tool_attributes.contains_key("nemo_relay.handle_attributes_json"));
     let (remote_tool_input, remote_tool_mime_type) =
         openinference_input_value(&remote_tool).unwrap();
     assert_eq!(remote_tool_mime_type, "application/json");
@@ -2716,11 +2815,12 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
         json!({"status": "done", "metrics": {"tokens": 42}})
     );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            attributes.get("nemo_relay.end.output_json").unwrap(),
-        )
-        .unwrap(),
-        json!({"status": "done", "metrics": {"tokens": 42}})
+        attributes.get("nemo_relay.end.output.status"),
+        Some(&"done".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.end.output.metrics"),
+        Some(&"{\"tokens\":42}".to_string())
     );
 }
 
@@ -2858,6 +2958,10 @@ fn helper_functions_cover_additional_openinference_branches() {
         Some(&"raw-model".to_string())
     );
     assert_eq!(
+        llm_attributes.get("openinference.metadata.phase"),
+        Some(&"done".to_string())
+    );
+    assert_eq!(
         llm_attributes.get(oi::METADATA.as_str()),
         Some(&"{\"phase\":\"done\"}".to_string())
     );
@@ -2928,12 +3032,12 @@ fn helper_functions_cover_additional_openinference_branches() {
     ));
     let mark_attributes = attr_map(&mark_attributes(&mark));
     assert_eq!(
-        mark_attributes.get("nemo_relay.mark.data_json"),
-        Some(&"{\"kind\":\"aux\"}".to_string())
+        mark_attributes.get("nemo_relay.mark.data.kind"),
+        Some(&"aux".to_string())
     );
     assert_eq!(
-        mark_attributes.get("nemo_relay.mark.metadata_json"),
-        Some(&"{\"source\":\"unit\"}".to_string())
+        mark_attributes.get("nemo_relay.mark.metadata.source"),
+        Some(&"unit".to_string())
     );
 
     let llm_with_scalar_input = make_start_event(
@@ -3840,11 +3944,13 @@ fn hermes_exact_api_payloads_emit_openinference_text_usage_and_metadata() {
         attributes.get("llm.cost.total"),
         Some(&"0.0042".to_string())
     );
-    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":true");
-    assert_attr_contains(
-        &attributes,
-        "metadata",
-        "\"fidelity_source\":\"hermes_api_hooks_sanitized\"",
+    assert_eq!(
+        attributes.get("openinference.metadata.provider_payload_exact"),
+        Some(&"true".to_string())
+    );
+    assert_eq!(
+        attributes.get("openinference.metadata.fidelity_source"),
+        Some(&"hermes_api_hooks_sanitized".to_string())
     );
 }
 
@@ -3934,26 +4040,25 @@ fn hermes_api_request_error_emits_openinference_json_output_and_metadata() {
         Some(&"application/json".to_string())
     );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(
-            attributes.get("nemo_relay.end.output_json").unwrap(),
-        )
-        .unwrap(),
-        json!({
-            "status_code": 502,
-            "retry_count": 1,
-            "max_retries": 2,
-            "retryable": true,
-            "reason": "upstream",
-            "error": {
-                "type": "BadGateway",
-                "message": "gateway upstream error"
-            }
-        })
+        attributes.get("nemo_relay.end.output.status_code"),
+        Some(&"502".to_string())
     );
-    assert_attr_contains(&attributes, "metadata", "\"provider_payload_exact\":false");
+    assert_eq!(
+        attributes.get("openinference.metadata.provider_payload_exact"),
+        Some(&"false".to_string())
+    );
+    assert_eq!(
+        attributes.get("openinference.metadata.fidelity_source"),
+        Some(&"hermes_api_hooks".to_string())
+    );
     assert_attr_contains(
         &attributes,
-        "metadata",
+        oi::METADATA.as_str(),
+        "\"provider_payload_exact\":false",
+    );
+    assert_attr_contains(
+        &attributes,
+        oi::METADATA.as_str(),
         "\"fidelity_source\":\"hermes_api_hooks\"",
     );
 }

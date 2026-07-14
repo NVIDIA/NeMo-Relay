@@ -143,6 +143,7 @@ type ObservabilityOtlpConfig struct {
 	Enabled              bool                        `json:"enabled,omitempty"`
 	MarkProjection       ObservabilityMarkProjection `json:"mark_projection,omitempty"`
 	MarkExcludeNames     []string                    `json:"mark_exclude_names,omitempty"`
+	AttributeMappings    []OtlpAttributeMapping      `json:"attribute_mappings,omitempty"`
 	Transport            string                      `json:"transport,omitempty"`
 	Endpoint             string                      `json:"endpoint,omitempty"`
 	Headers              map[string]string           `json:"headers,omitempty"`

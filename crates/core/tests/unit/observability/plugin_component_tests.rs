@@ -81,6 +81,18 @@ fn editor_schema_tracks_observability_config_types() {
         .expect("openinference editor schema");
     let headers = otlp.field("headers").expect("headers field");
     assert_eq!(headers.kind, EditorFieldKind::StringMap);
+
+    let attribute_mappings = otlp
+        .field("attribute_mappings")
+        .expect("attribute mappings field");
+    assert_eq!(attribute_mappings.kind, EditorFieldKind::List);
+    let mapping = attribute_mappings
+        .list_item
+        .expect("attribute mapping list item");
+    assert_eq!(mapping.kind, EditorFieldKind::Section);
+    let mapping_schema = mapping.schema.expect("attribute mapping schema")();
+    assert_eq!(mapping_schema.fields[0].name, "key");
+    assert_eq!(mapping_schema.fields[1].name, "alias");
 }
 
 fn push_agent(name: &str) -> crate::api::scope::ScopeHandle {
@@ -222,6 +234,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(!otlp.enabled);
     assert_eq!(otlp.mark_projection, MarkProjection::Inherit);
     assert_eq!(otlp.mark_exclude_names, vec!["llm.chunk"]);
+    assert!(otlp.attribute_mappings.is_empty());
     assert_eq!(otlp.transport, "http_binary");
     assert_eq!(otlp.service_name, "nemo-relay");
     assert_eq!(otlp.timeout_millis, 3_000);
@@ -242,6 +255,15 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
 #[test]
 fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
+    let mappings: OtlpSectionConfig = serde_json::from_value(json!({
+        "attribute_mappings": [{
+            "key": "nemo_relay.start.metadata.tenant",
+            "alias": "tenant.id"
+        }]
+    }))
+    .unwrap();
+    assert_eq!(mappings.attribute_mappings.len(), 1);
+
     let otlp: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool"
     }))
@@ -287,6 +309,22 @@ fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
         diagnostic.code == "observability.unknown_field"
             && diagnostic.field.as_deref() == Some("mark_projection")
     }));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "openinference": {
+            "attribute_mappings": [
+                {"key": "", "alias": "tenant.id"},
+                {"key": "openinference.metadata.tenant", "alias": "tenant.id"}
+            ]
+        }
+    })));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.unsupported_value"
+            && diagnostic.field.as_deref() == Some("attribute_mappings")
+            && diagnostic
+                .message
+                .contains("attribute mapping key must not be blank")
+    }));
 }
 
 #[cfg(feature = "schema")]
@@ -310,6 +348,7 @@ fn schema_contains_every_supported_observability_option() {
         "model_name",
         "mark_projection",
         "mark_exclude_names",
+        "attribute_mappings",
         "tool_definitions",
         "extra",
         "filename_template",

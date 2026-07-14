@@ -52,6 +52,10 @@ func TestOpenInferenceSubscriberLifecycle(t *testing.T) {
 	config.Timeout = 1250 * time.Millisecond
 	config.Headers["authorization"] = "Bearer token"
 	config.ResourceAttributes["deployment.environment"] = "test"
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "openinference.metadata.tenant",
+		Alias: "tenant.id",
+	}}
 
 	subscriber, err := NewOpenInferenceSubscriber(config)
 	if err != nil {

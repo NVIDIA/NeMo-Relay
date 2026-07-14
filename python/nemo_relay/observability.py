@@ -198,6 +198,7 @@ class OtlpConfig:
     enabled: bool = False
     mark_projection: MarkProjection = "inherit"
     mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
+    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
     transport: Literal["http_binary", "grpc"] = "http_binary"
     endpoint: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
@@ -215,6 +216,7 @@ class OtlpConfig:
                 "enabled": self.enabled,
                 "mark_projection": self.mark_projection,
                 "mark_exclude_names": self.mark_exclude_names,
+                "attribute_mappings": self.attribute_mappings,
                 "transport": self.transport,
                 "endpoint": self.endpoint,
                 "headers": self.headers,

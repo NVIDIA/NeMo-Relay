@@ -569,6 +569,8 @@ class TestOpenTelemetryTypes:
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
+        config.attribute_mappings = [{"key": "nemo_relay.start.metadata.tenant", "alias": "tenant.id"}]
+        assert config.attribute_mappings == [{"key": "nemo_relay.start.metadata.tenant", "alias": "tenant.id"}]
         assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -579,6 +581,9 @@ class TestOpenTelemetryTypes:
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
+
+        with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
+            config.attribute_mappings = [{"key": "", "alias": "tenant.id"}]
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenTelemetryConfig()
@@ -658,6 +663,8 @@ class TestOpenInferenceTypes:
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
+        config.attribute_mappings = [{"key": "openinference.metadata.tenant", "alias": "tenant.id"}]
+        assert config.attribute_mappings == [{"key": "openinference.metadata.tenant", "alias": "tenant.id"}]
         assert "OpenInferenceConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -668,6 +675,9 @@ class TestOpenInferenceTypes:
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
+
+        with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
+            config.attribute_mappings = [{"key": "", "alias": "tenant.id"}]
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenInferenceConfig()

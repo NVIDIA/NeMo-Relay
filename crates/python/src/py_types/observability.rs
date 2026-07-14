@@ -14,6 +14,21 @@ use super::{
     FORCE_ATIF_EXPORT_JSON_SERIALIZATION_ERROR, FORCE_ATIF_EXPORT_VALUE_SERIALIZATION_ERROR,
 };
 
+fn py_attribute_mappings(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+    let value = py_to_json(value)?;
+    let mappings: Vec<nemo_relay::observability::OtlpAttributeMapping> =
+        serde_json::from_value(value).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "attribute_mappings must be a list of {{key: str, alias: str}} objects: {error}"
+            ))
+        })?;
+    nemo_relay::observability::validate_attribute_mappings(&mappings)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok(mappings)
+}
+
 // ---------------------------------------------------------------------------
 // AtifExporter
 // ---------------------------------------------------------------------------
@@ -380,6 +395,7 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) timeout_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
+    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
 }
 
 impl PyOpenTelemetryConfig {
@@ -417,6 +433,7 @@ impl PyOpenTelemetryConfig {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
+        config = config.with_attribute_mappings(self.attribute_mappings.clone());
         Ok(config)
     }
 }
@@ -435,6 +452,7 @@ impl PyOpenTelemetryConfig {
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
+            attribute_mappings: Vec::new(),
         }
     }
 
@@ -463,6 +481,23 @@ impl PyOpenTelemetryConfig {
         resource_attributes: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_attribute_mappings(
+        &mut self,
+        attribute_mappings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.attribute_mappings = py_attribute_mappings(attribute_mappings)?;
         Ok(())
     }
 
@@ -559,6 +594,7 @@ pub struct PyOpenInferenceConfig {
     pub(crate) timeout_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
+    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
 }
 
 impl PyOpenInferenceConfig {
@@ -596,6 +632,7 @@ impl PyOpenInferenceConfig {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
+        config = config.with_attribute_mappings(self.attribute_mappings.clone());
         Ok(config)
     }
 }
@@ -614,6 +651,7 @@ impl PyOpenInferenceConfig {
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
+            attribute_mappings: Vec::new(),
         }
     }
 
@@ -642,6 +680,23 @@ impl PyOpenInferenceConfig {
         resource_attributes: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_attribute_mappings(
+        &mut self,
+        attribute_mappings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.attribute_mappings = py_attribute_mappings(attribute_mappings)?;
         Ok(())
     }
 

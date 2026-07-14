@@ -16,6 +16,7 @@ type OpenTelemetryConfig = nemo_relay::observability::otel::OpenTelemetryConfig;
 type OpenTelemetrySubscriber = nemo_relay::observability::otel::OpenTelemetrySubscriber;
 type OpenInferenceConfig = nemo_relay::observability::openinference::OpenInferenceConfig;
 type OpenInferenceSubscriber = nemo_relay::observability::openinference::OpenInferenceSubscriber;
+type OtlpAttributeMapping = nemo_relay::observability::OtlpAttributeMapping;
 type ObservabilityComponentSpec = nemo_relay::observability::plugin_component::ComponentSpec;
 type ObservabilityConfig = nemo_relay::observability::plugin_component::ObservabilityConfig;
 
@@ -529,6 +530,25 @@ fn parse_string_map_json(
     Ok(out)
 }
 
+fn parse_attribute_mappings_json(
+    json_ptr: *const c_char,
+) -> Result<Vec<OtlpAttributeMapping>, NemoRelayStatus> {
+    if json_ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    let json_string = c_str_to_string(json_ptr)?;
+    let mappings: Vec<OtlpAttributeMapping> =
+        serde_json::from_str(&json_string).map_err(|error| {
+            set_last_error(&format!("invalid attribute_mappings JSON: {error}"));
+            NemoRelayStatus::InvalidJson
+        })?;
+    nemo_relay::observability::validate_attribute_mappings(&mappings).map_err(|error| {
+        set_last_error(&format!("invalid attribute_mappings: {error}"));
+        NemoRelayStatus::InvalidArg
+    })?;
+    Ok(mappings)
+}
+
 fn required_out_ptr<T>(out: *mut *mut T) -> Result<(), NemoRelayStatus> {
     if out.is_null() {
         set_last_error("out pointer is null");
@@ -667,6 +687,43 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
     timeout_millis: u64,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_subscriber_create_with_attribute_mappings(
+            transport,
+            endpoint,
+            headers_json,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            std::ptr::null(),
+            out,
+        )
+    }
+}
+
+/// Creates a new OpenTelemetry subscriber with typed attribute mappings.
+///
+/// `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_attribute_mappings(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    attribute_mappings_json: *const c_char,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -723,6 +780,11 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create(
         Ok(config) => config,
         Err(status) => return status,
     };
+    let attribute_mappings = match parse_attribute_mappings_json(attribute_mappings_json) {
+        Ok(mappings) => mappings,
+        Err(status) => return status,
+    };
+    config = config.with_attribute_mappings(attribute_mappings);
     config = match apply_string_map(
         config,
         resource_attributes_json,
@@ -856,6 +918,43 @@ pub unsafe extern "C" fn nemo_relay_openinference_subscriber_create(
     timeout_millis: u64,
     out: *mut *mut FfiOpenInferenceSubscriber,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_openinference_subscriber_create_with_attribute_mappings(
+            transport,
+            endpoint,
+            headers_json,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            std::ptr::null(),
+            out,
+        )
+    }
+}
+
+/// Creates a new OpenInference subscriber with typed attribute mappings.
+///
+/// `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_openinference_subscriber_create_with_attribute_mappings(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    attribute_mappings_json: *const c_char,
+    out: *mut *mut FfiOpenInferenceSubscriber,
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -912,6 +1011,11 @@ pub unsafe extern "C" fn nemo_relay_openinference_subscriber_create(
         Ok(config) => config,
         Err(status) => return status,
     };
+    let attribute_mappings = match parse_attribute_mappings_json(attribute_mappings_json) {
+        Ok(mappings) => mappings,
+        Err(status) => return status,
+    };
+    config = config.with_attribute_mappings(attribute_mappings);
     config = match apply_string_map(
         config,
         resource_attributes_json,

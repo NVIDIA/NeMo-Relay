@@ -251,6 +251,7 @@ extern void nemo_relay_atof_exporter_free(void*);
 
 // OpenTelemetry subscriber
 extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -259,6 +260,7 @@ extern void nemo_relay_otel_subscriber_free(void*);
 
 // OpenInference subscriber
 extern int32_t nemo_relay_openinference_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
+extern int32_t nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
 extern int32_t nemo_relay_openinference_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_openinference_subscriber_deregister(const char*);
 extern int32_t nemo_relay_openinference_subscriber_force_flush(const void*);
@@ -1835,6 +1837,13 @@ type OpenTelemetryConfig struct {
 	ServiceVersion       string
 	InstrumentationScope string
 	Timeout              time.Duration
+	AttributeMappings    []OtlpAttributeMapping
+}
+
+// OtlpAttributeMapping copies a projected OTLP attribute to an alias.
+type OtlpAttributeMapping struct {
+	Key   string `json:"key"`
+	Alias string `json:"alias"`
 }
 
 // NewOpenTelemetryConfig returns a config initialized with sensible defaults.
@@ -1898,6 +1907,16 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
 	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
 
+	var cAttributeMappingsJSON *C.char
+	if config.AttributeMappings != nil {
+		attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+		if err != nil {
+			return nil, err
+		}
+		cAttributeMappingsJSON = C.CString(string(attributeMappingsJSON))
+		defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
+	}
+
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
@@ -1917,7 +1936,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create(
+	status := C.nemo_relay_otel_subscriber_create_with_attribute_mappings(
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
@@ -1927,6 +1946,7 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cServiceVersion,
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
+		cAttributeMappingsJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {
@@ -1999,6 +2019,7 @@ type OpenInferenceConfig struct {
 	ServiceVersion       string
 	InstrumentationScope string
 	Timeout              time.Duration
+	AttributeMappings    []OtlpAttributeMapping
 }
 
 // NewOpenInferenceConfig returns a config initialized with sensible defaults.
@@ -2062,6 +2083,16 @@ func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubsc
 	cResourceAttrsJSON := C.CString(string(resourceAttrsJSON))
 	defer C.free(unsafe.Pointer(cResourceAttrsJSON))
 
+	var cAttributeMappingsJSON *C.char
+	if config.AttributeMappings != nil {
+		attributeMappingsJSON, err := jsonMarshal(config.AttributeMappings)
+		if err != nil {
+			return nil, err
+		}
+		cAttributeMappingsJSON = C.CString(string(attributeMappingsJSON))
+		defer C.free(unsafe.Pointer(cAttributeMappingsJSON))
+	}
+
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
@@ -2081,7 +2112,7 @@ func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubsc
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_openinference_subscriber_create(
+	status := C.nemo_relay_openinference_subscriber_create_with_attribute_mappings(
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
@@ -2091,6 +2122,7 @@ func NewOpenInferenceSubscriber(config OpenInferenceConfig) (*OpenInferenceSubsc
 		cServiceVersion,
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
+		cAttributeMappingsJSON,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {
