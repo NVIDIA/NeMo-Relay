@@ -147,9 +147,7 @@ func TestOpenInferenceSubscriberExportsScopeLifecycleAndMappedAttributes(t *test
 	select {
 	case request := <-requests:
 		AssertOpenInferenceRequest(t, request)
-		if !bytes.Contains(request.Body, []byte("tenant.id")) || !bytes.Contains(request.Body, []byte("go")) {
-			t.Fatal("expected OTLP request body to contain mapped tenant alias")
-		}
+		assertOtlpStringAttribute(t, request.Body, "tenant.id", "go")
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
 	}

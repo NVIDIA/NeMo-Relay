@@ -13,6 +13,16 @@ import (
 	"time"
 )
 
+func assertOtlpStringAttribute(t *testing.T, body []byte, key string, value string) {
+	t.Helper()
+	encoded := append([]byte{0x0a, byte(len(key))}, key...)
+	encoded = append(encoded, 0x12, byte(len(value)+2), 0x0a, byte(len(value)))
+	encoded = append(encoded, value...)
+	if !bytes.Contains(body, encoded) {
+		t.Fatalf("expected OTLP string attribute %s=%s", key, value)
+	}
+}
+
 func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 	config := NewOpenTelemetryConfig()
 
@@ -168,9 +178,7 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 		if len(request.Body) == 0 {
 			t.Fatal("expected non-empty OTLP request body")
 		}
-		if !bytes.Contains(request.Body, []byte("tenant.id")) || !bytes.Contains(request.Body, []byte("go")) {
-			t.Fatal("expected OTLP request body to contain mapped tenant alias")
-		}
+		assertOtlpStringAttribute(t, request.Body, "tenant.id", "go")
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
 	}

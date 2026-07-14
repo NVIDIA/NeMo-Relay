@@ -739,7 +739,7 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_relay.start.data.task"),
+        attributes.get("nemo_relay.start.input.task"),
         Some(&"scope-start".to_string())
     );
     assert_eq!(
@@ -1564,7 +1564,7 @@ fn helper_functions_cover_additional_otel_branches() {
 
     let start_attributes = attr_map(&start_attributes(&tool_event));
     assert_eq!(
-        start_attributes.get("nemo_relay.start.input.query"),
+        start_attributes.get("nemo_relay.start.data.query"),
         Some(&"hello".to_string())
     );
     assert_eq!(

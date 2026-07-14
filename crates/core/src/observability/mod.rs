@@ -84,7 +84,7 @@ pub fn validate_attribute_mappings(
         if mapping.alias.trim().is_empty() {
             return Err("attribute mapping alias must not be blank".to_string());
         }
-        if !aliases.insert(mapping.alias.as_str()) {
+        if !aliases.insert(mapping.alias.trim()) {
             return Err(format!(
                 "attribute mapping alias {:?} is duplicated",
                 mapping.alias
@@ -184,6 +184,9 @@ pub(crate) fn attribute_mapping_aliases(
     projected_attributes: &[opentelemetry::KeyValue],
     mappings: &[OtlpAttributeMapping],
 ) -> Vec<opentelemetry::KeyValue> {
+    if mappings.is_empty() {
+        return Vec::new();
+    }
     let existing = projected_attributes
         .iter()
         .map(|attribute| attribute.key.as_str().to_string())
@@ -428,6 +431,13 @@ mod attribute_projection_tests {
             super::validate_attribute_mappings(&[
                 OtlpAttributeMapping::new("one", "duplicate"),
                 OtlpAttributeMapping::new("two", "duplicate"),
+            ])
+            .is_err()
+        );
+        assert!(
+            super::validate_attribute_mappings(&[
+                OtlpAttributeMapping::new("one", "duplicate"),
+                OtlpAttributeMapping::new("two", " duplicate "),
             ])
             .is_err()
         );

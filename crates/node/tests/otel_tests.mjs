@@ -17,6 +17,16 @@ function assertBodyContains(body, text) {
   assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
 }
 
+function assertStringAttribute(body, key, value) {
+  const encoded = Buffer.concat([
+    Buffer.from([0x0a, Buffer.byteLength(key)]),
+    Buffer.from(key),
+    Buffer.from([0x12, Buffer.byteLength(value) + 2, 0x0a, Buffer.byteLength(value)]),
+    Buffer.from(value),
+  ]);
+  assert.equal(body.includes(encoded), true, `expected OTLP string attribute ${key}=${value}`);
+}
+
 describe('OpenTelemetrySubscriber', () => {
   it('constructs from a mutable config object and supports lifecycle methods', () => {
     const subscriber = new OpenTelemetrySubscriber({
@@ -107,8 +117,7 @@ describe('OpenTelemetrySubscriber', () => {
       assert.equal(request.url, '/v1/traces');
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
       assert.ok(request.body.length > 0);
-      assertBodyContains(request.body, 'tenant.id');
-      assertBodyContains(request.body, 'node');
+      assertStringAttribute(request.body, 'tenant.id', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

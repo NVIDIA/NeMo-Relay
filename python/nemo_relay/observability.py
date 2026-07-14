@@ -198,7 +198,6 @@ class OtlpConfig:
     enabled: bool = False
     mark_projection: MarkProjection = "inherit"
     mark_exclude_names: list[str] = field(default_factory=lambda: ["llm.chunk"])
-    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
     transport: Literal["http_binary", "grpc"] = "http_binary"
     endpoint: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
@@ -208,6 +207,7 @@ class OtlpConfig:
     service_version: str | None = None
     instrumentation_scope: str | None = None
     timeout_millis: int = 3000
+    attribute_mappings: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this OTLP config to the canonical JSON object shape."""
