@@ -28,6 +28,10 @@ use nemo_relay::plugin::{
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+#[cfg(feature = "switchyard")]
+use nemo_relay_switchyard::{
+    register_switchyard_component, validate_switchyard_atof_configuration,
+};
 use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
@@ -264,7 +268,7 @@ async fn serve_listener_with_dynamic_inner(
         .map_err(CliError::Launch)?;
     let require_provider_client_token = managed_bootstrap.is_some();
     let plugin_activation =
-        PluginActivation::initialize(config.plugin_config.clone(), dynamic_plugins).await?;
+        initialize_plugin_host(config.plugin_config.clone(), dynamic_plugins).await?;
     let (bootstrap_shutdown, bootstrap_shutdown_rx) =
         bootstrap_shutdown_channel(bootstrap_shutdown_token.clone());
     let mut state = AppState::new_with_bootstrap(
@@ -336,7 +340,9 @@ async fn serve_listener_with_dynamic_inner(
     };
     let close_result = sessions.close_all("gateway_shutdown").await;
     let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
-    let clear_result = plugin_activation.clear();
+    let clear_result = plugin_activation
+        .map(ServerPluginActivation::clear)
+        .unwrap_or(Ok(()));
     if let Err(serve_error) = serve_result {
         if let Err(close_error) = close_result {
             eprintln!("session teardown failed after server error: {close_error}");
@@ -393,7 +399,7 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 
 impl AppState {
     #[cfg(test)]
-    fn new(config: GatewayConfig) -> Self {
+    pub(crate) fn new(config: GatewayConfig) -> Self {
         Self::new_with_bootstrap(config, None, None, false, None)
     }
 
@@ -716,6 +722,59 @@ where
     })
 }
 
+enum ServerPluginActivation {
+    Static,
+    Dynamic(PluginActivation),
+}
+
+impl ServerPluginActivation {
+    fn clear(self) -> Result<(), CliError> {
+        match self {
+            Self::Static => clear_plugin_configuration()
+                .map_err(|error| CliError::Config(format!("plugin teardown failed: {error}"))),
+            Self::Dynamic(activation) => activation.clear(),
+        }
+    }
+}
+
+async fn initialize_plugin_host(
+    config: Option<Value>,
+    dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
+) -> Result<Option<ServerPluginActivation>, CliError> {
+    if config.is_none() && dynamic_plugins.is_empty() {
+        return Ok(None);
+    }
+    if dynamic_plugins.is_empty() {
+        register_adaptive_component().map_err(|error| {
+            CliError::Config(format!("adaptive plugin registration failed: {error}"))
+        })?;
+        register_pii_redaction_component().map_err(|error| {
+            CliError::Config(format!("PII redaction plugin registration failed: {error}"))
+        })?;
+        #[cfg(feature = "switchyard")]
+        register_switchyard_component().map_err(|error| {
+            CliError::Config(format!("Switchyard plugin registration failed: {error}"))
+        })?;
+        let plugin_config: PluginConfig = config
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
+            .unwrap_or_default();
+        #[cfg(feature = "switchyard")]
+        validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
+            CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
+        })?;
+        initialize_plugins_exact(plugin_config)
+            .await
+            .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
+        return Ok(Some(ServerPluginActivation::Static));
+    }
+    PluginActivation::initialize(config, dynamic_plugins)
+        .await
+        .map(ServerPluginActivation::Dynamic)
+        .map(Some)
+}
+
 struct PluginActivation {
     active: bool,
     native: Option<NativePluginActivation>,
@@ -741,6 +800,10 @@ impl PluginActivation {
         })?;
         register_pii_redaction_component().map_err(|error| {
             CliError::Config(format!("PII redaction plugin registration failed: {error}"))
+        })?;
+        #[cfg(feature = "switchyard")]
+        register_switchyard_component().map_err(|error| {
+            CliError::Config(format!("Switchyard plugin registration failed: {error}"))
         })?;
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
@@ -838,6 +901,10 @@ impl PluginActivation {
                         config: plugin.config,
                     }),
             );
+        #[cfg(feature = "switchyard")]
+        validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
+            CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
+        })?;
         initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;

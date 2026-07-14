@@ -1261,8 +1261,24 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("headers.x-test must be a string")
     );
 
-    let unsupported = probe_atof_endpoint(
+    let mixed_case_duplicate = probe_atof_endpoint(
         4,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"Authorization": "Bearer literal"},
+            "header_env": {"authorization": "PATH"}
+        }),
+    )
+    .await;
+    assert_eq!(mixed_case_duplicate.status, Status::Fail);
+    assert!(
+        mixed_case_duplicate
+            .details
+            .contains("cannot appear in both headers and header_env")
+    );
+
+    let unsupported = probe_atof_endpoint(
+        5,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "transport": "grpc"

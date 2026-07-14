@@ -1974,6 +1974,37 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
 }
 
 #[tokio::test]
+async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+    let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+    register_plugin(Arc::new(GenericTestPlugin)).unwrap();
+
+    let activation = initialize_plugin_host(
+        Some(json!({
+            "version": 1,
+            "components": [{
+                "kind": GENERIC_TEST_PLUGIN_KIND,
+                "enabled": true,
+                "config": {}
+            }]
+        })),
+        Vec::new(),
+    )
+    .await
+    .expect("static CLI config should initialize")
+    .expect("static CLI config should return a teardown guard");
+    assert!(matches!(&activation, ServerPluginActivation::Static));
+
+    nemo_relay::plugin::clear_plugin_configuration()
+        .expect("legacy clear should remain available for a static-only CLI config");
+    activation
+        .clear()
+        .expect("the static teardown guard should tolerate prior clear");
+    let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+}
+
+#[tokio::test]
 async fn serve_listener_activates_adaptive_plugin_config() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();

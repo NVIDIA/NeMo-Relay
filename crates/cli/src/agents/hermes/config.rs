@@ -40,10 +40,31 @@ pub(crate) fn transparent_config(
         gateway_url,
     )
     .map_err(CliError::Install)?;
-    let root = merge_hooks(
+    let mut root = merge_hooks(
         root,
         generated_hooks(crate::agents::CodingAgent::Hermes, &command),
     )?;
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| CliError::Launch("Hermes config must be a YAML mapping".into()))?;
+    let mut model = match object.remove("model") {
+        Some(Value::Object(model)) => model,
+        Some(Value::String(default)) => {
+            Map::from_iter([("default".into(), Value::String(default))])
+        }
+        Some(Value::Null) | None => Map::new(),
+        Some(_) => {
+            return Err(CliError::Launch(
+                "Hermes model config must be a string or mapping".into(),
+            ));
+        }
+    };
+    model.insert("provider".into(), Value::String("custom".into()));
+    model.insert(
+        "base_url".into(),
+        Value::String(format!("{}/v1", gateway_url.trim_end_matches('/'))),
+    );
+    object.insert("model".into(), Value::Object(model));
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }
 

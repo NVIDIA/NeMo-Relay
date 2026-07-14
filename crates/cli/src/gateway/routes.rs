@@ -46,6 +46,22 @@ impl ProviderRoute {
         }
     }
 
+    pub(super) fn from_dispatch_override(value: &str) -> Option<Self> {
+        match value {
+            "openai_chat"
+            | "openai_chat_completions"
+            | "openai.chat_completions"
+            | "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "openai_responses" | "openai.responses" | "/v1/responses" => {
+                Some(Self::OpenAiResponses)
+            }
+            "anthropic_messages" | "anthropic.messages" | "/v1/messages" => {
+                Some(Self::AnthropicMessages)
+            }
+            _ => None,
+        }
+    }
+
     pub(super) const fn provider_surface(self) -> Option<ProviderSurface> {
         match self {
             Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),

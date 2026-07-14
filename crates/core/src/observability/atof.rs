@@ -177,6 +177,9 @@ pub struct AtofEndpointConfig {
     /// Headers applied to endpoint requests or handshakes.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub headers: HashMap<String, String>,
+    /// Header names mapped to environment variables containing their values.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub header_env: HashMap<String, String>,
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_endpoint_timeout_millis")]
     pub timeout_millis: u64,
@@ -192,6 +195,7 @@ impl AtofEndpointConfig {
             url: url.into(),
             transport,
             headers: HashMap::new(),
+            header_env: HashMap::new(),
             timeout_millis: default_endpoint_timeout_millis(),
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         }
@@ -200,6 +204,17 @@ impl AtofEndpointConfig {
     /// Add a header to this endpoint config.
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add a header whose value is resolved from an environment variable at activation.
+    pub fn with_header_env(
+        mut self,
+        key: impl Into<String>,
+        environment_variable: impl Into<String>,
+    ) -> Self {
+        self.header_env
+            .insert(key.into(), environment_variable.into());
         self
     }
 
@@ -585,17 +600,42 @@ fn validate_endpoint_config(config: &AtofEndpointConfig) -> Result<()> {
             url.scheme()
         )));
     }
-    build_header_map(&config.headers)?;
+    resolved_header_map(&config.headers, &config.header_env)?;
     Ok(())
 }
 
 #[cfg(feature = "atof-streaming")]
-fn build_header_map(headers: &HashMap<String, String>) -> Result<reqwest::header::HeaderMap> {
+fn resolved_header_map(
+    headers: &HashMap<String, String>,
+    header_env: &HashMap<String, String>,
+) -> Result<reqwest::header::HeaderMap> {
     let mut out = reqwest::header::HeaderMap::new();
     for (key, value) in headers {
         let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
             .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
         let value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+        out.insert(name, value);
+    }
+    for (key, variable) in header_env {
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+        if out.contains_key(&name) {
+            return Err(AtofExporterError::InvalidEndpoint(format!(
+                "header {key:?} cannot be configured in both headers and header_env"
+            )));
+        }
+        let value = std::env::var(variable).map_err(|_| {
+            AtofExporterError::InvalidEndpoint(format!(
+                "environment variable {variable:?} for header {key:?} is not set"
+            ))
+        })?;
+        if value.trim().is_empty() {
+            return Err(AtofExporterError::InvalidEndpoint(format!(
+                "environment variable {variable:?} for header {key:?} is blank"
+            )));
+        }
+        let value = reqwest::header::HeaderValue::from_str(&value)
             .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
         out.insert(name, value);
     }
@@ -635,14 +675,16 @@ async fn run_http_post_endpoint(
 ) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_millis(config.timeout_millis))
-        .default_headers(match build_header_map(&config.headers) {
-            Ok(headers) => headers,
-            Err(error) => {
-                eprintln!("nemo_relay: ATOF endpoint[{index}] disabled: {error}");
-                drain_closed(rx).await;
-                return;
-            }
-        })
+        .default_headers(
+            match resolved_header_map(&config.headers, &config.header_env) {
+                Ok(headers) => headers,
+                Err(error) => {
+                    eprintln!("nemo_relay: ATOF endpoint[{index}] disabled: {error}");
+                    drain_closed(rx).await;
+                    return;
+                }
+            },
+        )
         .build()
     {
         Ok(client) => client,
@@ -795,12 +837,12 @@ async fn connect_websocket(
         .as_str()
         .into_client_request()
         .map_err(|error| error.to_string())?;
-    for (key, value) in &config.headers {
-        let name =
-            tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(key.as_bytes())
-                .map_err(|error| error.to_string())?;
-        let value = tokio_tungstenite::tungstenite::http::header::HeaderValue::from_str(value)
-            .map_err(|error| error.to_string())?;
+    let headers = resolved_header_map(&config.headers, &config.header_env)
+        .map_err(|error| error.to_string())?;
+    for (name, value) in headers {
+        let Some(name) = name else {
+            continue;
+        };
         request.headers_mut().insert(name, value);
     }
     tokio::time::timeout(
@@ -859,8 +901,8 @@ async fn run_ndjson_endpoint(
 fn build_ndjson_client(
     config: &AtofEndpointConfig,
 ) -> std::result::Result<reqwest::Client, String> {
-    let headers =
-        build_header_map(&config.headers).map_err(|error| format!("disabled: {error}"))?;
+    let headers = resolved_header_map(&config.headers, &config.header_env)
+        .map_err(|error| format!("disabled: {error}"))?;
     reqwest::Client::builder()
         .connect_timeout(Duration::from_millis(config.timeout_millis))
         .default_headers(headers)

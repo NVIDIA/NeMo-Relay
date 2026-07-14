@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "switchyard"
+enabled = true
+
+[components.config]
+mode = "enforce"
+priority = 0
+decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
+decision_profile_id = "smart-stage-router"
+request_materialization = "recent_message_window"
+context_mode = "atof_required"
+decision_timeout_millis = 25
+max_retries = 3
+recent_message_count = 8
+enabled_inbound_profiles = ["openai_chat", "openai_responses", "anthropic_messages"]
+
+[components.config.decision_header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"
+
+[components.config.default_targets]
+openai_chat = "openai-default"
+openai_responses = "responses-default"
+anthropic_messages = "anthropic-default"
+
+[components.config.targets.openai-default]
+model = "weak-model"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "http://127.0.0.1:4101"
+
+[components.config.targets.responses-default]
+model = "weak-model"
+protocol = "openai_responses"
+endpoint = "/v1/responses"
+base_url = "http://127.0.0.1:4101"
+
+[components.config.targets.anthropic-default]
+model = "weak-model"
+protocol = "anthropic_messages"
+endpoint = "/v1/messages"
+base_url = "http://127.0.0.1:4101"
+
+[components.config.targets.strong]
+model = "strong-model"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "http://127.0.0.1:4102"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config.atof]
+enabled = true
+mode = "append"
+
+[[components.config.atof.endpoints]]
+url = "http://127.0.0.1:4000/v1/atof/events"
+transport = "http_post"
+field_name_policy = "preserve"
+timeout_millis = 3000
+
+[components.config.atof.endpoints.header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"

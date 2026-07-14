@@ -11,6 +11,7 @@ use request::*;
 use response::*;
 use routes::*;
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use async_stream::stream;
@@ -31,7 +32,7 @@ use nemo_relay::codec::resolve::{
 };
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::codec::traits::LlmResponseCodec;
-use nemo_relay::error::FlowError;
+use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 
 use crate::agents::shared::alignment::{self, GatewayRouteKind};
@@ -43,6 +44,11 @@ use crate::sessions::{GatewayCallPrep, GatewaySessionFinish, SessionManager};
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/gateway_tests.rs"]
 mod tests;
+
+const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
+const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
+const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
+const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
 
 /// Proxies supported LLM API requests through NeMo Relay's managed execution pipeline.
 ///
@@ -72,6 +78,131 @@ pub(crate) async fn passthrough(
     run_managed_gateway(state, prepared, prep).await
 }
 
+/* Pre-refactor request helpers moved to `gateway::request`.
+struct PreparedGatewayRequest {
+    method: Method,
+    headers: HeaderMap,
+    path: String,
+    provider: ProviderRoute,
+    upstream_url: String,
+    body_bytes: Bytes,
+    request_json: Value,
+    streaming: bool,
+}
+
+// Validates the gateway route, buffers the request body exactly once, and derives the metadata used
+// for both upstream forwarding and NeMo Relay LLM start events. Provider JSON parse failures are not
+// request failures because the gateway still forwards raw bytes unchanged.
+async fn prepare_gateway_request(
+    config: &crate::config::GatewayConfig,
+    request: Request<Body>,
+) -> Result<PreparedGatewayRequest, CliError> {
+    let (parts, body) = request.into_parts();
+    let provider = ProviderRoute::from_path(parts.uri.path()).ok_or_else(|| {
+        CliError::InvalidPayload(format!("unsupported gateway path {}", parts.uri.path()))
+    })?;
+    let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
+        .await
+        .map_err(passthrough_body_error)?;
+    let request_json = serde_json::from_slice::<Value>(&body_bytes).unwrap_or(Value::Null);
+    let path_and_query = parts
+        .uri
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or(parts.uri.path());
+    let upstream_url = gateway_upstream_url_override(provider, &parts.headers, path_and_query)
+        .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+    let streaming = request_json
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut headers = parts.headers;
+    strip_internal_dispatch_headers(&mut headers);
+    Ok(PreparedGatewayRequest {
+        method: parts.method,
+        headers,
+        path: parts.uri.path().to_string(),
+        provider,
+        upstream_url,
+        body_bytes,
+        request_json,
+        streaming,
+    })
+}
+
+fn passthrough_body_error(error: axum::Error) -> CliError {
+    if error.source().is_some_and(|source| {
+        source.is::<LengthLimitError>()
+            || source
+                .source()
+                .is_some_and(|source| source.is::<LengthLimitError>())
+    }) {
+        CliError::PayloadTooLarge(error.to_string())
+    } else {
+        CliError::InvalidPayload(error.to_string())
+    }
+}
+
+// Builds the [`LlmGatewayStart`] payload from a prepared request. Identifier resolution is shared
+// across streaming and non-streaming paths so correlation behavior is consistent for every route.
+// Provider-specific fallbacks are resolved here, before request execution leaves the gateway path,
+// because the later runtime-managed LLM call only sees this normalized start payload.
+fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGatewayStart {
+    LlmGatewayStart {
+        // Explicit NeMo Relay headers still win, but alignment can recover agent-native session
+        // signals when available. Applies to Claude Code's session header and Codex's Responses
+        // prompt-cache thread id today.
+        session_id: gateway_session_id(&request.headers, &request.request_json, request.provider),
+        provider: request.provider.name().to_string(),
+        model_name: request
+            .request_json
+            .get("model")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        // Subagent ownership is intentionally header-only at the gateway layer. Body fields can be
+        // provider payload content rather than scope identity, so the session layer handles other
+        // ownership hints.
+        subagent_id: gateway_subagent_id(&request.headers),
+        conversation_id: gateway_identifier(
+            &request.headers,
+            &request.request_json,
+            "x-nemo-relay-conversation-id",
+            &[
+                &["conversation_id"],
+                &["conversationId"],
+                &["conversation", "id"],
+            ],
+        ),
+        generation_id: gateway_identifier(
+            &request.headers,
+            &request.request_json,
+            "x-nemo-relay-generation-id",
+            &[&["generation_id"], &["generationId"], &["generation", "id"]],
+        ),
+        request_id: gateway_identifier(
+            &request.headers,
+            &request.request_json,
+            "x-nemo-relay-request-id",
+            &[
+                &["request_id"],
+                &["requestId"],
+                &["request", "id"],
+                &["metadata", "request_id"],
+            ],
+        )
+        // Preserve a transport request id as a weak fallback for debugging even when the provider
+        // body does not expose an LLM request id.
+        .or_else(|| header_string(&request.headers, "x-request-id")),
+        request: LlmRequest {
+            headers: observable_headers(&request.headers),
+            content: request.request_json.clone(),
+        },
+        streaming: request.streaming,
+        metadata: json!({ "gateway_path": request.path }),
+    }
+}
+
+*/
 // Captures upstream HTTP status and response headers from inside the managed `func`. The runtime's
 // LLM execution callback returns only a Json (or Json stream), so the outer gateway needs a side
 // channel to recover the bytes the client expects.
@@ -259,6 +390,7 @@ fn build_buffered_func(
         let upstream_error = upstream_error.clone();
         let response_bytes = response_bytes.clone();
         Box::pin(async move {
+            let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
                 &method,
@@ -273,6 +405,9 @@ fn build_buffered_func(
                 Ok(response) => response,
                 Err(error) => {
                     let message = error.to_string();
+                    if retry_aware {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
                     *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
                     return Err(FlowError::Internal(message));
                 }
@@ -283,10 +418,20 @@ fn build_buffered_func(
                 Ok(bytes) => bytes,
                 Err(error) => {
                     let message = error.to_string();
+                    if retry_aware {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
                     *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
                     return Err(FlowError::Internal(message));
                 }
             };
+            if retry_aware && !status.is_success() {
+                return Err(FlowError::Upstream(http_failure(
+                    status,
+                    &response_headers,
+                    &bytes,
+                )));
+            }
             let json = serde_json::from_slice::<Value>(&bytes)
                 .unwrap_or_else(|_| json!({ "body_bytes": bytes.len() }));
             *upstream_info.lock().expect("upstream info lock poisoned") =
@@ -427,6 +572,7 @@ fn build_streaming_func(
         let upstream_info = upstream_info.clone();
         let upstream_error = upstream_error.clone();
         Box::pin(async move {
+            let retry_aware = retry_aware_dispatch(&request);
             let response = match forward_upstream_request(
                 &http,
                 &method,
@@ -441,12 +587,26 @@ fn build_streaming_func(
                 Ok(response) => response,
                 Err(error) => {
                     let message = error.to_string();
+                    if retry_aware {
+                        return Err(FlowError::Upstream(transport_failure(&error)));
+                    }
                     *upstream_error.lock().expect("upstream error lock poisoned") = Some(error);
                     return Err(FlowError::Internal(message));
                 }
             };
             let status = response.status();
             let response_headers = response_headers(response.headers());
+            if retry_aware && !status.is_success() {
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|error| FlowError::Upstream(transport_failure(&error)))?;
+                return Err(FlowError::Upstream(http_failure(
+                    status,
+                    &response_headers,
+                    &bytes,
+                )));
+            }
             *upstream_info.lock().expect("upstream info lock poisoned") =
                 Some((status, response_headers));
             let json_stream = sse_json_stream(response);
@@ -646,13 +806,21 @@ async fn forward_upstream_request(
     effective_request: Option<&LlmRequest>,
     forwarding: ProviderForwarding,
 ) -> Result<reqwest::Response, reqwest::Error> {
-    let (body_bytes, headers) = effective_upstream_request(body_bytes, headers, effective_request);
-    let sanitized = strip_replaceable_agent_auth_headers(
-        &headers,
+    let effective = effective_dispatch_request(
+        body_bytes,
+        headers,
+        effective_request,
+        url,
         forwarding.route,
+    );
+    let sanitized = strip_replaceable_agent_auth_headers(
+        &effective.headers,
+        effective.route,
         forwarding.allow_environment_provider_auth,
     );
-    let mut upstream = http.request(method.clone(), url).body(body_bytes.clone());
+    let mut upstream = http
+        .request(method.clone(), &effective.url)
+        .body(effective.body_bytes.clone());
     for (name, value) in &sanitized {
         if should_forward_request_header(name, &sanitized) {
             upstream = upstream.header(name, value);
@@ -660,20 +828,53 @@ async fn forward_upstream_request(
     }
     upstream = inject_provider_auth(
         upstream,
-        forwarding.route,
+        effective.route,
         &sanitized,
         forwarding.allow_environment_provider_auth,
     );
     upstream.send().await
 }
 
+#[derive(Clone)]
+struct EffectiveUpstreamRequest {
+    body_bytes: Bytes,
+    headers: HeaderMap,
+    url: String,
+    route: ProviderRoute,
+}
+
+#[cfg(test)]
 fn effective_upstream_request(
     body_bytes: &Bytes,
     headers: &HeaderMap,
     effective_request: Option<&LlmRequest>,
 ) -> (Bytes, HeaderMap) {
+    let effective = effective_dispatch_request(
+        body_bytes,
+        headers,
+        effective_request,
+        "",
+        ProviderRoute::OpenAiChatCompletions,
+    );
+    (effective.body_bytes, effective.headers)
+}
+
+fn effective_dispatch_request(
+    body_bytes: &Bytes,
+    headers: &HeaderMap,
+    effective_request: Option<&LlmRequest>,
+    url: &str,
+    route: ProviderRoute,
+) -> EffectiveUpstreamRequest {
+    let mut headers = headers.clone();
+    strip_internal_dispatch_headers(&mut headers);
     let Some(request) = effective_request else {
-        return (body_bytes.clone(), headers.clone());
+        return EffectiveUpstreamRequest {
+            body_bytes: body_bytes.clone(),
+            headers,
+            url: url.to_string(),
+            route,
+        };
     };
 
     let body_bytes = if request.content.is_null() {
@@ -685,21 +886,65 @@ fn effective_upstream_request(
                 eprintln!(
                     "nemo-relay CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
                 );
-                return (body_bytes.clone(), headers.clone());
+                return EffectiveUpstreamRequest {
+                    body_bytes: body_bytes.clone(),
+                    headers,
+                    url: url.to_string(),
+                    route,
+                };
             }
         }
     };
-    let mut headers = headers.clone();
+    let mut override_url = None;
+    let mut override_route = None;
     for (name, value) in &request.headers {
+        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_URL_HEADER) {
+            override_url = json_header_string(value);
+            continue;
+        }
+        if name.eq_ignore_ascii_case(INTERNAL_DISPATCH_ROUTE_HEADER) {
+            override_route = json_header_string(value)
+                .and_then(|value| ProviderRoute::from_dispatch_override(&value));
+            continue;
+        }
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
+        if is_internal_dispatch_header(&name) {
+            continue;
+        }
         let Some(value) = json_header_value(value) else {
             continue;
         };
         headers.insert(name, value);
     }
-    (body_bytes, headers)
+    EffectiveUpstreamRequest {
+        body_bytes,
+        headers,
+        url: override_url.unwrap_or_else(|| url.to_string()),
+        route: override_route.unwrap_or(route),
+    }
+}
+
+fn json_header_string(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn strip_internal_dispatch_headers(headers: &mut HeaderMap) {
+    headers.remove(INTERNAL_DISPATCH_URL_HEADER);
+    headers.remove(INTERNAL_DISPATCH_ROUTE_HEADER);
+    headers.remove(INTERNAL_RETRY_AWARE_HEADER);
+}
+
+fn is_internal_dispatch_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        INTERNAL_DISPATCH_URL_HEADER | INTERNAL_DISPATCH_ROUTE_HEADER | INTERNAL_RETRY_AWARE_HEADER
+    )
 }
 
 fn json_header_value(value: &Value) -> Option<HeaderValue> {
@@ -819,8 +1064,97 @@ fn translate_runtime_error(error: FlowError, upstream_error: &UpstreamErrorSlot)
     }
     match error {
         FlowError::GuardrailRejected(reason) => CliError::GuardrailRejected(reason),
+        FlowError::Upstream(failure) => CliError::ProviderFailure(failure),
         other => CliError::InvalidPayload(other.to_string()),
     }
+}
+
+fn retry_aware_dispatch(request: &LlmRequest) -> bool {
+    request
+        .headers
+        .get(INTERNAL_RETRY_AWARE_HEADER)
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn transport_failure(error: &reqwest::Error) -> UpstreamFailure {
+    UpstreamFailure {
+        status: error.status().map(|status| status.as_u16()),
+        body: bounded_error_body(error.to_string().as_bytes()),
+        headers: BTreeMap::new(),
+        class: if error.is_timeout() {
+            UpstreamFailureClass::Timeout
+        } else {
+            UpstreamFailureClass::Connection
+        },
+    }
+}
+
+fn http_failure(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> UpstreamFailure {
+    let body = bounded_error_body(body);
+    let normalized = body.to_ascii_lowercase();
+    let class = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        UpstreamFailureClass::Authentication
+    } else if normalized.contains("context_length_exceeded")
+        || normalized.contains("context window")
+        || normalized.contains("too many tokens")
+    {
+        UpstreamFailureClass::ContextWindow
+    } else if normalized.contains("model_not_found")
+        || normalized.contains("model unavailable")
+        || normalized.contains("model_overloaded")
+    {
+        UpstreamFailureClass::ModelUnavailable
+    } else if matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 504) {
+        UpstreamFailureClass::RetryableStatus
+    } else if status.is_client_error() {
+        UpstreamFailureClass::InvalidRequest
+    } else {
+        UpstreamFailureClass::Other
+    };
+    UpstreamFailure {
+        status: Some(status.as_u16()),
+        body,
+        headers: failure_headers(headers),
+        class,
+    }
+}
+
+// Captures only safe provider metadata for retry and fallback diagnostics. This is intentionally
+// separate from `response_headers`, which preserves response headers for ordinary downstream
+// forwarding and therefore must not apply this failure-specific credential filter.
+fn failure_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            !is_hop_by_hop(name)
+                && *name != http::header::CONTENT_LENGTH
+                && !is_sensitive_response_header(name)
+        })
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn is_sensitive_response_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "set-cookie"
+            | "www-authenticate"
+            | "authorization"
+            | "cookie"
+            | "x-api-key"
+            | "api-key"
+            | "anthropic-api-key"
+    )
+}
+
+fn bounded_error_body(body: &[u8]) -> String {
+    String::from_utf8_lossy(&body[..body.len().min(MAX_UPSTREAM_ERROR_BODY_BYTES)]).into_owned()
 }
 
 /// Proxies OpenAI model-list requests without creating LLM runtime events.
@@ -878,3 +1212,286 @@ pub(crate) async fn models(
     let bytes = upstream_response.bytes().await?;
     build_response(status, headers, Body::from(bytes))
 }
+/* Pre-refactor route and response helpers moved to `gateway::routes` and `gateway::response`.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderRoute {
+    OpenAiResponses,
+    OpenAiChatCompletions,
+    OpenAiModels,
+    AnthropicMessages,
+    AnthropicCountTokens,
+}
+
+impl ProviderRoute {
+    // Maps public gateway paths to known upstream provider routes. Unsupported paths return `None`
+    // so the caller can fail as a bad hook/gateway payload instead of constructing arbitrary URLs.
+    fn from_path(path: &str) -> Option<Self> {
+        match path {
+            "/responses" => Some(Self::OpenAiResponses),
+            "/v1/responses" => Some(Self::OpenAiResponses),
+            "/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "/models" => Some(Self::OpenAiModels),
+            "/v1/models" => Some(Self::OpenAiModels),
+            "/v1/messages" => Some(Self::AnthropicMessages),
+            "/v1/messages/count_tokens" => Some(Self::AnthropicCountTokens),
+            _ => None,
+        }
+    }
+
+    fn from_dispatch_override(value: &str) -> Option<Self> {
+        match value {
+            "openai_chat"
+            | "openai_chat_completions"
+            | "openai.chat_completions"
+            | "/v1/chat/completions" => Some(Self::OpenAiChatCompletions),
+            "openai_responses" | "openai.responses" | "/v1/responses" => {
+                Some(Self::OpenAiResponses)
+            }
+            "anthropic_messages" | "anthropic.messages" | "/v1/messages" => {
+                Some(Self::AnthropicMessages)
+            }
+            _ => None,
+        }
+    }
+
+    const fn provider_surface(self) -> Option<ProviderSurface> {
+        match self {
+            Self::OpenAiResponses => Some(ProviderSurface::OpenAIResponses),
+            Self::OpenAiChatCompletions => Some(ProviderSurface::OpenAIChat),
+            Self::AnthropicMessages => Some(ProviderSurface::AnthropicMessages),
+            Self::AnthropicCountTokens | Self::OpenAiModels => None,
+        }
+    }
+
+    // Returns the provider route name recorded on managed LLM events. These names split OpenAI API
+    // variants because their request/response schemas differ even when they share a base URL, and
+    // they double as codec hints for ambiguous provider request shapes.
+    const fn name(self) -> &'static str {
+        self.alignment_route().name()
+    }
+
+    // Builds the upstream URL by combining the configured provider base with the original path and
+    // query string. Trailing slashes are stripped from the base to avoid double-slash variants in
+    // configured enterprise or local proxy endpoints.
+    fn upstream_url(self, config: &crate::config::GatewayConfig, path_and_query: &str) -> String {
+        let base = match self {
+            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
+                config.openai_base_url.as_str()
+            }
+            Self::AnthropicMessages | Self::AnthropicCountTokens => {
+                config.anthropic_base_url.as_str()
+            }
+        };
+        self.upstream_url_with_base(base, path_and_query)
+    }
+
+    // Like `upstream_url` but with an explicit base URL. This keeps OpenAI `/v1` normalization in
+    // one place for configured public, enterprise, or local proxy bases.
+    fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
+        let base = base.trim_end_matches('/');
+        let path_and_query = match self {
+            Self::OpenAiResponses | Self::OpenAiChatCompletions | Self::OpenAiModels => {
+                normalize_openai_path_for_base(base, path_and_query)
+            }
+            _ => path_and_query.to_string(),
+        };
+        format!("{base}{path_and_query}")
+    }
+
+    // Narrows gateway routing to the smaller taxonomy used by trace alignment. Keeping this
+    // conversion here prevents provider-specific alignment code from depending on gateway URL
+    // routing internals.
+    const fn alignment_route(self) -> GatewayRouteKind {
+        match self {
+            Self::OpenAiResponses => GatewayRouteKind::OpenAiResponses,
+            Self::OpenAiChatCompletions => GatewayRouteKind::OpenAiChatCompletions,
+            Self::OpenAiModels => GatewayRouteKind::OpenAiModels,
+            Self::AnthropicMessages => GatewayRouteKind::AnthropicMessages,
+            Self::AnthropicCountTokens => GatewayRouteKind::AnthropicCountTokens,
+        }
+    }
+}
+
+fn normalize_openai_path_for_base(base: &str, path_and_query: &str) -> String {
+    match (base.ends_with("/v1"), path_and_query.starts_with("/v1/")) {
+        (true, true) => path_and_query
+            .strip_prefix("/v1")
+            .expect("path was checked to start with /v1")
+            .to_string(),
+        (false, false) => format!("/v1{path_and_query}"),
+        _ => path_and_query.to_string(),
+    }
+}
+
+// Gives alignment adapters a chance to choose an agent-native upstream before default provider
+// routing runs. Today this supports Codex ChatGPT auth; future harness fallbacks should stay in
+// alignment rather than adding provider-shaped checks here.
+fn gateway_upstream_url_override(
+    route: ProviderRoute,
+    headers: &HeaderMap,
+    path_and_query: &str,
+) -> Option<String> {
+    gateway_upstream_url_override_with_openai_key_state(
+        route,
+        headers,
+        path_and_query,
+        env_var_is_nonempty("OPENAI_API_KEY"),
+    )
+}
+
+fn gateway_upstream_url_override_with_openai_key_state(
+    route: ProviderRoute,
+    headers: &HeaderMap,
+    path_and_query: &str,
+    has_openai_replacement_key: bool,
+) -> Option<String> {
+    alignment::gateway_upstream_url_override(
+        headers,
+        route.alignment_route(),
+        path_and_query,
+        has_openai_replacement_key,
+    )
+}
+
+// Lets alignment adapters strip agent-native credentials only when the gateway can replace them
+// with standard provider API keys. Whitespace-only env vars are treated as missing because
+// forwarding an empty bearer value only replaces one authentication failure with another.
+fn strip_replaceable_agent_auth_headers(headers: &HeaderMap, route: ProviderRoute) -> HeaderMap {
+    strip_replaceable_agent_auth_headers_with_openai_key_state(
+        headers,
+        route,
+        env_var_is_nonempty("OPENAI_API_KEY"),
+    )
+}
+
+fn strip_replaceable_agent_auth_headers_with_openai_key_state(
+    headers: &HeaderMap,
+    route: ProviderRoute,
+    has_openai_replacement_key: bool,
+) -> HeaderMap {
+    alignment::gateway_forward_headers(headers, route.alignment_route(), has_openai_replacement_key)
+}
+
+fn env_var_is_nonempty(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_some()
+}
+
+// Delegates provider-specific session fallbacks to `alignment` so request construction stays
+// generic and each coding-agent quirk has one documented adapter.
+fn gateway_session_id(headers: &HeaderMap, body: &Value, route: ProviderRoute) -> Option<String> {
+    alignment::gateway_session_id(headers, body, route.alignment_route())
+}
+
+fn gateway_subagent_id(headers: &HeaderMap) -> Option<String> {
+    alignment::gateway_subagent_id(headers)
+}
+
+// Keeps the gateway-facing helper local for tests while the generic extraction pattern lives in
+// `alignment`.
+fn gateway_identifier(
+    headers: &HeaderMap,
+    body: &Value,
+    header_name: &'static str,
+    body_paths: &[&[&str]],
+) -> Option<String> {
+    alignment::gateway_identifier(headers, body, header_name, body_paths)
+}
+
+// Copies only non-sensitive, forwardable request headers into LLM request metadata. This preserves
+// correlation headers while excluding credentials and hop-by-hop transport details.
+fn observable_headers(headers: &HeaderMap) -> Map<String, Value> {
+    let mut output = Map::new();
+    for (name, value) in headers {
+        if should_record_header(name)
+            && let Ok(value) = value.to_str()
+        {
+            output.insert(name.as_str().to_string(), json!(value));
+        }
+    }
+    output
+}
+
+// Copies upstream response headers except hop-by-hop transport headers that Axum/hyper must manage
+// for the downstream connection. Multiple values are appended to preserve provider behavior.
+// Content-Length is also dropped because the gateway re-encodes streaming responses and the
+// upstream-reported length will not match the bytes the client sees.
+fn response_headers(headers: &HeaderMap) -> HeaderMap {
+    let mut output = HeaderMap::new();
+    for (name, value) in headers {
+        if !is_hop_by_hop(name) && name != http::header::CONTENT_LENGTH {
+            output.append(name.clone(), value.clone());
+        }
+    }
+    output
+}
+
+// Reconstructs an Axum response from upstream status, filtered headers, and the selected body. All
+// builder errors are converted into gateway HTTP errors rather than panics.
+fn build_response(
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Body,
+) -> Result<Response<Body>, CliError> {
+    let mut builder = Response::builder().status(status);
+    for (name, value) in &headers {
+        builder = builder.header(name, value);
+    }
+    Ok(builder.body(body)?)
+}
+
+// Allows provider request headers through unless they are transport-owned or must be recalculated
+// for the forwarded body. Host and content length are intentionally excluded because reqwest sets
+// them for the upstream connection.
+fn should_forward_request_header(name: &HeaderName) -> bool {
+    !is_hop_by_hop(name)
+        && name != http::header::HOST
+        && name != http::header::CONTENT_LENGTH
+        // Strip Accept-Encoding so upstreams return identity-encoded bodies; otherwise the
+        // observability capture (`output.value` on LLM spans, ATIF trajectory bodies) records
+        // gzip/br/zstd bytes that downstream consumers can't read. Bandwidth cost is paid only
+        // on the gateway-upstream hop. The client never asked for the encoding it would have
+        // received from upstream, so its decoders never trigger.
+        && name != http::header::ACCEPT_ENCODING
+}
+
+// Allows headers into observability metadata only after removing credentials and provider API keys.
+// The forwarding filter runs first so hop-by-hop transport headers are also excluded from recorded
+// LLM request attributes. The credential blocklist covers the four canonical cases we see in
+// practice: `Authorization` (most providers), `Cookie` (session credentials), `x-api-key` (OpenAI
+// SDK and similar), `anthropic-api-key` (Anthropic), and the generic `api-key` alias used by some
+// providers/proxies (e.g., Azure OpenAI). `HeaderName::as_str()` already returns the canonical
+// lowercase form so string comparisons are case-insensitive by construction.
+fn should_record_header(name: &HeaderName) -> bool {
+    should_forward_request_header(name)
+        && name != http::header::AUTHORIZATION
+        && name != http::header::COOKIE
+        && name.as_str() != "x-api-key"
+        && name.as_str() != "api-key"
+        && name.as_str() != "anthropic-api-key"
+}
+
+// Identifies headers that describe a single transport hop and therefore must not be proxied across
+// the client-gateway-upstream boundary.
+fn is_hop_by_hop(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+#[cfg(test)]
+#[path = "../tests/coverage/gateway_tests.rs"]
+mod tests;
+*/

@@ -6,7 +6,9 @@ use crate::configuration::{
     global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
 };
 use crate::plugins::ConfigurationScope;
-use nemo_relay::config_editor::{EditorConfig, EditorSchema};
+use nemo_relay::config_editor::{
+    EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
+};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay::plugins::nemo_guardrails::component::{
@@ -206,7 +208,7 @@ fn typed_editor_model_contains_adaptive_options() {
     let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
     assert_eq!(
         telemetry.field("learners").unwrap().kind,
-        EditorFieldKind::Json
+        EditorFieldKind::List
     );
 
     let acg = schema.field("acg").unwrap().schema().unwrap();
@@ -301,7 +303,7 @@ fn typed_editor_model_contains_pii_redaction_options() {
     );
     assert_eq!(
         builtin.field("target_paths").unwrap().kind,
-        EditorFieldKind::Json
+        EditorFieldKind::List
     );
     assert_eq!(
         builtin.field("detector").unwrap().kind,
@@ -1153,6 +1155,8 @@ fn optional_section_without_default(name: &'static str) -> EditorFieldSpec {
         optional: true,
         nested_schema: None,
         nested_default: None,
+        list_item: None,
+        tagged_union: None,
     }
 }
 
@@ -1165,6 +1169,8 @@ fn depth_root_schema() -> &'static EditorSchema {
         optional: false,
         nested_schema: Some(depth_middle_schema),
         nested_default: None,
+        list_item: None,
+        tagged_union: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1179,6 +1185,8 @@ fn depth_middle_schema() -> &'static EditorSchema {
         optional: false,
         nested_schema: Some(depth_leaf_schema),
         nested_default: None,
+        list_item: None,
+        tagged_union: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1193,6 +1201,8 @@ fn depth_leaf_schema() -> &'static EditorSchema {
         optional: false,
         nested_schema: None,
         nested_default: None,
+        list_item: None,
+        tagged_union: None,
     }];
     static SCHEMA: EditorSchema = EditorSchema { fields: &FIELDS };
     &SCHEMA
@@ -1222,6 +1232,8 @@ fn clear_value_field_refuses_required_fields() {
             optional: false,
             nested_schema: None,
             nested_default: None,
+            list_item: None,
+            tagged_union: None,
         },
         EditorFieldSpec {
             name: "optional",
@@ -1231,6 +1243,8 @@ fn clear_value_field_refuses_required_fields() {
             optional: true,
             nested_schema: None,
             nested_default: None,
+            list_item: None,
+            tagged_union: None,
         },
     ];
     let schema = EditorSchema { fields: &FIELDS };
@@ -2266,6 +2280,61 @@ fn display_helpers_render_scalars_json_and_defaults() {
     );
 }
 
+fn collection_section_default() -> Value {
+    json!({ "list": ["default"], "map": { "key": "value" } })
+}
+
+#[test]
+fn collection_summaries_preserve_defaults_and_show_invalid_shapes() {
+    let section = EditorFieldSpec {
+        name: "section",
+        label: "Section",
+        kind: EditorFieldKind::Section,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: Some(collection_section_default),
+        list_item: None,
+        tagged_union: None,
+    };
+    let list = EditorFieldSpec {
+        name: "list",
+        label: "List",
+        kind: EditorFieldKind::List,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    };
+    let map = EditorFieldSpec {
+        name: "map",
+        label: "Map",
+        kind: EditorFieldKind::StringMap,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+        list_item: None,
+        tagged_union: None,
+    };
+
+    assert_eq!(
+        display_field_value(section, list, &json!(["default"])),
+        "1 item (default)"
+    );
+    assert_eq!(display_field_value(section, list, &json!("wrong")), "wrong");
+    assert_eq!(
+        display_field_value(section, map, &json!({ "key": "value" })),
+        "1 entry (default)"
+    );
+    assert_eq!(
+        display_field_value(section, map, &json!(["wrong"])),
+        r#"["wrong"]"#
+    );
+}
+
 #[test]
 fn parse_float_value_rejects_non_finite_numbers() {
     let field = EditorFieldSpec {
@@ -2276,6 +2345,8 @@ fn parse_float_value_rejects_non_finite_numbers() {
         optional: false,
         nested_schema: None,
         nested_default: None,
+        list_item: None,
+        tagged_union: None,
     };
 
     assert_eq!(parse_float_value(&field, "0.75").unwrap(), json!(0.75));
@@ -2288,6 +2359,136 @@ fn parse_float_value_rejects_non_finite_numbers() {
         );
         assert!(error.contains(value), "error was: {error}");
     }
+}
+
+fn tagged_list_item_schema() -> &'static EditorSchema {
+    static SCHEMA: EditorSchema = EditorSchema { fields: &[] };
+    &SCHEMA
+}
+
+fn tagged_list_item_default() -> Value {
+    json!({ "kind": "example" })
+}
+
+fn other_tagged_list_item_default() -> Value {
+    json!({ "kind": "other" })
+}
+
+static TAGGED_LIST_ITEM_VARIANTS: [EditorVariantSpec; 2] = [
+    EditorVariantSpec {
+        label: "Example",
+        tag: "example",
+        schema: tagged_list_item_schema,
+        default: tagged_list_item_default,
+    },
+    EditorVariantSpec {
+        label: "Other",
+        tag: "other",
+        schema: tagged_list_item_schema,
+        default: other_tagged_list_item_default,
+    },
+];
+
+static TAGGED_UNION: EditorTaggedUnionSpec = EditorTaggedUnionSpec {
+    discriminator: "kind",
+    variants: &TAGGED_LIST_ITEM_VARIANTS,
+};
+
+static TAGGED_LIST_ITEM: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: None,
+    default: None,
+    tagged_union: Some(&TAGGED_UNION),
+    list_item: None,
+};
+
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+struct TaggedUnionHarness {
+    backend: Value,
+}
+
+nemo_relay::editor_config! {
+    impl TaggedUnionHarness {
+        backend => { label: "Backend", kind: TaggedUnion, tagged_union: &TAGGED_UNION },
+    }
+}
+
+#[test]
+fn tagged_unions_support_list_items_and_top_level_fields() {
+    let field = TaggedUnionHarness::editor_schema()
+        .field("backend")
+        .unwrap();
+    assert_eq!(field.kind, EditorFieldKind::TaggedUnion);
+    assert_eq!(
+        field.tagged_union.map(|metadata| metadata.discriminator),
+        Some("kind")
+    );
+    assert_eq!(
+        editor_item_label(&json!({ "kind": "example" }), &TAGGED_LIST_ITEM),
+        "example"
+    );
+}
+
+#[test]
+fn top_level_tagged_union_lifecycle_changes_variants_and_resets() {
+    let default = json!({ "kind": "example" });
+    let mut edited = TaggedUnionFieldState::new(Some(json!({ "kind": "other" })), None);
+    edited
+        .value_mut()
+        .as_object_mut()
+        .unwrap()
+        .insert("setting".into(), json!(true));
+    assert_eq!(
+        edited.finish(),
+        TaggedUnionFieldEdit::Set(json!({ "kind": "other", "setting": true }))
+    );
+
+    let mut changed =
+        TaggedUnionFieldState::new(Some(json!({ "kind": "other" })), Some(default.clone()));
+    changed.change_variant(&TAGGED_UNION, 0).unwrap();
+    assert_eq!(changed.value(), &default);
+    assert_eq!(changed.finish(), TaggedUnionFieldEdit::Set(default));
+
+    let reset = TaggedUnionFieldState::new(Some(json!({ "kind": "other" })), None).reset();
+    assert_eq!(reset, TaggedUnionFieldEdit::Reset);
+
+    assert!(
+        tagged_union_variant_value(&TAGGED_UNION, 2)
+            .unwrap_err()
+            .to_string()
+            .contains("tagged union variant does not exist")
+    );
+
+    let field = TaggedUnionHarness::editor_schema()
+        .field("backend")
+        .unwrap();
+    let mut config = TaggedUnionHarness {
+        backend: json!({ "kind": "other" }),
+    };
+    reset_config_field(&mut config, field).unwrap();
+    assert_eq!(config.backend, Value::Null);
+}
+
+#[test]
+fn collection_shortcuts_reset_to_defaults_and_clear_to_empty() {
+    let default = json!(["llm.chunk"]);
+
+    assert_eq!(
+        collection_shortcut_value(Some(&default), json!([]), MenuShortcut::Reset),
+        default
+    );
+    assert_eq!(
+        collection_shortcut_value(Some(&default), json!([]), MenuShortcut::Clear),
+        json!([])
+    );
+}
+
+#[test]
+fn string_map_add_rejects_an_existing_trimmed_key() {
+    let entries = json!({ "existing": "value" });
+
+    assert!(string_map_entry_exists(&entries, " existing "));
+    assert!(!string_map_entry_exists(&entries, "new"));
 }
 
 #[test]

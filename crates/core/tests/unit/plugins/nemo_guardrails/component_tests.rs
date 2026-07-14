@@ -234,6 +234,12 @@ fn editor_schema_tracks_nemo_guardrails_config_types() {
     let remote_schema = remote.schema().expect("remote editor schema");
     let headers = remote_schema.field("headers").expect("headers field");
     assert_eq!(headers.kind, EditorFieldKind::StringMap);
+    let config_ids = remote_schema.field("config_ids").expect("config_ids field");
+    assert_eq!(config_ids.kind, EditorFieldKind::List);
+    assert_eq!(
+        config_ids.list_item.expect("config_ids item metadata").kind,
+        EditorFieldKind::String
+    );
 
     let request_defaults = schema
         .field("request_defaults")

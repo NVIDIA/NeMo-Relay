@@ -12,7 +12,19 @@ pub(crate) fn prepare(
     dry_run: bool,
 ) -> Result<(), CliError> {
     let source_config = hooks_path_for_launch(hooks_path)?;
+    let gateway_url = launch
+        .env
+        .iter()
+        .find_map(|(name, value)| {
+            (name == crate::configuration::GATEWAY_URL_ENV).then_some(value.as_str())
+        })
+        .expect("transparent runs always define their gateway URL")
+        .to_owned();
     launch.env.push(("HERMES_ACCEPT_HOOKS".into(), "1".into()));
+    launch.env.push((
+        "OPENAI_BASE_URL".into(),
+        format!("{}/v1", gateway_url.trim_end_matches('/')),
+    ));
     if dry_run {
         launch.notes.push(format!(
             "would create an isolated Hermes config overlay for {}",
@@ -26,14 +38,7 @@ pub(crate) fn prepare(
             source_config.display()
         ))
     })?;
-    let gateway_url = launch
-        .env
-        .iter()
-        .find_map(|(name, value)| {
-            (name == crate::configuration::GATEWAY_URL_ENV).then_some(value.as_str())
-        })
-        .expect("transparent runs always define their gateway URL");
-    let overlay_home = create_overlay(source_home, &source_config, gateway_url)?;
+    let overlay_home = create_overlay(source_home, &source_config, &gateway_url)?;
     launch
         .env
         .push(("HERMES_HOME".into(), overlay_home.display().to_string()));
