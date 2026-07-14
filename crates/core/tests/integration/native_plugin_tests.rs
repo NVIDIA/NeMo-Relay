@@ -41,6 +41,7 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const PLUGIN_DISCOVERY_TEST_CHILD: &str = "NEMO_RELAY_PLUGIN_DISCOVERY_TEST_CHILD";
 
 struct ReplacementRegistryPlugin;
 
@@ -1180,6 +1181,70 @@ async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
     activation.clear().expect("combined host should clear");
     assert_eq!(STATIC_BASE_DEREGISTRATIONS.load(Ordering::SeqCst), 1);
     assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
+    assert!(lookup_plugin("fixture_native").is_none());
+    assert!(deregister_plugin(STATIC_BASE_PLUGIN_KIND));
+}
+
+#[tokio::test]
+async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_components() {
+    if std::env::var_os(PLUGIN_DISCOVERY_TEST_CHILD).is_none() {
+        let environment = TempDir::new().expect("plugin discovery environment should be created");
+        let project_config_dir = environment.path().join(".nemo-relay");
+        std::fs::create_dir_all(&project_config_dir)
+            .expect("project plugin config directory should be created");
+        std::fs::write(
+            project_config_dir.join("plugins.toml"),
+            format!(
+                "version = 1\n\n[[components]]\nkind = {STATIC_BASE_PLUGIN_KIND:?}\nenabled = true\n"
+            ),
+        )
+        .expect("project plugin config should be written");
+        let xdg_config_home = environment.path().join("xdg");
+        std::fs::create_dir_all(&xdg_config_home)
+            .expect("isolated user config directory should be created");
+
+        let output = Command::new(std::env::current_exe().expect("test executable should resolve"))
+            .args([
+                "--exact",
+                "plugin_host_activation_layers_discovered_static_base_with_dynamic_components",
+                "--nocapture",
+            ])
+            .current_dir(environment.path())
+            .env("XDG_CONFIG_HOME", &xdg_config_home)
+            .env(PLUGIN_DISCOVERY_TEST_CHILD, "1")
+            .output()
+            .expect("plugin discovery child process should run");
+        assert!(
+            output.status.success(),
+            "plugin discovery child process failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let _ = deregister_plugin(STATIC_BASE_PLUGIN_KIND);
+    STATIC_BASE_REGISTRATIONS.store(0, Ordering::SeqCst);
+    STATIC_BASE_DEREGISTRATIONS.store(0, Ordering::SeqCst);
+    register_plugin(Arc::new(StaticBasePlugin)).expect("static base plugin should register");
+
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let (activation, report) = PluginHostActivation::activate_with_discovered_config(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &manifest_ref)],
+    )
+    .await
+    .expect("discovered static and dynamic components should activate together");
+
+    assert!(!report.has_errors());
+    assert_eq!(STATIC_BASE_REGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert!(lookup_plugin(STATIC_BASE_PLUGIN_KIND).is_some());
+    assert!(lookup_plugin("fixture_native").is_some());
+
+    activation.clear().expect("discovered host should clear");
+    assert_eq!(STATIC_BASE_DEREGISTRATIONS.load(Ordering::SeqCst), 1);
     assert!(lookup_plugin("fixture_native").is_none());
     assert!(deregister_plugin(STATIC_BASE_PLUGIN_KIND));
 }
