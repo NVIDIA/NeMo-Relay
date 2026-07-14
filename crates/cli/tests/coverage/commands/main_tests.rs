@@ -9,8 +9,8 @@ use super::serve::ServerArgs;
 use super::*;
 use crate::commands::model_pricing::{PricingSubcommand, PricingValidateCommand};
 use crate::commands::plugins::{
-    PluginsCommand, PluginsEditCommand, PluginsInspectCommand, PluginsListCommand,
-    PluginsSubcommand, PluginsValidateCommand,
+    PluginsCommand, PluginsInspectCommand, PluginsListCommand, PluginsSubcommand,
+    PluginsValidateCommand,
 };
 
 #[test]
@@ -262,16 +262,6 @@ fn safe_dispatch_helpers_cover_completions_and_plugins_paths() {
         .unwrap(),
         ExitCode::SUCCESS
     );
-
-    let error = run_plugins(
-        PluginsCommand {
-            command: PluginsSubcommand::Edit(PluginsEditCommand::default()),
-        },
-        &server,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("interactive terminal") || error.contains("TTY"));
 
     assert_eq!(
         run_plugins(
