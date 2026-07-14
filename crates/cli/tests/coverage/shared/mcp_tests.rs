@@ -13,6 +13,7 @@ use super::*;
 use crate::installation::generation::{
     GENERATION_FILE_NAME, GenerationRetirement, InstallGeneration, write_new_generation,
 };
+use crate::mcp::protocol::MCP_SUPPORTED_PROTOCOL_VERSIONS;
 
 struct BootstrapConfigHome {
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -139,6 +140,32 @@ fn bounded_mcp_reader_rejects_one_oversized_unterminated_frame() {
 
 #[test]
 fn initialize_reports_native_server_and_supported_protocol() {
+    for protocol_version in MCP_SUPPORTED_PROTOCOL_VERSIONS {
+        let response = response_for(&json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "initialize",
+            "params": { "protocolVersion": protocol_version }
+        }))
+        .unwrap();
+
+        assert_eq!(response["jsonrpc"], json!("2.0"));
+        assert_eq!(response["id"], json!(7));
+        assert_eq!(
+            response["result"]["protocolVersion"],
+            json!(protocol_version)
+        );
+        assert_eq!(response["result"]["capabilities"], json!({}));
+        assert_eq!(
+            response["result"]["serverInfo"]["name"],
+            json!("nemo-relay")
+        );
+        assert_eq!(
+            response["result"]["serverInfo"]["version"],
+            json!(env!("CARGO_PKG_VERSION"))
+        );
+    }
+
     let response = response_for(&json!({
         "jsonrpc": "2.0",
         "id": 7,
@@ -146,21 +173,9 @@ fn initialize_reports_native_server_and_supported_protocol() {
         "params": { "protocolVersion": "2024-11-05" }
     }))
     .unwrap();
-
-    assert_eq!(response["jsonrpc"], json!("2.0"));
-    assert_eq!(response["id"], json!(7));
     assert_eq!(
         response["result"]["protocolVersion"],
         json!(MCP_PROTOCOL_VERSION)
-    );
-    assert_eq!(response["result"]["capabilities"], json!({}));
-    assert_eq!(
-        response["result"]["serverInfo"]["name"],
-        json!("nemo-relay")
-    );
-    assert_eq!(
-        response["result"]["serverInfo"]["version"],
-        json!(env!("CARGO_PKG_VERSION"))
     );
 }
 

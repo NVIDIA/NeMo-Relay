@@ -5,7 +5,8 @@
 
 use serde_json::{Value, json};
 
-pub(super) const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+pub(super) const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+pub(super) const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[MCP_PROTOCOL_VERSION, "2025-06-18"];
 
 /// Result of decoding one newline-delimited MCP frame.
 pub(super) struct FrameAction {
@@ -49,7 +50,8 @@ pub(super) fn response_for(message: &Value) -> Option<Value> {
             else {
                 return Some(jsonrpc_error(id, -32602, "Missing protocolVersion"));
             };
-            let protocol_version = if requested_protocol == MCP_PROTOCOL_VERSION {
+            let protocol_version = if MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&requested_protocol)
+            {
                 requested_protocol
             } else {
                 MCP_PROTOCOL_VERSION

@@ -119,6 +119,54 @@ entrypoint = "plugin.py"
     .unwrap();
 }
 
+fn write_python_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    let artifact_body = "def main():\n    return None\n";
+    std::fs::write(dir.join("plugin.py"), artifact_body).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(artifact_body.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    std::fs::write(
+        dir.join("relay-plugin.toml"),
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = {plugin_id}
+kind = "worker"
+
+[compat]
+relay = "0.5"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+manifest_root = "."
+artifact = "plugin.py"
+
+[integrity]
+sha256 = {digest}
+
+[load]
+runtime = "python"
+entrypoint = "plugin:main"
+"#,
+            plugin_id = toml_basic_string(plugin_id),
+            digest = toml_basic_string(&digest),
+        ),
+    )
+    .unwrap();
+}
+
 fn write_detached_ed25519_signature(dir: &std::path::Path, signature_name: &str) -> String {
     std::fs::create_dir_all(dir).unwrap();
     let artifact = std::fs::read(dir.join("plugin.py")).unwrap();
@@ -1563,6 +1611,61 @@ fn cli_plugins_validate_json_emits_versioned_success_output() {
     assert_eq!(parsed["data"]["policy_state"], "valid");
     assert_eq!(parsed["data"]["startup_class"], "optional");
     assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
+}
+
+#[test]
+fn cli_plugins_validate_rejects_malformed_python_entrypoints_by_path_and_id() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workdir");
+    let plugin_dir = cwd.join("plugins").join("acme");
+    let config_dir = cwd.join(".nemo-relay");
+    let plugin_id = "acme.invalid-python-entrypoint";
+    std::fs::create_dir_all(&config_dir).unwrap();
+    write_python_dynamic_plugin_manifest(&plugin_dir, plugin_id);
+    std::fs::write(
+        config_dir.join("plugins.toml"),
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {}\n",
+            toml_basic_string(plugin_dir.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let manifest_path = plugin_dir.join("relay-plugin.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    std::fs::write(
+        manifest_path,
+        manifest.replace("entrypoint = \"plugin:main\"", "entrypoint = \"plugin\""),
+    )
+    .unwrap();
+
+    for target in [
+        plugin_dir.to_string_lossy().into_owned(),
+        plugin_id.to_owned(),
+    ] {
+        let output = Command::new(gateway_bin())
+            .current_dir(&cwd)
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("HOME", temp.path())
+            .args(["plugins", "validate", &target, "--json"])
+            .output()
+            .unwrap();
+
+        assert!(
+            !output.status.success(),
+            "malformed Python entrypoint unexpectedly validated for {target}"
+        );
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(parsed["command"], "plugins validate");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("module:function form"),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
 }
 
 #[test]

@@ -27,6 +27,7 @@ impl PluginOperationLock {
     ) -> Result<Self, String> {
         let deadline = Instant::now() + timeout;
         let global_file = acquire_lock_file(installation_key, global_lock_dir, deadline, "global")?;
+        ensure_lock_directory(install_dir)?;
         let root_file = if directories_alias(global_lock_dir, install_dir) {
             None
         } else {
@@ -44,6 +45,15 @@ impl PluginOperationLock {
     }
 }
 
+fn ensure_lock_directory(directory: &Path) -> Result<(), String> {
+    fs::create_dir_all(directory).map_err(|error| {
+        format!(
+            "failed to create plugin operation lock directory {}: {error}",
+            directory.display()
+        )
+    })
+}
+
 fn directories_alias(left: &Path, right: &Path) -> bool {
     left == right
         || matches!(
@@ -58,12 +68,7 @@ fn acquire_lock_file(
     deadline: Instant,
     scope: &str,
 ) -> Result<File, String> {
-    fs::create_dir_all(directory).map_err(|error| {
-        format!(
-            "failed to create plugin operation lock directory {}: {error}",
-            directory.display()
-        )
-    })?;
+    ensure_lock_directory(directory)?;
     let path = operation_lock_path(installation_key, directory);
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);

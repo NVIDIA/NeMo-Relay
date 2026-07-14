@@ -1219,18 +1219,26 @@ fn concurrent_different_install_roots_share_the_global_host_lock() {
 #[test]
 fn plugin_operation_lock_acquires_an_aliased_global_and_install_root_once() {
     let root = tempdir().unwrap();
+    let install_dir = root.path().join("new").join("..");
+    let synchronization = tempdir().unwrap();
+    let holder = CrossProcessLockHolder::spawn(
+        OPERATION_LOCK_HELPER_DIR_ENV,
+        &install_dir,
+        Some(root.path()),
+        synchronization.path(),
+    );
 
-    let _lock = PluginOperationLock::acquire(
+    let Err(error) = PluginOperationLock::acquire(
         "codex",
         root.path(),
         &root.path().join("."),
         Duration::from_millis(75),
-    )
-    .unwrap();
+    ) else {
+        panic!("aliased lock acquisition unexpectedly succeeded");
+    };
 
-    assert!(
-        crate::installation::operation_lock::operation_lock_path("codex", root.path()).exists()
-    );
+    assert!(error.contains("global lock"), "{error}");
+    holder.release();
 }
 
 #[test]
