@@ -2215,11 +2215,11 @@ fn default_atof_mode() -> String {
 }
 
 fn default_atof_endpoint_transport() -> String {
-    "http_post".to_string()
+    AtofEndpointTransport::default().as_str().to_string()
 }
 
 fn default_atof_endpoint_field_name_policy() -> String {
-    "preserve".to_string()
+    AtofEndpointFieldNamePolicy::default().as_str().to_string()
 }
 
 fn default_agent_name() -> String {

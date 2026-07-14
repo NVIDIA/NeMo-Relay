@@ -21,6 +21,7 @@ use nemo_relay::codec::optimization::{
     LlmOptimizationModelTransition,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::observability::atof::{AtofEndpointFieldNamePolicy, AtofEndpointTransport};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, Result as PluginResult, deregister_plugin, register_plugin,
@@ -435,22 +436,20 @@ pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(
             ));
         }
     };
-    if endpoint
-        .get("transport")
-        .and_then(Json::as_str)
-        .unwrap_or("http_post")
-        != "http_post"
-    {
+    let transport = endpoint.get("transport").map_or_else(
+        || Some(AtofEndpointTransport::default()),
+        |value| value.as_str().and_then(AtofEndpointTransport::parse),
+    );
+    if transport != Some(AtofEndpointTransport::HttpPost) {
         return Err(format!(
             "Switchyard ATOF endpoint {required_name:?} must use transport = http_post"
         ));
     }
-    if endpoint
-        .get("field_name_policy")
-        .and_then(Json::as_str)
-        .unwrap_or("preserve")
-        != "preserve"
-    {
+    let field_name_policy = endpoint.get("field_name_policy").map_or_else(
+        || Some(AtofEndpointFieldNamePolicy::default()),
+        |value| value.as_str().and_then(AtofEndpointFieldNamePolicy::parse),
+    );
+    if field_name_policy != Some(AtofEndpointFieldNamePolicy::Preserve) {
         return Err(format!(
             "Switchyard ATOF endpoint {required_name:?} must use field_name_policy = preserve"
         ));

@@ -370,6 +370,7 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
     );
 
     plugin_config.components[1].config["atof"]["endpoints"][0]["name"] = json!("switchyard");
+    assert!(validate_switchyard_atof_configuration(&plugin_config).is_ok());
     plugin_config.components[1].config["atof"]["endpoints"][0]["transport"] = json!("websocket");
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
