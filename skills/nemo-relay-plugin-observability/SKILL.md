@@ -11,6 +11,7 @@ metadata:
 Start with one exporter managed by the built-in Observability plugin. This is
 the default for reusable process configuration and the best first plugin for
 most users because it makes Relay's captured activity visible.
+Choose one proof output before layering additional telemetry destinations.
 
 Use manual subscriber or exporter APIs only when a test, script, or application
 needs direct control over registration names, collection windows, or flush

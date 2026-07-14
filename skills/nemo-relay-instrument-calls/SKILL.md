@@ -10,6 +10,7 @@ metadata:
 
 Use this skill when an app already has tool functions or model/provider calls and
 needs to run them through NeMo Relay correctly.
+Keep the original callable behavior stable while adding Relay lifecycle capture.
 
 ## Default Guidance
 
