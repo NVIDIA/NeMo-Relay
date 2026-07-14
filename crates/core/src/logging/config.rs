@@ -16,7 +16,7 @@ pub const DEFAULT_FILE_FLUSH_INTERVAL_MILLIS: u64 = 1000;
 /// Default ceiling applied to file sink `queue_capacity` when [`LoggingConfig::max_queue_capacity`]
 /// is not overridden.
 ///
-/// This is a safety limit, not a tuning recommendation. The async queue preallocates every slot,
+/// This is a safety limit. The async queue preallocates every slot,
 /// so an unbounded value can panic the process at startup; the ceiling turns a mistaken value into
 /// a config error instead. Raise it deliberately if your workload needs a larger queue.
 pub const DEFAULT_MAX_FILE_QUEUE_CAPACITY: usize = 1_048_576;
