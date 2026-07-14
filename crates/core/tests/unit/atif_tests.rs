@@ -880,6 +880,29 @@ fn test_exporter_prefers_explicit_end_model_over_raw_start_model() {
 }
 
 #[test]
+fn test_paired_span_falls_back_to_start_event_model_without_normalized_response() {
+    let llm_uuid = Uuid::now_v7();
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .model_name("profile-start-model")
+        .build();
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({"content": "done"}))
+        .model_name("profile-end-model")
+        .build();
+
+    let candidate = LlmSpanCandidate::from_events(llm_uuid, &start, &end).unwrap();
+
+    assert_eq!(candidate.model_name.as_deref(), Some("profile-start-model"));
+}
+
+#[test]
 fn test_exporter_prefers_effective_response_model_over_requested_profile_model() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let llm_uuid = Uuid::now_v7();
