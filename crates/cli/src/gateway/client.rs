@@ -3,8 +3,11 @@
 
 //! Authenticated health and shutdown transport for loopback sidecars.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use reqwest::Url;
@@ -14,6 +17,12 @@ use serde_json::Value;
 use crate::configuration::BootstrapChallengeKey;
 
 use crate::bootstrap::{BOOTSTRAP_PROTOCOL_VERSION, HEALTHZ_TIMEOUT};
+
+static CHALLENGE_KEY_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<BootstrapChallengeKey>>>> =
+    OnceLock::new();
+static TLS_IDENTITY_CACHE: OnceLock<
+    Mutex<HashMap<PathBuf, Arc<crate::gateway::tls::RelayTlsIdentity>>>,
+> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RelayHealth {
@@ -95,12 +104,12 @@ pub(crate) fn post_verified(
         ))
     })?;
 
-    let key = BootstrapChallengeKey::load().map_err(|error| {
+    let key = cached_bootstrap_challenge_key().map_err(|error| {
         VerifiedHttpError::before_payload(format!(
             "failed to load the Relay bootstrap challenge key: {error}"
         ))
     })?;
-    let tls_identity = crate::gateway::tls::RelayTlsIdentity::load().map_err(|error| {
+    let tls_identity = cached_tls_identity().map_err(|error| {
         VerifiedHttpError::before_payload(format!(
             "failed to load pinned Relay TLS identity: {error}"
         ))
@@ -166,7 +175,7 @@ pub(crate) fn post_verified(
     let (health, _) = classify_health_response(
         &health_headers,
         &health_body,
-        Some((bootstrap_fingerprint, nonce.as_str(), &key)),
+        Some((bootstrap_fingerprint, nonce.as_str(), key.as_ref())),
     );
     match health {
         RelayHealth::Compatible => {}
@@ -185,7 +194,7 @@ pub(crate) fn post_verified(
         .is_some_and(|value| value.eq_ignore_ascii_case("close"))
     {
         return Err(VerifiedHttpError::before_payload(
-            "verified Relay gateway closed the authenticated connection before hook delivery",
+            "verified Relay gateway closed the authenticated connection before request delivery",
         ));
     }
 
@@ -202,22 +211,22 @@ pub(crate) fn post_verified(
     ));
     stream.write_all(request.as_bytes()).map_err(|error| {
         VerifiedHttpError::before_payload(format!(
-            "failed to send verified hook request headers: {error}"
+            "failed to send verified gateway request headers: {error}"
         ))
     })?;
     stream.write_all(body).map_err(|error| {
         VerifiedHttpError::after_payload(format!(
-            "verified hook payload delivery became indeterminate: {error}"
+            "verified gateway payload delivery became indeterminate: {error}"
         ))
     })?;
     let (response_headers, response_body) = read_http_message(&mut stream, max_response_bytes)
         .map_err(|error| {
             VerifiedHttpError::after_payload(format!(
-                "failed to read verified hook response: {error}"
+                "failed to read verified gateway response: {error}"
             ))
         })?;
     let status = http_status(&response_headers).ok_or_else(|| {
-        VerifiedHttpError::after_payload("verified hook response had an invalid HTTP status")
+        VerifiedHttpError::after_payload("verified gateway response had an invalid HTTP status")
     })?;
     Ok(VerifiedHttpResponse {
         status,
@@ -280,7 +289,7 @@ pub(crate) fn probe_with_instance(
         return (RelayHealth::Foreign, None);
     }
     let challenge = bootstrap_fingerprint.map(|fingerprint| {
-        let key = BootstrapChallengeKey::load().map_err(|_| ())?;
+        let key = cached_bootstrap_challenge_key().map_err(|_| ())?;
         let mut nonce = [0_u8; 32];
         SystemRandom::new().fill(&mut nonce).map_err(|_| ())?;
         let nonce = nonce
@@ -316,11 +325,15 @@ pub(crate) fn probe_with_instance(
         &body,
         challenge
             .as_ref()
-            .map(|(fingerprint, nonce, key)| (*fingerprint, nonce.as_str(), key)),
+            .map(|(fingerprint, nonce, key)| (*fingerprint, nonce.as_str(), key.as_ref())),
     )
 }
 
-pub(crate) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {
+pub(crate) fn request_shutdown(
+    url: &str,
+    bootstrap_fingerprint: &str,
+    token: &str,
+) -> Result<(), String> {
     let (host, port) = parse_loopback_url(url)?;
     let addresses = (host.as_str(), port)
         .to_socket_addrs()
@@ -333,9 +346,42 @@ pub(crate) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {
     stream
         .set_write_timeout(Some(HEALTHZ_TIMEOUT))
         .map_err(|error| format!("failed to configure sidecar shutdown write timeout: {error}"))?;
+    let key = cached_bootstrap_challenge_key()
+        .map_err(|error| format!("failed to load the Relay bootstrap challenge key: {error}"))?;
+    let mut nonce = [0_u8; 32];
+    SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| "failed to generate a Relay bootstrap shutdown challenge".to_string())?;
+    let nonce = nonce
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let authority = loopback_authority(&host, port);
+    let challenge = format!(
+        "GET /healthz HTTP/1.1\r\nHost: {authority}\r\nX-NeMo-Relay-Bootstrap-Fingerprint: {bootstrap_fingerprint}\r\nX-NeMo-Relay-Bootstrap-Nonce: {nonce}\r\nConnection: keep-alive\r\n\r\n"
+    );
+    stream
+        .write_all(challenge.as_bytes())
+        .map_err(|error| format!("failed to authenticate managed sidecar shutdown: {error}"))?;
+    let (health_headers, health_body) = read_http_message(&mut stream, 16 * 1024)
+        .map_err(|error| format!("failed to read managed sidecar shutdown proof: {error}"))?;
+    if classify_health_response(
+        &health_headers,
+        &health_body,
+        Some((bootstrap_fingerprint, nonce.as_str(), key.as_ref())),
+    )
+    .0 != RelayHealth::Compatible
+    {
+        return Err("managed sidecar did not authenticate the shutdown connection".into());
+    }
+    if http_header(&health_headers, "connection")
+        .is_some_and(|value| value.eq_ignore_ascii_case("close"))
+    {
+        return Err("managed sidecar closed the authenticated shutdown connection".into());
+    }
     let request = format!(
         "POST /bootstrap/shutdown HTTP/1.1\r\nHost: {}\r\nX-NeMo-Relay-Bootstrap-Token: {token}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        loopback_authority(&host, port)
+        authority
     );
     stream
         .write_all(request.as_bytes())
@@ -359,6 +405,34 @@ pub(crate) fn request_shutdown(url: &str, token: &str) -> Result<(), String> {
                 .unwrap_or("unknown response")
         ))
     }
+}
+
+fn cached_bootstrap_challenge_key() -> Result<Arc<BootstrapChallengeKey>, String> {
+    let state = crate::bootstrap::state::state_dir()?;
+    let cache = CHALLENGE_KEY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "Relay bootstrap challenge key cache is poisoned".to_string())?;
+    if let Some(key) = cache.get(&state) {
+        return Ok(Arc::clone(key));
+    }
+    let key = Arc::new(BootstrapChallengeKey::load().map_err(|error| error.to_string())?);
+    cache.insert(state, Arc::clone(&key));
+    Ok(key)
+}
+
+fn cached_tls_identity() -> Result<Arc<crate::gateway::tls::RelayTlsIdentity>, String> {
+    let state = crate::bootstrap::state::state_dir()?;
+    let cache = TLS_IDENTITY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .map_err(|_| "Relay TLS identity cache is poisoned".to_string())?;
+    if let Some(identity) = cache.get(&state) {
+        return Ok(Arc::clone(identity));
+    }
+    let identity = Arc::new(crate::gateway::tls::RelayTlsIdentity::load()?);
+    cache.insert(state, Arc::clone(&identity));
+    Ok(identity)
 }
 
 fn http_header<'a>(headers: &'a [u8], name: &str) -> Option<&'a str> {

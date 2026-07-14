@@ -203,6 +203,15 @@ fn verified_hook_response_rejects_invalid_status_and_fail_open_http_errors() {
     .to_string();
     assert!(error.contains("invalid status"), "{error}");
 
+    handle_verified_hook_forward_response(
+        Ok(crate::gateway::client::VerifiedHttpResponse {
+            status: 0,
+            body: Vec::new(),
+        }),
+        false,
+    )
+    .unwrap();
+
     handle_hook_forward_status(reqwest::StatusCode::BAD_GATEWAY, String::new(), false).unwrap();
 }
 

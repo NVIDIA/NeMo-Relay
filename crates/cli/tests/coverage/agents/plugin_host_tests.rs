@@ -2762,6 +2762,34 @@ fn claude_reinstall_uses_fresh_backup_after_prior_restore() {
 }
 
 #[test]
+fn claude_gateway_url_change_preserves_the_pre_relay_backup() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings = dir.path().join(".claude").join("settings.json");
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(
+        &settings,
+        serde_json::to_vec_pretty(&json!({
+            "env": { "ANTHROPIC_BASE_URL": "https://api.anthropic.com" }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    let replacement_gateway = "http://127.0.0.1:49999";
+    enable_claude_provider(replacement_gateway).unwrap();
+    restore_claude_provider(replacement_gateway).unwrap();
+
+    let restored: Value = serde_json::from_slice(&fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(
+        json_env_string(&restored, "ANTHROPIC_BASE_URL"),
+        Some("https://api.anthropic.com")
+    );
+    assert!(!backup_path(&settings).exists());
+}
+
+#[test]
 fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
     let relay = std::path::PathBuf::from(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe");
     let generation =

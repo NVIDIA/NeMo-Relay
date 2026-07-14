@@ -15,7 +15,7 @@ const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) struct PluginOperationLock {
     _global_file: File,
-    _root_file: File,
+    _root_file: Option<File>,
 }
 
 impl PluginOperationLock {
@@ -27,12 +27,29 @@ impl PluginOperationLock {
     ) -> Result<Self, String> {
         let deadline = Instant::now() + timeout;
         let global_file = acquire_lock_file(installation_key, global_lock_dir, deadline, "global")?;
-        let root_file = acquire_lock_file(installation_key, install_dir, deadline, "install-root")?;
+        let root_file = if directories_alias(global_lock_dir, install_dir) {
+            None
+        } else {
+            Some(acquire_lock_file(
+                installation_key,
+                install_dir,
+                deadline,
+                "install-root",
+            )?)
+        };
         Ok(Self {
             _global_file: global_file,
             _root_file: root_file,
         })
     }
+}
+
+fn directories_alias(left: &Path, right: &Path) -> bool {
+    left == right
+        || matches!(
+            (fs::canonicalize(left), fs::canonicalize(right)),
+            (Ok(left), Ok(right)) if left == right
+        )
 }
 
 fn acquire_lock_file(

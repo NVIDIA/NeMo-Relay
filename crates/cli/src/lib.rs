@@ -27,7 +27,8 @@ mod sessions;
 mod hook_assertions;
 
 #[cfg(test)]
-pub(crate) use commands::test_support;
+#[path = "../tests/coverage/shared/test_support.rs"]
+pub(crate) mod test_support;
 
 use std::process::ExitCode;
 
@@ -37,6 +38,7 @@ use std::process::ExitCode;
 #[doc(hidden)]
 pub fn run_cli() -> ExitCode {
     mcp_environment::remove_unresolved_mcp_placeholders();
+    let bootstrap_shutdown_token = take_bootstrap_shutdown_token();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -47,5 +49,16 @@ pub fn run_cli() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    runtime.block_on(commands::run())
+    runtime.block_on(commands::run(bootstrap_shutdown_token))
+}
+
+fn take_bootstrap_shutdown_token() -> Option<String> {
+    let token = std::env::var(bootstrap::state::BOOTSTRAP_SHUTDOWN_TOKEN_ENV)
+        .ok()
+        .filter(|token| !token.is_empty());
+    // SAFETY: this runs before the Tokio runtime and application threads are created.
+    unsafe {
+        std::env::remove_var(bootstrap::state::BOOTSTRAP_SHUTDOWN_TOKEN_ENV);
+    }
+    token
 }

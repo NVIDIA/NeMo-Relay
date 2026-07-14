@@ -2,99 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use std::ffi::{OsStr, OsString};
-use std::io::{Read, Write};
+use crate::test_support::{EnvScope, accept_bounded, header, read_headers};
+use std::ffi::OsStr;
+use std::io::Write;
 use std::net::TcpListener;
-
-struct EnvScope {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    previous: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl EnvScope {
-    fn set(values: &[(&'static str, Option<&OsStr>)]) -> Self {
-        let guard = crate::test_support::ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = values
-            .iter()
-            .map(|(name, _)| (*name, std::env::var_os(name)))
-            .collect();
-        for (name, value) in values {
-            // SAFETY: The process-wide environment lock is held for this scope.
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-        Self {
-            _guard: guard,
-            previous,
-        }
-    }
-}
-
-impl Drop for EnvScope {
-    fn drop(&mut self) {
-        for (name, value) in self.previous.drain(..) {
-            // SAFETY: The process-wide environment lock remains held during restoration.
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
-
-fn read_headers(stream: &mut std::net::TcpStream) -> String {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut bytes = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !bytes.ends_with(b"\r\n\r\n") {
-        stream.read_exact(&mut byte).unwrap();
-        bytes.push(byte[0]);
-    }
-    String::from_utf8(bytes).unwrap()
-}
-
-fn accept_bounded(listener: &TcpListener) -> std::net::TcpStream {
-    listener.set_nonblocking(true).unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                stream.set_nonblocking(false).unwrap();
-                return stream;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "timed out accepting test connection"
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("failed to accept test connection: {error}"),
-        }
-    }
-}
-
-fn header(request: &str, name: &str) -> String {
-    request
-        .lines()
-        .find_map(|line| {
-            let (candidate, value) = line.split_once(':')?;
-            candidate
-                .eq_ignore_ascii_case(name)
-                .then(|| value.trim().to_string())
-        })
-        .unwrap()
-}
 
 #[test]
 fn owner_records_are_versioned_endpoint_scoped_and_round_trip() {
@@ -278,6 +189,18 @@ fn authenticated_owned_gateway_is_shut_down_and_cleaned_up() {
             .unwrap();
 
         let mut shutdown = accept_bounded(&listener);
+        let challenge = read_headers(&mut shutdown);
+        let nonce = header(&challenge, "x-nemo-relay-bootstrap-nonce");
+        let proof = key.proof("fingerprint", &nonce);
+        shutdown
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
         let request = read_headers(&mut shutdown);
         assert!(request.starts_with("POST /bootstrap/shutdown HTTP/1.1"));
         assert_eq!(

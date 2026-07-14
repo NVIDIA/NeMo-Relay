@@ -14,6 +14,7 @@ use crate::filesystem::{
 };
 
 const ABSENT_SETTINGS_BACKUP_KEY: &str = "__nemo_relay_original_settings_absent";
+const MANAGED_PROVIDER_BACKUP_KEY: &str = "__nemo_relay_managed_anthropic_base_url";
 
 pub(crate) struct ClaudeSetupSnapshot {
     files: Vec<FileSnapshot>,
@@ -48,8 +49,26 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
         return Err(format!("{} has a non-object env field", path.display()));
     }
     let backup_snapshot = snapshot_optional_file(&backup_path(&path))?;
-    let managed_provider = json_env_string(&settings, "ANTHROPIC_BASE_URL") == Some(gateway_url);
+    let current_provider = json_env_string(&settings, "ANTHROPIC_BASE_URL");
+    let backup_file = backup_path(&path);
+    let previous_managed_provider = read_json_object(&backup_file).ok().and_then(|backup| {
+        backup
+            .get(MANAGED_PROVIDER_BACKUP_KEY)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    let managed_provider = current_provider == Some(gateway_url)
+        || previous_managed_provider
+            .as_deref()
+            .is_some_and(|previous| current_provider == Some(previous))
+        || (backup_file.exists() && current_provider == Some(crate::bootstrap::DEFAULT_URL));
     if !managed_provider && let Err(error) = backup_claude_settings(&path, true) {
+        restore_file_snapshot(&backup_snapshot)?;
+        return Err(error);
+    }
+    if backup_file.exists()
+        && let Err(error) = record_managed_provider(&backup_file, gateway_url)
+    {
         restore_file_snapshot(&backup_snapshot)?;
         return Err(error);
     }
@@ -66,6 +85,15 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
     }
     println!("set ANTHROPIC_BASE_URL={gateway_url} in {}", path.display());
     Ok(())
+}
+
+fn record_managed_provider(backup: &Path, gateway_url: &str) -> Result<(), String> {
+    let mut value = read_json_object(backup)?;
+    value
+        .as_object_mut()
+        .expect("read_json_object returns an object")
+        .insert(MANAGED_PROVIDER_BACKUP_KEY.into(), json!(gateway_url));
+    write_json(backup, &value)
 }
 
 pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {

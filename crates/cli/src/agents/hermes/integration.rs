@@ -180,6 +180,29 @@ fn allowlist_has_owned_command(allowlist: &Value, command: Option<&str>) -> bool
 }
 
 fn is_persistent_relay_hook_command(command: &str) -> bool {
+    #[cfg(any(windows, test))]
+    if let Some(arguments) = crate::hooks::decode_windows_hook_command(command) {
+        return matches!(
+            arguments.as_slice(),
+            [
+                _,
+                hook_forward,
+                agent,
+                gateway_flag,
+                gateway_url,
+                generation_file_flag,
+                _,
+                generation_token_flag,
+                generation_token,
+            ] if hook_forward == "hook-forward"
+                && agent == "hermes"
+                && gateway_flag == "--gateway-url"
+                && gateway_url == crate::bootstrap::DEFAULT_URL
+                && generation_file_flag == "--generation-file"
+                && generation_token_flag == "--generation-token"
+                && !generation_token.is_empty()
+        );
+    }
     command.contains("hook-forward")
         && command.contains("hermes")
         && command.contains("--gateway-url")

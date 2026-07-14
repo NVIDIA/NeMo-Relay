@@ -47,11 +47,18 @@ pub(crate) fn handle_verified_hook_forward_response(
 ) -> Result<(), CliError> {
     match response {
         Ok(response) => {
-            let status = reqwest::StatusCode::from_u16(response.status).map_err(|error| {
-                CliError::Install(format!(
-                    "verified hook response had an invalid status: {error}"
-                ))
-            })?;
+            let status = match reqwest::StatusCode::from_u16(response.status) {
+                Ok(status) => status,
+                Err(error) => {
+                    let message = format!("verified hook response had an invalid status: {error}");
+                    eprintln!("nemo-relay hook forward failed: {message}");
+                    return if fail_closed {
+                        Err(CliError::Install(message))
+                    } else {
+                        Ok(())
+                    };
+                }
+            };
             handle_hook_forward_status(
                 status,
                 String::from_utf8_lossy(&response.body).into_owned(),

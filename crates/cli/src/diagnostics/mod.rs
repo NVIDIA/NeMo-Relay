@@ -1098,7 +1098,7 @@ pub(crate) async fn run_doctor(
 /// Top-level entry point invoked by `nemo-relay agents`. Always exits 0; the data drives caller
 /// decisions (e.g., CI gating on JSON output).
 pub(crate) async fn run_agents(json: bool) -> Result<std::process::ExitCode, CliError> {
-    let agents = agents_report().await;
+    let agents = agents_report().await?;
     let output = if json {
         format_agents_json(&agents)?
     } else {

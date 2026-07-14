@@ -279,7 +279,7 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
             spec.bootstrap_fingerprint.as_deref().unwrap_or_default(),
         )
         .env(BOOTSTRAP_STATE_DIR_ENV, state)
-        .env("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", &shutdown_token)
+        .env(state::BOOTSTRAP_SHUTDOWN_TOKEN_ENV, &shutdown_token)
         .env_remove(crate::installation::generation::GENERATION_FILE_ENV)
         .env_remove(crate::installation::generation::GENERATION_TOKEN_ENV)
         .stdin(Stdio::null())

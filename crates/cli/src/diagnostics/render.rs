@@ -267,9 +267,9 @@ pub(crate) fn format_json(report: &DoctorReport) -> Result<String, CliError> {
 
 /// Runs `agents` — a thin wrapper over `collect_agents` that emits only the agent list. Shares
 /// the same JSON schema as `doctor.agents` for consistency.
-pub(crate) async fn agents_report() -> Vec<AgentInfo> {
-    let resolved = resolve_server_config(&GatewayOverrides::default()).unwrap_or_default();
-    collect_agents(None, &resolved).await
+pub(crate) async fn agents_report() -> Result<Vec<AgentInfo>, CliError> {
+    let resolved = resolve_server_config(&GatewayOverrides::default())?;
+    Ok(collect_agents(None, &resolved).await)
 }
 
 /// Renders the agents listing in human form.

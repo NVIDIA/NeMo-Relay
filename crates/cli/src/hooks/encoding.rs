@@ -234,7 +234,7 @@ pub(super) fn safe_windows_launcher_token(launcher: &str) -> bool {
 /// Decode only the exact PowerShell envelope emitted by [`encoded_windows_hook_command`].
 ///
 /// Hermes uses this to migrate and replace Relay-owned hooks whose generation arguments change.
-#[cfg(test)]
+#[cfg(any(windows, test))]
 pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
     const COMMAND_SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
     const SCRIPT_PREFIX: &str = "$ErrorActionPreference='Stop'; & ";
@@ -273,7 +273,7 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
     parse_powershell_single_quoted_arguments(invocation)
 }
 
-#[cfg(test)]
+#[cfg(any(windows, test))]
 pub(super) fn parse_powershell_single_quoted_arguments(mut raw: &str) -> Option<Vec<String>> {
     let mut arguments = Vec::new();
     while !raw.is_empty() {

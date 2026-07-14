@@ -5,6 +5,7 @@ use super::*;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use crate::test_support::EnvScope;
 use clap_complete::Shell;
 
 #[test]
@@ -102,46 +103,4 @@ fn install_writes_detected_shell_completion() {
     assert_eq!(path, temp.path().join(".zfunc/_nemo-relay"));
     let script = std::fs::read_to_string(path).unwrap();
     assert!(script.contains("nemo-relay"));
-}
-
-struct EnvScope {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    values: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl EnvScope {
-    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
-        let guard = crate::test_support::ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let previous = values
-            .iter()
-            .map(|(key, _)| (*key, std::env::var_os(key)))
-            .collect::<Vec<_>>();
-        for (key, value) in values {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-        Self {
-            _guard: guard,
-            values: previous,
-        }
-    }
-}
-
-impl Drop for EnvScope {
-    fn drop(&mut self) {
-        for (key, value) in self.values.drain(..) {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-    }
 }

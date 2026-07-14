@@ -13,7 +13,7 @@ use crate::error::CliError;
 
 #[derive(Debug, Clone, Args)]
 pub(crate) struct DoctorCommand {
-    #[arg(value_enum)]
+    #[arg(value_enum, conflicts_with = "plugin")]
     pub(crate) agent: Option<AgentArg>,
     #[arg(long, value_enum)]
     pub(crate) plugin: Option<InstallTarget>,

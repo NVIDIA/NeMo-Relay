@@ -156,6 +156,7 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
         TEST_GENERATION_TOKEN,
         true,
     );
+    assert!(is_persistent_relay_hook_command(&encoded));
     let encoded_codex = crate::hooks::persistent_hook_forward_command_for_platform(
         Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
         CodingAgent::Codex,
@@ -164,6 +165,7 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
         true,
     );
     assert_ne!(encoded, encoded_codex);
+    assert!(!is_persistent_relay_hook_command(&encoded_codex));
 }
 
 #[test]

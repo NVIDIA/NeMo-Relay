@@ -1217,6 +1217,23 @@ fn concurrent_different_install_roots_share_the_global_host_lock() {
 }
 
 #[test]
+fn plugin_operation_lock_acquires_an_aliased_global_and_install_root_once() {
+    let root = tempdir().unwrap();
+
+    let _lock = PluginOperationLock::acquire(
+        "codex",
+        root.path(),
+        &root.path().join("."),
+        Duration::from_millis(75),
+    )
+    .unwrap();
+
+    assert!(
+        crate::installation::operation_lock::operation_lock_path("codex", root.path()).exists()
+    );
+}
+
+#[test]
 fn generation_retirement_lock_contention_is_bounded_across_processes() {
     let dir = tempdir().unwrap();
     let synchronization = tempdir().unwrap();

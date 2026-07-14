@@ -8,46 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
-
-struct TestEnvironment {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-impl TestEnvironment {
-    fn isolated_home(path: &std::path::Path) -> Self {
-        let guard = crate::test_support::ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let previous = ["XDG_CONFIG_HOME", "HOME"]
-            .into_iter()
-            .map(|name| (name, std::env::var_os(name)))
-            .collect();
-        // SAFETY: ENV_TEST_LOCK serializes process-wide environment changes.
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", path);
-            std::env::set_var("HOME", path);
-        }
-        Self {
-            _guard: guard,
-            previous,
-        }
-    }
-}
-
-impl Drop for TestEnvironment {
-    fn drop(&mut self) {
-        for (name, value) in self.previous.drain(..) {
-            // SAFETY: ENV_TEST_LOCK remains held during restoration.
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
+use crate::test_support::{EnvScope, header, read_headers};
 
 fn serve_once(response: &[u8]) -> (String, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
     let response = response.to_vec();
@@ -82,14 +43,58 @@ fn serve_once(response: &[u8]) -> (String, mpsc::Receiver<Vec<u8>>, thread::Join
     (url, receiver, server)
 }
 
+fn serve_verified_shutdown(
+    key: crate::configuration::BootstrapChallengeKey,
+    response: &[u8],
+) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let response = response.to_vec();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (sender, receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let challenge = read_headers(&mut stream);
+        let nonce = header(&challenge, "x-nemo-relay-bootstrap-nonce");
+        let proof = key.proof("fingerprint", &nonce);
+        let body = format!(
+            "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"test-instance\"}}",
+            env!("CARGO_PKG_VERSION"),
+            BOOTSTRAP_PROTOCOL_VERSION
+        );
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nX-NeMo-Relay-Bootstrap-Proof: {proof}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let _ = sender.send(read_headers(&mut stream));
+        stream.write_all(&response).unwrap();
+    });
+    (url, receiver, server)
+}
+
 #[test]
 fn shutdown_request_sends_the_private_token_and_accepts_no_content() {
-    let (url, request, server) =
-        serve_once(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
+    let (url, request, server) = serve_verified_shutdown(
+        key,
+        b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
 
-    request_shutdown(&url, "private-token").unwrap();
+    request_shutdown(&url, "fingerprint", "private-token").unwrap();
 
-    let request = String::from_utf8(request.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+    let request = request.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
         request.starts_with("POST /bootstrap/shutdown HTTP/1.1"),
         "{request}"
@@ -103,10 +108,18 @@ fn shutdown_request_sends_the_private_token_and_accepts_no_content() {
 
 #[test]
 fn shutdown_request_reports_rejection_without_hiding_the_status() {
-    let (url, _, server) =
-        serve_once(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
+    let (url, _, server) = serve_verified_shutdown(
+        key,
+        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
 
-    let error = request_shutdown(&url, "wrong-token").unwrap_err();
+    let error = request_shutdown(&url, "fingerprint", "wrong-token").unwrap_err();
 
     assert!(error.contains("rejected shutdown"), "{error}");
     assert!(error.contains("HTTP/1.1 403 Forbidden"), "{error}");
@@ -115,9 +128,15 @@ fn shutdown_request_reports_rejection_without_hiding_the_status() {
 
 #[test]
 fn shutdown_request_rejects_a_malformed_http_response() {
-    let (url, _, server) = serve_once(b"not-http");
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    let key = crate::configuration::BootstrapChallengeKey::load().unwrap();
+    let (url, _, server) = serve_verified_shutdown(key, b"not-http");
 
-    let error = request_shutdown(&url, "private-token").unwrap_err();
+    let error = request_shutdown(&url, "fingerprint", "private-token").unwrap_err();
 
     assert!(error.contains("malformed shutdown response"), "{error}");
     server.join().unwrap();
@@ -129,7 +148,7 @@ fn shutdown_request_reports_connection_failure() {
     let url = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
 
-    let error = request_shutdown(&url, "private-token").unwrap_err();
+    let error = request_shutdown(&url, "fingerprint", "private-token").unwrap_err();
 
     assert!(error.contains("failed to connect"), "{error}");
 }
@@ -168,7 +187,10 @@ fn loopback_helpers_normalize_localhost_and_ipv6_authorities() {
 #[test]
 fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
     let temp = tempfile::tempdir().unwrap();
-    let _environment = TestEnvironment::isolated_home(temp.path());
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
     crate::configuration::BootstrapChallengeKey::load().unwrap();
     crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
     let (url, request, server) = serve_once(
@@ -194,4 +216,23 @@ fn verified_hook_payload_is_not_sent_before_the_tls_tunnel_is_authenticated() {
     );
     assert!(error.to_string().contains("authenticated Relay TLS tunnel"));
     server.join().unwrap();
+}
+
+#[test]
+fn verified_transport_reuses_loaded_bootstrap_credentials() {
+    let temp = tempfile::tempdir().unwrap();
+    let _environment = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(temp.path().as_os_str())),
+        ("HOME", Some(temp.path().as_os_str())),
+    ]);
+    crate::configuration::BootstrapChallengeKey::load().unwrap();
+    crate::gateway::tls::RelayTlsIdentity::load_or_create().unwrap();
+
+    let first_key = cached_bootstrap_challenge_key().unwrap();
+    let second_key = cached_bootstrap_challenge_key().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first_key, &second_key));
+
+    let first_identity = cached_tls_identity().unwrap();
+    let second_identity = cached_tls_identity().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first_identity, &second_identity));
 }

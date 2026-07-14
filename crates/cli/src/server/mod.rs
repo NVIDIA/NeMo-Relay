@@ -68,12 +68,21 @@ pub(crate) struct BootstrapShutdown {
     sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
+#[derive(Default)]
+struct BootstrapServeOptions<'a> {
+    fingerprint: Option<String>,
+    identity: Option<ManagedBootstrapIdentity>,
+    ready_file: Option<&'a Path>,
+    shutdown_token: Option<String>,
+}
+
 /// Binds the configured address and activates enabled dynamic plugins before serving.
 pub(crate) async fn serve_with_dynamic(
     config: GatewayConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     managed_bootstrap: Option<ManagedBootstrapIdentity>,
     ready_file: Option<&Path>,
+    bootstrap_shutdown_token: Option<String>,
 ) -> Result<(), CliError> {
     let listener = bind_listener(config.bind).await?;
     print_startup_status(listener.local_addr()?, &config);
@@ -84,10 +93,13 @@ pub(crate) async fn serve_with_dynamic(
         listener,
         config,
         dynamic_plugins,
-        bootstrap_fingerprint,
-        managed_bootstrap,
         Some(ShutdownMode::ProcessSignal),
-        ready_file,
+        BootstrapServeOptions {
+            fingerprint: bootstrap_fingerprint,
+            identity: managed_bootstrap,
+            ready_file,
+            shutdown_token: bootstrap_shutdown_token,
+        },
     )
     .await
 }
@@ -169,10 +181,11 @@ pub(crate) async fn serve_listener_with_bootstrap(
         listener,
         config,
         Vec::new(),
-        Some(bootstrap_fingerprint),
-        None,
         shutdown.map(ShutdownMode::Receiver),
-        None,
+        BootstrapServeOptions {
+            fingerprint: Some(bootstrap_fingerprint),
+            ..BootstrapServeOptions::default()
+        },
     )
     .await
 }
@@ -189,10 +202,8 @@ pub(crate) async fn serve_listener_with_dynamic(
         listener,
         config,
         dynamic_plugins,
-        None,
-        None,
         shutdown.map(ShutdownMode::Receiver),
-        None,
+        BootstrapServeOptions::default(),
     )
     .await
 }
@@ -210,10 +221,11 @@ pub(crate) async fn serve_transparent_listener_with_dynamic(
         listener,
         config,
         dynamic_plugins,
-        Some(bootstrap_fingerprint),
-        None,
         shutdown.map(ShutdownMode::Receiver),
-        None,
+        BootstrapServeOptions {
+            fingerprint: Some(bootstrap_fingerprint),
+            ..BootstrapServeOptions::default()
+        },
     )
     .await
 }
@@ -229,18 +241,15 @@ async fn serve_listener_with_dynamic_inner(
     listener: TcpListener,
     config: GatewayConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
-    bootstrap_fingerprint: Option<String>,
-    managed_bootstrap: Option<ManagedBootstrapIdentity>,
     shutdown_mode: Option<ShutdownMode>,
-    ready_file: Option<&Path>,
+    bootstrap: BootstrapServeOptions<'_>,
 ) -> Result<(), CliError> {
-    let bootstrap_shutdown_token = std::env::var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN")
-        .ok()
-        .filter(|token| !token.is_empty());
-    // The token belongs only to this server. Remove it before worker plugin processes are spawned.
-    unsafe {
-        std::env::remove_var("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN");
-    }
+    let BootstrapServeOptions {
+        fingerprint: bootstrap_fingerprint,
+        identity: managed_bootstrap,
+        ready_file,
+        shutdown_token: bootstrap_shutdown_token,
+    } = bootstrap;
     let bootstrap_challenge_key = bootstrap_fingerprint
         .as_ref()
         .map(|_| BootstrapChallengeKey::load())

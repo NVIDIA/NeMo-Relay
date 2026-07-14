@@ -19,11 +19,13 @@ pub(crate) use delivery::{gateway_headers, insert_header, read_hook_payload_from
 pub(crate) use destination::{
     HookGatewayLifecycle, resolve_hook_destination, transparent_gateway_spec,
 };
+#[cfg(any(windows, test))]
+pub(crate) use encoding::decode_windows_hook_command;
 #[cfg(all(test, windows))]
 pub(crate) use encoding::windows_powershell_path;
 #[cfg(test)]
 pub(crate) use encoding::{
-    decode_windows_hook_command, encoded_windows_hook_command, event_matches_tools,
+    encoded_windows_hook_command, event_matches_tools,
     persistent_hook_forward_command_for_platform, transparent_hook_forward_command_for_platform,
 };
 pub(crate) use encoding::{

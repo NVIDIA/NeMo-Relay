@@ -13,6 +13,20 @@ use crate::commands::plugins::{
     PluginsSubcommand, PluginsValidateCommand,
 };
 
+#[test]
+fn bootstrap_shutdown_token_is_removed_before_runtime_startup() {
+    let _environment = crate::test_support::EnvScope::set(&[(
+        crate::bootstrap::state::BOOTSTRAP_SHUTDOWN_TOKEN_ENV,
+        Some(std::ffi::OsStr::new("private-token")),
+    )]);
+
+    assert_eq!(
+        crate::take_bootstrap_shutdown_token().as_deref(),
+        Some("private-token")
+    );
+    assert!(std::env::var_os(crate::bootstrap::state::BOOTSTRAP_SHUTDOWN_TOKEN_ENV).is_none());
+}
+
 struct EnvScope {
     _cwd_guard: Option<crate::test_support::CwdTestScope>,
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -96,6 +110,31 @@ fn cli_parses_native_mcp_subcommand_and_bind_override() {
     assert_eq!(cli.server.bind.unwrap().to_string(), "127.0.0.1:4041");
 
     assert!(Cli::try_parse_from(["nemo-relay", "mcp", "--agent", "codex"]).is_err());
+}
+
+#[test]
+fn doctor_rejects_conflicting_agent_and_plugin_targets() {
+    let error =
+        Cli::try_parse_from(["nemo-relay", "doctor", "codex", "--plugin", "all"]).unwrap_err();
+    assert!(error.to_string().contains("cannot be used with"));
+}
+
+#[test]
+fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
+    let visited = std::cell::RefCell::new(Vec::new());
+    let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {
+        visited.borrow_mut().push(agent);
+        match agent {
+            CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
+            CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
+            CodingAgent::Hermes => Ok(ExitCode::SUCCESS),
+        }
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert_eq!(*visited.borrow(), CodingAgent::ALL);
+    assert!(error.contains("codex failure"), "{error}");
 }
 
 #[test]

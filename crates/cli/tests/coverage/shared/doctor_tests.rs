@@ -2,37 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::configuration::ResolvedDynamicPluginConfig;
-
-fn accept_bounded(listener: &TcpListener) -> std::net::TcpStream {
-    listener.set_nonblocking(true).unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                stream.set_nonblocking(false).unwrap();
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                    .unwrap();
-                return stream;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "timed out accepting test connection"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(error) => panic!("failed to accept test connection: {error}"),
-        }
-    }
-}
+use crate::test_support::{EnvScope, accept_bounded};
 
 fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -66,48 +42,6 @@ fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::threa
             .unwrap();
     });
     (url, body, handle)
-}
-
-struct EnvScope {
-    _guard: std::sync::MutexGuard<'static, ()>,
-    values: Vec<(&'static str, Option<OsString>)>,
-}
-
-impl EnvScope {
-    fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
-        let guard = crate::test_support::ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let previous = values
-            .iter()
-            .map(|(key, _)| (*key, std::env::var_os(key)))
-            .collect::<Vec<_>>();
-        for (key, value) in values {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-        Self {
-            _guard: guard,
-            values: previous,
-        }
-    }
-}
-
-impl Drop for EnvScope {
-    fn drop(&mut self) {
-        for (key, value) in self.values.drain(..) {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-    }
 }
 
 fn empty_report() -> DoctorReport {
@@ -377,6 +311,27 @@ fn format_human_reports_config_resolution_failure() {
 
     assert!(rendered.contains("Resolution ✗ could not resolve merged config"));
     assert!(rendered.contains("Some checks FAILED"));
+}
+
+#[tokio::test]
+async fn agents_report_surfaces_merged_config_resolution_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_home = temp.path().join("config");
+    let config = config_home.join("nemo-relay").join("config.toml");
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    std::fs::write(&config, "[upstream\n").unwrap();
+    let _env = EnvScope::set(&[
+        ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
+        (
+            "NEMO_RELAY_CONFIG_SCOPE",
+            Some(std::ffi::OsStr::new("user")),
+        ),
+    ]);
+
+    let error = agents_report().await.unwrap_err().to_string();
+
+    assert!(error.contains("config"), "{error}");
+    assert!(error.contains("TOML"), "{error}");
 }
 
 #[test]
@@ -714,7 +669,10 @@ fn collect_completions_reports_shell_specific_paths() {
 
 #[test]
 fn collect_environment_and_completions_cover_missing_home_and_unknown_shell() {
-    let _env = EnvScope::set(&[("SHELL", Some(std::ffi::OsStr::new("/opt/bin/elvish")))]);
+    let _env = EnvScope::set(&[
+        ("SHELL", Some(std::ffi::OsStr::new("/opt/bin/elvish"))),
+        ("COMSPEC", Some(std::ffi::OsStr::new("C:/opt/bin/elvish"))),
+    ]);
     let environment = collect_environment();
     assert_eq!(environment.shell.as_deref(), Some("elvish"));
 

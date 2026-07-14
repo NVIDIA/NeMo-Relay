@@ -19,6 +19,7 @@ use super::{BOOTSTRAP_LOCK_TIMEOUT, BOOTSTRAP_PROTOCOL_VERSION};
 use crate::gateway::client::{RelayHealth, probe, request_shutdown};
 
 pub(crate) const BOOTSTRAP_STATE_DIR_ENV: &str = "NEMO_RELAY_BOOTSTRAP_STATE_DIR";
+pub(crate) const BOOTSTRAP_SHUTDOWN_TOKEN_ENV: &str = "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN";
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -57,6 +58,10 @@ impl OwnerRecord {
             && self.bootstrap_protocol == BOOTSTRAP_PROTOCOL_VERSION
             && self.url == url
             && !self.shutdown_token.is_empty()
+            && self
+                .bootstrap_fingerprint
+                .as_deref()
+                .is_some_and(|fingerprint| !fingerprint.is_empty())
     }
 }
 
@@ -196,7 +201,7 @@ pub(crate) fn publish_owner_from_env(
     let token = shutdown_token
         .filter(|token| !token.is_empty())
         .ok_or_else(|| {
-            "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN is required for managed bootstrap".to_string()
+            format!("{BOOTSTRAP_SHUTDOWN_TOKEN_ENV} is required for managed bootstrap")
         })?;
     if !address.ip().is_loopback() {
         return Err(format!(
@@ -242,7 +247,14 @@ pub(crate) fn stop_owned_and_reset(url: &str) -> Result<(), String> {
             ));
         }
     }
-    request_shutdown(url, &owner.shutdown_token)?;
+    request_shutdown(
+        url,
+        owner
+            .bootstrap_fingerprint
+            .as_deref()
+            .expect("validated owner record has a bootstrap fingerprint"),
+        &owner.shutdown_token,
+    )?;
     let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
     loop {
         match probe(url, owner.bootstrap_fingerprint.as_deref()) {

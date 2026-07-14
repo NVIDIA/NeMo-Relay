@@ -96,14 +96,9 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
             "no supported Claude Code, Codex, or Hermes host CLI was detected".into(),
         ));
     }
-    let mut result = ExitCode::SUCCESS;
-    for agent in agents {
-        let status = crate::agents::install_integration(agent, request.clone())?;
-        if status != ExitCode::SUCCESS {
-            result = status;
-        }
-    }
-    Ok(result)
+    run_agent_operations(agents, "install", |agent| {
+        crate::agents::install_integration(agent, request.clone())
+    })
 }
 
 pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError> {
@@ -120,12 +115,31 @@ pub(super) fn uninstall(command: UninstallCommand) -> Result<ExitCode, CliError>
             "no installed Claude Code, Codex, or Hermes integration state was found".into(),
         ));
     }
+    run_agent_operations(agents, "uninstall", |agent| {
+        crate::agents::uninstall_integration(agent, request.clone())
+    })
+}
+
+pub(super) fn run_agent_operations(
+    agents: Vec<CodingAgent>,
+    operation: &str,
+    mut run: impl FnMut(CodingAgent) -> Result<ExitCode, CliError>,
+) -> Result<ExitCode, CliError> {
     let mut result = ExitCode::SUCCESS;
+    let mut errors = Vec::new();
     for agent in agents {
-        let status = crate::agents::uninstall_integration(agent, request.clone())?;
-        if status != ExitCode::SUCCESS {
-            result = status;
+        match run(agent) {
+            Ok(status) if status != ExitCode::SUCCESS => result = status,
+            Ok(_) => {}
+            Err(error) => errors.push(format!("{}: {error}", agent.as_arg())),
         }
     }
-    Ok(result)
+    if errors.is_empty() {
+        Ok(result)
+    } else {
+        Err(CliError::Install(format!(
+            "failed to {operation} one or more integrations after attempting every target: {}",
+            errors.join("; ")
+        )))
+    }
 }

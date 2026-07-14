@@ -74,7 +74,7 @@ pub(crate) fn detect_installed_agents_in(path_var: Option<&std::ffi::OsStr>) -> 
     let Some(path_var) = path_var else {
         return Vec::new();
     };
-    // Pairs of (CodingAgent, exec name to look for on $PATH).
+    // Keep only agents whose canonical executable resolves on PATH.
     CodingAgent::ALL
         .into_iter()
         .filter(|agent| {
