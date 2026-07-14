@@ -10,6 +10,7 @@ metadata:
 
 Use this skill when a user wants to package reusable NeMo Relay runtime behavior
 behind plugin configuration.
+Keep reusable plugin behavior separate from one-off application startup code.
 
 ## Use This When
 

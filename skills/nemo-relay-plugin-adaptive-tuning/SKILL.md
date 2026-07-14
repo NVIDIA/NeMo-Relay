@@ -13,6 +13,7 @@ metadata:
 Use this skill when a user has baseline NeMo Relay instrumentation and wants to
 improve latency, parallelism, prompt-cache behavior, or model-request behavior
 from runtime signals.
+Keep adaptive behavior measured against a known baseline.
 
 ## Do Not Use This When
 

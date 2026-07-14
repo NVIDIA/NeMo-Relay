@@ -11,6 +11,7 @@ metadata:
 Use this skill when a user has existing NeMo Flow code or documentation and
 wants it converted to NeMo Relay. Treat the migration as a mechanical rename
 plus language-specific validation, not a behavior rewrite.
+Keep compatibility exceptions explicit before applying broad renames.
 
 ## Default Workflow
 
