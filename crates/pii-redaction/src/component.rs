@@ -244,7 +244,7 @@ nemo_relay::editor_config! {
             kind: Enum,
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
-        target_paths => { label: "target_paths", kind: Json },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",

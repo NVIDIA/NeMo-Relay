@@ -16,3 +16,8 @@ func runWithTestScopeStack(t *testing.T, fn func()) {
 
 	stack.Run(fn)
 }
+
+func runTestWithScopeStack(t *testing.T, fn func(*testing.T)) {
+	t.Helper()
+	runWithTestScopeStack(t, func() { fn(t) })
+}

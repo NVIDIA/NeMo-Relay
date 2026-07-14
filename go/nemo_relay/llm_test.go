@@ -84,6 +84,10 @@ func TestLlmCallWithDataMetadata(t *testing.T) {
 }
 
 func TestLlmCallWithParent(t *testing.T) {
+	runTestWithScopeStack(t, testLlmCallWithParent)
+}
+
+func testLlmCallWithParent(t *testing.T) {
 	parent, _ := PushScope("llm_parent", ScopeTypeAgent)
 	defer PopScope(parent)
 
