@@ -10,6 +10,7 @@ metadata:
 
 Use this skill when NeMo Relay is present in the application but something is not
 working.
+Start by proving which runtime layer is failing before changing configuration.
 
 ## First Checks
 

@@ -12,6 +12,7 @@ Choose the package or executable from the user's desired outcome. Stop after
 installation and basic availability checks. Do not configure runtime behavior,
 write `plugins.toml`, create scopes, register middleware, or build a first app
 example from this skill.
+Keep installation separate from first-use instrumentation.
 
 ## Choose The Install Path
 
