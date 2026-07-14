@@ -18,7 +18,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_empty_specs_without_outputs() {
         let mut report_json = std::ptr::dangling_mut::<c_char>();
         unsafe {
             assert_eq!(
-                nemo_relay_activate_dynamic_plugins(
+                nemo_relay_initialize_with_dynamic_plugins(
                     config.as_ptr(),
                     specs.as_ptr(),
                     &mut activation,
@@ -49,7 +49,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
     unsafe {
         let mut report = std::ptr::dangling_mut::<c_char>();
         assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
+            nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
                 ptr::null_mut(),
@@ -61,7 +61,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
 
         let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
         assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
+            nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
                 &mut activation,
@@ -78,7 +78,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
             let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
             let mut report = std::ptr::dangling_mut::<c_char>();
             assert_eq!(
-                nemo_relay_activate_dynamic_plugins(
+                nemo_relay_initialize_with_dynamic_plugins(
                     config_json,
                     specs_json,
                     &mut activation,
@@ -99,7 +99,7 @@ fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
         let mut activation = ptr::null_mut();
         let mut report = ptr::null_mut();
         assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
+            nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 invalid_shape.as_ptr(),
                 &mut activation,
@@ -140,7 +140,7 @@ fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner(
         let mut activation = ptr::null_mut();
         let mut report = ptr::null_mut();
         assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
+            nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
                 &mut activation,
@@ -159,7 +159,7 @@ fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner(
         let mut retry_activation = ptr::null_mut();
         let mut retry_report = ptr::null_mut();
         assert_eq!(
-            nemo_relay_activate_dynamic_plugins(
+            nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 specs.as_ptr(),
                 &mut retry_activation,

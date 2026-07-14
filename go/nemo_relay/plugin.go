@@ -28,7 +28,7 @@ typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_
 
 extern int32_t nemo_relay_validate_plugin_config(const char* config_json, char** out_json);
 extern int32_t nemo_relay_initialize_plugins(const char* config_json, char** out_json);
-extern int32_t nemo_relay_activate_dynamic_plugins(const char* config_json, const char* dynamic_plugins_json, FfiPluginActivation** out_activation, char** out_report_json);
+extern int32_t nemo_relay_initialize_with_dynamic_plugins(const char* config_json, const char* dynamic_plugins_json, FfiPluginActivation** out_activation, char** out_report_json);
 extern int32_t nemo_relay_plugin_activation_clear(FfiPluginActivation* activation);
 extern void nemo_relay_plugin_activation_free(FfiPluginActivation** activation);
 extern int32_t nemo_relay_clear_plugin_configuration(void);
@@ -115,7 +115,7 @@ var (
 			C.nemo_relay_string_free(out)
 		})
 	}
-	activateDynamicPluginsJSON = func(configJSON, dynamicPluginsJSON string) (unsafe.Pointer, string, error) {
+	initializeWithDynamicPluginsJSON = func(configJSON, dynamicPluginsJSON string) (unsafe.Pointer, string, error) {
 		cConfig := C.CString(configJSON)
 		cDynamicPlugins := C.CString(dynamicPluginsJSON)
 		defer C.free(unsafe.Pointer(cConfig))
@@ -125,7 +125,7 @@ var (
 
 		var activation *C.FfiPluginActivation
 		var report *C.char
-		status := C.nemo_relay_activate_dynamic_plugins(
+		status := C.nemo_relay_initialize_with_dynamic_plugins(
 			cConfig,
 			cDynamicPlugins,
 			&activation,
@@ -252,7 +252,7 @@ type DynamicPluginActivationSpec struct {
 }
 
 // PluginActivation owns the runtime registrations, native libraries, and
-// workers created by ActivateDynamicPlugins. Copies share one activation
+// workers created by InitializeWithDynamicPlugins. Copies share one activation
 // lifetime and may be closed safely from any copy.
 //
 // Experimental: this API needs a production consumer before its lifecycle
@@ -386,7 +386,7 @@ func InitializePlugins(config PluginConfig) (ConfigReport, error) {
 	return report, nil
 }
 
-// ActivateDynamicPlugins discovers plugins.toml once during startup, layers the
+// InitializeWithDynamicPlugins discovers plugins.toml once during startup, layers the
 // supplied config over the discovered configuration, and activates explicit
 // dynamic plugins in the same transaction. Explicit values take precedence
 // where both sources configure the same setting. Static components in the
@@ -400,7 +400,7 @@ func InitializePlugins(config PluginConfig) (ConfigReport, error) {
 //
 // Experimental: this API needs a production consumer before its lifecycle
 // contract is considered stable.
-func ActivateDynamicPlugins(
+func InitializeWithDynamicPlugins(
 	config PluginConfig,
 	dynamicPlugins []DynamicPluginActivationSpec,
 ) (*PluginActivation, ConfigReport, error) {
@@ -418,7 +418,7 @@ func ActivateDynamicPlugins(
 		return nil, ConfigReport{}, err
 	}
 
-	ptr, rawReport, err := activateDynamicPluginsJSON(
+	ptr, rawReport, err := initializeWithDynamicPluginsJSON(
 		string(configPayload),
 		string(dynamicPluginsPayload),
 	)

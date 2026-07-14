@@ -33,12 +33,12 @@ var (
 
 func withPluginActivationStubs(t *testing.T) {
 	t.Helper()
-	originalActivate := activateDynamicPluginsJSON
+	originalInitialize := initializeWithDynamicPluginsJSON
 	originalClear := clearPluginActivation
 	originalFree := freePluginActivation
 	originalReporter := reportPluginActivationCleanupError
 	t.Cleanup(func() {
-		activateDynamicPluginsJSON = originalActivate
+		initializeWithDynamicPluginsJSON = originalInitialize
 		clearPluginActivation = originalClear
 		freePluginActivation = originalFree
 		reportPluginActivationCleanupError = originalReporter
@@ -53,14 +53,14 @@ func fixtureDynamicPluginSpecs() []DynamicPluginActivationSpec {
 	}}
 }
 
-func TestActivateDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
+func TestInitializeWithDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
 	withPluginActivationStubs(t)
 
 	token := new(byte)
 	ptr := unsafe.Pointer(token)
 	var gotConfig PluginConfig
 	var gotSpecs []DynamicPluginActivationSpec
-	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
+	initializeWithDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
 		if err := json.Unmarshal([]byte(configJSON), &gotConfig); err != nil {
 			t.Fatalf("invalid config JSON: %v", err)
 		}
@@ -85,7 +85,7 @@ func TestActivateDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
 	}
 
 	environment := "/tmp/fixture-environment"
-	activation, report, err := ActivateDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{
+	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{
 		{
 			PluginID:       "fixture.worker",
 			Kind:           DynamicPluginKindWorker,
@@ -95,7 +95,7 @@ func TestActivateDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+		t.Fatalf("InitializeWithDynamicPlugins() error = %v", err)
 	}
 	if gotConfig.Version != 1 {
 		t.Fatalf("config version = %d, want 1", gotConfig.Version)
@@ -152,7 +152,7 @@ func TestPluginConfigPublicJSONShapeRemainsCompatible(t *testing.T) {
 	}
 }
 
-func TestActivateDynamicPluginsUsesPrivateConfigWireShape(t *testing.T) {
+func TestInitializeWithDynamicPluginsUsesPrivateConfigWireShape(t *testing.T) {
 	withPluginActivationStubs(t)
 
 	config := PluginConfig{Components: []PluginComponentSpec{{Kind: "fixture.disabled"}}}
@@ -166,7 +166,7 @@ func TestActivateDynamicPluginsUsesPrivateConfigWireShape(t *testing.T) {
 	}
 
 	token := new(byte)
-	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
+	initializeWithDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
 		const wantConfig = `{"components":[{"kind":"fixture.disabled","enabled":false}]}`
 		if configJSON != wantConfig {
 			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
@@ -180,9 +180,9 @@ func TestActivateDynamicPluginsUsesPrivateConfigWireShape(t *testing.T) {
 	clearPluginActivation = func(unsafe.Pointer) error { return nil }
 	freePluginActivation = func(unsafe.Pointer) {}
 
-	activation, _, err := ActivateDynamicPlugins(config, fixtureDynamicPluginSpecs())
+	activation, _, err := InitializeWithDynamicPlugins(config, fixtureDynamicPluginSpecs())
 	if err != nil {
-		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+		t.Fatalf("InitializeWithDynamicPlugins() error = %v", err)
 	}
 	if err := activation.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -218,22 +218,22 @@ func TestComponentWrappersPreserveDisabledValuesDuringConversion(t *testing.T) {
 	}
 }
 
-func TestActivateDynamicPluginsRejectsEmptySpecsWithoutCallingCgo(t *testing.T) {
+func TestInitializeWithDynamicPluginsRejectsEmptySpecsWithoutCallingCgo(t *testing.T) {
 	withPluginActivationStubs(t)
 
 	activationCalls := 0
-	activateDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
+	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
 		activationCalls++
 		return nil, "", errors.New("unexpected CGo call")
 	}
 
 	for _, specs := range [][]DynamicPluginActivationSpec{nil, {}} {
-		activation, report, err := ActivateDynamicPlugins(NewPluginConfig(), specs)
+		activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), specs)
 		if err == nil || !strings.Contains(err.Error(), "at least one dynamic plugin") {
-			t.Fatalf("ActivateDynamicPlugins(%#v) error = %v, want empty-spec diagnostic", specs, err)
+			t.Fatalf("InitializeWithDynamicPlugins(%#v) error = %v, want empty-spec diagnostic", specs, err)
 		}
 		if activation != nil || len(report.Diagnostics) != 0 {
-			t.Fatalf("ActivateDynamicPlugins(%#v) = (%#v, %#v), want empty outputs", specs, activation, report)
+			t.Fatalf("InitializeWithDynamicPlugins(%#v) = (%#v, %#v), want empty outputs", specs, activation, report)
 		}
 	}
 	if activationCalls != 0 {
@@ -241,12 +241,12 @@ func TestActivateDynamicPluginsRejectsEmptySpecsWithoutCallingCgo(t *testing.T) 
 	}
 }
 
-func TestActivateDynamicPluginsCleansUpInvalidReport(t *testing.T) {
+func TestInitializeWithDynamicPluginsCleansUpInvalidReport(t *testing.T) {
 	withPluginActivationStubs(t)
 
 	token := new(byte)
 	ptr := unsafe.Pointer(token)
-	activateDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
+	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
 		return ptr, "not-json", nil
 	}
 	var calls []string
@@ -256,9 +256,9 @@ func TestActivateDynamicPluginsCleansUpInvalidReport(t *testing.T) {
 	}
 	freePluginActivation = func(unsafe.Pointer) { calls = append(calls, "free") }
 
-	activation, _, err := ActivateDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs())
+	activation, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs())
 	if err == nil {
-		t.Fatal("ActivateDynamicPlugins() error = nil, want invalid report error")
+		t.Fatal("InitializeWithDynamicPlugins() error = nil, want invalid report error")
 	}
 	if activation != nil {
 		t.Fatalf("activation = %#v, want nil", activation)
@@ -501,11 +501,11 @@ func copiedPluginActivationWithGCSentinel(
 	return copyValue
 }
 
-func TestActivateDynamicPluginsSurfacesSerializationAndActivationErrors(t *testing.T) {
+func TestInitializeWithDynamicPluginsSurfacesSerializationAndActivationErrors(t *testing.T) {
 	withPluginActivationStubs(t)
 
 	activationCalls := 0
-	activateDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
+	initializeWithDynamicPluginsJSON = func(string, string) (unsafe.Pointer, string, error) {
 		activationCalls++
 		return nil, "", errors.New("load failed")
 	}
@@ -516,7 +516,7 @@ func TestActivateDynamicPluginsSurfacesSerializationAndActivationErrors(t *testi
 		Enabled: true,
 		Config:  map[string]any{"invalid": make(chan int)},
 	})
-	if _, _, err := ActivateDynamicPlugins(invalidConfig, fixtureDynamicPluginSpecs()); err == nil {
+	if _, _, err := InitializeWithDynamicPlugins(invalidConfig, fixtureDynamicPluginSpecs()); err == nil {
 		t.Fatal("invalid config serialization error = nil")
 	}
 	if activationCalls != 0 {
@@ -529,14 +529,14 @@ func TestActivateDynamicPluginsSurfacesSerializationAndActivationErrors(t *testi
 		ManifestRef: "/tmp/relay-plugin.toml",
 		Config:      map[string]any{"invalid": make(chan int)},
 	}}
-	if _, _, err := ActivateDynamicPlugins(NewPluginConfig(), invalidSpecs); err == nil {
+	if _, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), invalidSpecs); err == nil {
 		t.Fatal("invalid specs serialization error = nil")
 	}
 	if activationCalls != 0 {
 		t.Fatalf("activation calls after specs serialization failure = %d", activationCalls)
 	}
 
-	if _, _, err := ActivateDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs()); err == nil || err.Error() != "load failed" {
+	if _, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), fixtureDynamicPluginSpecs()); err == nil || err.Error() != "load failed" {
 		t.Fatalf("activation error = %v, want load failed", err)
 	}
 	if activationCalls != 1 {
@@ -551,7 +551,7 @@ func TestNilPluginActivationCloseIsSafe(t *testing.T) {
 	}
 }
 
-func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
+func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf("ClearPluginConfiguration() error = %v", err)
 	}
@@ -624,14 +624,14 @@ source = "project-file"
 		}
 	}()
 
-	activation, report, err := ActivateDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
+	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
 		PluginID:    "fixture_native",
 		Kind:        DynamicPluginKindRustDynamic,
 		ManifestRef: manifest,
 		Config:      map[string]any{},
 	}})
 	if err != nil {
-		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+		t.Fatalf("InitializeWithDynamicPlugins() error = %v", err)
 	}
 	defer func() {
 		if err := activation.Close(); err != nil {
@@ -697,7 +697,7 @@ source = "project-file"
 		t.Fatalf("Remove(plugins.toml) error = %v", err)
 	}
 
-	_, _, err = ActivateDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
+	_, _, err = InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
 		PluginID:    "fixture_missing",
 		Kind:        DynamicPluginKindRustDynamic,
 		ManifestRef: filepath.Join(t.TempDir(), "missing-relay-plugin.toml"),
@@ -707,21 +707,21 @@ source = "project-file"
 	}
 }
 
-func TestActivateDynamicPluginsLoadsWorkerPluginThroughCgo(t *testing.T) {
+func TestInitializeWithDynamicPluginsLoadsWorkerPluginThroughCgo(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf("ClearPluginConfiguration() error = %v", err)
 	}
 
 	executable := goWorkerPluginFixture(t)
 	manifest := writeGoWorkerPluginManifest(t, executable)
-	activation, report, err := ActivateDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
+	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
 		PluginID:    "fixture_worker",
 		Kind:        DynamicPluginKindWorker,
 		ManifestRef: manifest,
 		Config:      map[string]any{},
 	}})
 	if err != nil {
-		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+		t.Fatalf("InitializeWithDynamicPlugins() error = %v", err)
 	}
 	defer func() {
 		if err := activation.Close(); err != nil {
@@ -774,7 +774,7 @@ func TestPluginActivationFinalizerReleasesHostOwnership(t *testing.T) {
 	for time.Now().Before(deadline) {
 		runtime.GC()
 		runtime.Gosched()
-		activation, _, err := ActivateDynamicPlugins(NewPluginConfig(), specs)
+		activation, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), specs)
 		if err == nil {
 			if closeErr := activation.Close(); closeErr != nil {
 				t.Fatalf("replacement activation Close() error = %v", closeErr)
@@ -792,9 +792,9 @@ func TestPluginActivationFinalizerReleasesHostOwnership(t *testing.T) {
 //go:noinline
 func createUnclosedPluginActivation(t *testing.T, specs []DynamicPluginActivationSpec) {
 	t.Helper()
-	activation, _, err := ActivateDynamicPlugins(NewPluginConfig(), specs)
+	activation, _, err := InitializeWithDynamicPlugins(NewPluginConfig(), specs)
 	if err != nil {
-		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
+		t.Fatalf("InitializeWithDynamicPlugins() error = %v", err)
 	}
 	runtime.KeepAlive(activation)
 }

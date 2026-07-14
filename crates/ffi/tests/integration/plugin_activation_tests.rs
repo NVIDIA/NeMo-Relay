@@ -97,7 +97,7 @@ fn run_discovered_config_activation_test() {
     let mut empty_report = ptr::null_mut();
     assert_eq!(
         unsafe {
-            api::nemo_relay_activate_dynamic_plugins(
+            api::nemo_relay_initialize_with_dynamic_plugins(
                 config.as_ptr(),
                 empty_specs.as_ptr(),
                 &mut empty_activation,
@@ -146,7 +146,7 @@ source = "project-file"
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let (mut activation, report) = activate_plugins(json!([{
+    let (mut activation, report) = initialize_with_dynamic_plugins(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
@@ -239,7 +239,7 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
 
     let manifest_dir = TempDir::new().expect("native manifest tempdir");
     let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
-    let (mut activation, report) = activate_plugins(json!([{
+    let (mut activation, report) = initialize_with_dynamic_plugins(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
@@ -270,7 +270,7 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
         json!({"input": true})
     );
 
-    let (mut drop_activation, _) = activate_plugins(json!([{
+    let (mut drop_activation, _) = initialize_with_dynamic_plugins(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
@@ -305,7 +305,7 @@ fn ffi_activation_rejects_overlapping_outputs_without_claiming_host() {
     let mut aliased_output = std::ptr::dangling_mut::<std::ffi::c_void>();
     let output_slot = &mut aliased_output as *mut *mut std::ffi::c_void;
     let status = unsafe {
-        api::nemo_relay_activate_dynamic_plugins(
+        api::nemo_relay_initialize_with_dynamic_plugins(
             config.as_ptr(),
             specs.as_ptr(),
             output_slot.cast::<*mut FfiPluginActivation>(),
@@ -320,7 +320,7 @@ fn ffi_activation_rejects_overlapping_outputs_without_claiming_host() {
             .contains("must not overlap")
     );
 
-    let (mut activation, _) = activate_plugins(specs_value);
+    let (mut activation, _) = initialize_with_dynamic_plugins(specs_value);
     unsafe {
         assert_eq!(
             api::nemo_relay_plugin_activation_clear(activation),
@@ -337,7 +337,7 @@ fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
 
     let manifest_dir = TempDir::new().expect("worker manifest tempdir");
     let manifest = write_worker_manifest(manifest_dir.path(), build_worker_fixture());
-    let (mut activation, report) = activate_plugins(json!([{
+    let (mut activation, report) = initialize_with_dynamic_plugins(json!([{
         "plugin_id": "fixture_worker",
         "kind": "worker",
         "manifest_ref": manifest,
@@ -393,7 +393,7 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
     let mut activation = ptr::null_mut();
     let mut report = ptr::null_mut();
     let status = unsafe {
-        api::nemo_relay_activate_dynamic_plugins(
+        api::nemo_relay_initialize_with_dynamic_plugins(
             config.as_ptr(),
             specs.as_ptr(),
             &mut activation,
@@ -409,7 +409,7 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
         json!({"input": true})
     );
 
-    let (mut activation, _) = activate_plugins(json!([{
+    let (mut activation, _) = initialize_with_dynamic_plugins(json!([{
         "plugin_id": "fixture_native",
         "kind": "rust_dynamic",
         "manifest_ref": manifest,
@@ -424,13 +424,13 @@ fn ffi_activation_rolls_back_an_earlier_native_load_when_a_later_load_fails() {
     }
 }
 
-fn activate_plugins(specs: Json) -> (*mut FfiPluginActivation, Json) {
+fn initialize_with_dynamic_plugins(specs: Json) -> (*mut FfiPluginActivation, Json) {
     let config = cstring(r#"{"version":1,"components":[]}"#);
     let specs = cstring(&specs.to_string());
     let mut activation = ptr::null_mut();
     let mut report = ptr::null_mut();
     let status = unsafe {
-        api::nemo_relay_activate_dynamic_plugins(
+        api::nemo_relay_initialize_with_dynamic_plugins(
             config.as_ptr(),
             specs.as_ptr(),
             &mut activation,

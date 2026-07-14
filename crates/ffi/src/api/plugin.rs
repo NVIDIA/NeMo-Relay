@@ -202,7 +202,7 @@ fn lock_plugin_activation(
 /// `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
 /// output pointers.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_activate_dynamic_plugins(
+pub unsafe extern "C" fn nemo_relay_initialize_with_dynamic_plugins(
     config_json: *const c_char,
     dynamic_plugins_json: *const c_char,
     out_activation: *mut *mut FfiPluginActivation,
@@ -282,7 +282,7 @@ pub unsafe extern "C" fn nemo_relay_activate_dynamic_plugins(
 ///
 /// # Safety
 /// `activation` must be a valid activation handle returned by
-/// `nemo_relay_activate_dynamic_plugins`, or null. The caller must ensure the
+/// `nemo_relay_initialize_with_dynamic_plugins`, or null. The caller must ensure the
 /// handle remains allocated for this call and that
 /// `nemo_relay_plugin_activation_free` does not run concurrently with it.
 #[unsafe(no_mangle)]

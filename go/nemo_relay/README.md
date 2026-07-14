@@ -24,9 +24,10 @@ Rust runtime.
 This binding is experimental and source-first. Rust, Python, and Node.js are the
 primary supported surfaces.
 
-> **DO NOT TREAT AS PRODUCTION-READY:** the FFI/Go dynamic-plugin activation
-> lifecycle needs a real consumer to validate shutdown, ownership, and error
-> handling before it can be promoted to a stable contract.
+> **DO NOT TREAT AS PRODUCTION-READY:** the experimental
+> `InitializeWithDynamicPlugins` lifecycle needs a real consumer to validate
+> shutdown, ownership, and error handling before it can be promoted to a stable
+> contract.
 
 ## Why Use It?
 

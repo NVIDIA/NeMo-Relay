@@ -294,7 +294,7 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveR
 }
 
 /// Free a dynamic plugin activation handle previously returned by
-/// `nemo_relay_activate_dynamic_plugins`.
+/// `nemo_relay_initialize_with_dynamic_plugins`.
 ///
 /// Any activation that has not already been explicitly cleared is cleaned up
 /// best-effort by its Rust destructor before the allocation is released. The
@@ -303,7 +303,7 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveR
 ///
 /// # Safety
 /// `ptr` must be null or point to a writable activation-handle variable whose
-/// value is null or was returned by `nemo_relay_activate_dynamic_plugins`. The
+/// value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The
 /// caller must ensure that no operation, including
 /// `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
 /// with this call and that no operation can use the handle after this call

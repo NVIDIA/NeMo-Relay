@@ -1457,10 +1457,10 @@ NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpe
  * `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
  * output pointers.
  */
-NemoRelayStatus nemo_relay_activate_dynamic_plugins(const char *config_json,
-                                                    const char *dynamic_plugins_json,
-                                                    struct FfiPluginActivation **out_activation,
-                                                    char **out_report_json);
+NemoRelayStatus nemo_relay_initialize_with_dynamic_plugins(const char *config_json,
+                                                           const char *dynamic_plugins_json,
+                                                           struct FfiPluginActivation **out_activation,
+                                                           char **out_report_json);
 
 /**
  * Clear one owned dynamic plugin activation.
@@ -1476,7 +1476,7 @@ NemoRelayStatus nemo_relay_activate_dynamic_plugins(const char *config_json,
  *
  * # Safety
  * `activation` must be a valid activation handle returned by
- * `nemo_relay_activate_dynamic_plugins`, or null. The caller must ensure the
+ * `nemo_relay_initialize_with_dynamic_plugins`, or null. The caller must ensure the
  * handle remains allocated for this call and that
  * `nemo_relay_plugin_activation_free` does not run concurrently with it.
  */
@@ -2527,7 +2527,7 @@ void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
 
 /**
  * Free a dynamic plugin activation handle previously returned by
- * `nemo_relay_activate_dynamic_plugins`.
+ * `nemo_relay_initialize_with_dynamic_plugins`.
  *
  * Any activation that has not already been explicitly cleared is cleaned up
  * best-effort by its Rust destructor before the allocation is released. The
@@ -2536,7 +2536,7 @@ void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
  *
  * # Safety
  * `ptr` must be null or point to a writable activation-handle variable whose
- * value is null or was returned by `nemo_relay_activate_dynamic_plugins`. The
+ * value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The
  * caller must ensure that no operation, including
  * `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
  * with this call and that no operation can use the handle after this call
