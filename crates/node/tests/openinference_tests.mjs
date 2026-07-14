@@ -83,21 +83,13 @@ describe('OpenInferenceSubscriber', () => {
     const subscriber = new OpenInferenceSubscriber({
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
+      attributeMappings: [{ key: 'openinference.metadata.tenant', alias: 'tenant.id' }],
     });
 
     const name = unique('node_openinference_e2e');
     subscriber.register(name);
     try {
-      const scope = pushScope(
-        'openinference_scope',
-        ScopeType.Agent,
-        null,
-        null,
-        {
-          scope: true,
-        },
-        null,
-      );
+      const scope = pushScope('openinference_scope', ScopeType.Agent, null, null, null, null);
       event(
         'openinference_mark',
         scope,
@@ -108,7 +100,7 @@ describe('OpenInferenceSubscriber', () => {
           source: 'node',
         },
       );
-      popScope(scope);
+      popScope(scope, null, null, { tenant: 'node' });
 
       subscriber.forceFlush();
       const request = await collector.nextRequest();
@@ -119,6 +111,8 @@ describe('OpenInferenceSubscriber', () => {
       assertBodyContains(request.body, 'AGENT');
       assertBodyContains(request.body, 'metadata');
       assertBodyContains(request.body, 'openinference_mark');
+      assertBodyContains(request.body, 'tenant.id');
+      assertBodyContains(request.body, 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

@@ -537,11 +537,14 @@ fn parse_attribute_mappings_json(
         return Ok(Vec::new());
     }
     let json_string = c_str_to_string(json_ptr)?;
-    let mappings: Vec<OtlpAttributeMapping> =
-        serde_json::from_str(&json_string).map_err(|error| {
-            set_last_error(&format!("invalid attribute_mappings JSON: {error}"));
-            NemoRelayStatus::InvalidJson
-        })?;
+    let value: serde_json::Value = serde_json::from_str(&json_string).map_err(|error| {
+        set_last_error(&format!("invalid attribute_mappings JSON: {error}"));
+        NemoRelayStatus::InvalidJson
+    })?;
+    let mappings: Vec<OtlpAttributeMapping> = serde_json::from_value(value).map_err(|error| {
+        set_last_error(&format!("invalid attribute_mappings: {error}"));
+        NemoRelayStatus::InvalidArg
+    })?;
     nemo_relay::observability::validate_attribute_mappings(&mappings).map_err(|error| {
         set_last_error(&format!("invalid attribute_mappings: {error}"));
         NemoRelayStatus::InvalidArg

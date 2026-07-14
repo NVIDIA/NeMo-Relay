@@ -1377,6 +1377,42 @@ fn test_ffi_typed_attribute_mapping_constructors_validate_and_accept_mappings() 
             ),
             NemoRelayStatus::InvalidArg
         );
+
+        for invalid_shape in ["{}", "null", r#"[{"key":1,"alias":"tenant.id"}]"#] {
+            let invalid_shape = cstring(invalid_shape);
+            assert_eq!(
+                nemo_relay_otel_subscriber_create_with_attribute_mappings(
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    invalid_shape.as_ptr(),
+                    &mut otel,
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert_eq!(
+                nemo_relay_openinference_subscriber_create_with_attribute_mappings(
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    invalid_shape.as_ptr(),
+                    &mut openinference,
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+        }
     }
 }
 

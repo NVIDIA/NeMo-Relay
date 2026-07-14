@@ -13,6 +13,10 @@ function uniqueId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
+function assertBodyContains(body, text) {
+  assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
+}
+
 describe('OpenTelemetrySubscriber', () => {
   it('constructs from a mutable config object and supports lifecycle methods', () => {
     const subscriber = new OpenTelemetrySubscriber({
@@ -79,21 +83,13 @@ describe('OpenTelemetrySubscriber', () => {
     const subscriber = new OpenTelemetrySubscriber({
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
+      attributeMappings: [{ key: 'nemo_relay.mark.metadata.source', alias: 'tenant.id' }],
     });
 
     const name = uniqueId('node_otel_e2e');
     subscriber.register(name);
     try {
-      const scope = pushScope(
-        'otel_scope',
-        ScopeType.Agent,
-        null,
-        null,
-        {
-          scope: true,
-        },
-        null,
-      );
+      const scope = pushScope('otel_scope', ScopeType.Agent, null, null, null, null);
       event(
         'otel_mark',
         scope,
@@ -111,6 +107,8 @@ describe('OpenTelemetrySubscriber', () => {
       assert.equal(request.url, '/v1/traces');
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
       assert.ok(request.body.length > 0);
+      assertBodyContains(request.body, 'tenant.id');
+      assertBodyContains(request.body, 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();
