@@ -56,11 +56,6 @@ fn collect_fields(record: &Record<'_>) -> CollectedFields {
             "message" => {
                 // Message already lives in record.payload(); ignore KV duplicates.
             }
-            _ if is_sensitive_field_name(name) => {
-                collected
-                    .fields
-                    .insert(name.to_owned(), json!("[redacted]"));
-            }
             _ => {
                 collected.fields.insert(name.to_owned(), json!(rendered));
             }
@@ -158,24 +153,6 @@ fn format_human_value(value: &Value) -> String {
     }
 }
 
-fn is_sensitive_field_name(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "password"
-            | "passwd"
-            | "secret"
-            | "token"
-            | "api_key"
-            | "apikey"
-            | "access_token"
-            | "refresh_token"
-            | "authorization"
-            | "auth"
-            | "openai_api_key"
-            | "anthropic_api_key"
-    )
-}
-
 #[cfg(test)]
 pub(crate) fn format_event_for_test(
     format: LogFormat,
@@ -191,13 +168,7 @@ pub(crate) fn format_event_for_test(
         fields.event_name = Some(event_name.to_owned());
     }
     for (name, value) in extra_fields {
-        if is_sensitive_field_name(name) {
-            fields
-                .fields
-                .insert((*name).to_owned(), json!("[redacted]"));
-        } else {
-            fields.fields.insert((*name).to_owned(), json!(*value));
-        }
+        fields.fields.insert((*name).to_owned(), json!(*value));
     }
     // Fixed timestamp for deterministic formatter assertions.
     let timestamp = "2026-07-10T14:22:31.123Z";

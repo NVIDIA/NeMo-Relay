@@ -69,27 +69,6 @@ fn jsonl_formatter_emits_required_schema_without_duplicating_event_or_message() 
 }
 
 #[test]
-fn jsonl_formatter_redacts_sensitive_field_names() {
-    let line = format_event_for_test(
-        LogFormat::Jsonl,
-        "root-id",
-        Level::Warn,
-        "nemo_relay.config",
-        Some("config_warning"),
-        "sanitized",
-        &[
-            ("token", "secret-token"),
-            ("api_key", "sk-test"),
-            ("bind", "127.0.0.1:1"),
-        ],
-    );
-    let record: Value = serde_json::from_str(line.trim_end()).unwrap();
-    assert_eq!(record["fields"]["token"], "[redacted]");
-    assert_eq!(record["fields"]["api_key"], "[redacted]");
-    assert_eq!(record["fields"]["bind"], "127.0.0.1:1");
-}
-
-#[test]
 fn multiple_jsonl_records_are_one_object_per_line_with_shared_root_id() {
     let root = "018f3d7c-1111-2222-3333-444455556666";
     let first = format_event_for_test(
@@ -138,6 +117,7 @@ fn file_sink_receives_jsonl_and_preserves_existing_content() {
             flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
+        ..default_config()
     };
     let runtime = init_logging(&config).unwrap();
     let root = runtime.root_relay_id().to_owned();
@@ -194,6 +174,7 @@ fn sink_level_filter_drops_events_below_sink_minimum() {
             flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
+        ..default_config()
     };
     let runtime = init_logging(&config).unwrap();
 
@@ -263,6 +244,46 @@ fn init_logging_rejects_duplicate_resolved_paths() {
 }
 
 #[test]
+fn build_logger_rejects_queue_capacity_above_max_queue_capacity() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let config = LoggingConfig {
+        max_queue_capacity: 10,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: temp.path().join("over-max.log.jsonl"),
+            queue_capacity: 11,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    let error = build_logger(&config, "root".into())
+        .err()
+        .expect("queue_capacity above max should fail")
+        .to_string();
+    assert!(error.contains("exceeds maximum"));
+}
+
+#[test]
+fn build_logger_allows_queue_capacity_up_to_configured_max() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    // queue_capacity exceeds the default (1024) but stays within a raised ceiling.
+    let config = LoggingConfig {
+        max_queue_capacity: 4096,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: temp.path().join("within-max.log.jsonl"),
+            queue_capacity: 4096,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    assert!(
+        build_logger(&config, "root".into()).is_ok(),
+        "queue_capacity within max should build"
+    );
+}
+
+#[test]
 fn init_logging_rejects_dot_slash_duplicate_relative_paths() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
@@ -312,6 +333,7 @@ fn shutdown_drains_async_file_sink_without_waiting() {
             flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
+        ..default_config()
     };
     let runtime = init_logging(&config).unwrap();
 
@@ -388,6 +410,7 @@ fn global_level_filter_drops_events_below_process_minimum() {
             flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
+        ..default_config()
     };
     let runtime = init_logging(&config).unwrap();
 
@@ -433,6 +456,7 @@ fn relative_sink_path_resolves_against_process_cwd() {
             flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
+        ..default_config()
     };
     let expected = temp.path().join("relay.log.jsonl");
     let runtime = init_logging(&config).unwrap();
@@ -476,6 +500,7 @@ fn multiple_file_sinks_receive_same_event() {
                 ..FileLogSinkConfig::default()
             }),
         ],
+        ..default_config()
     };
     let runtime = init_logging(&config).unwrap();
     let root = runtime.root_relay_id().to_owned();

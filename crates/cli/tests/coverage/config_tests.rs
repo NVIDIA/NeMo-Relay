@@ -2106,6 +2106,44 @@ queue_capacity = 0
     .unwrap_err()
     .to_string();
     assert!(error.contains("queue_capacity must be greater than 0"));
+
+    let zero_max = temp.path().join("zero-max.toml");
+    std::fs::write(
+        &zero_max,
+        r#"
+[logging]
+max_queue_capacity = 0
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(zero_max),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("max_queue_capacity must be greater than 0"));
+
+    let over_max = temp.path().join("over-max.toml");
+    std::fs::write(
+        &over_max,
+        r#"
+[logging]
+max_queue_capacity = 10
+
+[[logging.sinks]]
+path = "relay.log"
+queue_capacity = 11
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&ServerArgs {
+        config: Some(over_max),
+        ..ServerArgs::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("exceeds max_queue_capacity"));
 }
 
 #[test]

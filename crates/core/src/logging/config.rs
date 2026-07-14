@@ -13,6 +13,14 @@ pub const DEFAULT_FILE_QUEUE_CAPACITY: usize = 1024;
 /// Default periodic flush interval for file sinks when `flush_interval_millis` is omitted.
 pub const DEFAULT_FILE_FLUSH_INTERVAL_MILLIS: u64 = 1000;
 
+/// Default ceiling applied to file sink `queue_capacity` when [`LoggingConfig::max_queue_capacity`]
+/// is not overridden.
+///
+/// This is a safety limit, not a tuning recommendation. The async queue preallocates every slot,
+/// so an unbounded value can panic the process at startup; the ceiling turns a mistaken value into
+/// a config error instead. Raise it deliberately if your workload needs a larger queue.
+pub const DEFAULT_MAX_FILE_QUEUE_CAPACITY: usize = 1_048_576;
+
 /// Operational logging configuration for [`init_logging`](super::init_logging).
 ///
 /// `level` is the process-wide **minimum severity**: call sites may emit any level, but records
@@ -25,6 +33,9 @@ pub struct LoggingConfig {
     pub stderr_format: LogFormat,
     /// Additional file sinks beyond stderr.
     pub sinks: Vec<LogSinkConfig>,
+    /// Safety ceiling for each file sink's `queue_capacity`. Defaults to
+    /// [`DEFAULT_MAX_FILE_QUEUE_CAPACITY`].
+    pub max_queue_capacity: usize,
 }
 
 impl Default for LoggingConfig {
@@ -33,6 +44,7 @@ impl Default for LoggingConfig {
             level: LogLevel::Info,
             stderr_format: LogFormat::Human,
             sinks: Vec::new(),
+            max_queue_capacity: DEFAULT_MAX_FILE_QUEUE_CAPACITY,
         }
     }
 }
@@ -113,7 +125,8 @@ pub struct FileLogSinkConfig {
     pub level: LogLevel,
     /// Output encoding for this file sink.
     pub format: LogFormat,
-    /// Max records waiting for disk write (async queue bound).
+    /// Max records waiting for disk write (async queue bound). Must be greater than 0 and at most
+    /// [`LoggingConfig::max_queue_capacity`].
     pub queue_capacity: usize,
     /// Periodic flush cadence in milliseconds. `0` disables periodic flush (shutdown flush only).
     pub flush_interval_millis: u64,

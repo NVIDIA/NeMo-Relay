@@ -75,6 +75,12 @@ pub(crate) fn build_logger(
                 ))
             })?;
 
+        if file_sink.queue_capacity > config.max_queue_capacity {
+            return Err(FlowError::InvalidArgument(format!(
+                "logging sink queue_capacity {} exceeds maximum {}",
+                file_sink.queue_capacity, config.max_queue_capacity
+            )));
+        }
         let capacity = NonZeroUsize::new(file_sink.queue_capacity).ok_or_else(|| {
             FlowError::InvalidArgument("logging sink queue_capacity must be greater than 0".into())
         })?;

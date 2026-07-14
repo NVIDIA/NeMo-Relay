@@ -9,8 +9,9 @@ use axum::http::HeaderMap;
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use nemo_relay::error::FlowError;
 pub(crate) use nemo_relay::logging::{
-    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_QUEUE_CAPACITY, FileLogSinkConfig, LogFormat,
-    LogLevel, LogSinkConfig, LoggingConfig,
+    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_QUEUE_CAPACITY,
+    DEFAULT_MAX_FILE_QUEUE_CAPACITY, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig,
+    LoggingConfig,
 };
 use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{PluginError, merge_plugin_config_documents};
@@ -643,6 +644,7 @@ struct FileConfig {
 struct FileLoggingConfig {
     level: Option<String>,
     stderr_format: Option<String>,
+    max_queue_capacity: Option<usize>,
     #[serde(default)]
     sinks: Vec<RawFileLogSinkConfig>,
 }
@@ -1018,6 +1020,15 @@ fn apply_file_logging_config(
     if let Some(stderr_format) = config.stderr_format.as_deref() {
         logging.stderr_format = LogFormat::parse(stderr_format).map_err(logging_parse_error)?;
     }
+    logging.max_queue_capacity = match config.max_queue_capacity {
+        Some(0) => {
+            return Err(CliError::Config(
+                "logging max_queue_capacity must be greater than 0".into(),
+            ));
+        }
+        Some(max) => max,
+        None => DEFAULT_MAX_FILE_QUEUE_CAPACITY,
+    };
     if !config.sinks.is_empty() {
         let default_sink_level = logging.level;
         logging.sinks = config
@@ -1025,6 +1036,15 @@ fn apply_file_logging_config(
             .into_iter()
             .map(|sink| parse_file_log_sink(sink, default_sink_level))
             .collect::<Result<Vec<_>, _>>()?;
+        for sink in &logging.sinks {
+            let LogSinkConfig::File(file_sink) = sink;
+            if file_sink.queue_capacity > logging.max_queue_capacity {
+                return Err(CliError::Config(format!(
+                    "logging sink queue_capacity {} exceeds max_queue_capacity {}",
+                    file_sink.queue_capacity, logging.max_queue_capacity
+                )));
+            }
+        }
     }
     Ok(())
 }
