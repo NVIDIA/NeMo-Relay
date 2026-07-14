@@ -402,9 +402,10 @@ pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(
     if switchyard.context_mode != ContextMode::AtofRequired {
         return Ok(());
     }
-    let required_name = switchyard.atof_endpoint_name.as_deref().ok_or_else(|| {
-        "atof_required Switchyard profiles require atof_endpoint_name".to_string()
-    })?;
+    let required_name = validate_atof_endpoint_name(switchyard.atof_endpoint_name.as_deref())?
+        .ok_or_else(|| {
+            "atof_required Switchyard profiles require atof_endpoint_name".to_string()
+        })?;
     let observability = config
         .components
         .iter()
@@ -1225,6 +1226,18 @@ impl SwitchyardRuntime {
     }
 }
 
+fn validate_atof_endpoint_name(name: Option<&str>) -> Result<Option<&str>, String> {
+    if let Some(name) = name {
+        if name.trim().is_empty() {
+            return Err("atof_endpoint_name must be non-empty when configured".into());
+        }
+        if name != name.trim() {
+            return Err("atof_endpoint_name must not have leading or trailing whitespace".into());
+        }
+    }
+    Ok(name)
+}
+
 fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
     if config.version != 1 {
         return Err(format!(
@@ -1244,17 +1257,9 @@ fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
     if config.recent_message_count == 0 {
         return Err("recent_message_count must be greater than zero".into());
     }
-    let atof_endpoint_name = config.atof_endpoint_name.as_deref();
+    let atof_endpoint_name = validate_atof_endpoint_name(config.atof_endpoint_name.as_deref())?;
     if config.context_mode == ContextMode::AtofRequired && atof_endpoint_name.is_none() {
         return Err("atof_required Switchyard profiles require atof_endpoint_name".into());
-    }
-    if let Some(name) = atof_endpoint_name {
-        if name.trim().is_empty() {
-            return Err("atof_endpoint_name must be non-empty when configured".into());
-        }
-        if name != name.trim() {
-            return Err("atof_endpoint_name must not have leading or trailing whitespace".into());
-        }
     }
     let url = reqwest::Url::parse(&config.decision_api_url)
         .map_err(|error| format!("decision_api_url is invalid: {error}"))?;

@@ -335,6 +335,30 @@ fn disabled_protocol_defaults_are_optional() {
 }
 
 #[test]
+fn atof_cross_component_validation_rejects_invalid_endpoint_names_before_lookup() {
+    for (name, expected) in [
+        (" ", "atof_endpoint_name must be non-empty when configured"),
+        (
+            " switchyard ",
+            "atof_endpoint_name must not have leading or trailing whitespace",
+        ),
+    ] {
+        let mut switchyard = config("http://switchyard.test/v1/routing/decision".into());
+        switchyard.context_mode = ContextMode::AtofRequired;
+        switchyard.atof_endpoint_name = Some(name.into());
+        let plugin_config = PluginConfig {
+            components: vec![switchyard.into()],
+            ..PluginConfig::default()
+        };
+
+        assert_eq!(
+            validate_switchyard_atof_configuration(&plugin_config).unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn atof_cross_component_validation_reports_each_activation_mismatch() {
     assert!(validate_switchyard_atof_configuration(&PluginConfig::default()).is_ok());
 
