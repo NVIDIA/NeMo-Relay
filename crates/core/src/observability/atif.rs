@@ -1512,15 +1512,7 @@ impl LlmSpanCandidate {
             request_signature,
             request_correlation_keys: llm_request_correlation_keys(start, end),
             response_signature,
-            model_name: normalized_response_model_name(end)
-                .or_else(|| {
-                    start
-                        .model_name()
-                        .or_else(|| end.model_name())
-                        .map(ToOwned::to_owned)
-                })
-                .or_else(|| model_name_for_llm_event(start))
-                .or_else(|| model_name_for_llm_event(end)),
+            model_name: effective_model_for_pair(start, end),
             fidelity_score: llm_event_fidelity_score(start).max(llm_event_fidelity_score(end)),
             end_metrics: end.data().and_then(|output| {
                 let normalized_response = end.normalized_llm_response();
@@ -2711,8 +2703,20 @@ fn normalized_response_model_name(event: &Event) -> Option<String> {
         .and_then(|response| response.as_ref().model.clone())
 }
 
+fn effective_model_for_pair(start: &Event, end: &Event) -> Option<String> {
+    normalized_response_model_name(end)
+        .or_else(|| {
+            start
+                .model_name()
+                .or_else(|| end.model_name())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| model_name_for_llm_event(start))
+        .or_else(|| model_name_for_llm_event(end))
+}
+
 fn effective_response_model_name(event: &Event) -> Option<String> {
-    normalized_response_model_name(event).or_else(|| model_name_for_llm_event(event))
+    effective_model_for_pair(event, event)
 }
 
 fn remove_projected_tool_call_duplicates(steps: &mut Vec<AtifStep>) {
