@@ -63,6 +63,7 @@ describe('observability plugin helpers', () => {
     const config = observability.atofConfig({
       endpoints: [
         {
+          name: 'switchyard',
           url: 'http://localhost:8080/events',
           transport: 'http_post',
           headers: { 'X-Test': 'yes' },
@@ -74,6 +75,7 @@ describe('observability plugin helpers', () => {
 
     assert.deepEqual(config.endpoints, [
       {
+        name: 'switchyard',
         url: 'http://localhost:8080/events',
         transport: 'http_post',
         headers: { 'X-Test': 'yes' },

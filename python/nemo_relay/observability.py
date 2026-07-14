@@ -59,6 +59,7 @@ class AtofEndpointConfig:
     """Streaming destination for raw ATOF events."""
 
     url: str
+    name: str | None = None
     transport: Literal["http_post", "websocket", "ndjson"] = "http_post"
     headers: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
@@ -68,6 +69,7 @@ class AtofEndpointConfig:
         """Serialize this ATOF endpoint config to the canonical JSON object shape."""
         return _normalize_object(
             {
+                "name": self.name,
                 "url": self.url,
                 "transport": self.transport,
                 "headers": self.headers,

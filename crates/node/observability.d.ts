@@ -15,6 +15,7 @@ export interface AtofConfig {
 }
 
 export interface AtofEndpointConfig {
+  name?: string;
   url: string;
   transport?: 'http_post' | 'websocket' | 'ndjson' | string;
   headers?: Record<string, string>;

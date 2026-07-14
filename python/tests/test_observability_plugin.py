@@ -103,12 +103,14 @@ class TestObservabilityConfigHelpers:
     def test_atof_endpoint_config_serializes_streaming_fields(self):
         endpoint = AtofEndpointConfig(
             url="http://localhost:8080/events",
+            name="switchyard",
             transport="http_post",
             headers={"X-Test": "yes"},
             timeout_millis=1000,
             field_name_policy="replace_dots",
         )
         assert endpoint.to_dict() == {
+            "name": "switchyard",
             "url": "http://localhost:8080/events",
             "transport": "http_post",
             "headers": {"X-Test": "yes"},
@@ -116,6 +118,7 @@ class TestObservabilityConfigHelpers:
             "field_name_policy": "replace_dots",
         }
         assert AtofConfig(endpoints=[endpoint]).to_dict()["endpoints"] == [endpoint.to_dict()]
+        assert "name" not in AtofEndpointConfig(url="http://localhost:8080/events").to_dict()
 
     def test_http_storage_config_serializes_headers(self):
         s3 = S3StorageConfig(bucket="archive")
