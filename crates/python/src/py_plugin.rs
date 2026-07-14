@@ -1025,16 +1025,7 @@ fn to_py_err(err: impl std::fmt::Display) -> PyErr {
 }
 
 fn plugin_error_to_py_err(error: PluginError) -> PyErr {
-    let message = error.to_string();
-    match error {
-        PluginError::InvalidConfig(_) | PluginError::Serialization(_) => {
-            pyo3::exceptions::PyValueError::new_err(message)
-        }
-        PluginError::NotFound(_) => pyo3::exceptions::PyFileNotFoundError::new_err(message),
-        PluginError::Conflict(_)
-        | PluginError::Internal(_)
-        | PluginError::RegistrationFailed(_) => pyo3::exceptions::PyRuntimeError::new_err(message),
-    }
+    PluginTeardownError::from_plugin_error(error).to_py_err()
 }
 
 #[cfg(test)]

@@ -102,7 +102,7 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
             sha256 = "sha256:{digest}"
 
             [load]
-            library = {str(library)!r}
+            library = {library.as_posix()!r}
             symbol = "nemo_relay_fixture_native_plugin"
             """
         )
@@ -153,7 +153,7 @@ def worker_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
             [load]
             runtime = "rust"
-            entrypoint = {str(executable)!r}
+            entrypoint = {executable.as_posix()!r}
             """
         )
     )
