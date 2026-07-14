@@ -350,6 +350,8 @@ enabled = true
       let earlyResult;
       let operationFailed = false;
       let operationError;
+      let cleanupFailed = false;
+      let cleanupError;
       try {
         earlyResult = await Promise.race([
           firstClose.then(() => 'first'),
@@ -360,8 +362,6 @@ enabled = true
         operationFailed = true;
         operationError = error;
       } finally {
-        let cleanupFailed = false;
-        let cleanupError;
         try {
           process.kill(workerPid, 'SIGCONT');
         } catch (error) {
@@ -376,12 +376,12 @@ enabled = true
           cleanupFailed = true;
           cleanupError = rejectedClose.reason;
         }
-        if (operationFailed) {
-          throw operationError;
-        }
-        if (cleanupFailed) {
-          throw cleanupError;
-        }
+      }
+      if (operationFailed) {
+        throw operationError;
+      }
+      if (cleanupFailed) {
+        throw cleanupError;
       }
 
       assert.equal(earlyResult, 'pending');
