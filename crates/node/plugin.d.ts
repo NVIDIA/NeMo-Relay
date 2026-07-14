@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/// <reference lib="esnext.disposable" />
+
 import type { EventSanitizeFields, Json } from './index';
 
 /** Policy behavior for unsupported configuration. */
