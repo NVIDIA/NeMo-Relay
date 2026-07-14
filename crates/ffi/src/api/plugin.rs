@@ -154,15 +154,9 @@ fn parse_dynamic_plugin_specs(
 }
 
 fn lock_plugin_activation(
-    activation: *mut FfiPluginActivation,
-) -> std::result::Result<
-    std::sync::MutexGuard<'static, Option<PluginHostActivation>>,
-    NemoRelayStatus,
-> {
-    if activation.is_null() {
-        return Err(NemoRelayStatus::NullPointer);
-    }
-    unsafe { &*activation }.0.lock().map_err(|error| {
+    activation: &FfiPluginActivation,
+) -> std::result::Result<std::sync::MutexGuard<'_, Option<PluginHostActivation>>, NemoRelayStatus> {
+    activation.0.lock().map_err(|error| {
         set_last_error(&format!("plugin activation lock poisoned: {error}"));
         NemoRelayStatus::Internal
     })
@@ -173,18 +167,37 @@ fn lock_plugin_activation(
 /// **Experimental:** this API needs a production consumer before its lifecycle
 /// contract is considered stable.
 ///
-/// `config_json` is the base [`PluginConfig`] document. Its static components
+/// `config_json` is the base `PluginConfig` document. Its static components
 /// initialize before components appended by the dynamic plugins.
 /// `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
 /// activation specification; use `nemo_relay_initialize_plugins` for a
-/// static-only configuration. On success, the caller owns `out_activation` and
+/// static-only configuration.
+///
+/// The base configuration uses this JSON shape:
+///
+/// ```text
+/// {"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
+/// ```
+///
+/// Dynamic plugin specifications use this JSON shape:
+///
+/// ```text
+/// [{"plugin_id":"example","kind":"rust_dynamic","manifest_ref":"/absolute/path/relay-plugin.toml","config":{}}]
+/// ```
+///
+/// `kind` must be `rust_dynamic` or `worker`. `environment_ref` is optional
+/// and applies only to worker plugins. `manifest_ref` is resolved by the
+/// embedding application; this API does not discover installed plugins.
+///
+/// On success, the caller owns `out_activation` and
 /// must clear and free it with `nemo_relay_plugin_activation_clear` and
 /// `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
 /// string and must be released with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// Both input pointers must reference valid, null-terminated C strings.
-/// `out_activation` and `out_report_json` must be valid, non-null output pointers.
+/// `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
+/// output pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_activate_dynamic_plugins(
     config_json: *const c_char,
@@ -193,19 +206,26 @@ pub unsafe extern "C" fn nemo_relay_activate_dynamic_plugins(
     out_report_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
     clear_last_error();
-    if !out_activation.is_null() {
-        unsafe { *out_activation = std::ptr::null_mut() };
-    }
-    if !out_report_json.is_null() {
-        unsafe { *out_report_json = std::ptr::null_mut() };
-    }
     if out_activation.is_null() {
+        if !out_report_json.is_null() {
+            unsafe { *out_report_json = std::ptr::null_mut() };
+        }
         set_last_error("out_activation pointer is null");
         return NemoRelayStatus::NullPointer;
     }
     if out_report_json.is_null() {
+        unsafe { *out_activation = std::ptr::null_mut() };
         set_last_error("out_report_json pointer is null");
         return NemoRelayStatus::NullPointer;
+    }
+    if out_activation.cast::<std::ffi::c_void>() == out_report_json.cast::<std::ffi::c_void>() {
+        unsafe { *out_activation = std::ptr::null_mut() };
+        set_last_error("out_activation and out_report_json must not overlap");
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe {
+        *out_activation = std::ptr::null_mut();
+        *out_report_json = std::ptr::null_mut();
     }
 
     if let Err(status) = ensure_adaptive_component_registered() {
@@ -262,6 +282,7 @@ pub unsafe extern "C" fn nemo_relay_plugin_activation_clear(
     if activation.is_null() {
         return NemoRelayStatus::Ok;
     }
+    let activation = unsafe { &*activation };
     let mut guard = match lock_plugin_activation(activation) {
         Ok(guard) => guard,
         Err(status) => return status,

@@ -45,9 +45,8 @@ type PiiRedactionConfig struct {
 
 // PiiRedactionComponentSpec wraps one PII redaction config as a top-level plugin component.
 type PiiRedactionComponentSpec struct {
-	Enabled    bool               `json:"enabled,omitempty"`
-	Config     PiiRedactionConfig `json:"config"`
-	enabledSet bool
+	Enabled bool               `json:"enabled,omitempty"`
+	Config  PiiRedactionConfig `json:"config"`
 }
 
 // NewPiiRedactionConfig returns a default PII redaction config with version 1.
@@ -82,50 +81,18 @@ func NewPiiRedactionLocalModelConfig() PiiRedactionLocalModelConfig {
 // NewPiiRedactionComponentSpec wraps PII redaction config as an enabled component.
 func NewPiiRedactionComponentSpec(config PiiRedactionConfig) PiiRedactionComponentSpec {
 	return PiiRedactionComponentSpec{
-		Enabled:    true,
-		Config:     config,
-		enabledSet: true,
+		Enabled: true,
+		Config:  config,
 	}
-}
-
-// SetEnabled explicitly sets whether this PII redaction component is enabled.
-func (spec *PiiRedactionComponentSpec) SetEnabled(enabled bool) {
-	spec.Enabled = enabled
-	spec.enabledSet = true
-}
-
-// WithEnabled returns a copy with an explicitly present enabled value.
-func (spec PiiRedactionComponentSpec) WithEnabled(enabled bool) PiiRedactionComponentSpec {
-	spec.SetEnabled(enabled)
-	return spec
-}
-
-// MarshalJSON preserves omitted-default and explicit-false enabled semantics.
-func (spec PiiRedactionComponentSpec) MarshalJSON() ([]byte, error) {
-	return marshalComponentWrapper(spec.Enabled, spec.enabledSet, spec.Config)
-}
-
-// UnmarshalJSON records whether enabled was explicitly present.
-func (spec *PiiRedactionComponentSpec) UnmarshalJSON(payload []byte) error {
-	enabled, enabledSet, config, err := unmarshalComponentWrapper[PiiRedactionConfig](payload)
-	if err != nil {
-		return err
-	}
-	*spec = PiiRedactionComponentSpec{Enabled: enabled, Config: config, enabledSet: enabledSet}
-	return nil
 }
 
 // PluginComponent converts the PII redaction wrapper into the shared plugin shape.
 func (spec PiiRedactionComponentSpec) PluginComponent() PluginComponentSpec {
-	component := PluginComponentSpec{
+	return PluginComponentSpec{
 		Kind:    PiiRedactionPluginKind,
 		Enabled: spec.Enabled,
 		Config:  mustConfigMap(spec.Config),
 	}
-	if spec.enabledSet || spec.Enabled {
-		component.SetEnabled(spec.Enabled)
-	}
-	return component
 }
 
 // PiiRedactionComponent converts PII redaction config directly into a shared plugin component.

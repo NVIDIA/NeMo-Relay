@@ -66,6 +66,49 @@ fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {
 }
 
 #[test]
+fn ffi_activation_rejects_overlapping_outputs_without_claiming_host() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    let _ = nemo_relay_clear_plugin_configuration();
+
+    let manifest_dir = TempDir::new().expect("native manifest tempdir");
+    let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
+    let config = cstring(r#"{"version":1,"components":[]}"#);
+    let specs_value = json!([{
+        "plugin_id": "fixture_native",
+        "kind": "rust_dynamic",
+        "manifest_ref": manifest,
+        "config": {}
+    }]);
+    let specs = cstring(&specs_value.to_string());
+    let mut aliased_output = std::ptr::dangling_mut::<std::ffi::c_void>();
+    let output_slot = &mut aliased_output as *mut *mut std::ffi::c_void;
+    let status = unsafe {
+        api::nemo_relay_activate_dynamic_plugins(
+            config.as_ptr(),
+            specs.as_ptr(),
+            output_slot.cast::<*mut FfiPluginActivation>(),
+            output_slot.cast::<*mut c_char>(),
+        )
+    };
+    assert_eq!(status, NemoRelayStatus::InvalidArg);
+    assert!(aliased_output.is_null());
+    assert!(
+        unsafe { read_last_error() }
+            .unwrap_or_default()
+            .contains("must not overlap")
+    );
+
+    let (mut activation, _) = activate_plugins(specs_value);
+    unsafe {
+        assert_eq!(
+            api::nemo_relay_plugin_activation_clear(activation),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_plugin_activation_free(&mut activation);
+    }
+}
+
+#[test]
 fn ffi_activation_loads_worker_callbacks_and_stops_worker_on_clear() {
     let _guard = TEST_MUTEX.lock().unwrap();
     let _ = nemo_relay_clear_plugin_configuration();

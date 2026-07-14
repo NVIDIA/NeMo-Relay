@@ -71,8 +71,8 @@ extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExec
 import "C"
 
 import (
-	"encoding/json"
 	"errors"
+	"log"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -220,22 +220,16 @@ type ConfigReport struct {
 
 // PluginComponentSpec is one top-level plugin component.
 type PluginComponentSpec struct {
-	Kind string `json:"kind"`
-	// Enabled uses Relay's default true when omitted. Use SetEnabled or
-	// WithEnabled to serialize an explicit false value.
-	Enabled    bool           `json:"-"`
-	Config     map[string]any `json:"config,omitempty"`
-	enabledSet bool
+	Kind    string         `json:"kind"`
+	Enabled bool           `json:"enabled,omitempty"`
+	Config  map[string]any `json:"config,omitempty"`
 }
 
 // PluginConfig is the canonical plugin configuration document.
 type PluginConfig struct {
-	// Version uses Relay's default when omitted. Use SetVersion or WithVersion
-	// to serialize an explicit zero value.
-	Version    uint32                `json:"-"`
+	Version    uint32                `json:"version,omitempty"`
 	Components []PluginComponentSpec `json:"components,omitempty"`
 	Policy     *ConfigPolicy         `json:"policy,omitempty"`
-	versionSet bool
 }
 
 // DynamicPluginKind identifies the runtime lane used by a dynamic plugin.
@@ -317,153 +311,48 @@ func NewPluginConfig() PluginConfig {
 	return PluginConfig{
 		Version:    1,
 		Components: []PluginComponentSpec{},
-		versionSet: true,
 	}
-}
-
-// SetVersion sets the plugin config schema version and records it as explicitly
-// present, including when version is zero.
-func (config *PluginConfig) SetVersion(version uint32) {
-	config.Version = version
-	config.versionSet = true
-}
-
-// WithVersion returns a copy with an explicitly present schema version.
-func (config PluginConfig) WithVersion(version uint32) PluginConfig {
-	config.SetVersion(version)
-	return config
 }
 
 // NewPluginComponent returns an enabled top-level component with empty config.
 func NewPluginComponent(kind string) PluginComponentSpec {
 	return PluginComponentSpec{
-		Kind:       kind,
-		Enabled:    true,
-		Config:     map[string]any{},
-		enabledSet: true,
+		Kind:    kind,
+		Enabled: true,
+		Config:  map[string]any{},
 	}
 }
 
-// SetEnabled sets whether this component is enabled and records the value as
-// explicitly present, including when enabled is false.
-func (component *PluginComponentSpec) SetEnabled(enabled bool) {
-	component.Enabled = enabled
-	component.enabledSet = true
-}
-
-// WithEnabled returns a copy with an explicitly present enabled value.
-func (component PluginComponentSpec) WithEnabled(enabled bool) PluginComponentSpec {
-	component.SetEnabled(enabled)
-	return component
-}
-
-// MarshalJSON preserves Relay's default-on-omission semantics while allowing
-// callers to explicitly serialize false through SetEnabled or WithEnabled.
-func (component PluginComponentSpec) MarshalJSON() ([]byte, error) {
+// marshalPluginActivationConfig serializes the activation-only wire shape.
+// It keeps presence handling private so the established public Go config
+// structs and their encoding method sets remain unchanged. Component enabled
+// values are explicit on this wire because Relay defaults an omitted value to
+// true, while the Go field's zero value is false.
+func marshalPluginActivationConfig(config PluginConfig) ([]byte, error) {
 	type componentJSON struct {
 		Kind    string         `json:"kind"`
-		Enabled *bool          `json:"enabled,omitempty"`
+		Enabled bool           `json:"enabled"`
 		Config  map[string]any `json:"config,omitempty"`
 	}
-	var enabled *bool
-	if component.enabledSet || component.Enabled {
-		enabled = &component.Enabled
-	}
-	return json.Marshal(componentJSON{
-		Kind:    component.Kind,
-		Enabled: enabled,
-		Config:  component.Config,
-	})
-}
-
-// UnmarshalJSON records whether enabled was explicitly present so false
-// survives subsequent marshaling instead of becoming Relay's default true.
-func (component *PluginComponentSpec) UnmarshalJSON(payload []byte) error {
-	decoded := struct {
-		Kind    string         `json:"kind"`
-		Enabled *bool          `json:"enabled"`
-		Config  map[string]any `json:"config"`
-	}{}
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return err
-	}
-	*component = PluginComponentSpec{
-		Kind:   decoded.Kind,
-		Config: decoded.Config,
-	}
-	if decoded.Enabled != nil {
-		component.SetEnabled(*decoded.Enabled)
-	}
-	return nil
-}
-
-// MarshalJSON preserves Relay's default-on-omission semantics while allowing
-// callers to explicitly serialize zero through SetVersion or WithVersion.
-func (config PluginConfig) MarshalJSON() ([]byte, error) {
 	type configJSON struct {
-		Version    *uint32               `json:"version,omitempty"`
-		Components []PluginComponentSpec `json:"components,omitempty"`
-		Policy     *ConfigPolicy         `json:"policy,omitempty"`
+		Version    uint32          `json:"version,omitempty"`
+		Components []componentJSON `json:"components,omitempty"`
+		Policy     *ConfigPolicy   `json:"policy,omitempty"`
 	}
-	var version *uint32
-	if config.versionSet || config.Version != 0 {
-		version = &config.Version
+
+	components := make([]componentJSON, len(config.Components))
+	for i, component := range config.Components {
+		components[i] = componentJSON{
+			Kind:    component.Kind,
+			Enabled: component.Enabled,
+			Config:  component.Config,
+		}
 	}
-	return json.Marshal(configJSON{
-		Version:    version,
-		Components: config.Components,
+	return jsonMarshal(configJSON{
+		Version:    config.Version,
+		Components: components,
 		Policy:     config.Policy,
 	})
-}
-
-// UnmarshalJSON records whether version was explicitly present so zero
-// survives subsequent marshaling instead of becoming Relay's default version.
-func (config *PluginConfig) UnmarshalJSON(payload []byte) error {
-	decoded := struct {
-		Version    *uint32               `json:"version"`
-		Components []PluginComponentSpec `json:"components"`
-		Policy     *ConfigPolicy         `json:"policy"`
-	}{}
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		return err
-	}
-	*config = PluginConfig{
-		Components: decoded.Components,
-		Policy:     decoded.Policy,
-	}
-	if decoded.Version != nil {
-		config.SetVersion(*decoded.Version)
-	}
-	return nil
-}
-
-func marshalComponentWrapper[T any](enabled bool, enabledSet bool, config T) ([]byte, error) {
-	var explicitEnabled *bool
-	if enabledSet || enabled {
-		explicitEnabled = &enabled
-	}
-	return json.Marshal(struct {
-		Enabled *bool `json:"enabled,omitempty"`
-		Config  T     `json:"config"`
-	}{
-		Enabled: explicitEnabled,
-		Config:  config,
-	})
-}
-
-func unmarshalComponentWrapper[T any](payload []byte) (bool, bool, T, error) {
-	var decoded struct {
-		Enabled *bool `json:"enabled"`
-		Config  T     `json:"config"`
-	}
-	if err := json.Unmarshal(payload, &decoded); err != nil {
-		var zero T
-		return false, false, zero, err
-	}
-	if decoded.Enabled == nil {
-		return false, false, decoded.Config, nil
-	}
-	return *decoded.Enabled, true, decoded.Config, nil
 }
 
 // ValidatePluginConfig validates a plugin config without changing runtime state.
@@ -519,7 +408,7 @@ func ActivateDynamicPlugins(
 			"dynamic plugin activation requires at least one dynamic plugin; use InitializePlugins for a static-only configuration",
 		)
 	}
-	configPayload, err := jsonMarshal(config)
+	configPayload, err := marshalPluginActivationConfig(config)
 	if err != nil {
 		return nil, ConfigReport{}, err
 	}
@@ -546,10 +435,18 @@ func ActivateDynamicPlugins(
 
 func newPluginActivation(ptr unsafe.Pointer) *PluginActivation {
 	state := &pluginActivationState{ptr: ptr}
-	runtime.SetFinalizer(state, func(state *pluginActivationState) {
-		_ = state.close()
-	})
+	runtime.SetFinalizer(state, finalizePluginActivation)
 	return &PluginActivation{state: state}
+}
+
+var reportPluginActivationCleanupError = func(err error) {
+	log.Printf("nemo_relay: dynamic plugin activation cleanup failed during finalization: %v", err)
+}
+
+func finalizePluginActivation(state *pluginActivationState) {
+	if err := state.close(); err != nil {
+		reportPluginActivationCleanupError(err)
+	}
 }
 
 // Close removes callbacks and subscribers before unloading plugin libraries

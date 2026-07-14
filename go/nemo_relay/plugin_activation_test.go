@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -32,10 +33,12 @@ func withPluginActivationStubs(t *testing.T) {
 	originalActivate := activateDynamicPluginsJSON
 	originalClear := clearPluginActivation
 	originalFree := freePluginActivation
+	originalReporter := reportPluginActivationCleanupError
 	t.Cleanup(func() {
 		activateDynamicPluginsJSON = originalActivate
 		clearPluginActivation = originalClear
 		freePluginActivation = originalFree
+		reportPluginActivationCleanupError = originalReporter
 	})
 }
 
@@ -116,8 +119,26 @@ func TestActivateDynamicPluginsSerializesSpecsAndOwnsCleanup(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
-func TestActivateDynamicPluginsPreservesLegacyOmittedDefaults(t *testing.T) {
-	withPluginActivationStubs(t)
+func TestPluginConfigPublicJSONShapeRemainsCompatible(t *testing.T) {
+	type envelope struct {
+		PluginConfig
+		Name string `json:"name"`
+	}
+
+	payload, err := json.Marshal(envelope{
+		PluginConfig: PluginConfig{Version: 1},
+		Name:         "fixture",
+	})
+	if err != nil {
+		t.Fatalf("marshal embedded plugin config: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("unmarshal embedded plugin config: %v", err)
+	}
+	if string(fields["name"]) != `"fixture"` || string(fields["version"]) != "1" {
+		t.Fatalf("embedded plugin config lost envelope fields: %s", payload)
+	}
 
 	emptyPayload, err := json.Marshal(PluginConfig{})
 	if err != nil {
@@ -126,42 +147,24 @@ func TestActivateDynamicPluginsPreservesLegacyOmittedDefaults(t *testing.T) {
 	if string(emptyPayload) != "{}" {
 		t.Fatalf("empty plugin config JSON = %s, want {}", emptyPayload)
 	}
-
-	token := new(byte)
-	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
-		const wantConfig = `{"components":[{"kind":"fixture.default"}]}`
-		if configJSON != wantConfig {
-			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
-		}
-		const wantSpecs = `[{"plugin_id":"fixture.native","kind":"rust_dynamic","manifest_ref":"/tmp/relay-plugin.toml"}]`
-		if specsJSON != wantSpecs {
-			t.Fatalf("dynamic plugin specs JSON = %s, want %s", specsJSON, wantSpecs)
-		}
-		return unsafe.Pointer(token), `{"diagnostics":[]}`, nil
-	}
-	clearPluginActivation = func(unsafe.Pointer) error { return nil }
-	freePluginActivation = func(unsafe.Pointer) {}
-
-	activation, _, err := ActivateDynamicPlugins(PluginConfig{
-		Components: []PluginComponentSpec{
-			{Kind: "fixture.default"},
-		},
-	}, fixtureDynamicPluginSpecs())
-	if err != nil {
-		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
-	}
-	if err := activation.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	runtime.KeepAlive(token)
 }
 
-func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
+func TestActivateDynamicPluginsUsesPrivateConfigWireShape(t *testing.T) {
 	withPluginActivationStubs(t)
+
+	config := PluginConfig{Components: []PluginComponentSpec{{Kind: "fixture.disabled"}}}
+	publicPayload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal public plugin config: %v", err)
+	}
+	const wantPublic = `{"components":[{"kind":"fixture.disabled"}]}`
+	if string(publicPayload) != wantPublic {
+		t.Fatalf("public plugin config JSON = %s, want %s", publicPayload, wantPublic)
+	}
 
 	token := new(byte)
 	activateDynamicPluginsJSON = func(configJSON, specsJSON string) (unsafe.Pointer, string, error) {
-		const wantConfig = `{"version":0,"components":[{"kind":"fixture.disabled","enabled":false}]}`
+		const wantConfig = `{"components":[{"kind":"fixture.disabled","enabled":false}]}`
 		if configJSON != wantConfig {
 			t.Fatalf("config JSON = %s, want %s", configJSON, wantConfig)
 		}
@@ -169,25 +172,11 @@ func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
 		if specsJSON != wantSpecs {
 			t.Fatalf("dynamic plugin specs JSON = %s, want %s", specsJSON, wantSpecs)
 		}
-		var roundTrip PluginConfig
-		if err := json.Unmarshal([]byte(configJSON), &roundTrip); err != nil {
-			t.Fatalf("unmarshal explicit plugin config: %v", err)
-		}
-		roundTripPayload, err := json.Marshal(roundTrip)
-		if err != nil {
-			t.Fatalf("remarshal explicit plugin config: %v", err)
-		}
-		if string(roundTripPayload) != wantConfig {
-			t.Fatalf("round-trip config JSON = %s, want %s", roundTripPayload, wantConfig)
-		}
 		return unsafe.Pointer(token), `{"diagnostics":[]}`, nil
 	}
 	clearPluginActivation = func(unsafe.Pointer) error { return nil }
 	freePluginActivation = func(unsafe.Pointer) {}
 
-	component := (PluginComponentSpec{Kind: "fixture.disabled"}).WithEnabled(false)
-	config := PluginConfig{Components: []PluginComponentSpec{component}}
-	config.SetVersion(0)
 	activation, _, err := ActivateDynamicPlugins(config, fixtureDynamicPluginSpecs())
 	if err != nil {
 		t.Fatalf("ActivateDynamicPlugins() error = %v", err)
@@ -198,105 +187,18 @@ func TestActivateDynamicPluginsPreservesExplicitZeroAndFalse(t *testing.T) {
 	runtime.KeepAlive(token)
 }
 
-func TestPluginConfigUnmarshalOmissionsResetPresenceAndValues(t *testing.T) {
-	staleComponent := NewPluginComponent("fixture.stale")
-	staleComponent.Config = map[string]any{"stale": true}
-	config := NewPluginConfig()
-	config.Version = 7
-	config.Components = []PluginComponentSpec{staleComponent}
-	config.Policy = &ConfigPolicy{UnknownField: UnsupportedBehaviorError}
-
-	const payload = `{"components":[{"kind":"fixture.fresh"}]}`
-	if err := json.Unmarshal([]byte(payload), &config); err != nil {
-		t.Fatalf("unmarshal config with omitted defaults: %v", err)
-	}
-	if config.Version != 0 || config.versionSet {
-		t.Fatalf("omitted version retained stale state: %#v", config)
-	}
-	if config.Policy != nil {
-		t.Fatalf("omitted policy retained stale state: %#v", config.Policy)
-	}
-	if len(config.Components) != 1 {
-		t.Fatalf("components = %#v, want one", config.Components)
-	}
-	component := config.Components[0]
-	if component.Kind != "fixture.fresh" || component.Enabled || component.enabledSet || component.Config != nil {
-		t.Fatalf("omitted enabled/config retained stale state: %#v", component)
-	}
-
-	roundTrip, err := json.Marshal(config)
-	if err != nil {
-		t.Fatalf("remarshal config with omitted defaults: %v", err)
-	}
-	if string(roundTrip) != payload {
-		t.Fatalf("round-trip config JSON = %s, want %s", roundTrip, payload)
-	}
-}
-
-func TestComponentWrapperEnabledPresenceSurvivesConversion(t *testing.T) {
-	adaptive := NewAdaptiveComponentSpec(NewAdaptiveConfig())
-	adaptive.Enabled = false
-	explicitDisabled := []PluginComponentSpec{
-		adaptive.PluginComponent(),
-		NewObservabilityComponentSpec(NewObservabilityConfig()).WithEnabled(false).PluginComponent(),
-		NewPricingComponentSpec(NewPricingConfig()).WithEnabled(false).PluginComponent(),
-		NewPiiRedactionComponentSpec(NewPiiRedactionConfig()).WithEnabled(false).PluginComponent(),
-	}
-	legacyDefaults := []PluginComponentSpec{
+func TestComponentWrappersPreserveDisabledValuesDuringConversion(t *testing.T) {
+	disabled := []PluginComponentSpec{
 		(AdaptiveComponentSpec{Config: NewAdaptiveConfig()}).PluginComponent(),
 		(ObservabilityComponentSpec{Config: NewObservabilityConfig()}).PluginComponent(),
 		(PricingComponentSpec{Config: NewPricingConfig()}).PluginComponent(),
 		(PiiRedactionComponentSpec{Config: NewPiiRedactionConfig()}).PluginComponent(),
 	}
-
-	assertEnabledPresence := func(component PluginComponentSpec, wantPresent bool) {
-		t.Helper()
-		payload, err := json.Marshal(component)
-		if err != nil {
-			t.Fatalf("marshal %s component: %v", component.Kind, err)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(payload, &fields); err != nil {
-			t.Fatalf("unmarshal %s component JSON: %v", component.Kind, err)
-		}
-		enabled, present := fields["enabled"]
-		if present != wantPresent {
-			t.Fatalf("%s enabled presence = %t, want %t: %s", component.Kind, present, wantPresent, payload)
-		}
-		if wantPresent && string(enabled) != "false" {
-			t.Fatalf("%s enabled JSON = %s, want false", component.Kind, enabled)
+	for _, component := range disabled {
+		if component.Enabled {
+			t.Fatalf("%s component became enabled during conversion", component.Kind)
 		}
 	}
-
-	for _, component := range explicitDisabled {
-		assertEnabledPresence(component, true)
-	}
-	for _, component := range legacyDefaults {
-		assertEnabledPresence(component, false)
-	}
-
-	wrapperPayload, err := json.Marshal(
-		NewAdaptiveComponentSpec(NewAdaptiveConfig()).WithEnabled(false),
-	)
-	if err != nil {
-		t.Fatalf("marshal explicit adaptive wrapper: %v", err)
-	}
-	decodedWrapper := NewAdaptiveComponentSpec(NewAdaptiveConfig())
-	if err := json.Unmarshal(wrapperPayload, &decodedWrapper); err != nil {
-		t.Fatalf("unmarshal explicit adaptive wrapper: %v", err)
-	}
-	if decodedWrapper.Enabled || !decodedWrapper.enabledSet {
-		t.Fatalf("explicit wrapper enabled state was not preserved: %#v", decodedWrapper)
-	}
-	assertEnabledPresence(decodedWrapper.PluginComponent(), true)
-
-	if err := json.Unmarshal([]byte(`{"config":{}}`), &decodedWrapper); err != nil {
-		t.Fatalf("unmarshal adaptive wrapper with omitted enabled: %v", err)
-	}
-	if decodedWrapper.Enabled || decodedWrapper.enabledSet {
-		t.Fatalf("omitted wrapper enabled retained stale state: %#v", decodedWrapper)
-	}
-	assertEnabledPresence(decodedWrapper.PluginComponent(), false)
 }
 
 func TestActivateDynamicPluginsRejectsEmptySpecsWithoutCallingCgo(t *testing.T) {
@@ -372,6 +274,23 @@ func TestPluginActivationCloseFreesAfterClearFailure(t *testing.T) {
 	}
 	if strings.Join(calls, ",") != "clear,free" {
 		t.Fatalf("cleanup calls = %v", calls)
+	}
+	runtime.KeepAlive(token)
+}
+
+func TestPluginActivationFinalizerReportsClearFailure(t *testing.T) {
+	withPluginActivationStubs(t)
+
+	token := new(byte)
+	wantErr := errors.New("teardown failed")
+	clearPluginActivation = func(unsafe.Pointer) error { return wantErr }
+	freePluginActivation = func(unsafe.Pointer) {}
+	var reported error
+	reportPluginActivationCleanupError = func(err error) { reported = err }
+
+	finalizePluginActivation(&pluginActivationState{ptr: unsafe.Pointer(token)})
+	if !errors.Is(reported, wantErr) {
+		t.Fatalf("reported finalizer error = %v, want %v", reported, wantErr)
 	}
 	runtime.KeepAlive(token)
 }
@@ -869,7 +788,7 @@ id = "fixture_native"
 kind = "rust_dynamic"
 
 [compat]
-relay = "=0.6.0"
+relay = "=%s"
 native_api = "1"
 
 [defaults]
@@ -881,7 +800,7 @@ items = ["plugin_native"]
 [load]
 library = %q
 symbol = "nemo_relay_fixture_native_plugin"
-`, library)
+`, relayWorkspaceVersion(t), library)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write native plugin manifest: %v", err)
 	}
@@ -898,7 +817,7 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = "=0.6.0"
+relay = "=%s"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -910,11 +829,46 @@ items = ["plugin_worker"]
 [load]
 runtime = "rust"
 entrypoint = %q
-`, executable)
+`, relayWorkspaceVersion(t), executable)
 	if err := os.WriteFile(manifest, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write worker plugin manifest: %v", err)
 	}
 	return manifest
+}
+
+func relayWorkspaceVersion(t *testing.T) string {
+	t.Helper()
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repository root: %v", err)
+	}
+	payload, err := os.ReadFile(filepath.Join(repoRoot, "Cargo.toml"))
+	if err != nil {
+		t.Fatalf("read workspace Cargo.toml: %v", err)
+	}
+	section := string(payload)
+	const header = "[workspace.package]"
+	start := strings.Index(section, header)
+	if start < 0 {
+		t.Fatal("workspace Cargo.toml has no [workspace.package] section")
+	}
+	section = section[start+len(header):]
+	if end := strings.Index(section, "\n["); end >= 0 {
+		section = section[:end]
+	}
+	for _, line := range strings.Split(section, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "version =") {
+			continue
+		}
+		version, err := strconv.Unquote(strings.TrimSpace(strings.TrimPrefix(line, "version =")))
+		if err != nil {
+			t.Fatalf("parse workspace package version: %v", err)
+		}
+		return version
+	}
+	t.Fatal("workspace package version not found")
+	return ""
 }
 
 func goNativeLibraryName() string {

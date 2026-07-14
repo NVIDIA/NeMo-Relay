@@ -1422,18 +1422,37 @@ NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpe
  * **Experimental:** this API needs a production consumer before its lifecycle
  * contract is considered stable.
  *
- * `config_json` is the base [`PluginConfig`] document. Its static components
+ * `config_json` is the base `PluginConfig` document. Its static components
  * initialize before components appended by the dynamic plugins.
  * `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
  * activation specification; use `nemo_relay_initialize_plugins` for a
- * static-only configuration. On success, the caller owns `out_activation` and
+ * static-only configuration.
+ *
+ * The base configuration uses this JSON shape:
+ *
+ * ```text
+ * {"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
+ * ```
+ *
+ * Dynamic plugin specifications use this JSON shape:
+ *
+ * ```text
+ * [{"plugin_id":"example","kind":"rust_dynamic","manifest_ref":"/absolute/path/relay-plugin.toml","config":{}}]
+ * ```
+ *
+ * `kind` must be `rust_dynamic` or `worker`. `environment_ref` is optional
+ * and applies only to worker plugins. `manifest_ref` is resolved by the
+ * embedding application; this API does not discover installed plugins.
+ *
+ * On success, the caller owns `out_activation` and
  * must clear and free it with `nemo_relay_plugin_activation_clear` and
  * `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
  * string and must be released with `nemo_relay_string_free`.
  *
  * # Safety
  * Both input pointers must reference valid, null-terminated C strings.
- * `out_activation` and `out_report_json` must be valid, non-null output pointers.
+ * `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
+ * output pointers.
  */
 NemoRelayStatus nemo_relay_activate_dynamic_plugins(const char *config_json,
                                                     const char *dynamic_plugins_json,
