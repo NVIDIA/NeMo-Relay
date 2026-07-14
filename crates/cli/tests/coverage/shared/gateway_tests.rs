@@ -160,6 +160,28 @@ fn selects_provider_routes() {
 }
 
 #[test]
+fn dispatch_override_routes_cover_models_and_count_tokens() {
+    for alias in ["openai_models", "openai.models", "/models", "/v1/models"] {
+        assert_eq!(
+            ProviderRoute::from_dispatch_override(alias),
+            Some(ProviderRoute::OpenAiModels),
+            "alias {alias}"
+        );
+    }
+    for alias in [
+        "anthropic_count_tokens",
+        "anthropic.count_tokens",
+        "/v1/messages/count_tokens",
+    ] {
+        assert_eq!(
+            ProviderRoute::from_dispatch_override(alias),
+            Some(ProviderRoute::AnthropicCountTokens),
+            "alias {alias}"
+        );
+    }
+}
+
+#[test]
 fn provider_route_names_round_trip_through_alignment_routes() {
     for route in [
         ProviderRoute::OpenAiResponses,
@@ -389,6 +411,70 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
     );
     assert!(effective.headers.get(INTERNAL_RETRY_AWARE_HEADER).is_none());
     assert!(retry_aware_dispatch(&request));
+}
+
+#[test]
+fn malformed_dispatch_route_discards_the_override_url() {
+    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            (
+                INTERNAL_DISPATCH_URL_HEADER.to_string(),
+                json!("http://127.0.0.1:9000/v1/models"),
+            ),
+            (
+                INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
+                json!("not-a-provider-route"),
+            ),
+        ]),
+        content: Value::Null,
+    };
+
+    let effective = effective_dispatch_request(
+        &original_body,
+        &HeaderMap::new(),
+        Some(&request),
+        "http://default.invalid/v1/chat/completions",
+        ProviderRoute::OpenAiChatCompletions,
+    );
+
+    assert_eq!(effective.url, "http://default.invalid/v1/chat/completions");
+    assert_eq!(effective.route, ProviderRoute::OpenAiChatCompletions);
+    assert!(
+        effective
+            .headers
+            .get(INTERNAL_DISPATCH_URL_HEADER)
+            .is_none()
+    );
+    assert!(
+        effective
+            .headers
+            .get(INTERNAL_DISPATCH_ROUTE_HEADER)
+            .is_none()
+    );
+}
+
+#[test]
+fn dispatch_url_without_a_route_remains_supported() {
+    let original_body = Bytes::from_static(br#"{"model":"original"}"#);
+    let request = LlmRequest {
+        headers: Map::from_iter([(
+            INTERNAL_DISPATCH_URL_HEADER.to_string(),
+            json!("http://127.0.0.1:9000/v1/chat/completions"),
+        )]),
+        content: Value::Null,
+    };
+
+    let effective = effective_dispatch_request(
+        &original_body,
+        &HeaderMap::new(),
+        Some(&request),
+        "http://default.invalid/v1/chat/completions",
+        ProviderRoute::OpenAiChatCompletions,
+    );
+
+    assert_eq!(effective.url, "http://127.0.0.1:9000/v1/chat/completions");
+    assert_eq!(effective.route, ProviderRoute::OpenAiChatCompletions);
 }
 
 #[test]
@@ -1161,6 +1247,87 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
         .await
         .unwrap();
     assert_eq!(closed, 1);
+}
+
+#[test]
+fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
+    let subscriber_name = "gateway-no-runtime-drop-test";
+    let _ = nemo_relay::api::subscriber::deregister_subscriber(subscriber_name);
+    let captured_output = Arc::new(Mutex::new(None::<Value>));
+    let captured = captured_output.clone();
+    nemo_relay::api::subscriber::register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(nemo_relay::api::event::ScopeCategory::End)
+                && event.name() == "codex-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("stream-no-runtime")
+            {
+                *captured.lock().unwrap() = event.output().cloned();
+            }
+        }),
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (manager, prep) = runtime.block_on(async {
+        let manager = SessionManager::new(GatewayConfig::default());
+        let prep = manager
+            .prepare_gateway_call(
+                &HeaderMap::new(),
+                LlmGatewayStart {
+                    session_id: Some("stream-no-runtime".into()),
+                    provider: "openai.responses".into(),
+                    model_name: Some("gpt-test".into()),
+                    subagent_id: None,
+                    conversation_id: None,
+                    generation_id: None,
+                    request_id: None,
+                    request: LlmRequest {
+                        headers: Map::new(),
+                        content: json!({ "input": "Record a final response without a runtime." }),
+                    },
+                    streaming: true,
+                    metadata: json!({}),
+                },
+            )
+            .await
+            .unwrap();
+        (manager, prep)
+    });
+    let final_response = json!({ "output_text": "streamed final" });
+    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+        std::result::Result<Value, FlowError>,
+    >());
+    let body = client_sse_body(
+        stream,
+        ProviderRoute::OpenAiResponses,
+        manager.clone(),
+        prep.session_id,
+        prep.owner_subagent_id,
+        Arc::new(Mutex::new(Some(final_response.clone()))),
+        prep.session_finish,
+    );
+
+    drop(body);
+
+    let closed = runtime
+        .block_on(manager.close_idle_sessions_at(
+            std::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+            "idle_timeout",
+        ))
+        .unwrap();
+    assert_eq!(closed, 1);
+    nemo_relay::api::subscriber::flush_subscribers().unwrap();
+    assert_eq!(*captured_output.lock().unwrap(), Some(final_response));
+    nemo_relay::api::subscriber::deregister_subscriber(subscriber_name).unwrap();
 }
 
 #[tokio::test]

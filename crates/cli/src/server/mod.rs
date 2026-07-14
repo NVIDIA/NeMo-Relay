@@ -737,6 +737,81 @@ impl ServerPluginActivation {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum PluginComponentSetupError {
+    Adaptive(String),
+    PiiRedaction(String),
+    #[cfg(feature = "switchyard")]
+    Switchyard(String),
+    #[cfg(feature = "switchyard")]
+    SwitchyardAtof(String),
+}
+
+impl PluginComponentSetupError {
+    pub(crate) const fn check_name(&self) -> &'static str {
+        match self {
+            Self::Adaptive(_) => "Adaptive plugin",
+            Self::PiiRedaction(_) => "PII redaction plugin",
+            #[cfg(feature = "switchyard")]
+            Self::Switchyard(_) => "Switchyard plugin",
+            #[cfg(feature = "switchyard")]
+            Self::SwitchyardAtof(_) => "Switchyard ATOF",
+        }
+    }
+
+    pub(crate) fn diagnostic_details(&self) -> String {
+        match self {
+            Self::Adaptive(error) | Self::PiiRedaction(error) => {
+                format!("registration failed: {error}")
+            }
+            #[cfg(feature = "switchyard")]
+            Self::Switchyard(error) => format!("registration failed: {error}"),
+            #[cfg(feature = "switchyard")]
+            Self::SwitchyardAtof(error) => error.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for PluginComponentSetupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Adaptive(error) => {
+                write!(formatter, "adaptive plugin registration failed: {error}")
+            }
+            Self::PiiRedaction(error) => {
+                write!(
+                    formatter,
+                    "PII redaction plugin registration failed: {error}"
+                )
+            }
+            #[cfg(feature = "switchyard")]
+            Self::Switchyard(error) => {
+                write!(formatter, "Switchyard plugin registration failed: {error}")
+            }
+            #[cfg(feature = "switchyard")]
+            Self::SwitchyardAtof(error) => {
+                write!(formatter, "Switchyard ATOF validation failed: {error}")
+            }
+        }
+    }
+}
+
+pub(crate) fn register_and_validate_plugin_components(
+    _plugin_config: &PluginConfig,
+) -> Result<(), PluginComponentSetupError> {
+    register_adaptive_component()
+        .map_err(|error| PluginComponentSetupError::Adaptive(error.to_string()))?;
+    register_pii_redaction_component()
+        .map_err(|error| PluginComponentSetupError::PiiRedaction(error.to_string()))?;
+    #[cfg(feature = "switchyard")]
+    register_switchyard_component()
+        .map_err(|error| PluginComponentSetupError::Switchyard(error.to_string()))?;
+    #[cfg(feature = "switchyard")]
+    validate_switchyard_atof_configuration(_plugin_config)
+        .map_err(PluginComponentSetupError::SwitchyardAtof)?;
+    Ok(())
+}
+
 async fn initialize_plugin_host(
     config: Option<Value>,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
@@ -745,25 +820,13 @@ async fn initialize_plugin_host(
         return Ok(None);
     }
     if dynamic_plugins.is_empty() {
-        register_adaptive_component().map_err(|error| {
-            CliError::Config(format!("adaptive plugin registration failed: {error}"))
-        })?;
-        register_pii_redaction_component().map_err(|error| {
-            CliError::Config(format!("PII redaction plugin registration failed: {error}"))
-        })?;
-        #[cfg(feature = "switchyard")]
-        register_switchyard_component().map_err(|error| {
-            CliError::Config(format!("Switchyard plugin registration failed: {error}"))
-        })?;
         let plugin_config: PluginConfig = config
             .map(serde_json::from_value)
             .transpose()
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
             .unwrap_or_default();
-        #[cfg(feature = "switchyard")]
-        validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
-            CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
-        })?;
+        register_and_validate_plugin_components(&plugin_config)
+            .map_err(|error| CliError::Config(error.to_string()))?;
         initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
@@ -795,16 +858,21 @@ impl PluginActivation {
                 _snapshots: Vec::new(),
             });
         };
-        register_adaptive_component().map_err(|error| {
-            CliError::Config(format!("adaptive plugin registration failed: {error}"))
-        })?;
-        register_pii_redaction_component().map_err(|error| {
-            CliError::Config(format!("PII redaction plugin registration failed: {error}"))
-        })?;
-        #[cfg(feature = "switchyard")]
-        register_switchyard_component().map_err(|error| {
-            CliError::Config(format!("Switchyard plugin registration failed: {error}"))
-        })?;
+        // Gateway already resolved its config; activate exactly (no re-discovery).
+        let mut plugin_config: PluginConfig = match config {
+            Some(config) => serde_json::from_value(config)
+                .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
+            None => PluginConfig::default(),
+        };
+        plugin_config
+            .components
+            .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
+                kind: plugin.plugin_id.clone(),
+                enabled: true,
+                config: plugin.config.clone(),
+            }));
+        register_and_validate_plugin_components(&plugin_config)
+            .map_err(|error| CliError::Config(error.to_string()))?;
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
                 snapshot.verify_current()?;
@@ -884,27 +952,6 @@ impl PluginActivation {
                     CliError::Config(format!("worker plugin load failed: {error}"))
                 })?)
             };
-        // Gateway already resolved its config; activate exactly (no re-discovery).
-        let mut plugin_config: PluginConfig = match config {
-            Some(config) => serde_json::from_value(config)
-                .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
-            None => PluginConfig::default(),
-        };
-        plugin_config
-            .components
-            .extend(
-                dynamic_plugins
-                    .into_iter()
-                    .map(|plugin| PluginComponentSpec {
-                        kind: plugin.plugin_id,
-                        enabled: true,
-                        config: plugin.config,
-                    }),
-            );
-        #[cfg(feature = "switchyard")]
-        validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
-            CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
-        })?;
         initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;

@@ -27,12 +27,6 @@ use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
 use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-#[cfg(feature = "switchyard")]
-use nemo_relay_switchyard::{
-    register_switchyard_component, validate_switchyard_atof_configuration,
-};
 use serde_json::{Value, json};
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -44,7 +38,7 @@ use crate::configuration::{
     default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
 };
 use crate::error::CliError;
-use crate::server::GatewayOverrides;
+use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
 const PRICING_PLUGIN_KIND: &str = "pricing";
@@ -479,37 +473,11 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             return checks;
         }
     };
-    if let Err(error) = register_adaptive_component() {
+    if let Err(error) = register_and_validate_plugin_components(&plugin_config) {
         checks.push(Check {
-            name: "Adaptive plugin",
+            name: error.check_name(),
             status: Status::Fail,
-            details: format!("registration failed: {error}"),
-        });
-        return checks;
-    }
-    if let Err(error) = register_pii_redaction_component() {
-        checks.push(Check {
-            name: "PII redaction plugin",
-            status: Status::Fail,
-            details: format!("registration failed: {error}"),
-        });
-        return checks;
-    }
-    #[cfg(feature = "switchyard")]
-    if let Err(error) = register_switchyard_component() {
-        checks.push(Check {
-            name: "Switchyard plugin",
-            status: Status::Fail,
-            details: format!("registration failed: {error}"),
-        });
-        return checks;
-    }
-    #[cfg(feature = "switchyard")]
-    if let Err(error) = validate_switchyard_atof_configuration(&plugin_config) {
-        checks.push(Check {
-            name: "Switchyard ATOF",
-            status: Status::Fail,
-            details: error,
+            details: error.diagnostic_details(),
         });
         return checks;
     }

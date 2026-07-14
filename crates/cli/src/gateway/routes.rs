@@ -55,8 +55,14 @@ impl ProviderRoute {
             "openai_responses" | "openai.responses" | "/v1/responses" => {
                 Some(Self::OpenAiResponses)
             }
+            "openai_models" | "openai.models" | "/models" | "/v1/models" => {
+                Some(Self::OpenAiModels)
+            }
             "anthropic_messages" | "anthropic.messages" | "/v1/messages" => {
                 Some(Self::AnthropicMessages)
+            }
+            "anthropic_count_tokens" | "anthropic.count_tokens" | "/v1/messages/count_tokens" => {
+                Some(Self::AnthropicCountTokens)
             }
             _ => None,
         }

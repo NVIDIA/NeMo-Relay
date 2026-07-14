@@ -2469,8 +2469,22 @@ fn tagged_unions_support_list_items_and_top_level_fields() {
         field.tagged_union.map(|metadata| metadata.discriminator),
         Some("kind")
     );
+    let list = EditorFieldSpec {
+        name: "backends",
+        label: "Backends",
+        kind: EditorFieldKind::List,
+        enum_values: &[],
+        optional: false,
+        nested_schema: None,
+        nested_default: None,
+        list_item: Some(&TAGGED_LIST_ITEM),
+        tagged_union: None,
+    };
     assert_eq!(
-        editor_item_label(&json!({ "kind": "example" }), &TAGGED_LIST_ITEM),
+        editor_item_label(
+            &json!({ "kind": "example" }),
+            list.list_item.expect("tagged list item metadata"),
+        ),
         "example"
     );
 }
