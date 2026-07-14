@@ -21,6 +21,8 @@ macro_rules! editor_config {
                     $(, optional: $optional:literal)?
                     $(, nested: $nested:ty)?
                     $(, default: $default:ty)?
+                    $(, list: $list:expr)?
+                    $(, tagged_union: $tagged_union:expr)?
                     $(,)?
                 }
             ),* $(,)?
@@ -33,6 +35,8 @@ macro_rules! editor_config {
     (@kind Enum) => { ... };
     (@kind StringMap) => { ... };
     (@kind Json) => { ... };
+    (@kind List) => { ... };
+    (@kind TaggedUnion) => { ... };
     (@kind Section) => { ... };
     (@values) => { ... };
     (@values $($value:literal),*) => { ... };
@@ -42,6 +46,10 @@ macro_rules! editor_config {
     (@nested $nested:ty) => { ... };
     (@default) => { ... };
     (@default $default:ty) => { ... };
+    (@list) => { ... };
+    (@list $list:expr) => { ... };
+    (@tagged_union) => { ... };
+    (@tagged_union $tagged_union:expr) => { ... };
 }
 ```
 

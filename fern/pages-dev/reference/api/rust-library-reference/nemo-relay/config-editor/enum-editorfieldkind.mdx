@@ -3,7 +3,7 @@ title: "Enum Editor Field Kind"
 sidebar-title: "EditorFieldKind"
 slug: "/reference/api/rust-library-reference/nemo-relay/config_editor/enum-editorfieldkind"
 description: "Editor control shape for one configuration field."
-position: 3
+position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -19,6 +19,8 @@ pub enum EditorFieldKind {
     Enum,
     StringMap,
     Json,
+    List,
+    TaggedUnion,
     Section,
 }
 ```
@@ -68,6 +70,18 @@ Object with string keys and string values.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Json"}} /></pre>
 
 Arbitrary JSON value.
+
+### `List`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "List"}} /></pre>
+
+A collection whose entries are edited recursively.
+
+### `TaggedUnion`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "TaggedUnion"}} /></pre>
+
+A tagged object whose variant is selected from a discriminator field.
 
 ### `Section`
 
