@@ -194,9 +194,6 @@ pub struct AtofFileSinkSectionConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtofStreamSinkSectionConfig {
-    /// Optional stable name used by other components to reference this endpoint.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
     /// Endpoint URL.
     pub url: String,
     /// Transport: `http_post`, `websocket`, or `ndjson`.
@@ -218,6 +215,9 @@ pub struct AtofStreamSinkSectionConfig {
     /// Field name policy applied before sending events: `preserve` or `replace_dots`.
     #[serde(default = "default_atof_endpoint_field_name_policy")]
     pub field_name_policy: String,
+    /// Optional stable name used by other components to reference this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -500,13 +500,13 @@ crate::editor_config! {
 
 crate::editor_config! {
     impl AtofStreamSinkSectionConfig {
-        name => { label: "name", kind: String, optional: true },
         url => { label: "url", kind: String },
         transport => { label: "transport", kind: Enum, values: ["http_post", "websocket", "ndjson"] },
         headers => { label: "headers", kind: StringMap },
         header_env => { label: "header_env", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
         field_name_policy => { label: "field_name_policy", kind: Enum, values: ["preserve", "replace_dots"] },
+        name => { label: "name", kind: String, optional: true },
     }
 }
 
