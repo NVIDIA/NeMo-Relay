@@ -1923,34 +1923,26 @@ fn validate_atof_values(
             }
             AtofSinkSectionConfig::Stream(stream) => {
                 if let Some(name) = stream.name.as_deref() {
-                    if name.trim().is_empty() {
-                        push_policy_diag(
-                            diagnostics,
-                            policy.unsupported_value,
-                            "observability.unsupported_value",
-                            Some("atof".to_string()),
-                            Some(format!("sinks[{index}].name")),
-                            format!("ATOF sinks[{index}].name must be non-empty"),
-                        );
-                    } else if name != name.trim() {
-                        push_policy_diag(
-                            diagnostics,
-                            policy.unsupported_value,
-                            "observability.unsupported_value",
-                            Some("atof".to_string()),
-                            Some(format!("sinks[{index}].name")),
-                            format!(
-                                "ATOF sinks[{index}].name must not have leading or trailing whitespace"
-                            ),
-                        );
+                    let trimmed = name.trim();
+                    let message = if trimmed.is_empty() {
+                        Some(format!("ATOF sinks[{index}].name must be non-empty"))
+                    } else if name != trimmed {
+                        Some(format!(
+                            "ATOF sinks[{index}].name must not have leading or trailing whitespace"
+                        ))
                     } else if !stream_sink_names.insert(name) {
+                        Some(format!("ATOF stream sink name {name:?} must be unique"))
+                    } else {
+                        None
+                    };
+                    if let Some(message) = message {
                         push_policy_diag(
                             diagnostics,
                             policy.unsupported_value,
                             "observability.unsupported_value",
                             Some("atof".to_string()),
                             Some(format!("sinks[{index}].name")),
-                            format!("ATOF stream sink name {name:?} must be unique"),
+                            message,
                         );
                     }
                 }
