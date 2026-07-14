@@ -347,21 +347,40 @@ enabled = true
       const firstClose = activation.close();
       const secondClose = activation.close();
       let earlyResult;
+      let operationFailed = false;
+      let operationError;
       try {
         earlyResult = await Promise.race([
           firstClose.then(() => 'first'),
           secondClose.then(() => 'second'),
           new Promise((resolve) => setTimeout(() => resolve('pending'), 200)),
         ]);
+      } catch (error) {
+        operationFailed = true;
+        operationError = error;
       } finally {
+        let cleanupFailed = false;
+        let cleanupError;
         try {
           process.kill(workerPid, 'SIGCONT');
         } catch (error) {
           if (error.code !== 'ESRCH') {
-            throw error;
+            cleanupFailed = true;
+            cleanupError = error;
           }
         }
-        await Promise.all([firstClose, secondClose]);
+        const closeResults = await Promise.allSettled([firstClose, secondClose]);
+        const rejectedClose = closeResults.find((result) => result.status === 'rejected');
+        if (!cleanupFailed && rejectedClose !== undefined) {
+          cleanupFailed = true;
+          cleanupError = rejectedClose.reason;
+        }
+        if (operationFailed) {
+          throw operationError;
+        }
+        if (cleanupFailed) {
+          throw cleanupError;
+        }
       }
 
       assert.equal(earlyResult, 'pending');
