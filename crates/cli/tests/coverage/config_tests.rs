@@ -1983,13 +1983,13 @@ fn logging_parses_global_settings_and_file_sinks() {
 [logging]
 level = "debug"
 stderr_format = "human"
+flush_interval_millis = 250
 
 [[logging.sinks]]
 path = {}
 level = "trace"
 format = "jsonl"
 queue_capacity = 32
-flush_interval_millis = 250
 
 [[logging.sinks]]
 path = {}
@@ -2009,6 +2009,7 @@ format = "human"
 
     assert_eq!(resolved.logging.level, LogLevel::Debug);
     assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
+    assert_eq!(resolved.logging.flush_interval_millis, 250);
     assert_eq!(resolved.logging.sinks.len(), 2);
     match &resolved.logging.sinks[0] {
         LogSinkConfig::File(sink) => {
@@ -2016,7 +2017,6 @@ format = "human"
             assert_eq!(sink.level, LogLevel::Trace);
             assert_eq!(sink.format, LogFormat::Jsonl);
             assert_eq!(sink.queue_capacity, 32);
-            assert_eq!(sink.flush_interval_millis, 250);
         }
     }
     match &resolved.logging.sinks[1] {
@@ -2025,11 +2025,7 @@ format = "human"
             // Omitted sink level inherits global logging.level.
             assert_eq!(sink.level, LogLevel::Debug);
             assert_eq!(sink.format, LogFormat::Human);
-            assert_eq!(sink.queue_capacity, DEFAULT_FILE_QUEUE_CAPACITY);
-            assert_eq!(
-                sink.flush_interval_millis,
-                DEFAULT_FILE_FLUSH_INTERVAL_MILLIS
-            );
+            assert_eq!(sink.queue_capacity, DEFAULT_FILE_SINK_QUEUE_ENTRIES);
         }
     }
 }
@@ -2107,34 +2103,17 @@ queue_capacity = 0
     .to_string();
     assert!(error.contains("queue_capacity must be greater than 0"));
 
-    let zero_max = temp.path().join("zero-max.toml");
-    std::fs::write(
-        &zero_max,
-        r#"
-[logging]
-max_queue_capacity = 0
-"#,
-    )
-    .unwrap();
-    let error = resolve_server_config(&ServerArgs {
-        config: Some(zero_max),
-        ..ServerArgs::default()
-    })
-    .unwrap_err()
-    .to_string();
-    assert!(error.contains("max_queue_capacity must be greater than 0"));
-
     let over_max = temp.path().join("over-max.toml");
     std::fs::write(
         &over_max,
-        r#"
-[logging]
-max_queue_capacity = 10
-
+        format!(
+            r#"
 [[logging.sinks]]
 path = "relay.log"
-queue_capacity = 11
+queue_capacity = {}
 "#,
+            MAX_FILE_SINK_QUEUE_ENTRIES + 1
+        ),
     )
     .unwrap();
     let error = resolve_server_config(&ServerArgs {
@@ -2143,7 +2122,7 @@ queue_capacity = 11
     })
     .unwrap_err()
     .to_string();
-    assert!(error.contains("exceeds max_queue_capacity"));
+    assert!(error.contains("exceeds maximum"));
 }
 
 #[test]

@@ -20,9 +20,8 @@ use uuid::Uuid;
 use crate::error::Result;
 
 pub use config::{
-    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_QUEUE_CAPACITY,
-    DEFAULT_MAX_FILE_QUEUE_CAPACITY, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig,
-    LoggingConfig,
+    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogSinkConfig,
+    LogFormat, LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES,
 };
 pub(crate) use sink::build_logger;
 use sink::log_level_filter;

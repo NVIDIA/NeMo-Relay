@@ -1638,7 +1638,6 @@ dependencies = [
  "axum",
  "base64",
  "bytes",
- "chrono",
  "clap",
  "clap_complete",
  "console 0.16.3",

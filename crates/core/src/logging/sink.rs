@@ -7,13 +7,14 @@ use std::io::{self, Write};
 use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use spdlog::sink::{AsyncPoolSink, FileSink, OverflowPolicy, StdStreamSink};
 use spdlog::terminal_style::StyleMode;
 use spdlog::{Level, LevelFilter, Logger, ThreadPool};
 
-use super::config::{LogLevel, LogSinkConfig, LoggingConfig};
+use super::config::{LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES};
 use super::format::RelayFormatter;
 use crate::error::{FlowError, Result};
 
@@ -24,7 +25,6 @@ pub(crate) fn build_logger(
     let mut sinks: Vec<Arc<dyn spdlog::sink::Sink>> = Vec::new();
     let mut thread_pools = Vec::new();
     let mut resolved_paths: Vec<PathBuf> = Vec::new();
-    let mut flush_interval_millis: Option<u64> = None;
 
     let stderr_sink = StdStreamSink::builder()
         .stderr()
@@ -75,10 +75,11 @@ pub(crate) fn build_logger(
                 ))
             })?;
 
-        if file_sink.queue_capacity > config.max_queue_capacity {
+        if file_sink.queue_capacity > MAX_FILE_SINK_QUEUE_ENTRIES {
             return Err(FlowError::InvalidArgument(format!(
-                "logging sink queue_capacity {} exceeds maximum {}",
-                file_sink.queue_capacity, config.max_queue_capacity
+                "logging sink queue_capacity {} exceeds maximum \
+                 {MAX_FILE_SINK_QUEUE_ENTRIES} entries per file sink",
+                file_sink.queue_capacity
             )));
         }
         let capacity = NonZeroUsize::new(file_sink.queue_capacity).ok_or_else(|| {
@@ -100,7 +101,9 @@ pub(crate) fn build_logger(
             .thread_pool(Arc::clone(&pool))
             .overflow_policy(OverflowPolicy::DropIncoming)
             .level_filter(spdlog_level_filter(file_sink.level))
-            .error_handler(stderr_error_handler(&resolved_path.display().to_string()))
+            .error_handler(dropped_record_error_handler(
+                &resolved_path.display().to_string(),
+            ))
             .build_arc()
             .map_err(|error| {
                 FlowError::InvalidArgument(format!(
@@ -111,14 +114,6 @@ pub(crate) fn build_logger(
 
         thread_pools.push(pool);
         sinks.push(async_sink);
-
-        if file_sink.flush_interval_millis > 0 {
-            flush_interval_millis = Some(
-                flush_interval_millis
-                    .map(|current| current.min(file_sink.flush_interval_millis))
-                    .unwrap_or(file_sink.flush_interval_millis),
-            );
-        }
     }
 
     // Leave the logger unnamed so LogCrateProxy maps log::target into record.logger_name().
@@ -130,8 +125,8 @@ pub(crate) fn build_logger(
             FlowError::InvalidArgument(format!("failed to build logging runtime: {error}"))
         })?;
 
-    if let Some(millis) = flush_interval_millis {
-        logger.set_flush_period(Some(Duration::from_millis(millis)));
+    if !thread_pools.is_empty() && config.flush_interval_millis > 0 {
+        logger.set_flush_period(Some(Duration::from_millis(config.flush_interval_millis)));
     }
 
     Ok((logger, thread_pools))
@@ -205,6 +200,83 @@ fn stderr_error_handler(sink_label: &str) -> impl Fn(spdlog::Error) + Send + Syn
     }
 }
 
+/// Minimum spacing between queue-full notices written to stderr.
+const DROP_REPORT_INTERVAL_MILLIS: u64 = 1000;
+
+/// Rate-limits async-sink queue-full notices so a full queue cannot flood or block stderr.
+///
+/// `DropIncoming` reports a queue-full error per dropped record on the enqueue (caller) thread.
+/// Writing each one synchronously would defeat the non-blocking queue during a burst, so Relay
+/// reports at most one notice per [`DROP_REPORT_INTERVAL_MILLIS`].
+struct DropNoticeRateLimiter {
+    last_report_millis: AtomicU64,
+}
+
+impl DropNoticeRateLimiter {
+    fn new() -> Self {
+        Self {
+            last_report_millis: AtomicU64::new(0),
+        }
+    }
+
+    /// Returns `true` when a notice may be emitted at `now_millis`.
+    fn should_report(&self, now_millis: u64) -> bool {
+        loop {
+            let last = self.last_report_millis.load(Ordering::Relaxed);
+            if now_millis.saturating_sub(last) < DROP_REPORT_INTERVAL_MILLIS {
+                return false;
+            }
+            if self
+                .last_report_millis
+                .compare_exchange_weak(last, now_millis, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn dropped_record_error_handler(
+    sink_label: &str,
+) -> impl Fn(spdlog::Error) + Send + Sync + 'static {
+    let sink_label = sink_label.to_owned();
+    let rate_limiter = DropNoticeRateLimiter::new();
+    move |error| {
+        // Only a full queue dropping a record is the high-volume "records lost" case that needs
+        // rate-limiting. Other errors (disconnected channel, dropped flush, write failures) are
+        // rare and reported immediately and accurately.
+        match &error {
+            spdlog::Error::SendToChannel(
+                spdlog::error::SendToChannelError::Full,
+                spdlog::error::SendToChannelErrorDropped::Record(_),
+            ) => {
+                if rate_limiter.should_report(now_millis()) {
+                    let _ = writeln!(
+                        io::stderr(),
+                        "nemo-relay: logging sink ({sink_label}): records are being dropped \
+                         because the queue is full; repeated notices are limited to once per \
+                         {DROP_REPORT_INTERVAL_MILLIS}ms"
+                    );
+                }
+            }
+            other => {
+                let _ = writeln!(
+                    io::stderr(),
+                    "nemo-relay: logging sink error ({sink_label}): {other}"
+                );
+            }
+        }
+    }
+}
+
 fn spdlog_level_filter(level: LogLevel) -> LevelFilter {
     LevelFilter::MoreSevereEqual(spdlog_level(level))
 }
@@ -226,5 +298,21 @@ pub(super) fn log_level_filter(level: LogLevel) -> log::LevelFilter {
         LogLevel::Info => log::LevelFilter::Info,
         LogLevel::Debug => log::LevelFilter::Debug,
         LogLevel::Trace => log::LevelFilter::Trace,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DROP_REPORT_INTERVAL_MILLIS, DropNoticeRateLimiter};
+
+    #[test]
+    fn drop_notice_rate_limiter_reports_immediately_then_once_per_interval() {
+        let rate_limiter = DropNoticeRateLimiter::new();
+        let interval = DROP_REPORT_INTERVAL_MILLIS;
+        let first_timestamp = 10 * interval;
+
+        assert!(rate_limiter.should_report(first_timestamp));
+        assert!(!rate_limiter.should_report(first_timestamp + interval - 1));
+        assert!(rate_limiter.should_report(first_timestamp + interval));
     }
 }

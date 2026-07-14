@@ -7,19 +7,19 @@ use std::path::PathBuf;
 
 use crate::error::{FlowError, Result};
 
-/// Default async queue depth for file sinks when `queue_capacity` is omitted.
-pub const DEFAULT_FILE_QUEUE_CAPACITY: usize = 1024;
+/// Default number of pending asynchronous queue entries per file sink when `queue_capacity` is
+/// omitted.
+pub const DEFAULT_FILE_SINK_QUEUE_ENTRIES: usize = 1024;
 
-/// Default periodic flush interval for file sinks when `flush_interval_millis` is omitted.
+/// Default periodic flush interval when [`LoggingConfig::flush_interval_millis`] is omitted.
 pub const DEFAULT_FILE_FLUSH_INTERVAL_MILLIS: u64 = 1000;
 
-/// Default ceiling applied to file sink `queue_capacity` when [`LoggingConfig::max_queue_capacity`]
-/// is not overridden.
+/// Fixed hard maximum number of pending asynchronous queue entries per file sink.
 ///
-/// This is a safety limit. The async queue preallocates every slot,
-/// so an unbounded value can panic the process at startup; the ceiling turns a mistaken value into
-/// a config error instead. Raise it deliberately if your workload needs a larger queue.
-pub const DEFAULT_MAX_FILE_QUEUE_CAPACITY: usize = 1_048_576;
+/// This is a non-configurable safety limit, not the queue size itself. The async queue
+/// preallocates every slot, so an oversized `queue_capacity` can panic the process at startup;
+/// configuration above this bound is rejected with a config error. It cannot be raised.
+pub const MAX_FILE_SINK_QUEUE_ENTRIES: usize = 8_192;
 
 /// Operational logging configuration for [`init_logging`](super::init_logging).
 ///
@@ -33,9 +33,9 @@ pub struct LoggingConfig {
     pub stderr_format: LogFormat,
     /// Additional file sinks beyond stderr.
     pub sinks: Vec<LogSinkConfig>,
-    /// Safety ceiling for each file sink's `queue_capacity`. Defaults to
-    /// [`DEFAULT_MAX_FILE_QUEUE_CAPACITY`].
-    pub max_queue_capacity: usize,
+    /// Periodic flush cadence in milliseconds applied to all file sinks. `0` disables periodic
+    /// flush (shutdown flush only). Defaults to [`DEFAULT_FILE_FLUSH_INTERVAL_MILLIS`].
+    pub flush_interval_millis: u64,
 }
 
 impl Default for LoggingConfig {
@@ -44,7 +44,7 @@ impl Default for LoggingConfig {
             level: LogLevel::Info,
             stderr_format: LogFormat::Human,
             sinks: Vec::new(),
-            max_queue_capacity: DEFAULT_MAX_FILE_QUEUE_CAPACITY,
+            flush_interval_millis: DEFAULT_FILE_FLUSH_INTERVAL_MILLIS,
         }
     }
 }
@@ -115,8 +115,8 @@ pub enum LogSinkConfig {
 /// time. Absolute paths are used as-is. `~` and env expansion are not applied.
 ///
 /// File sinks write through an async queue so logging cannot stall the process on disk I/O.
-/// `queue_capacity` and `flush_interval_millis` are optional advanced overrides; omitted values
-/// use [`DEFAULT_FILE_QUEUE_CAPACITY`] and [`DEFAULT_FILE_FLUSH_INTERVAL_MILLIS`].
+/// `queue_capacity` is an optional advanced override; an omitted value uses
+/// [`DEFAULT_FILE_SINK_QUEUE_ENTRIES`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileLogSinkConfig {
     /// Destination file path.
@@ -125,11 +125,9 @@ pub struct FileLogSinkConfig {
     pub level: LogLevel,
     /// Output encoding for this file sink.
     pub format: LogFormat,
-    /// Max records waiting for disk write (async queue bound). Must be greater than 0 and at most
-    /// [`LoggingConfig::max_queue_capacity`].
+    /// Maximum pending asynchronous queue entries for this file sink. Must be greater than 0 and
+    /// at most [`MAX_FILE_SINK_QUEUE_ENTRIES`].
     pub queue_capacity: usize,
-    /// Periodic flush cadence in milliseconds. `0` disables periodic flush (shutdown flush only).
-    pub flush_interval_millis: u64,
 }
 
 impl Default for FileLogSinkConfig {
@@ -138,8 +136,7 @@ impl Default for FileLogSinkConfig {
             path: PathBuf::from(".nemo-relay/logs/relay.log.jsonl"),
             level: LogLevel::Info,
             format: LogFormat::Jsonl,
-            queue_capacity: DEFAULT_FILE_QUEUE_CAPACITY,
-            flush_interval_millis: DEFAULT_FILE_FLUSH_INTERVAL_MILLIS,
+            queue_capacity: DEFAULT_FILE_SINK_QUEUE_ENTRIES,
         }
     }
 }

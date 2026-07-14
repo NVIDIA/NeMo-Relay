@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Operational log record rendering (human/JSONL) and field redaction.
+//! Operational log record rendering (human/JSONL).
 
 use std::fmt::Write as _;
 
@@ -28,7 +28,7 @@ impl Formatter for RelayFormatter {
         let rendered = render_record(
             self.format,
             &self.root_relay_id,
-            record.time(),
+            &system_time_to_rfc3339(record.time()),
             record.level(),
             record.logger_name().unwrap_or(""),
             record.payload(),
@@ -67,13 +67,12 @@ fn collect_fields(record: &Record<'_>) -> CollectedFields {
 fn render_record(
     format: LogFormat,
     root_relay_id: &str,
-    time: std::time::SystemTime,
+    timestamp: &str,
     level: Level,
     target: &str,
     message: &str,
     fields: &CollectedFields,
 ) -> String {
-    let timestamp = system_time_to_rfc3339(time);
     let event_name = fields.event_name.as_deref().unwrap_or("");
     match format {
         LogFormat::Jsonl => {
@@ -146,13 +145,12 @@ fn short_root_id(root_relay_id: &str) -> &str {
 fn format_human_value(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
-        Value::Bool(flag) => flag.to_string(),
-        Value::Number(number) => number.to_string(),
-        Value::Null => "null".into(),
         other => other.to_string(),
     }
 }
 
+/// Renders an event through the production [`render_record`] path with a fixed timestamp, so
+/// formatter tests exercise the real rendering code rather than a parallel copy.
 #[cfg(test)]
 pub(crate) fn format_event_for_test(
     format: LogFormat,
@@ -170,43 +168,13 @@ pub(crate) fn format_event_for_test(
     for (name, value) in extra_fields {
         fields.fields.insert((*name).to_owned(), json!(*value));
     }
-    // Fixed timestamp for deterministic formatter assertions.
-    let timestamp = "2026-07-10T14:22:31.123Z";
-    match format {
-        LogFormat::Jsonl => {
-            let mut body = Map::new();
-            body.insert("timestamp".into(), json!(timestamp));
-            body.insert("level".into(), json!(json_level_name(level)));
-            body.insert("root_relay_id".into(), json!(root_relay_id));
-            body.insert("target".into(), json!(target));
-            body.insert(
-                "event".into(),
-                json!(fields.event_name.as_deref().unwrap_or("")),
-            );
-            body.insert("message".into(), json!(message));
-            body.insert("fields".into(), Value::Object(fields.fields));
-            format!("{}\n", serde_json::to_string(&body).expect("json"))
-        }
-        LogFormat::Human => {
-            let root_short = short_root_id(root_relay_id);
-            let mut line = format!(
-                "{timestamp} {} root={root_short} target={target}",
-                human_level_name(level)
-            );
-            if let Some(event_name) = fields.event_name.as_deref()
-                && !event_name.is_empty()
-            {
-                line.push_str(&format!(" event={event_name}"));
-            }
-            for (key, value) in &fields.fields {
-                line.push_str(&format!(" {key}={}", format_human_value(value)));
-            }
-            if !message.is_empty() {
-                line.push(' ');
-                line.push_str(message);
-            }
-            line.push('\n');
-            line
-        }
-    }
+    render_record(
+        format,
+        root_relay_id,
+        "2026-07-10T14:22:31.123Z",
+        level,
+        target,
+        message,
+        &fields,
+    )
 }

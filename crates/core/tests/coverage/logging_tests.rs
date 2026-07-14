@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::logging::{
-    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, build_logger,
-    format_event_for_test, init_logging,
+    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    MAX_FILE_SINK_QUEUE_ENTRIES, build_logger, format_event_for_test, init_logging,
 };
 use serde_json::Value;
 use spdlog::Level;
@@ -114,7 +114,6 @@ fn file_sink_receives_jsonl_and_preserves_existing_content() {
             path: path.clone(),
             level: LogLevel::Info,
             format: LogFormat::Jsonl,
-            flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
@@ -171,7 +170,6 @@ fn sink_level_filter_drops_events_below_sink_minimum() {
             path: path.clone(),
             level: LogLevel::Warn,
             format: LogFormat::Jsonl,
-            flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
@@ -244,42 +242,39 @@ fn init_logging_rejects_duplicate_resolved_paths() {
 }
 
 #[test]
-fn build_logger_rejects_queue_capacity_above_max_queue_capacity() {
+fn build_logger_rejects_queue_capacity_above_fixed_maximum() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
     let config = LoggingConfig {
-        max_queue_capacity: 10,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
             path: temp.path().join("over-max.log.jsonl"),
-            queue_capacity: 11,
+            queue_capacity: MAX_FILE_SINK_QUEUE_ENTRIES + 1,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
     };
     let error = build_logger(&config, "root".into())
         .err()
-        .expect("queue_capacity above max should fail")
+        .expect("queue_capacity above the fixed maximum should fail")
         .to_string();
     assert!(error.contains("exceeds maximum"));
 }
 
 #[test]
-fn build_logger_allows_queue_capacity_up_to_configured_max() {
+fn build_logger_allows_queue_capacity_at_fixed_maximum() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();
-    // queue_capacity exceeds the default (1024) but stays within a raised ceiling.
     let config = LoggingConfig {
-        max_queue_capacity: 4096,
         sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
             path: temp.path().join("within-max.log.jsonl"),
-            queue_capacity: 4096,
+            queue_capacity: MAX_FILE_SINK_QUEUE_ENTRIES,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
     };
     assert!(
         build_logger(&config, "root".into()).is_ok(),
-        "queue_capacity within max should build"
+        "queue_capacity at the fixed maximum should build"
     );
 }
 
@@ -330,7 +325,6 @@ fn shutdown_drains_async_file_sink_without_waiting() {
             path: path.clone(),
             level: LogLevel::Info,
             format: LogFormat::Jsonl,
-            flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
@@ -407,7 +401,6 @@ fn global_level_filter_drops_events_below_process_minimum() {
             path: path.clone(),
             level: LogLevel::Info,
             format: LogFormat::Jsonl,
-            flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
@@ -453,7 +446,6 @@ fn relative_sink_path_resolves_against_process_cwd() {
             path: PathBuf::from("relay.log.jsonl"),
             level: LogLevel::Info,
             format: LogFormat::Jsonl,
-            flush_interval_millis: 0,
             ..FileLogSinkConfig::default()
         })],
         ..default_config()
@@ -489,14 +481,12 @@ fn multiple_file_sinks_receive_same_event() {
                 path: path_a.clone(),
                 level: LogLevel::Info,
                 format: LogFormat::Jsonl,
-                flush_interval_millis: 0,
                 ..FileLogSinkConfig::default()
             }),
             LogSinkConfig::File(FileLogSinkConfig {
                 path: path_b.clone(),
                 level: LogLevel::Info,
                 format: LogFormat::Human,
-                flush_interval_millis: 0,
                 ..FileLogSinkConfig::default()
             }),
         ],
@@ -537,4 +527,201 @@ fn empty_sink_path_fails_at_logger_build() {
         .expect("empty path should fail")
         .to_string();
     assert!(error.contains("path must not be empty"));
+}
+
+#[test]
+fn periodic_flush_applies_to_all_file_sinks() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path_a = temp.path().join("flush-a.log.jsonl");
+    let path_b = temp.path().join("flush-b.log.jsonl");
+    // Small global interval; rely solely on the periodic timer (no explicit flush/shutdown).
+    let config = LoggingConfig {
+        flush_interval_millis: 20,
+        sinks: vec![
+            LogSinkConfig::File(FileLogSinkConfig {
+                path: path_a.clone(),
+                ..FileLogSinkConfig::default()
+            }),
+            LogSinkConfig::File(FileLogSinkConfig {
+                path: path_b.clone(),
+                ..FileLogSinkConfig::default()
+            }),
+        ],
+        ..default_config()
+    };
+    let runtime = init_logging(&config).unwrap();
+    log::info!(target: "nemo_relay.server", event = "periodic_flush"; "written to both sinks");
+
+    // A single logger-level flush period must drain every sink without an explicit flush.
+    let contents_a = wait_for_log_line(&path_a, |c| c.contains("periodic_flush"));
+    let contents_b = wait_for_log_line(&path_b, |c| c.contains("periodic_flush"));
+    assert!(
+        contents_a.contains("periodic_flush"),
+        "sink A was not periodically flushed"
+    );
+    assert!(
+        contents_b.contains("periodic_flush"),
+        "sink B was not periodically flushed"
+    );
+    runtime.shutdown();
+}
+
+#[test]
+fn file_sink_creates_missing_parent_directories() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nested/dir/relay.log.jsonl");
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    let result = build_logger(&config, "root".into());
+    assert!(
+        result.is_ok(),
+        "expected nested sink path to build; got {:?}",
+        result.err()
+    );
+}
+
+#[test]
+fn log_level_parse_maps_valid_inputs_and_rejects_unknown() {
+    let valid = [
+        ("error", LogLevel::Error),
+        ("warn", LogLevel::Warn),
+        ("warning", LogLevel::Warn),
+        ("INFO", LogLevel::Info),
+        (" debug ", LogLevel::Debug),
+        ("trace", LogLevel::Trace),
+    ];
+    for (input, expected) in valid {
+        assert_eq!(
+            LogLevel::parse(input).unwrap(),
+            expected,
+            "input={input:?} should map to {expected:?}"
+        );
+    }
+    assert!(LogLevel::parse("verbose").is_err());
+}
+
+#[test]
+fn log_format_parse_maps_valid_inputs_and_rejects_unknown() {
+    let valid = [
+        ("human", LogFormat::Human),
+        ("jsonl", LogFormat::Jsonl),
+        ("json", LogFormat::Jsonl),
+        ("JSONL", LogFormat::Jsonl),
+        (" human ", LogFormat::Human),
+    ];
+    for (input, expected) in valid {
+        assert_eq!(
+            LogFormat::parse(input).unwrap(),
+            expected,
+            "input={input:?} should map to {expected:?}"
+        );
+    }
+    assert!(LogFormat::parse("yaml").is_err());
+}
+
+#[test]
+fn non_string_fields_are_coerced_to_json_strings() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("typed-fields.log.jsonl");
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    let runtime = init_logging(&config).unwrap();
+    // Numeric and boolean fields go through the same stringifying path as everything else.
+    log::info!(target: "nemo_relay.server", event = "typed_fields", count = 42, ok = true; "coercion");
+    runtime.logger.flush();
+    let contents = wait_for_log_line(&path, |c| c.contains("typed_fields"));
+    runtime.shutdown();
+
+    let line = contents
+        .lines()
+        .find(|line| line.contains("typed_fields"))
+        .expect("typed_fields record should be present");
+    let record: Value = serde_json::from_str(line).unwrap();
+    // Operational logging coerces every field value to a string by design.
+    assert_eq!(record["fields"]["count"], Value::String("42".into()));
+    assert_eq!(record["fields"]["ok"], Value::String("true".into()));
+}
+
+#[test]
+fn build_logger_rejects_zero_queue_capacity() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: temp.path().join("zero-queue.log.jsonl"),
+            queue_capacity: 0,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    let error = build_logger(&config, "root".into())
+        .err()
+        .expect("zero queue_capacity should fail")
+        .to_string();
+    assert!(error.contains("queue_capacity must be greater than 0"));
+}
+
+#[test]
+fn shutdown_flushes_file_sink_when_periodic_flush_disabled() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("no-periodic-flush.log.jsonl");
+    let config = LoggingConfig {
+        // Periodic flush disabled: only the shutdown drain should reach disk.
+        flush_interval_millis: 0,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+    let runtime = init_logging(&config).unwrap();
+    log::info!(target: "nemo_relay.server", event = "no_periodic"; "flushed on shutdown");
+    // No explicit flush() and no periodic flush; shutdown must still drain the record.
+    runtime.shutdown();
+    let contents = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        contents.contains("no_periodic"),
+        "shutdown should drain the sink even when periodic flush is disabled"
+    );
+}
+
+#[test]
+fn dropping_stale_runtime_preserves_current_logger_and_final_drop_detaches() {
+    let _lock = lock_logging_tests();
+    let stale = init_logging(&default_config()).unwrap();
+    let current = init_logging(&default_config()).unwrap();
+
+    // Dropping the older runtime must not detach the newer (currently installed) logger.
+    drop(stale);
+    let installed = spdlog::log_crate_proxy().swap_logger(None);
+    match &installed {
+        Some(logger) => assert!(
+            std::sync::Arc::ptr_eq(logger, &current.logger),
+            "proxy should still hold the current runtime's logger after a stale drop"
+        ),
+        None => panic!("proxy lost its logger when a stale runtime was dropped"),
+    }
+    // Restore so the current runtime still sees itself as the installed receiver.
+    spdlog::log_crate_proxy().set_logger(installed);
+
+    // Dropping the current runtime detaches the proxy.
+    drop(current);
+    assert!(
+        spdlog::log_crate_proxy().swap_logger(None).is_none(),
+        "proxy should be empty after the current runtime is dropped"
+    );
 }

@@ -34,7 +34,6 @@ async-stream = "0.3"
 axum = "0.8"
 base64 = "0.22"
 bytes = "1"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 console = "0.16"
