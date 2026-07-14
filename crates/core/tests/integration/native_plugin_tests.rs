@@ -3,7 +3,6 @@
 
 //! Integration coverage for SDK-built native dynamic plugins.
 
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,39 +41,7 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-struct PluginDiscoveryTestEnv {
-    previous_cwd: PathBuf,
-    previous_xdg_config_home: Option<OsString>,
-}
-
-impl PluginDiscoveryTestEnv {
-    fn enter(cwd: &Path, xdg_config_home: &Path) -> Self {
-        let guard = Self {
-            previous_cwd: std::env::current_dir().expect("current directory should resolve"),
-            previous_xdg_config_home: std::env::var_os("XDG_CONFIG_HOME"),
-        };
-        std::env::set_current_dir(cwd).expect("test current directory should be set");
-        // SAFETY: native plugin integration tests serialize environment changes
-        // with NATIVE_PLUGIN_TEST_LOCK and this guard restores the prior value.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", xdg_config_home) };
-        guard
-    }
-}
-
-impl Drop for PluginDiscoveryTestEnv {
-    fn drop(&mut self) {
-        let _ = std::env::set_current_dir(&self.previous_cwd);
-        // SAFETY: see PluginDiscoveryTestEnv::enter. The same serialized scope
-        // restores the process environment before releasing the test lock.
-        unsafe {
-            match &self.previous_xdg_config_home {
-                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-        }
-    }
-}
+const PLUGIN_DISCOVERY_TEST_CHILD: &str = "NEMO_RELAY_PLUGIN_DISCOVERY_TEST_CHILD";
 
 struct ReplacementRegistryPlugin;
 
@@ -1220,6 +1187,42 @@ async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
 
 #[tokio::test]
 async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_components() {
+    if std::env::var_os(PLUGIN_DISCOVERY_TEST_CHILD).is_none() {
+        let environment = TempDir::new().expect("plugin discovery environment should be created");
+        let project_config_dir = environment.path().join(".nemo-relay");
+        std::fs::create_dir_all(&project_config_dir)
+            .expect("project plugin config directory should be created");
+        std::fs::write(
+            project_config_dir.join("plugins.toml"),
+            format!(
+                "version = 1\n\n[[components]]\nkind = {STATIC_BASE_PLUGIN_KIND:?}\nenabled = true\n"
+            ),
+        )
+        .expect("project plugin config should be written");
+        let xdg_config_home = environment.path().join("xdg");
+        std::fs::create_dir_all(&xdg_config_home)
+            .expect("isolated user config directory should be created");
+
+        let output = Command::new(std::env::current_exe().expect("test executable should resolve"))
+            .args([
+                "--exact",
+                "plugin_host_activation_layers_discovered_static_base_with_dynamic_components",
+                "--nocapture",
+            ])
+            .current_dir(environment.path())
+            .env("XDG_CONFIG_HOME", &xdg_config_home)
+            .env(PLUGIN_DISCOVERY_TEST_CHILD, "1")
+            .output()
+            .expect("plugin discovery child process should run");
+        assert!(
+            output.status.success(),
+            "plugin discovery child process failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let _ = deregister_plugin(STATIC_BASE_PLUGIN_KIND);
     STATIC_BASE_REGISTRATIONS.store(0, Ordering::SeqCst);
@@ -1228,22 +1231,6 @@ async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_compo
 
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let environment = TempDir::new().expect("plugin discovery environment should be created");
-    let project_config_dir = environment.path().join(".nemo-relay");
-    std::fs::create_dir_all(&project_config_dir)
-        .expect("project plugin config directory should be created");
-    std::fs::write(
-        project_config_dir.join("plugins.toml"),
-        format!(
-            "version = 1\n\n[[components]]\nkind = {STATIC_BASE_PLUGIN_KIND:?}\nenabled = true\n"
-        ),
-    )
-    .expect("project plugin config should be written");
-    let xdg_config_home = environment.path().join("xdg");
-    std::fs::create_dir_all(&xdg_config_home)
-        .expect("isolated user config directory should be created");
-    let _environment = PluginDiscoveryTestEnv::enter(environment.path(), &xdg_config_home);
-
     let (activation, report) = PluginHostActivation::activate_with_discovered_config(
         PluginConfig::default(),
         [host_spec("fixture_native", &manifest_ref)],
