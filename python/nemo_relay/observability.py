@@ -59,12 +59,12 @@ class AtofStreamSinkConfig:
     """Stream sink for raw ATOF events."""
 
     url: str
-    name: str | None = None
     transport: Literal["http_post", "websocket", "ndjson"] = "http_post"
     headers: dict[str, str] = field(default_factory=dict)
     header_env: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
     field_name_policy: Literal["preserve", "replace_dots"] = "preserve"
+    name: str | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF stream sink to the canonical JSON object shape."""
