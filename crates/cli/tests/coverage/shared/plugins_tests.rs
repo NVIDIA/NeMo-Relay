@@ -9,7 +9,9 @@ use crate::plugins::ConfigurationScope;
 use nemo_relay::config_editor::{
     EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
 };
-use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_relay::observability::plugin_component::{
+    AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
+};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay::plugins::nemo_guardrails::component::{
     LocalBackendConfig, NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig, RemoteBackendConfig,
@@ -176,7 +178,15 @@ fn typed_editor_model_contains_observability_sections() {
     let atof = schema.field("atof").unwrap().schema().unwrap();
     let atif = schema.field("atif").unwrap().schema().unwrap();
     let openinference = schema.field("openinference").unwrap().schema().unwrap();
-    assert!(atof.fields.iter().any(|field| field.name == "mode"));
+    let sinks = atof.field("sinks").expect("ATOF sinks field");
+    assert_eq!(sinks.kind, EditorFieldKind::List);
+    assert_eq!(
+        sinks
+            .list_item
+            .and_then(|item| item.tagged_union)
+            .map(|union| union.discriminator),
+        Some("type")
+    );
     assert!(
         atif.fields
             .iter()
@@ -188,6 +198,13 @@ fn typed_editor_model_contains_observability_sections() {
             .iter()
             .any(|field| field.name == "endpoint")
     );
+    let attribute_mappings = openinference.field("attribute_mappings").unwrap();
+    assert_eq!(attribute_mappings.kind, EditorFieldKind::List);
+    let mapping = attribute_mappings.list_item.unwrap();
+    assert_eq!(mapping.kind, EditorFieldKind::Section);
+    let mapping_schema = mapping.schema.unwrap()();
+    assert_eq!(mapping_schema.fields[0].name, "key");
+    assert_eq!(mapping_schema.fields[1].name, "alias");
 }
 
 #[test]
@@ -630,17 +647,21 @@ fn plugin_cancellation_paths_share_message() {
 fn plugin_menu_marks_configured_sections_and_fields() {
     let mut observability = ObservabilityConfig::default();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
-    let mode = atof.schema().unwrap().field("mode").unwrap();
-    let output_directory = atof.schema().unwrap().field("output_directory").unwrap();
+    let sinks = atof.schema().unwrap().field("sinks").unwrap();
 
     assert!(!section_configured(&observability, atof));
     ensure_section(&mut observability, atof);
     assert!(section_configured(&observability, atof));
-    assert!(!section_field_configured(&observability, atof, mode).unwrap());
-    assert!(!section_field_configured(&observability, atof, output_directory).unwrap());
+    assert!(!section_field_configured(&observability, atof, sinks).unwrap());
 
-    set_section_field(&mut observability, atof, "output_directory", json!("logs")).unwrap();
-    assert!(section_field_configured(&observability, atof, output_directory).unwrap());
+    set_section_field(
+        &mut observability,
+        atof,
+        "sinks",
+        json!([{ "type": "file", "output_directory": "logs" }]),
+    )
+    .unwrap();
+    assert!(section_field_configured(&observability, atof, sinks).unwrap());
     assert!(configured_label(true, "Edit ATOF").contains('✓'));
     assert!(!configured_label(false, "Edit ATIF").contains('✓'));
 }
@@ -655,15 +676,12 @@ fn editor_model_renders_valid_observability_plugin_config() {
     set_section_field(
         &mut observability.config,
         atof,
-        "output_directory",
-        json!("logs"),
-    )
-    .unwrap();
-    set_section_field(
-        &mut observability.config,
-        atof,
-        "filename",
-        json!("events.jsonl"),
+        "sinks",
+        json!([{
+            "type": "file",
+            "output_directory": "logs",
+            "filename": "events.jsonl"
+        }]),
     )
     .unwrap();
     store_observability_state(&mut config, &observability).unwrap();
@@ -746,7 +764,13 @@ fn typed_editor_serializes_explicit_observability_overrides() {
     let mut observability = ObservabilityConfig::default();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
     toggle_section(&mut observability, atof);
-    set_section_field(&mut observability, atof, "output_directory", json!("logs")).unwrap();
+    set_section_field(
+        &mut observability,
+        atof,
+        "sinks",
+        json!([{ "type": "file", "output_directory": "logs" }]),
+    )
+    .unwrap();
 
     let map = observability_config_map(&observability).unwrap();
     let atof = map
@@ -754,8 +778,14 @@ fn typed_editor_serializes_explicit_observability_overrides() {
         .and_then(Value::as_object)
         .expect("atof section is serialized");
     assert_eq!(atof.get("enabled"), Some(&Value::Bool(true)));
-    assert_eq!(atof.get("output_directory"), Some(&json!("logs")));
-    assert_eq!(atof.get("mode"), Some(&json!("append")));
+    assert_eq!(
+        atof.get("sinks"),
+        Some(&json!([{
+            "type": "file",
+            "output_directory": "logs",
+            "mode": "append"
+        }]))
+    );
     assert!(map.contains_key("policy"));
 }
 
@@ -785,11 +815,14 @@ fn editor_save_preserves_unknown_observability_fields() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 1,
+                "version": 2,
                 "future_top_level": "preserve",
                 "atof": {
                     "enabled": true,
-                    "output_directory": "old-logs",
+                    "sinks": [{
+                        "type": "file",
+                        "output_directory": "old-logs"
+                    }],
                     "future_atof_field": "preserve"
                 }
             })
@@ -801,12 +834,15 @@ fn editor_save_preserves_unknown_observability_fields() {
     };
     let mut observability = component_observability_state(&config).unwrap();
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
-    remove_section_field(&mut observability.config, atof, "output_directory").unwrap();
     set_section_field(
         &mut observability.config,
         atof,
-        "filename",
-        json!("events.jsonl"),
+        "sinks",
+        json!([{
+            "type": "file",
+            "output_directory": "old-logs",
+            "filename": "events.jsonl"
+        }]),
     )
     .unwrap();
 
@@ -830,8 +866,15 @@ fn editor_save_preserves_unknown_observability_fields() {
         atof_config.get("future_atof_field"),
         Some(&json!("preserve"))
     );
-    assert_eq!(atof_config.get("filename"), Some(&json!("events.jsonl")));
-    assert!(!atof_config.contains_key("output_directory"));
+    assert_eq!(
+        atof_config.get("sinks"),
+        Some(&json!([{
+            "type": "file",
+            "output_directory": "old-logs",
+            "filename": "events.jsonl",
+            "mode": "append"
+        }]))
+    );
 }
 
 #[test]
@@ -1467,23 +1510,26 @@ fn reset_selected_field_accounts_for_section_toggle_offset() {
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
     let fields = atof.schema().unwrap().fields;
 
-    set_section_field(&mut observability, atof, "output_directory", json!("logs")).unwrap();
+    set_section_field(
+        &mut observability,
+        atof,
+        "sinks",
+        json!([{ "type": "file", "output_directory": "logs" }]),
+    )
+    .unwrap();
     assert!(
-        section_field_value(&observability, atof, "output_directory")
+        section_field_value(&observability, atof, "sinks")
             .unwrap()
             .is_some()
     );
 
-    let output_directory_index = fields
+    let sinks_index = fields
         .iter()
-        .position(|field| field.name == "output_directory")
+        .position(|field| field.name == "sinks")
         .unwrap();
-    assert!(
-        reset_selected_field(&mut observability, atof, fields, output_directory_index + 1,)
-            .unwrap()
-    );
+    assert!(reset_selected_field(&mut observability, atof, fields, sinks_index + 1,).unwrap());
     assert_eq!(
-        section_field_value(&observability, atof, "output_directory").unwrap(),
+        section_field_value(&observability, atof, "sinks").unwrap(),
         None
     );
     assert!(!reset_selected_field(&mut observability, atof, fields, 0).unwrap());
@@ -1972,10 +2018,13 @@ fn validate_config_reports_plugin_diagnostics() {
             kind: OBSERVABILITY_PLUGIN_KIND.to_string(),
             enabled: true,
             config: json!({
-                "version": 1,
+                "version": 2,
                 "atof": {
                     "enabled": true,
-                    "mode": "not-a-mode"
+                    "sinks": [{
+                        "type": "file",
+                        "mode": "not-a-mode"
+                    }]
                 }
             })
             .as_object()
@@ -1991,7 +2040,7 @@ fn validate_config_reports_plugin_diagnostics() {
         error.contains("plugin validation failed"),
         "error was: {error}"
     );
-    assert!(error.contains("ATOF mode"), "error was: {error}");
+    assert!(error.contains("ATOF sinks[0].mode"), "error was: {error}");
 }
 
 #[test]
@@ -2269,14 +2318,11 @@ fn display_helpers_render_scalars_json_and_defaults() {
     assert_eq!(display_value(&json!({ "a": 1 })), r#"{"a":1}"#);
 
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
-    let mode = atof.schema().unwrap().field("mode").unwrap();
+    let sinks = atof.schema().unwrap().field("sinks").unwrap();
+    assert_eq!(display_field_value(atof, sinks, &json!([])), "0 items");
     assert_eq!(
-        display_field_value(atof, mode, &json!("append")),
-        "append (default)"
-    );
-    assert_eq!(
-        display_field_value(atof, mode, &json!("overwrite")),
-        "overwrite"
+        display_field_value(atof, sinks, &json!([{ "type": "file" }])),
+        "1 item"
     );
 }
 
@@ -2555,4 +2601,22 @@ fn target_path_resolves_user_scope_from_xdg_and_reports_missing_home() {
         }
     }
     drop(guard);
+}
+
+#[test]
+fn typed_list_metadata_describes_atof_sinks() {
+    let sinks = AtofSectionConfig::editor_schema().field("sinks").unwrap();
+    let sink_item = sinks.list_item.expect("ATOF sink item metadata");
+    assert_eq!(sinks.kind, EditorFieldKind::List);
+    assert_eq!(sink_item.kind, EditorFieldKind::Section);
+    assert_eq!(
+        sink_item
+            .tagged_union
+            .expect("ATOF sink tagged union")
+            .variants
+            .iter()
+            .map(|variant| variant.tag)
+            .collect::<Vec<_>>(),
+        vec!["file", "stream"]
+    );
 }

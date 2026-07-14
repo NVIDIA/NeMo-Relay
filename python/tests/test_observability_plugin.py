@@ -15,7 +15,8 @@ from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
     AtofConfig,
-    AtofEndpointConfig,
+    AtofFileSinkConfig,
+    AtofStreamSinkConfig,
     ComponentSpec,
     HttpStorageConfig,
     ObservabilityConfig,
@@ -29,7 +30,7 @@ if typing.TYPE_CHECKING:
 
 class TestObservabilityConfigHelpers:
     def test_defaults_and_component_wrapper(self):
-        assert AtofConfig().to_dict() == {"enabled": False, "mode": "append"}
+        assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
             "enabled": False,
             "agent_name": "NeMo Relay",
@@ -40,6 +41,7 @@ class TestObservabilityConfigHelpers:
             "enabled": False,
             "mark_projection": "inherit",
             "mark_exclude_names": ["llm.chunk"],
+            "attribute_mappings": [],
             "transport": "http_binary",
             "headers": {},
             "resource_attributes": {},
@@ -53,7 +55,7 @@ class TestObservabilityConfigHelpers:
         assert wrapped["enabled"] is True
         wrapped_config = wrapped["config"]
         assert isinstance(wrapped_config, dict)
-        assert wrapped_config["version"] == 1
+        assert wrapped_config["version"] == 2
 
     def test_validation_rejects_bad_values(self):
         report = plugin.validate(
@@ -61,8 +63,8 @@ class TestObservabilityConfigHelpers:
                 components=[
                     ComponentSpec(
                         {
-                            "version": 1,
-                            "atof": {"mode": "bad"},
+                            "version": 2,
+                            "atof": {"sinks": [{"type": "file", "mode": "bad"}]},
                             "atif": {"filename_template": "missing-placeholder"},
                         }
                     )
@@ -70,7 +72,7 @@ class TestObservabilityConfigHelpers:
             )
         )
         fields = {diag.get("field") for diag in report["diagnostics"]}
-        assert {"mode", "filename_template"} <= fields
+        assert {"sinks[0].mode", "filename_template"} <= fields
 
     def test_list_kinds_includes_builtin_observability(self):
         assert OBSERVABILITY_PLUGIN_KIND in plugin.list_kinds()
@@ -100,22 +102,25 @@ class TestObservabilityConfigHelpers:
         atif = AtifConfig(enabled=True, storage=[storage])
         assert atif.to_dict()["storage"] == [storage.to_dict()]
 
-    def test_atof_endpoint_config_serializes_streaming_fields(self):
-        endpoint = AtofEndpointConfig(
+    def test_atof_sink_config_serializes_streaming_fields(self):
+        sink = AtofStreamSinkConfig(
             url="http://localhost:8080/events",
             transport="http_post",
             headers={"X-Test": "yes"},
+            header_env={"authorization": "NEMO_RELAY_ATOF_AUTH"},
             timeout_millis=1000,
             field_name_policy="replace_dots",
         )
-        assert endpoint.to_dict() == {
+        assert sink.to_dict() == {
+            "type": "stream",
             "url": "http://localhost:8080/events",
             "transport": "http_post",
             "headers": {"X-Test": "yes"},
+            "header_env": {"authorization": "NEMO_RELAY_ATOF_AUTH"},
             "timeout_millis": 1000,
             "field_name_policy": "replace_dots",
         }
-        assert AtofConfig(endpoints=[endpoint]).to_dict()["endpoints"] == [endpoint.to_dict()]
+        assert AtofConfig(sinks=[sink]).to_dict()["sinks"] == [sink.to_dict()]
 
     def test_http_storage_config_serializes_headers(self):
         s3 = S3StorageConfig(bucket="archive")
@@ -140,9 +145,13 @@ class TestObservabilityConfigHelpers:
         config = ObservabilityConfig(
             atof=AtofConfig(
                 enabled=True,
-                output_directory=str(tmp_path),
-                filename="events.jsonl",
-                mode="overwrite",
+                sinks=[
+                    AtofFileSinkConfig(
+                        output_directory=str(tmp_path),
+                        filename="events.jsonl",
+                        mode="overwrite",
+                    )
+                ],
             ),
             atif=AtifConfig(
                 enabled=True,

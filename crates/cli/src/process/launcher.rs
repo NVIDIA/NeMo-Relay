@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use nemo_relay::observability::plugin_component::{
-    AtifStorageConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
+    AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
 use nemo_relay::plugin::PluginConfig;
 use serde_json::Value;
@@ -596,17 +596,25 @@ pub(crate) fn exporter_destinations(config: &GatewayConfig) -> Vec<String> {
 fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<String> {
     let mut destinations = Vec::new();
     if let Some(section) = config.atof.as_ref().filter(|section| section.enabled) {
-        let directory = section
-            .output_directory
-            .clone()
-            .unwrap_or_else(current_output_directory);
-        let path = directory.join(
-            section
-                .filename
-                .clone()
-                .unwrap_or_else(|| "nemo-relay-events-<timestamp>.jsonl".into()),
-        );
-        destinations.push(format!("ATOF {}", path.display()));
+        for sink in &section.sinks {
+            match sink {
+                AtofSinkSectionConfig::File(file) => {
+                    let directory = file
+                        .output_directory
+                        .clone()
+                        .unwrap_or_else(current_output_directory);
+                    let path = directory.join(
+                        file.filename
+                            .clone()
+                            .unwrap_or_else(|| "nemo-relay-events-<timestamp>.jsonl".into()),
+                    );
+                    destinations.push(format!("ATOF {}", path.display()));
+                }
+                AtofSinkSectionConfig::Stream(stream) => {
+                    destinations.push(format!("ATOF {}", stream.url));
+                }
+            }
+        }
     }
     if let Some(section) = config.atif.as_ref().filter(|section| section.enabled) {
         if section.storage.is_empty() {

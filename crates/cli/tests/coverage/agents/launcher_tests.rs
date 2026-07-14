@@ -464,11 +464,20 @@ fn exporter_destinations_describe_observability_outputs() {
                 "kind": OBSERVABILITY_PLUGIN_KIND,
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": "logs",
-                        "filename": "events.jsonl"
+                        "sinks": [
+                            {
+                                "type": "file",
+                                "output_directory": "logs",
+                                "filename": "events.jsonl"
+                            },
+                            {
+                                "type": "stream",
+                                "url": "https://collector.example/atof"
+                            }
+                        ]
                     },
                     "atif": {
                         "enabled": true,
@@ -495,6 +504,11 @@ fn exporter_destinations_describe_observability_outputs() {
             "ATOF {}",
             PathBuf::from("logs").join("events.jsonl").display()
         )));
+    assert!(
+        destinations
+            .iter()
+            .any(|line| line == "ATOF https://collector.example/atof")
+    );
     assert!(destinations.iter().any(|line| line
         == &format!(
             "ATIF {}",

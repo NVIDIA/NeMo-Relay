@@ -2,20 +2,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    Arc, CStr, ConfigDiagnostic, DiagnosticLevel, FfiPluginContext, Future,
-    NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb, NemoRelayFreeFn, NemoRelayJsonCb,
-    NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestCb,
-    NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb,
-    NemoRelayStatus, NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb,
-    NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError, PluginRegistrationContext,
-    active_plugin_report, c_char, c_str_to_json, c_str_to_string, clear_last_error,
-    clear_plugin_configuration, deregister_plugin, initialize_plugins, json_to_c_string,
-    last_error_message, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
-    register_plugin, set_last_error, status_from_plugin_error, tokio_runtime,
-    validate_plugin_config, wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_response_fn,
-    wrap_llm_sanitize_request_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
-    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    Arc, CStr, ConfigDiagnostic, DiagnosticLevel, DynamicPluginActivationSpec, FfiPluginActivation,
+    FfiPluginContext, Future, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
+    NemoRelayFreeFn, NemoRelayJsonCb, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayLlmRequestCb, NemoRelayLlmRequestInterceptCb, NemoRelayPluginRegisterCb,
+    NemoRelayPluginValidateCb, NemoRelayStatus, NemoRelayToolConditionalCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError,
+    PluginHostActivation, PluginRegistrationContext, active_plugin_report, c_char, c_str_to_json,
+    c_str_to_string, clear_last_error, clear_plugin_configuration, deregister_plugin,
+    initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
+    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
+    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_sanitize_fn,
+    wrap_event_subscriber, wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn,
+    wrap_llm_request_intercept_fn, wrap_llm_response_fn, wrap_llm_sanitize_request_fn,
+    wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn,
+    wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
@@ -130,6 +131,180 @@ fn ensure_adaptive_component_registered() -> std::result::Result<(), NemoRelaySt
 
 fn ensure_pii_redaction_component_registered() -> std::result::Result<(), NemoRelayStatus> {
     register_pii_redaction_component().map_err(|err| status_from_plugin_error(&err))
+}
+
+fn parse_plugin_config(
+    config_json: *const c_char,
+) -> std::result::Result<PluginConfig, NemoRelayStatus> {
+    let value = c_str_to_json(config_json).ok_or(NemoRelayStatus::InvalidJson)?;
+    serde_json::from_value(value).map_err(|error| {
+        set_last_error(&format!("invalid plugin config: {error}"));
+        NemoRelayStatus::InvalidJson
+    })
+}
+
+fn parse_dynamic_plugin_specs(
+    dynamic_plugins_json: *const c_char,
+) -> std::result::Result<Vec<DynamicPluginActivationSpec>, NemoRelayStatus> {
+    let value = c_str_to_json(dynamic_plugins_json).ok_or(NemoRelayStatus::InvalidJson)?;
+    serde_json::from_value(value).map_err(|error| {
+        set_last_error(&format!("invalid dynamic plugin specifications: {error}"));
+        NemoRelayStatus::InvalidJson
+    })
+}
+
+fn lock_plugin_activation(
+    activation: &FfiPluginActivation,
+) -> std::result::Result<std::sync::MutexGuard<'_, Option<PluginHostActivation>>, NemoRelayStatus> {
+    activation.0.lock().map_err(|error| {
+        set_last_error(&format!("plugin activation lock poisoned: {error}"));
+        NemoRelayStatus::Internal
+    })
+}
+
+/// Load and activate dynamic plugins as one owned transaction.
+///
+/// **Experimental:** this API needs a production consumer before its lifecycle
+/// contract is considered stable.
+///
+/// Relay discovers `plugins.toml` once during this startup call and layers
+/// `config_json` over the discovered configuration. Explicit values take
+/// precedence where both sources configure the same setting. Static components
+/// from the resolved configuration initialize before components appended by
+/// the dynamic plugins. Configuration files are not watched or reloaded.
+/// `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
+/// activation specification; use `nemo_relay_initialize_plugins` for a
+/// static-only configuration.
+///
+/// The explicit configuration uses this JSON shape:
+///
+/// ```text
+/// {"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
+/// ```
+///
+/// Dynamic plugin specifications use this JSON shape:
+///
+/// ```text
+/// [{"plugin_id":"example","kind":"rust_dynamic","manifest_ref":"/absolute/path/relay-plugin.toml","config":{}}]
+/// ```
+///
+/// `kind` must be `rust_dynamic` or `worker`. `environment_ref` is optional
+/// and applies only to worker plugins. `manifest_ref` is resolved by the
+/// embedding application; this API does not discover installed plugins.
+///
+/// On success, the caller owns `out_activation` and
+/// must clear and free it with `nemo_relay_plugin_activation_clear` and
+/// `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
+/// string and must be released with `nemo_relay_string_free`.
+///
+/// # Safety
+/// Both input pointers must reference valid, null-terminated C strings.
+/// `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
+/// output pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_initialize_with_dynamic_plugins(
+    config_json: *const c_char,
+    dynamic_plugins_json: *const c_char,
+    out_activation: *mut *mut FfiPluginActivation,
+    out_report_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out_activation.is_null() {
+        if !out_report_json.is_null() {
+            unsafe { *out_report_json = std::ptr::null_mut() };
+        }
+        set_last_error("out_activation pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if out_report_json.is_null() {
+        unsafe { *out_activation = std::ptr::null_mut() };
+        set_last_error("out_report_json pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if out_activation.cast::<std::ffi::c_void>() == out_report_json.cast::<std::ffi::c_void>() {
+        unsafe { *out_activation = std::ptr::null_mut() };
+        set_last_error("out_activation and out_report_json must not overlap");
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe {
+        *out_activation = std::ptr::null_mut();
+        *out_report_json = std::ptr::null_mut();
+    }
+
+    if let Err(status) = ensure_adaptive_component_registered() {
+        return status;
+    }
+    if let Err(status) = ensure_pii_redaction_component_registered() {
+        return status;
+    }
+    let config = match parse_plugin_config(config_json) {
+        Ok(config) => config,
+        Err(status) => return status,
+    };
+    let dynamic_plugins = match parse_dynamic_plugin_specs(dynamic_plugins_json) {
+        Ok(dynamic_plugins) => dynamic_plugins,
+        Err(status) => return status,
+    };
+    let (activation, report) = match tokio_runtime().block_on(
+        PluginHostActivation::activate_with_discovered_config(config, dynamic_plugins),
+    ) {
+        Ok(result) => result,
+        Err(error) => return status_from_plugin_error(&error),
+    };
+    let report_json = match serde_json::to_value(report) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = activation.clear();
+            set_last_error(&error.to_string());
+            return NemoRelayStatus::Internal;
+        }
+    };
+
+    unsafe {
+        *out_activation = Box::into_raw(Box::new(FfiPluginActivation(std::sync::Mutex::new(
+            Some(activation),
+        ))));
+        *out_report_json = json_to_c_string(&report_json);
+    }
+    NemoRelayStatus::Ok
+}
+
+/// Clear one owned dynamic plugin activation.
+///
+/// This operation is idempotent. A null handle is treated as already cleared.
+/// If teardown fails, the error is reported only by the call that performs the
+/// teardown. The activation is consumed regardless of the outcome, so a later
+/// clear returns success and does not report the earlier error again.
+/// Concurrent clear calls for the same handle are serialized, but they must not
+/// overlap with `nemo_relay_plugin_activation_free`.
+/// The handle allocation remains owned by the caller and must still be passed
+/// to `nemo_relay_plugin_activation_free`.
+///
+/// # Safety
+/// `activation` must be a valid activation handle returned by
+/// `nemo_relay_initialize_with_dynamic_plugins`, or null. The caller must ensure the
+/// handle remains allocated for this call and that
+/// `nemo_relay_plugin_activation_free` does not run concurrently with it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_activation_clear(
+    activation: *mut FfiPluginActivation,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if activation.is_null() {
+        return NemoRelayStatus::Ok;
+    }
+    let activation = unsafe { &*activation };
+    let mut guard = match lock_plugin_activation(activation) {
+        Ok(guard) => guard,
+        Err(status) => return status,
+    };
+    let Some(activation) = guard.take() else {
+        return NemoRelayStatus::Ok;
+    };
+    match activation.clear() {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(&error),
+    }
 }
 
 /// Validate a generic plugin config document and return the diagnostics report as JSON.

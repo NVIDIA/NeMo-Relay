@@ -1123,7 +1123,8 @@ test-rust:
                 --output-path "$coverage_out"
         fi
     else
-        cargo test --workspace
+        cargo test --workspace --exclude nemo-relay-ffi
+        cargo test -p nemo-relay-ffi -- --test-threads=1
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -1136,6 +1137,9 @@ test-python:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    test_config_home="$(mktemp -d)"
+    trap 'rm -rf "$test_config_home"' EXIT
+    export XDG_CONFIG_HOME="$test_config_home"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact python-coverage.xml)"
         junit_out="$(prepare_artifact python-junit.xml)"
@@ -1382,6 +1386,9 @@ test-node:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    test_config_home="$(mktemp -d)"
+    trap 'rm -rf "$test_config_home"' EXIT
+    export XDG_CONFIG_HOME="$test_config_home"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"
