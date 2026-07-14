@@ -19,8 +19,9 @@ The plugin intentionally infers subscriber names from the component namespace so
 ## Structs
 
 - [AtifSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atifsectionconfig): Per-trajectory ATIF exporter config.
-- [AtofEndpointSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofendpointsectionconfig): Streaming destination for raw ATOF events.
-- [AtofSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofsectionconfig): Filesystem-backed ATOF JSONL exporter config.
+- [AtofFileSinkSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atoffilesinksectionconfig): File sink settings for the ATOF plugin section.
+- [AtofSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofsectionconfig): Multi-sink ATOF JSONL exporter config.
+- [AtofStreamSinkSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-atofstreamsinksectionconfig): Stream sink settings for the ATOF plugin section.
 - [ComponentSpec](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-componentspec): Top-level observability component wrapper.
 - [HttpStorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-httpstorageconfig): HTTP endpoint settings for ATIF trajectory upload.
 - [ObservabilityConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-observabilityconfig): Canonical config document for the observability plugin component.
@@ -30,6 +31,7 @@ The plugin intentionally infers subscriber names from the component namespace so
 ## Enums
 
 - [AtifStorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/enum-atifstorageconfig): Remote storage destination for ATIF trajectory files.
+- [AtofSinkSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/enum-atofsinksectionconfig): One plugin-managed destination for raw ATOF events.
 
 ## Constants
 

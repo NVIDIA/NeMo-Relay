@@ -1,0 +1,44 @@
+---
+title: "Type Alias Atof Endpoint Config"
+sidebar-title: "AtofEndpointConfig"
+description: "Backward-compatible name for an ATOF stream sink."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type AtofEndpointConfig = <a href=\"struct-atofstreamsinkconfig\">AtofStreamSinkConfig</a>;"}} /></pre>
+
+Backward-compatible name for an ATOF stream sink.
+
+## Aliased Type
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct AtofEndpointConfig &#123;\n    pub url: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub transport: <a href=\"enum-atofendpointtransport\">AtofEndpointTransport</a>,\n    pub headers: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub header_env: <a href=\"https://doc.rust-lang.org/1.93.0/std/collections/hash/map/struct.HashMap.html\">HashMap</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>, <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    pub timeout_millis: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub field_name_policy: <a href=\"enum-atofendpointfieldnamepolicy\">AtofEndpointFieldNamePolicy</a>,\n&#125;"}} /></pre>
+
+## Fields
+
+### `url: String`
+
+Endpoint URL.
+
+### `transport: AtofEndpointTransport`
+
+Endpoint transport.
+
+### `headers: HashMap<String, String>`
+
+Headers applied to endpoint requests or handshakes.
+
+### `header_env: HashMap<String, String>`
+
+Header names mapped to environment variables containing their values.
+
+### `timeout_millis: u64`
+
+Per-endpoint timeout in milliseconds.
+
+### `field_name_policy: AtofEndpointFieldNamePolicy`
+
+Field name transformation policy applied before sending events.

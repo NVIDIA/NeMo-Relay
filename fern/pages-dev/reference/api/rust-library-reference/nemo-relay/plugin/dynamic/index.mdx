@@ -42,6 +42,8 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [NativePluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginactivation): Owns native dynamic libraries registered into the plugin registry.
 - [NativePluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginloadspec): Native plugin load request derived from host dynamic-plugin state.
 - [PluginHostActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-pluginhostactivation): Owns one process-wide dynamic plugin configuration and its loaded runtimes.
+- [WorkerPluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-workerpluginactivation): Owns gRPC worker processes registered into the plugin registry.
+- [WorkerPluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-workerpluginloadspec): Worker plugin load request derived from host dynamic-plugin state.
 
 ## Enums
 
@@ -64,6 +66,7 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 ## Functions
 
 - [load_native_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-native-plugins): Loads native dynamic plugins and registers their plugin kinds.
+- [load_worker_plugins](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/fn-load-worker-plugins): Loads gRPC worker plugins and registers their plugin kinds.
 
 ## Type Aliases
 

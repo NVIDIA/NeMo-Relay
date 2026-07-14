@@ -78,6 +78,40 @@ export interface PluginConfig {
 }
 ```
 
+### `DynamicPluginActivationSpec`
+
+Explicitly resolved dynamic plugin load and component configuration.
+
+```ts
+export interface DynamicPluginActivationSpec {
+  pluginId: string;
+  kind: DynamicPluginKind;
+  manifestRef: string;
+  environmentRef?: string | null;
+  config?: Record<string, Json>;
+}
+```
+
+### `DynamicPluginActivation`
+
+Owns one process-wide dynamic plugin host activation.
+
+```ts
+export interface DynamicPluginActivation extends AsyncDisposable {
+  /** Validation report produced by the successful activation. */
+  readonly report: ConfigReport;
+  /**
+   * Whether this activation handle has not begun teardown. `false` does not
+   * guarantee another process-wide activation can start after failed teardown.
+   */
+  readonly active: boolean;
+  /** Clear callbacks before unloading libraries and workers. Idempotent. */
+  close(): Promise<void>;
+  /** Delegate structured `await using` cleanup to `close()`. */
+  [Symbol.asyncDispose](): Promise<void>;
+}
+```
+
 ### `PendingMarkSpec`
 
 A mark Relay materializes under a managed lifecycle.
@@ -413,6 +447,32 @@ Partial plugin registration is rolled back if activation fails, and the promise 
 export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
 ```
 
+### `initializeWithDynamicPlugins`
+
+Initialize with explicitly resolved dynamic plugins.
+
+The returned object owns loaded libraries and worker processes. Keep it alive while plugin callbacks may run and call `close()` for deterministic teardown. Garbage collection is a defensive fallback only.
+
+**Parameters**
+
+- `config`: Base configuration layered over discovered `plugins.toml` files.
+- `specs`: Non-empty explicit manifest and component configuration for each plugin.
+
+**Returns**
+
+The owned activation and its validation report.
+
+**Remarks**
+
+File-configured static components initialize before dynamic components. Use `initialize()` for a static-only configuration.
+
+```ts
+export declare function initializeWithDynamicPlugins(
+  config: PluginConfig,
+  specs: DynamicPluginActivationSpec[],
+): Promise<DynamicPluginActivation>;
+```
+
 ### `clear`
 
 Clear the active plugin configuration.
@@ -520,5 +580,13 @@ Policy behavior for unsupported configuration.
 
 ```ts
 export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
+```
+
+### `DynamicPluginKind`
+
+Execution lane for a dynamically loaded Relay plugin.
+
+```ts
+export type DynamicPluginKind = 'rust_dynamic' | 'worker';
 ```
 

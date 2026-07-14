@@ -19,20 +19,30 @@ Observability plugin configuration helpers.
 ```ts
 export interface AtofConfig {
   enabled?: boolean;
-  output_directory?: string;
-  filename?: string;
-  mode?: 'append' | 'overwrite' | string;
-  endpoints?: AtofEndpointConfig[];
+  sinks?: AtofSinkConfig[];
 }
 ```
 
-### `AtofEndpointConfig`
+### `AtofFileSinkConfig`
 
 ```ts
-export interface AtofEndpointConfig {
+export interface AtofFileSinkConfig {
+  type: 'file';
+  output_directory?: string;
+  filename?: string;
+  mode?: 'append' | 'overwrite' | string;
+}
+```
+
+### `AtofStreamSinkConfig`
+
+```ts
+export interface AtofStreamSinkConfig {
+  type: 'stream';
   url: string;
   transport?: 'http_post' | 'websocket' | 'ndjson' | string;
   headers?: Record<string, string>;
+  header_env?: Record<string, string>;
   timeout_millis?: number;
   field_name_policy?: 'preserve' | 'replace_dots' | string;
 }
@@ -167,6 +177,22 @@ export declare function ComponentSpec(
   config: Config,
   options?: {
     enabled?: boolean;
+```
+
+## Type Aliases
+
+### `AtofSinkConfig`
+
+```ts
+export type AtofSinkConfig = AtofFileSinkConfig | AtofStreamSinkConfig;
+```
+
+### `AtofEndpointConfig`
+
+@deprecated Use AtofStreamSinkConfig.
+
+```ts
+export type AtofEndpointConfig = AtofStreamSinkConfig;
 ```
 
 ## Constants

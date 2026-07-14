@@ -46,7 +46,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_atof_exporter_create_from_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-create-from-json): Creates a new ATOF exporter from a JSON config object.
 - [nemo_relay_atof_exporter_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-deregister): Deregisters the ATOF exporter subscriber.
 - [nemo_relay_atof_exporter_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-force-flush): Flushes the ATOF exporter output file.
-- [nemo_relay_atof_exporter_path](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-path): Returns the ATOF exporter output path as a string.
+- [nemo_relay_atof_exporter_path](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-path): Returns the ATOF exporter output path as a string when its sink is a file.
 - [nemo_relay_atof_exporter_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-register): Registers the ATOF exporter as an event subscriber.
 - [nemo_relay_atof_exporter_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-atof-exporter-shutdown): Shuts down the ATOF exporter by flushing output.
 - [nemo_relay_clear_plugin_configuration](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-clear-plugin-configuration): Clear the active global plugin configuration.
@@ -70,6 +70,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_flush_subscribers](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-flush-subscribers): Wait for subscriber callbacks queued before this call to finish.
 - [nemo_relay_get_handle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-get-handle): Retrieve the current scope handle from the thread-local scope stack.
 - [nemo_relay_initialize_plugins](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-plugins): Initialize the active global plugin components and return the resulting diagnostics report.
+- [nemo_relay_initialize_with_dynamic_plugins](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-initialize-with-dynamic-plugins): Load and activate dynamic plugins as one owned transaction.
 - [nemo_relay_list_plugin_kinds_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-list-plugin-kinds-json): Return the registered plugin kinds as JSON.
 - [nemo_relay_llm_call](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call): Begin a manual LLM call lifecycle span.
 - [nemo_relay_llm_call_end](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-call-end): End a manual LLM call lifecycle span.
@@ -94,6 +95,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_otel_subscriber_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-force-flush): Forces a flush of finished spans through the exporter.
 - [nemo_relay_otel_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-register): Registers the OpenTelemetry subscriber as an event subscriber.
 - [nemo_relay_otel_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-shutdown): Shuts down the underlying tracer provider.
+- [nemo_relay_plugin_activation_clear](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-activation-clear): Clear one owned dynamic plugin activation.
 - [nemo_relay_plugin_context_register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-conditional-execution-guardrail): Register an LLM conditional-execution guardrail into the plugin registration context.
 - [nemo_relay_plugin_context_register_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-execution-intercept): Register an LLM execution intercept into the plugin registration context.
 - [nemo_relay_plugin_context_register_llm_request_intercept](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-request-intercept): Register an LLM request intercept into the plugin registration context.

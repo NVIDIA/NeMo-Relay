@@ -24,6 +24,7 @@ This module defines opaque handle wrappers, enumerations, accessor functions, an
 - [FfiLLMRequest](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffillmrequest): Opaque wrapper around an LLM request (headers, content).
 - [FfiOpenInferenceSubscriber](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiopeninferencesubscriber): Opaque OpenInference subscriber handle.
 - [FfiOpenTelemetrySubscriber](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiopentelemetrysubscriber): Opaque OpenTelemetry subscriber handle.
+- [FfiPluginActivation](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffipluginactivation): Opaque owned dynamic plugin host activation.
 - [FfiPluginContext](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiplugincontext): Opaque plugin registration context.
 - [FfiScopeHandle](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiscopehandle): Opaque handle representing an active execution scope.
 - [FfiScopeStack](/reference/api/rust-library-reference/nemo-relay-ffi/types/struct-ffiscopestack): Opaque handle to an isolated scope stack for per-request/per-task isolation.
@@ -74,6 +75,7 @@ This module defines opaque handle wrappers, enumerations, accessor functions, an
 - [nemo_relay_llm_request_new](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-llm-request-new): Create a new LLM request object. Returns a heap-allocated `FfiLLMRequest` that must be freed with `nemo_relay_llm_request_free`. Returns null on invalid input.
 - [nemo_relay_openinference_subscriber_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-openinference-subscriber-free): Free an OpenInference subscriber handle previously returned by `nemo_relay_openinference_subscriber_create`.
 - [nemo_relay_otel_subscriber_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-otel-subscriber-free): Free an OpenTelemetry subscriber handle previously returned by `nemo_relay_otel_subscriber_create`.
+- [nemo_relay_plugin_activation_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-plugin-activation-free): Free a dynamic plugin activation handle previously returned by `nemo_relay_initialize_with_dynamic_plugins`.
 - [nemo_relay_scope_handle_attributes](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-attributes): Return the bitfield attributes of a scope handle. Returns 0 if `ptr` is null.
 - [nemo_relay_scope_handle_data](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-data): Return the scope data as a JSON C string, or null if no data is set. Caller must free the result with `nemo_relay_string_free`.
 - [nemo_relay_scope_handle_free](/reference/api/rust-library-reference/nemo-relay-ffi/types/fn-nemo-relay-scope-handle-free): Free a scope handle previously returned by the runtime.

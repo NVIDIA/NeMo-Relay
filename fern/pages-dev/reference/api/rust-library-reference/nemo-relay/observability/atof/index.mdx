@@ -15,9 +15,10 @@ The [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observabil
 
 ## Structs
 
-- [AtofEndpointConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofendpointconfig): Streaming destination for raw ATOF events.
 - [AtofExporter](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter): Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
 - [AtofExporterConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporterconfig): Configuration for [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter).
+- [AtofFileSinkConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atoffilesinkconfig): Filesystem sink for raw ATOF JSONL events.
+- [AtofStreamSinkConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofstreamsinkconfig): Streaming sink for raw ATOF events.
 
 ## Enums
 
@@ -25,7 +26,9 @@ The [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observabil
 - [AtofEndpointTransport](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofendpointtransport): Streaming transport used by an ATOF endpoint.
 - [AtofExporterError](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofexportererror): Errors produced while configuring or operating the ATOF JSONL exporter.
 - [AtofExporterMode](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofexportermode): File write behavior for [`AtofExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atof/struct-atofexporter).
+- [AtofSinkConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/enum-atofsinkconfig): One destination for raw ATOF events.
 
 ## Type Aliases
 
+- [AtofEndpointConfig](/reference/api/rust-library-reference/nemo-relay/observability/atof/type-atofendpointconfig): Backward-compatible name for an ATOF stream sink.
 - [Result](/reference/api/rust-library-reference/nemo-relay/observability/atof/type-result): Result type for the ATOF JSONL exporter.

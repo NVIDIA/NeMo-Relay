@@ -16,36 +16,29 @@ Main runtime lifecycle, scope, middleware, subscriber, and exporter APIs.
 
 ### `AtofExporterConfig`
 
-Mutable configuration object for `AtofExporter`.
+One tagged sink configuration for `AtofExporter`.
 
 ```ts
 export interface AtofExporterConfig {
+  /** Sink type: `"file"` (default) or `"stream"`. */
+  type?: string
   /** Output directory. Defaults to the current working directory. */
   outputDirectory?: string
   /** `"append"` (default) or `"overwrite"`. */
   mode?: string
   /** Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`. */
   filename?: string
-  /** Streaming endpoints that receive every raw ATOF event. */
-  endpoints?: Array<AtofEndpointConfig>
-}
-```
-
-### `AtofEndpointConfig`
-
-Mutable configuration object for one ATOF streaming endpoint.
-
-```ts
-export interface AtofEndpointConfig {
-  /** Endpoint URL. */
-  url: string
+  /** Stream endpoint URL. Required when `type` is `"stream"`. */
+  url?: string
   /** `"http_post"` (default), `"websocket"`, or `"ndjson"`. */
   transport?: string
-  /** Extra endpoint headers as string key/value pairs. */
+  /** Extra stream headers as string key/value pairs. */
   headers?: Json
-  /** Per-endpoint timeout in milliseconds. */
+  /** Header names mapped to environment variables that supply their values. */
+  headerEnv?: Json
+  /** Per-stream timeout in milliseconds. */
   timeoutMillis?: number
-  /** Field name policy applied before sending events. */
+  /** Field name policy applied before sending stream events. */
   fieldNamePolicy?: string
 }
 ```
@@ -158,7 +151,7 @@ export declare class AtifExporter {
 
 ### `AtofExporter`
 
-Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
+Single-sink Agent Trajectory Observability Format (ATOF) exporter.
 
 ```ts
 export declare class AtofExporter {
@@ -167,8 +160,8 @@ export declare class AtofExporter {
    * from a config object.
    */
   constructor(config?: AtofExporterConfig | undefined | null)
-  /** Return the JSONL output path. */
-  get path(): string
+  /** Return the JSONL output path, or `null` for a stream sink. */
+  get path(): string | null
   /** Register this exporter globally with the given name. */
   register(name: string): void
   /** Deregister a subscriber by name. */
@@ -252,6 +245,40 @@ export declare class AdaptiveRuntime {
   bindScope(scopeHandle: ScopeHandle): void
   /** Build cache request facts for an annotated LLM request. */
   buildCacheRequestFacts(options: Json): Json | null
+}
+```
+
+### `DynamicPluginActivation`
+
+Owned dynamic plugin activation.
+
+Keep this object alive while code may invoke callbacks registered by the dynamic plugins. Call `close()` for deterministic cleanup; garbage collection performs the same cleanup as a defensive fallback.
+
+```ts
+export declare class DynamicPluginActivation {
+  /** Return the validation report produced by activation. */
+  get report(): Json
+  /**
+   * Return whether this activation handle has not begun teardown.
+   *
+   * `false` does not guarantee another process-wide activation can start;
+   * failed teardown may intentionally retain the activation owner.
+   */
+  get active(): boolean
+  /**
+   * Clear plugin callbacks before unloading libraries and workers.
+   *
+   * This method is idempotent, including when concurrent callers race to
+   * close the same activation.
+   */
+  close(): Promise<void>
+  /**
+   * Supply the structured disposal signature to napi-rs declaration generation.
+   *
+   * Module initialization installs `close()` under the actual well-known
+   * symbol and removes this string-named declaration shim from the prototype.
+   */
+  [Symbol.asyncDispose](): Promise<void>
 }
 ```
 
@@ -1319,6 +1346,16 @@ Initialize the active global plugin components.
 
 ```ts
 export declare function initializePlugins(config: Json): Promise<Json>
+```
+
+### `initializeWithDynamicPlugins`
+
+Initialize with explicitly resolved dynamic plugins.
+
+`config` is layered over discovered `plugins.toml` files and may contain statically registered components; dynamic components are activated after that effective base configuration. At least one dynamic plugin is required. Static-only callers should use `initializePlugins`. The returned object owns all loaded libraries and worker processes. Its validation report is available through the `report` property.
+
+```ts
+export declare function initializeWithDynamicPlugins(config: Json, specs: Json): Promise<DynamicPluginActivation>
 ```
 
 ### `clearPluginConfiguration`

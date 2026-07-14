@@ -237,6 +237,58 @@ def to_dict() -> JsonObject
 
 Serialize this config to the canonical JSON document shape.
 
+### `DynamicPluginActivationSpec`
+
+One dynamic plugin component to load and activate.
+
+#### Methods
+
+##### `DynamicPluginActivationSpec`
+
+```python
+def DynamicPluginActivationSpec(plugin_id: str, kind: DynamicPluginKind, manifest_ref: str, environment_ref: str | None = None, config: JsonObject = ...) -> None
+```
+
+Create an instance.
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this activation specification to its canonical JSON shape.
+
+### `PluginHostActivation`
+
+Owned lifetime for one process-wide dynamic plugin host.
+
+#### Methods
+
+##### `report`
+
+```python
+def report() -> ConfigReport
+```
+
+Return the validation report captured during activation.
+
+##### `is_active`
+
+```python
+def is_active() -> bool
+```
+
+Return whether this activation handle has not begun teardown.
+
+##### `close`
+
+```python
+async def close() -> None
+```
+
+Clear callbacks and unload plugins; repeated calls are safe.
+
 ## Functions
 
 ### `validate`
@@ -254,6 +306,14 @@ async def initialize(config: PluginConfig | JsonObject) -> ConfigReport
 ```
 
 Validate and activate a plugin configuration.
+
+### `initialize_with_dynamic_plugins`
+
+```python
+async def initialize_with_dynamic_plugins(config: PluginConfig | JsonObject, dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject]) -> PluginHostActivation
+```
+
+Initialize registered components with dynamic plugins as one owned host.
 
 ### `clear`
 
@@ -305,5 +365,6 @@ Deregister a custom plugin kind.
 
 ## Type Aliases And Constants
 
+- `DynamicPluginKind`
 - `UnsupportedBehavior`
 

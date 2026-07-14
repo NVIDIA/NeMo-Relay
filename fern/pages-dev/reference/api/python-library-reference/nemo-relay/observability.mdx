@@ -29,9 +29,9 @@ def to_dict() -> JsonObject
 
 Serialize this policy to the canonical JSON object shape.
 
-### `AtofEndpointConfig`
+### `AtofStreamSinkConfig`
 
-Streaming destination for raw ATOF events.
+Stream sink for raw ATOF events.
 
 #### Methods
 
@@ -41,11 +41,11 @@ Streaming destination for raw ATOF events.
 def to_dict() -> JsonObject
 ```
 
-Serialize this ATOF endpoint config to the canonical JSON object shape.
+Serialize this ATOF stream sink to the canonical JSON object shape.
 
 ### `AtofConfig`
 
-Filesystem-backed raw ATOF JSONL export settings.
+Multi-sink raw ATOF export settings.
 
 #### Methods
 
@@ -56,6 +56,18 @@ def to_dict() -> JsonObject
 ```
 
 Serialize this ATOF config to the canonical JSON object shape.
+
+### `AtofFileSinkConfig`
+
+Filesystem destination for raw ATOF JSONL events.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
 
 ### `S3StorageConfig`
 
@@ -143,6 +155,7 @@ Serialize this component to the canonical plugin shape.
 
 ## Type Aliases And Constants
 
+- `AtofEndpointConfig`
 - `MarkProjection`
 - `OBSERVABILITY_PLUGIN_KIND`
 
