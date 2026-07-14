@@ -344,11 +344,14 @@ fn exporter_destinations_describe_observability_outputs() {
                 "kind": OBSERVABILITY_PLUGIN_KIND,
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": "logs",
-                        "filename": "events.jsonl"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": "logs",
+                            "filename": "events.jsonl"
+                        }]
                     },
                     "atif": {
                         "enabled": true,

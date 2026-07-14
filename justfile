@@ -468,6 +468,7 @@ local_dependencies = (
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
+    "nemo-relay-switchyard",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -1124,6 +1125,9 @@ test-python:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    test_config_home="$(mktemp -d)"
+    trap 'rm -rf "$test_config_home"' EXIT
+    export XDG_CONFIG_HOME="$test_config_home"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact python-coverage.xml)"
         junit_out="$(prepare_artifact python-junit.xml)"
@@ -1363,6 +1367,9 @@ test-node:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    test_config_home="$(mktemp -d)"
+    trap 'rm -rf "$test_config_home"' EXIT
+    export XDG_CONFIG_HOME="$test_config_home"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"

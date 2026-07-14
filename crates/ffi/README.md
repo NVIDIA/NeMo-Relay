@@ -23,6 +23,11 @@ shared Rust runtime contract.
 This surface is experimental and source-first. The repository-maintained Go
 binding consumes it through CGo.
 
+> **DO NOT TREAT AS PRODUCTION-READY:** the experimental
+> `nemo_relay_initialize_with_dynamic_plugins` lifecycle needs a real consumer
+> to validate shutdown, ownership, and error handling before it can be promoted
+> to a stable contract.
+
 ## Why Use It?
 
 - **Expose NeMo Relay to native consumers**: Call the shared Rust runtime from

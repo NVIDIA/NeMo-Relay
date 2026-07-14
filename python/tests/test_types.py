@@ -13,7 +13,6 @@ import pytest
 
 from nemo_relay import (
     AtifExporter,
-    AtofEndpointConfig,
     AtofExporter,
     AtofExporterConfig,
     AtofExporterMode,
@@ -90,6 +89,22 @@ class _OtelCollector:
 class _OtelCollectorServer(http.server.ThreadingHTTPServer):
     requests: list[_CollectorRequest]
     request_event: threading.Event
+
+
+def _encode_varint(value: int) -> bytes:
+    result = bytearray()
+    while value >= 0x80:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
+    result.append(value)
+    return bytes(result)
+
+
+def _otlp_string_attribute(key: str, value: str) -> bytes:
+    key_bytes = key.encode()
+    value_bytes = value.encode()
+    any_value = b"\x0a" + _encode_varint(len(value_bytes)) + value_bytes
+    return b"\x0a" + _encode_varint(len(key_bytes)) + key_bytes + b"\x12" + _encode_varint(len(any_value)) + any_value
 
 
 def _scope_event(events, name: str, category: str, scope_category: str) -> ScopeEvent:
@@ -458,39 +473,42 @@ class TestAtofExporterType:
         assert config.mode == AtofExporterMode.Append
         assert config.filename.startswith("nemo-relay-events-")
         assert config.filename.endswith(".jsonl")
-        assert config.endpoints == []
+        assert config.sink_type == "file"
         assert "AtofExporterConfig" in repr(config)
 
         config.output_directory = str(tmp_path)
         config.mode = AtofExporterMode.Overwrite
         config.filename = "events.jsonl"
-        endpoint = AtofEndpointConfig(
-            "http://localhost:8080/events",
-            transport="http_post",
-            headers={"X-Test": "yes"},
-            timeout_millis=1000,
-            field_name_policy="replace_dots",
-        )
-        config.endpoints = [endpoint]
+        config.sink_type = "stream"
+        config.url = "http://localhost:8080/events"
+        config.transport = "http_post"
+        config.headers = {"X-Test": "yes"}
+        config.header_env = {"authorization": "NEMO_RELAY_ATOF_AUTH"}
+        config.timeout_millis = 1000
+        config.field_name_policy = "replace_dots"
 
         assert config.output_directory == str(tmp_path)
         assert config.mode == AtofExporterMode.Overwrite
         assert config.filename == "events.jsonl"
-        assert config.endpoints[0].url == "http://localhost:8080/events"
-        assert config.endpoints[0].transport == "http_post"
-        assert config.endpoints[0].headers == {"X-Test": "yes"}
-        assert config.endpoints[0].timeout_millis == 1000
-        assert config.endpoints[0].field_name_policy == "replace_dots"
+        assert config.url == "http://localhost:8080/events"
+        assert config.transport == "http_post"
+        assert config.headers == {"X-Test": "yes"}
+        assert config.header_env == {"authorization": "NEMO_RELAY_ATOF_AUTH"}
+        assert config.timeout_millis == 1000
+        assert config.field_name_policy == "replace_dots"
 
-    def test_endpoint_field_name_policy_is_validated(self, tmp_path):
+    def test_stream_sink_requires_url(self):
         config = AtofExporterConfig()
-        config.output_directory = str(tmp_path)
-        config.endpoints = [
-            AtofEndpointConfig(
-                "http://localhost:8080/events",
-                field_name_policy="bogus",  # type: ignore[arg-type]
-            )
-        ]
+        config.sink_type = "stream"
+
+        with pytest.raises(ValueError, match="stream sink requires url"):
+            AtofExporter(config)
+
+    def test_endpoint_field_name_policy_is_validated(self):
+        config = AtofExporterConfig()
+        config.sink_type = "stream"
+        config.url = "http://localhost:8080/events"
+        config.field_name_policy = "bogus"
 
         with pytest.raises(ValueError, match="field_name_policy"):
             AtofExporter(config)
@@ -503,6 +521,7 @@ class TestAtofExporterType:
 
         exporter = AtofExporter(config)
         assert "<AtofExporter>" in repr(exporter)
+        assert exporter.path is not None
         assert exporter.path.endswith("events.jsonl")
 
         subscriber_name = f"py_atof_{uuid4().hex}"
@@ -569,6 +588,8 @@ class TestOpenTelemetryTypes:
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
+        config.attribute_mappings = [{"key": "nemo_relay.start.metadata.tenant", "alias": "tenant.id"}]
+        assert config.attribute_mappings == [{"key": "nemo_relay.start.metadata.tenant", "alias": "tenant.id"}]
         assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -579,6 +600,18 @@ class TestOpenTelemetryTypes:
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
+
+        with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
+            config.attribute_mappings = [{"key": "", "alias": "tenant.id"}]
+
+        with pytest.raises(ValueError, match="attribute mapping alias must not be blank"):
+            config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": ""}]
+
+        with pytest.raises(ValueError, match=r"attribute mapping alias .* duplicated"):
+            config.attribute_mappings = [
+                {"key": "one", "alias": "tenant.id"},
+                {"key": "two", "alias": "tenant.id"},
+            ]
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenTelemetryConfig()
@@ -605,9 +638,11 @@ class TestOpenTelemetryTypes:
 
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
+            source = "python-é" * 20
             config = OpenTelemetryConfig()
             config.endpoint = collector.endpoint
             config.service_name = "py-agent"
+            config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": "tenant.id"}]
 
             subscriber = OpenTelemetrySubscriber(config)
             subscriber_name = f"py_otel_e2e_{uuid4().hex}"
@@ -620,7 +655,7 @@ class TestOpenTelemetryTypes:
                         "otel_mark",
                         handle=handle,
                         data={"step": 1},
-                        metadata={"source": "python"},
+                        metadata={"source": source},
                     )
                 finally:
                     scope.pop(handle)
@@ -630,6 +665,7 @@ class TestOpenTelemetryTypes:
                 assert request["path"] == "/v1/traces"
                 assert request["headers"]["content-type"] == "application/x-protobuf"
                 assert request["body"]
+                assert _otlp_string_attribute("tenant.id", source) in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
@@ -658,6 +694,8 @@ class TestOpenInferenceTypes:
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
+        config.attribute_mappings = [{"key": "openinference.metadata.tenant", "alias": "tenant.id"}]
+        assert config.attribute_mappings == [{"key": "openinference.metadata.tenant", "alias": "tenant.id"}]
         assert "OpenInferenceConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -668,6 +706,18 @@ class TestOpenInferenceTypes:
 
         with pytest.raises(ValueError, match="dict\\[str, str\\]"):
             config.resource_attributes = cast(dict[str, str], {"env": 1})
+
+        with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
+            config.attribute_mappings = [{"key": "", "alias": "tenant.id"}]
+
+        with pytest.raises(ValueError, match="attribute mapping alias must not be blank"):
+            config.attribute_mappings = [{"key": "openinference.metadata.tenant", "alias": ""}]
+
+        with pytest.raises(ValueError, match=r"attribute mapping alias .* duplicated"):
+            config.attribute_mappings = [
+                {"key": "one", "alias": "tenant.id"},
+                {"key": "two", "alias": "tenant.id"},
+            ]
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenInferenceConfig()
@@ -701,9 +751,11 @@ class TestOpenInferenceTypes:
 
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
+            source = "python-é" * 20
             config = OpenInferenceConfig()
             config.endpoint = collector.endpoint
             config.service_name = "py-agent"
+            config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": "tenant.id"}]
 
             subscriber = OpenInferenceSubscriber(config)
             subscriber_name = f"py_openinference_e2e_{uuid4().hex}"
@@ -716,7 +768,7 @@ class TestOpenInferenceTypes:
                         "openinference_mark",
                         handle=handle,
                         data={"step": 1},
-                        metadata={"source": "python"},
+                        metadata={"source": source},
                     )
                 finally:
                     scope.pop(handle)
@@ -730,6 +782,7 @@ class TestOpenInferenceTypes:
                 assert b"AGENT" in request["body"]
                 assert b"metadata" in request["body"]
                 assert b"openinference_mark" in request["body"]
+                assert _otlp_string_attribute("tenant.id", source) in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

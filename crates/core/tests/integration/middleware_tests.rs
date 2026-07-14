@@ -958,10 +958,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
         (
-            "nemo_relay.mark.category_profile_json",
-            "{\"subtype\":\"example.compaction\"}",
+            "nemo_relay.mark.category_profile.subtype",
+            "example.compaction",
         ),
-        ("nemo_relay.mark.metadata_json", "{\"source\":\"test\"}"),
+        ("nemo_relay.mark.metadata.source", "test"),
     ] {
         assert!(otel_mark.attributes.iter().any(|attribute| {
             attribute.key.as_str() == key && attribute.value.to_string() == value
@@ -989,10 +989,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     for (key, value) in [
         ("nemo_relay.mark.category", "custom"),
         (
-            "nemo_relay.mark.category_profile_json",
-            "{\"subtype\":\"example.compaction\"}",
+            "nemo_relay.mark.category_profile.subtype",
+            "example.compaction",
         ),
-        ("nemo_relay.mark.metadata_json", "{\"source\":\"test\"}"),
+        ("nemo_relay.mark.metadata.source", "test"),
     ] {
         assert!(openinference_mark.attributes.iter().any(|attribute| {
             attribute.key.as_str() == key && attribute.value.to_string() == value

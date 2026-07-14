@@ -14,6 +14,21 @@ use super::{
     FORCE_ATIF_EXPORT_JSON_SERIALIZATION_ERROR, FORCE_ATIF_EXPORT_VALUE_SERIALIZATION_ERROR,
 };
 
+fn py_attribute_mappings(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+    let value = py_to_json(value)?;
+    let mappings: Vec<nemo_relay::observability::OtlpAttributeMapping> =
+        serde_json::from_value(value).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "attribute_mappings must be a list of {{key: str, alias: str}} objects: {error}"
+            ))
+        })?;
+    nemo_relay::observability::validate_attribute_mappings(&mappings)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok(mappings)
+}
+
 // ---------------------------------------------------------------------------
 // AtifExporter
 // ---------------------------------------------------------------------------
@@ -166,7 +181,7 @@ impl From<nemo_relay::observability::atof::AtofExporterMode> for PyAtofExporterM
 ///
 /// Configures a remote endpoint URL, transport (`http_post`, `websocket`, or
 /// `ndjson`), optional string headers, and a positive timeout in milliseconds.
-#[pyclass(name = "AtofEndpointConfig", from_py_object)]
+#[pyclass(name = "AtofStreamSinkConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyAtofEndpointConfig {
     #[pyo3(get, set)]
@@ -175,6 +190,8 @@ pub struct PyAtofEndpointConfig {
     pub(crate) transport: String,
     #[pyo3(get, set)]
     pub(crate) headers: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) header_env: HashMap<String, String>,
     #[pyo3(get, set)]
     pub(crate) timeout_millis: u64,
     #[pyo3(get, set)]
@@ -206,6 +223,9 @@ impl PyAtofEndpointConfig {
         for (key, value) in &self.headers {
             config = config.with_header(key.clone(), value.clone());
         }
+        for (key, variable) in &self.header_env {
+            config = config.with_header_env(key.clone(), variable.clone());
+        }
         Ok(config)
     }
 }
@@ -213,11 +233,12 @@ impl PyAtofEndpointConfig {
 #[pymethods]
 impl PyAtofEndpointConfig {
     #[new]
-    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, timeout_millis=3000, field_name_policy="preserve".to_string()))]
+    #[pyo3(signature = (url, *, transport="http_post".to_string(), headers=None, header_env=None, timeout_millis=3000, field_name_policy="preserve".to_string()))]
     pub(crate) fn new(
         url: String,
         transport: String,
         headers: Option<&Bound<'_, PyAny>>,
+        header_env: Option<&Bound<'_, PyAny>>,
         timeout_millis: u64,
         field_name_policy: String,
     ) -> PyResult<Self> {
@@ -225,10 +246,15 @@ impl PyAtofEndpointConfig {
             Some(headers) if !headers.is_none() => py_string_map(headers, "headers")?,
             _ => HashMap::new(),
         };
+        let header_env = match header_env {
+            Some(header_env) if !header_env.is_none() => py_string_map(header_env, "header_env")?,
+            _ => HashMap::new(),
+        };
         Ok(Self {
             url,
             transport,
             headers,
+            header_env,
             timeout_millis,
             field_name_policy,
         })
@@ -236,15 +262,17 @@ impl PyAtofEndpointConfig {
 
     pub(crate) fn __repr__(&self) -> String {
         format!(
-            "<AtofEndpointConfig transport={:?} url={:?}>",
+            "<AtofStreamSinkConfig transport={:?} url={:?}>",
             self.transport, self.url
         )
     }
 }
 
-/// Mutable configuration object for the filesystem-backed ATOF JSONL exporter.
+/// One tagged ATOF sink configuration for the manual exporter API.
 #[pyclass(name = "AtofExporterConfig")]
 pub struct PyAtofExporterConfig {
+    #[pyo3(get, set)]
+    pub(crate) sink_type: String,
     #[pyo3(get, set)]
     pub(crate) output_directory: String,
     #[pyo3(get, set)]
@@ -252,21 +280,50 @@ pub struct PyAtofExporterConfig {
     #[pyo3(get, set)]
     pub(crate) filename: String,
     #[pyo3(get, set)]
-    pub(crate) endpoints: Vec<PyAtofEndpointConfig>,
+    pub(crate) url: String,
+    #[pyo3(get, set)]
+    pub(crate) transport: String,
+    #[pyo3(get, set)]
+    pub(crate) headers: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) header_env: HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) field_name_policy: String,
 }
 
 impl PyAtofExporterConfig {
     fn to_rust_config(&self) -> PyResult<nemo_relay::observability::atof::AtofExporterConfig> {
-        let endpoints = self
-            .endpoints
-            .iter()
-            .map(PyAtofEndpointConfig::to_rust_config)
-            .collect::<PyResult<Vec<_>>>()?;
-        Ok(nemo_relay::observability::atof::AtofExporterConfig::new()
-            .with_output_directory(PathBuf::from(self.output_directory.clone()))
-            .with_mode(self.mode.clone().into())
-            .with_filename(self.filename.clone())
-            .with_endpoints(endpoints))
+        match self.sink_type.as_str() {
+            "file" => Ok(nemo_relay::observability::atof::AtofExporterConfig::new()
+                .with_output_directory(PathBuf::from(self.output_directory.clone()))
+                .with_mode(self.mode.clone().into())
+                .with_filename(self.filename.clone())),
+            "stream" => {
+                if self.url.trim().is_empty() {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "stream sink requires url",
+                    ));
+                }
+                PyAtofEndpointConfig {
+                    url: self.url.clone(),
+                    transport: self.transport.clone(),
+                    headers: self.headers.clone(),
+                    header_env: self.header_env.clone(),
+                    timeout_millis: self.timeout_millis,
+                    field_name_policy: self.field_name_policy.clone(),
+                }
+                .to_rust_config()
+                .map(|sink| {
+                    nemo_relay::observability::atof::AtofExporterConfig::new()
+                        .with_stream_sink(sink)
+                })
+            }
+            _ => Err(pyo3::exceptions::PyValueError::new_err(
+                "sink_type must be 'file' or 'stream'",
+            )),
+        }
     }
 }
 
@@ -274,24 +331,27 @@ impl PyAtofExporterConfig {
 impl PyAtofExporterConfig {
     #[new]
     pub(crate) fn new() -> Self {
-        let config = nemo_relay::observability::atof::AtofExporterConfig::new();
+        let config = nemo_relay::observability::atof::AtofFileSinkConfig::new();
         Self {
+            sink_type: "file".to_string(),
             output_directory: config.output_directory.to_string_lossy().into_owned(),
             mode: config.mode.into(),
             filename: config.filename,
-            endpoints: Vec::new(),
+            url: String::new(),
+            transport: "http_post".to_string(),
+            headers: HashMap::new(),
+            header_env: HashMap::new(),
+            timeout_millis: 3000,
+            field_name_policy: "preserve".to_string(),
         }
     }
 
     pub(crate) fn __repr__(&self) -> String {
-        format!(
-            "<AtofExporterConfig output_directory={:?} filename={:?}>",
-            self.output_directory, self.filename
-        )
+        format!("<AtofExporterConfig sink_type={:?}>", self.sink_type)
     }
 }
 
-/// Filesystem-backed ATOF JSONL exporter.
+/// Single-sink ATOF exporter.
 ///
 /// Register the exporter under a subscriber name, run instrumented application
 /// code, then deregister and shut down the exporter to flush output.
@@ -309,10 +369,12 @@ impl PyAtofExporter {
         Ok(Self { inner })
     }
 
-    /// Return the JSONL output path.
+    /// Return the JSONL output path, or ``None`` for a stream sink.
     #[getter]
-    pub(crate) fn path(&self) -> String {
-        self.inner.path().to_string_lossy().into_owned()
+    pub(crate) fn path(&self) -> Option<String> {
+        self.inner
+            .path()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     /// Register this exporter globally under ``name``.
@@ -380,6 +442,7 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) timeout_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
+    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
 }
 
 impl PyOpenTelemetryConfig {
@@ -417,6 +480,7 @@ impl PyOpenTelemetryConfig {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
+        config = config.with_attribute_mappings(self.attribute_mappings.clone());
         Ok(config)
     }
 }
@@ -435,6 +499,7 @@ impl PyOpenTelemetryConfig {
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
+            attribute_mappings: Vec::new(),
         }
     }
 
@@ -463,6 +528,23 @@ impl PyOpenTelemetryConfig {
         resource_attributes: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_attribute_mappings(
+        &mut self,
+        attribute_mappings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.attribute_mappings = py_attribute_mappings(attribute_mappings)?;
         Ok(())
     }
 
@@ -559,6 +641,7 @@ pub struct PyOpenInferenceConfig {
     pub(crate) timeout_millis: u64,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
+    pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
 }
 
 impl PyOpenInferenceConfig {
@@ -596,6 +679,7 @@ impl PyOpenInferenceConfig {
         for (key, value) in &self.resource_attributes {
             config = config.with_resource_attribute(key.clone(), value.clone());
         }
+        config = config.with_attribute_mappings(self.attribute_mappings.clone());
         Ok(config)
     }
 }
@@ -614,6 +698,7 @@ impl PyOpenInferenceConfig {
             timeout_millis: 3_000,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
+            attribute_mappings: Vec::new(),
         }
     }
 
@@ -642,6 +727,23 @@ impl PyOpenInferenceConfig {
         resource_attributes: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         self.resource_attributes = py_string_map(resource_attributes, "resource_attributes")?;
+        Ok(())
+    }
+
+    #[getter]
+    pub(crate) fn attribute_mappings(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.attribute_mappings).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    pub(crate) fn set_attribute_mappings(
+        &mut self,
+        attribute_mappings: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        self.attribute_mappings = py_attribute_mappings(attribute_mappings)?;
         Ok(())
     }
 

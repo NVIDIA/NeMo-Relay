@@ -587,12 +587,15 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     },
                     "atif": {
                         "enabled": true,
@@ -693,12 +696,15 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     }
                 }
             }
@@ -779,12 +785,15 @@ async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelit
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     }
                 }
             }
@@ -979,12 +988,15 @@ async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event()
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     }
                 }
             }
@@ -1125,12 +1137,15 @@ async fn serve_listener_hermes_post_tool_call_writes_atof_tool_events() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     }
                 }
             }
@@ -1349,12 +1364,15 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     }
                 }
             }
@@ -1533,12 +1551,15 @@ async fn serve_listener_records_codex_stop_atof_contract() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "output_directory": atof_dir,
-                        "filename": "events.jsonl",
-                        "mode": "overwrite"
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
                     }
                 }
             }
@@ -1827,10 +1848,13 @@ async fn serve_listener_rejects_invalid_plugin_config() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "mode": "invalid"
+                        "sinks": [{
+                            "type": "file",
+                            "mode": "invalid"
+                        }]
                     }
                 }
             }
@@ -1842,7 +1866,7 @@ async fn serve_listener_rejects_invalid_plugin_config() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("ATOF mode"));
+    assert!(error.to_string().contains("ATOF sinks[0].mode"));
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
 }
 
