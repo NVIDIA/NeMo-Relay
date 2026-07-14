@@ -272,12 +272,19 @@ pub unsafe extern "C" fn nemo_relay_activate_dynamic_plugins(
 /// Clear one owned dynamic plugin activation.
 ///
 /// This operation is idempotent. A null handle is treated as already cleared.
+/// If teardown fails, the error is reported only by the call that performs the
+/// teardown. The activation is consumed regardless of the outcome, so a later
+/// clear returns success and does not report the earlier error again.
+/// Concurrent clear calls for the same handle are serialized, but they must not
+/// overlap with `nemo_relay_plugin_activation_free`.
 /// The handle allocation remains owned by the caller and must still be passed
 /// to `nemo_relay_plugin_activation_free`.
 ///
 /// # Safety
 /// `activation` must be a valid activation handle returned by
-/// `nemo_relay_activate_dynamic_plugins`, or null.
+/// `nemo_relay_activate_dynamic_plugins`, or null. The caller must ensure the
+/// handle remains allocated for this call and that
+/// `nemo_relay_plugin_activation_free` does not run concurrently with it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_plugin_activation_clear(
     activation: *mut FfiPluginActivation,

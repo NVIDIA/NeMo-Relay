@@ -1466,12 +1466,19 @@ NemoRelayStatus nemo_relay_activate_dynamic_plugins(const char *config_json,
  * Clear one owned dynamic plugin activation.
  *
  * This operation is idempotent. A null handle is treated as already cleared.
+ * If teardown fails, the error is reported only by the call that performs the
+ * teardown. The activation is consumed regardless of the outcome, so a later
+ * clear returns success and does not report the earlier error again.
+ * Concurrent clear calls for the same handle are serialized, but they must not
+ * overlap with `nemo_relay_plugin_activation_free`.
  * The handle allocation remains owned by the caller and must still be passed
  * to `nemo_relay_plugin_activation_free`.
  *
  * # Safety
  * `activation` must be a valid activation handle returned by
- * `nemo_relay_activate_dynamic_plugins`, or null.
+ * `nemo_relay_activate_dynamic_plugins`, or null. The caller must ensure the
+ * handle remains allocated for this call and that
+ * `nemo_relay_plugin_activation_free` does not run concurrently with it.
  */
 NemoRelayStatus nemo_relay_plugin_activation_clear(struct FfiPluginActivation *activation);
 
@@ -2525,11 +2532,15 @@ void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
  * Any activation that has not already been explicitly cleared is cleaned up
  * best-effort by its Rust destructor before the allocation is released. The
  * caller's handle is set to null before cleanup, making repeated calls through
- * the same handle variable safe.
+ * the same handle variable safe when they are sequential.
  *
  * # Safety
  * `ptr` must be null or point to a writable activation-handle variable whose
- * value is null or was returned by `nemo_relay_activate_dynamic_plugins`.
+ * value is null or was returned by `nemo_relay_activate_dynamic_plugins`. The
+ * caller must ensure that no operation, including
+ * `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
+ * with this call and that no operation can use the handle after this call
+ * begins.
  */
 void nemo_relay_plugin_activation_free(struct FfiPluginActivation **ptr);
 

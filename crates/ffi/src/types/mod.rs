@@ -299,11 +299,15 @@ pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveR
 /// Any activation that has not already been explicitly cleared is cleaned up
 /// best-effort by its Rust destructor before the allocation is released. The
 /// caller's handle is set to null before cleanup, making repeated calls through
-/// the same handle variable safe.
+/// the same handle variable safe when they are sequential.
 ///
 /// # Safety
 /// `ptr` must be null or point to a writable activation-handle variable whose
-/// value is null or was returned by `nemo_relay_activate_dynamic_plugins`.
+/// value is null or was returned by `nemo_relay_activate_dynamic_plugins`. The
+/// caller must ensure that no operation, including
+/// `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
+/// with this call and that no operation can use the handle after this call
+/// begins.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_plugin_activation_free(ptr: *mut *mut FfiPluginActivation) {
     if ptr.is_null() {
