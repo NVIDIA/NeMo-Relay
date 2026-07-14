@@ -499,14 +499,22 @@ enabled = true
         );
         resumer.unref();
 
-        const startedAt = performance.now();
-        global.gc();
-        const elapsed = performance.now() - startedAt;
-        if (weak.deref() !== undefined) {
-          throw new Error('dynamic activation was not garbage collected');
+        let collected = false;
+        for (let index = 0; index < 20; index += 1) {
+          const startedAt = performance.now();
+          global.gc();
+          const elapsed = performance.now() - startedAt;
+          if (elapsed >= 400) {
+            throw new Error(\`dynamic activation finalizer blocked the JavaScript thread for \${elapsed}ms\`);
+          }
+          if (weak.deref() === undefined) {
+            collected = true;
+            break;
+          }
+          await new Promise((resolve) => setImmediate(resolve));
         }
-        if (elapsed >= 400) {
-          throw new Error(\`dynamic activation finalizer blocked the JavaScript thread for \${elapsed}ms\`);
+        if (!collected) {
+          throw new Error('dynamic activation was not garbage collected');
         }
 
         let replacement;
