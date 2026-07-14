@@ -10,8 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +27,8 @@ var (
 	goWorkerPluginFixtureOnce sync.Once
 	goWorkerPluginFixturePath string
 	goWorkerPluginFixtureErr  error
+	workspacePackagePattern   = regexp.MustCompile(`(?ms)^[\t ]*\[workspace\.package\][\t ]*(?:#[^\r\n]*)?\r?\n(.*?)(?:^[\t ]*\[|\z)`)
+	workspaceVersionPattern   = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
 )
 
 func withPluginActivationStubs(t *testing.T) {
@@ -966,29 +968,74 @@ func relayWorkspaceVersion(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("read workspace Cargo.toml: %v", err)
 	}
-	section := string(payload)
-	const header = "[workspace.package]"
-	start := strings.Index(section, header)
-	if start < 0 {
-		t.Fatal("workspace Cargo.toml has no [workspace.package] section")
+	version, err := workspaceVersionFromCargoTOML(payload)
+	if err != nil {
+		t.Fatal(err)
 	}
-	section = section[start+len(header):]
-	if end := strings.Index(section, "\n["); end >= 0 {
-		section = section[:end]
+	return version
+}
+
+func workspaceVersionFromCargoTOML(payload []byte) (string, error) {
+	section := workspacePackagePattern.FindSubmatch(payload)
+	if section == nil {
+		return "", errors.New("workspace Cargo.toml has no [workspace.package] section")
 	}
-	for _, line := range strings.Split(section, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "version =") {
-			continue
-		}
-		version, err := strconv.Unquote(strings.TrimSpace(strings.TrimPrefix(line, "version =")))
-		if err != nil {
-			t.Fatalf("parse workspace package version: %v", err)
-		}
-		return version
+	version := workspaceVersionPattern.FindSubmatch(section[1])
+	if version == nil {
+		return "", errors.New("workspace package version not found")
 	}
-	t.Fatal("workspace package version not found")
-	return ""
+	if len(version[1]) != 0 {
+		return string(version[1]), nil
+	}
+	return string(version[2]), nil
+}
+
+func TestWorkspaceVersionFromCargoTOML(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+		wantErr string
+	}{
+		{
+			name:    "standard workspace package",
+			payload: "[workspace.package]\nversion = \"0.6.0\"\nedition = \"2024\"\n\n[workspace.dependencies]\n",
+			want:    "0.6.0",
+		},
+		{
+			name:    "whitespace comments CRLF and literal string",
+			payload: "[package]\r\nversion = \"9.9.9\"\r\n\r\n  [workspace.package] # inherited metadata\r\n  version\t=\t'0.7.0' # next release\r\n\r\n[[workspace.metadata.fixture]]\r\n",
+			want:    "0.7.0",
+		},
+		{
+			name:    "missing workspace package",
+			payload: "[package]\nversion = \"0.6.0\"\n",
+			wantErr: "no [workspace.package] section",
+		},
+		{
+			name:    "missing workspace version",
+			payload: "[workspace.package]\nedition = \"2024\"\n",
+			wantErr: "workspace package version not found",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := workspaceVersionFromCargoTOML([]byte(test.payload))
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("workspaceVersionFromCargoTOML() error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("workspaceVersionFromCargoTOML() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("workspaceVersionFromCargoTOML() = %q, want %q", got, test.want)
+			}
+		})
+	}
 }
 
 func goNativeLibraryName() string {
