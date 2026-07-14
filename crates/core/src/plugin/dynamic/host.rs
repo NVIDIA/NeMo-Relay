@@ -207,7 +207,11 @@ impl PluginHostActivation {
         ))
     }
 
-    /// Returns whether this activation still owns an active plugin host.
+    /// Returns whether this activation handle has not begun teardown.
+    ///
+    /// `false` means the handle is no longer reusable. It does not guarantee
+    /// that another process-wide activation can start: failed teardown may
+    /// intentionally retain the loaded runtimes and activation owner.
     pub fn is_active(&self) -> bool {
         self.active
     }
@@ -390,7 +394,7 @@ mod tests {
         let _cleanup = PoisonedRegistryCleanup;
         let claim = acquire_plugin_host_lease().expect("fixture host should acquire the owner");
         let owner_id = claim.owner_id();
-        let activation = PluginHostActivation {
+        let mut activation = PluginHostActivation {
             active: true,
             native: Some(NativePluginActivation::with_plugin_kind_for_test(
                 "fixture.poisoned",
@@ -408,11 +412,12 @@ mod tests {
         .expect_err("fixture registry writer should panic");
 
         let error = activation
-            .clear()
+            .clear_inner()
             .expect_err("an uncertain kind deregistration must retain the activation")
             .to_string();
         assert!(error.contains("plugin registry lock poisoned"), "{error}");
         assert!(error.contains("activation owner were retained"), "{error}");
+        assert!(!activation.is_active());
         assert_eq!(
             *PLUGIN_MUTATION_OWNER.lock().unwrap(),
             PluginMutationOwner::Host(owner_id)

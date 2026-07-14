@@ -358,9 +358,8 @@ async fn initialize_plugin_host(
         None => PluginConfig::default(),
     };
     #[cfg(feature = "switchyard")]
-    validate_switchyard_atof_configuration(&plugin_config).map_err(|error| {
-        CliError::Config(format!("Switchyard ATOF validation failed: {error}"))
-    })?;
+    validate_switchyard_atof_configuration(&plugin_config)
+        .map_err(|error| CliError::Config(format!("Switchyard ATOF validation failed: {error}")))?;
     if dynamic_plugins.is_empty() {
         initialize_plugins_exact(plugin_config)
             .await

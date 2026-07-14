@@ -1004,9 +1004,11 @@ pub(crate) fn deregister_plugin_registration_checked(
 ///
 /// # Notes
 /// Disabled or inactive components still appear here when their plugin kind is
-/// registered.
+/// registered. An empty list is returned when built-in registration fails.
 pub fn list_plugin_kinds() -> Vec<String> {
-    let _ = ensure_builtin_plugins_registered();
+    if ensure_builtin_plugins_registered().is_err() {
+        return Vec::new();
+    }
     let mut kinds = PLUGIN_HANDLERS
         .read()
         .map(|guard| guard.keys().cloned().collect::<Vec<_>>())
@@ -1022,12 +1024,16 @@ pub fn list_plugin_kinds() -> Vec<String> {
 ///
 /// # Returns
 /// The registered plugin implementation for `plugin_kind`, or `None` when the
-/// kind is unknown.
+/// kind is unknown or built-in registration fails.
 ///
 /// # Notes
 /// The returned plugin is shared by [`Arc`], so callers receive a cheap clone.
 pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
-    let _ = ensure_builtin_plugins_registered();
+    ensure_builtin_plugins_registered().ok()?;
+    lookup_registered_plugin(plugin_kind)
+}
+
+fn lookup_registered_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
     PLUGIN_HANDLERS.read().ok().and_then(|guard| {
         guard
             .get(plugin_kind)
@@ -1051,8 +1057,17 @@ pub fn lookup_plugin(plugin_kind: &str) -> Option<Arc<dyn Plugin>> {
 /// Validation checks host policy, plugin multiplicity rules, unknown component
 /// kinds, and plugin-provided validation hooks.
 pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
-    let _ = ensure_builtin_plugins_registered();
     let mut report = ConfigReport::default();
+    if let Err(error) = ensure_builtin_plugins_registered() {
+        report.diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "plugin.builtin_registration_failed".to_string(),
+            component: None,
+            field: None,
+            message: format!("built-in plugin registration failed: {error}"),
+        });
+        return report;
+    }
 
     if config.version != 1 {
         push_policy_diag(
@@ -1068,7 +1083,7 @@ pub fn validate_plugin_config(config: &PluginConfig) -> ConfigReport {
     validate_plugin_multiplicity(&mut report, config);
 
     for component in &config.components {
-        let Some(plugin) = lookup_plugin(&component.kind) else {
+        let Some(plugin) = lookup_registered_plugin(&component.kind) else {
             push_policy_diag(
                 &mut report.diagnostics,
                 config.policy.unknown_component,
@@ -1831,7 +1846,7 @@ async fn initialize_plugin_components(
         .iter()
         .filter(|component| component.enabled)
     {
-        let Some(plugin) = lookup_plugin(&component.kind) else {
+        let Some(plugin) = lookup_registered_plugin(&component.kind) else {
             return Err(PluginError::NotFound(format!(
                 "plugin component '{}' is not registered",
                 component.kind
@@ -1972,7 +1987,7 @@ fn validate_plugin_multiplicity(report: &mut ConfigReport, config: &PluginConfig
             continue;
         }
 
-        let allows_multiple = lookup_plugin(&component.kind)
+        let allows_multiple = lookup_registered_plugin(&component.kind)
             .map(|plugin| plugin.allows_multiple_components())
             .unwrap_or(true);
         if !allows_multiple {
