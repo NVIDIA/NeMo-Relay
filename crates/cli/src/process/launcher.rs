@@ -611,7 +611,7 @@ fn observability_exporter_destinations(config: &ObservabilityConfig) -> Vec<Stri
                     destinations.push(format!("ATOF {}", path.display()));
                 }
                 AtofSinkSectionConfig::Stream(stream) => {
-                    destinations.push(format!("ATOF {}", stream.url));
+                    destinations.push(format!("ATOF {}", sanitized_url(&stream.url)));
                 }
             }
         }

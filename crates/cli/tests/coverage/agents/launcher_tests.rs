@@ -475,7 +475,7 @@ fn exporter_destinations_describe_observability_outputs() {
                             },
                             {
                                 "type": "stream",
-                                "url": "https://collector.example/atof"
+                                "url": "https://user:secret@collector.example/atof?token=secret"
                             }
                         ]
                     },
@@ -507,7 +507,7 @@ fn exporter_destinations_describe_observability_outputs() {
     assert!(
         destinations
             .iter()
-            .any(|line| line == "ATOF https://collector.example/atof")
+            .any(|line| line == "ATOF https://collector.example/atof?token=%5BREDACTED%5D")
     );
     assert!(destinations.iter().any(|line| line
         == &format!(
