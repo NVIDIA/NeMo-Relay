@@ -15,6 +15,7 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 
 ## Structs
 
+- [DynamicPluginActivationSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginactivationspec): One dynamic plugin component to load and activate in an embedding host.
 - [DynamicPluginFailure](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginfailure): One structured recent failure summary.
 - [DynamicPluginManifest](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifest): Authored `relay-plugin.toml` manifest.
 - [DynamicPluginManifestCapabilities](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginmanifestcapabilities): Capability declarations for authored manifests.
@@ -40,6 +41,7 @@ This module owns the durable control-plane record shape for dynamic plugins. Aut
 - [DynamicPluginWorkerLoadContract](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-dynamicpluginworkerloadcontract): Lane-specific load contract for worker plugins.
 - [NativePluginActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginactivation): Owns native dynamic libraries registered into the plugin registry.
 - [NativePluginLoadSpec](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-nativepluginloadspec): Native plugin load request derived from host dynamic-plugin state.
+- [PluginHostActivation](/reference/api/rust-library-reference/nemo-relay/plugin/dynamic/struct-pluginhostactivation): Owns one process-wide dynamic plugin configuration and its loaded runtimes.
 
 ## Enums
 
