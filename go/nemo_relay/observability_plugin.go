@@ -61,13 +61,13 @@ func (config ObservabilityAtofFileSinkConfig) MarshalJSON() ([]byte, error) {
 
 // ObservabilityAtofStreamSinkConfig configures one remote ATOF destination.
 type ObservabilityAtofStreamSinkConfig struct {
-	Name            string            `json:"name,omitempty"`
 	URL             string            `json:"url"`
 	Transport       string            `json:"transport,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	HeaderEnv       map[string]string `json:"header_env,omitempty"`
 	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
 	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
+	Name            string            `json:"name,omitempty"`
 }
 
 func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {}
