@@ -204,8 +204,22 @@ describe('dynamic plugin host', () => {
     plugin.clear();
   });
 
-  it('activates static base components with dynamic plugins', async () => {
+  it('layers plugins.toml static base components with dynamic plugins', async () => {
     const staticKind = 'node.fixture.static-base';
+    const projectRoot = path.join(tempRoot, 'file-static-base-project');
+    const projectConfigDirectory = path.join(projectRoot, '.nemo-relay');
+    const isolatedUserConfig = path.join(projectRoot, 'xdg');
+    mkdirSync(projectConfigDirectory, { recursive: true });
+    mkdirSync(isolatedUserConfig, { recursive: true });
+    writeFileSync(
+      path.join(projectConfigDirectory, 'plugins.toml'),
+      `version = 1
+
+[[components]]
+kind = ${tomlString(staticKind)}
+enabled = true
+`,
+    );
     plugin.register(staticKind, {
       register(_config, context) {
         context.registerToolRequestIntercept('mark-static-base', 0, false, (_name, args) => ({
@@ -214,21 +228,27 @@ describe('dynamic plugin host', () => {
         }));
       },
     });
+    const previousCwd = process.cwd();
+    const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
     let activation;
     try {
-      activation = await plugin.activateDynamicPlugins(
-        {
-          version: 1,
-          components: [{ kind: staticKind, enabled: true, config: {} }],
-        },
-        [activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef)],
-      );
+      process.chdir(projectRoot);
+      process.env.XDG_CONFIG_HOME = isolatedUserConfig;
+      activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+        activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
+      ]);
       const result = await executeTool('node_static_and_dynamic_tool');
       assert.equal(result.staticBase, true);
       assert.equal(result.native_plugin_tool_execution, true);
     } finally {
       await activation?.close();
       plugin.deregister(staticKind);
+      process.chdir(previousCwd);
+      if (previousXdgConfigHome === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
+      }
     }
   });
 

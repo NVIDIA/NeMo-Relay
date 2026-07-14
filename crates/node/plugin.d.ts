@@ -331,10 +331,11 @@ export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
  * alive while plugin callbacks may run and call `close()` for deterministic
  * teardown. Garbage collection is a defensive fallback only.
  *
- * @param config - Base configuration activated first, including any static components.
+ * @param config - Base configuration layered over discovered `plugins.toml` files.
  * @param specs - Non-empty explicit manifest and component configuration for each plugin.
  * @returns The owned activation and its validation report.
- * @remarks Use `initialize()` for a static-only configuration.
+ * @remarks File-configured static components initialize before dynamic
+ * components. Use `initialize()` for a static-only configuration.
  */
 export declare function activateDynamicPlugins(
   config: PluginConfig,

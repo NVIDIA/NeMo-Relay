@@ -4232,11 +4232,12 @@ impl Drop for DynamicPluginActivation {
 
 /// Load and activate explicitly resolved dynamic plugins.
 ///
-/// `config` may contain statically registered components; dynamic components
-/// are activated after that base configuration. At least one dynamic plugin is
-/// required. Static-only callers should use `initializePlugins`. The returned
-/// object owns all loaded libraries and worker processes. Its validation report
-/// is available through the `report` property.
+/// `config` is layered over discovered `plugins.toml` files and may contain
+/// statically registered components; dynamic components are activated after
+/// that effective base configuration. At least one dynamic plugin is required.
+/// Static-only callers should use `initializePlugins`. The returned object owns
+/// all loaded libraries and worker processes. Its validation report is available
+/// through the `report` property.
 #[napi]
 pub async fn activate_dynamic_plugins(
     config: Json,
@@ -4249,9 +4250,10 @@ pub async fn activate_dynamic_plugins(
             napi::Error::from_reason(format!("invalid dynamic plugin specs: {error}"))
         })?;
     let specs = specs.into_iter().map(Into::into).collect::<Vec<_>>();
-    let (activation, report) = CorePluginHostActivation::activate(config, specs)
-        .await
-        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let (activation, report) =
+        CorePluginHostActivation::activate_with_discovered_config(config, specs)
+            .await
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     let report = serde_json::to_value(report)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?;
     Ok(DynamicPluginActivation {

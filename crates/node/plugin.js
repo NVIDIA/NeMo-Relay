@@ -81,11 +81,12 @@ function initialize(config) {
 /**
  * Load and activate explicitly resolved dynamic plugins.
  *
- * @param {object} config - Base configuration, including any static components.
+ * @param {object} config - Base configuration layered over discovered `plugins.toml` files.
  * @param {Array<object>} specs - Non-empty native-library or worker plugin specifications.
  * @returns {Promise<object>} An owned activation with `report`, `active`, `close()`, and async disposal.
- * @remarks Keep the returned activation alive while its callbacks may run and
- * call `close()` or use `await using` for deterministic teardown. Use
+ * @remarks File-configured static components initialize before dynamic
+ * components. Keep the returned activation alive while its callbacks may run
+ * and call `close()` or use `await using` for deterministic teardown. Use
  * `initialize()` for a static-only configuration.
  */
 function activateDynamicPlugins(config, specs) {
