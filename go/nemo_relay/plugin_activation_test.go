@@ -196,8 +196,22 @@ func TestComponentWrappersPreserveDisabledValuesDuringConversion(t *testing.T) {
 		(PiiRedactionComponentSpec{Config: NewPiiRedactionConfig()}).PluginComponent(),
 	}
 	for _, component := range disabled {
-		if component.Enabled {
-			t.Fatalf("%s component became enabled during conversion", component.Kind)
+		payload, err := marshalPluginActivationConfig(PluginConfig{
+			Components: []PluginComponentSpec{component},
+		})
+		if err != nil {
+			t.Fatalf("marshal %s component: %v", component.Kind, err)
+		}
+		var wire struct {
+			Components []struct {
+				Enabled *bool `json:"enabled"`
+			} `json:"components"`
+		}
+		if err := json.Unmarshal(payload, &wire); err != nil {
+			t.Fatalf("unmarshal %s component wire payload: %v", component.Kind, err)
+		}
+		if len(wire.Components) != 1 || wire.Components[0].Enabled == nil || *wire.Components[0].Enabled {
+			t.Fatalf("%s component wire payload = %s, want enabled false", component.Kind, payload)
 		}
 	}
 }
