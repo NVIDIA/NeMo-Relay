@@ -5,10 +5,232 @@ use super::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use nemo_relay_ffi::types::{FfiPluginActivation, nemo_relay_plugin_activation_free};
 use tempfile::TempDir;
+
+const DISCOVERY_CHILD_ENV: &str = "NEMO_RELAY_FFI_DISCOVERY_CHILD";
+const DISCOVERED_STATIC_PLUGIN_KIND: &str = "ffi_discovered_static";
+static DISCOVERED_STATIC_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
+static DISCOVERED_STATIC_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+static DISCOVERED_STATIC_CONFIG: Mutex<Option<Json>> = Mutex::new(None);
+
+struct PluginDiscoveryTestEnv {
+    previous_cwd: PathBuf,
+    previous_xdg_config_home: Option<std::ffi::OsString>,
+}
+
+impl PluginDiscoveryTestEnv {
+    fn enter(cwd: &Path, xdg_config_home: &Path) -> Self {
+        let guard = Self {
+            previous_cwd: std::env::current_dir().expect("current directory"),
+            previous_xdg_config_home: std::env::var_os("XDG_CONFIG_HOME"),
+        };
+        std::env::set_current_dir(cwd).expect("set project directory");
+        // SAFETY: this runs in a dedicated child test process and Drop restores
+        // the environment before that process exits.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", xdg_config_home) };
+        guard
+    }
+}
+
+impl Drop for PluginDiscoveryTestEnv {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.previous_cwd);
+        // SAFETY: see PluginDiscoveryTestEnv::enter.
+        unsafe {
+            match &self.previous_xdg_config_home {
+                Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+    }
+}
+
+#[test]
+fn ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins() {
+    if std::env::var_os(DISCOVERY_CHILD_ENV).is_some() {
+        run_discovered_config_activation_test();
+        return;
+    }
+
+    let output = Command::new(std::env::current_exe().expect("current test executable"))
+        .arg("--exact")
+        .arg(
+            "plugin_activation_tests::ffi_activation_layers_discovered_static_and_explicit_dynamic_plugins",
+        )
+        .arg("--nocapture")
+        .env(DISCOVERY_CHILD_ENV, "1")
+        .output()
+        .expect("discovery child test should start");
+    assert!(
+        output.status.success(),
+        "discovery child test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_discovered_config_activation_test() {
+    let _ = nemo_relay_clear_plugin_configuration();
+    DISCOVERED_STATIC_REGISTRATIONS.store(0, Ordering::SeqCst);
+    DISCOVERED_STATIC_CALLBACKS.store(0, Ordering::SeqCst);
+    *DISCOVERED_STATIC_CONFIG.lock().unwrap() = None;
+
+    let environment = TempDir::new().expect("plugin discovery environment");
+    let project_config_dir = environment.path().join(".nemo-relay");
+    let xdg_config_home = environment.path().join("xdg");
+    std::fs::create_dir_all(&project_config_dir).expect("project config directory");
+    std::fs::create_dir_all(&xdg_config_home).expect("isolated user config directory");
+    let plugins_toml = project_config_dir.join("plugins.toml");
+    std::fs::write(&plugins_toml, "invalid = [").expect("write invalid plugin config");
+    let _environment = PluginDiscoveryTestEnv::enter(environment.path(), &xdg_config_home);
+
+    // Empty specifications fail before discovery or ownership. The malformed
+    // file would otherwise produce a TOML error, and the successful activation
+    // below proves this attempt did not retain the process-wide host claim.
+    let config = cstring(r#"{"version":1,"components":[]}"#);
+    let empty_specs = cstring("[]");
+    let mut empty_activation = ptr::null_mut();
+    let mut empty_report = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_activate_dynamic_plugins(
+                config.as_ptr(),
+                empty_specs.as_ptr(),
+                &mut empty_activation,
+                &mut empty_report,
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert!(empty_activation.is_null());
+    assert!(empty_report.is_null());
+    assert!(
+        unsafe { read_last_error() }
+            .unwrap_or_default()
+            .contains("at least one dynamic plugin")
+    );
+
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            r#"version = 999
+
+[[components]]
+kind = {DISCOVERED_STATIC_PLUGIN_KIND:?}
+enabled = true
+
+[components.config]
+source = "project-file"
+"#
+        ),
+    )
+    .expect("write project plugin config");
+
+    let plugin_kind = cstring(DISCOVERED_STATIC_PLUGIN_KIND);
+    assert_eq!(
+        unsafe {
+            api::nemo_relay_register_plugin(
+                plugin_kind.as_ptr(),
+                None,
+                discovered_static_register,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+
+    let manifest_dir = TempDir::new().expect("native manifest tempdir");
+    let manifest = write_native_manifest(manifest_dir.path(), build_native_fixture());
+    let (mut activation, report) = activate_plugins(json!([{
+        "plugin_id": "fixture_native",
+        "kind": "rust_dynamic",
+        "manifest_ref": manifest,
+        "config": {}
+    }]));
+
+    // The explicit version 1 must override the discovered version 999. The
+    // file-only component and its config must still survive the merge.
+    assert_eq!(report["diagnostics"], json!([]));
+    assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
+        Some(&json!({"source": "project-file"}))
+    );
+    assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
+
+    // Mutating the file after startup has no effect: discovery is one-shot.
+    std::fs::write(&plugins_toml, "invalid = [").expect("mutate plugin config after startup");
+    let intercepted = tool_request_intercepts("ffi-layered-tool", json!({"input": true}));
+    assert_eq!(intercepted["file_static"], true);
+    assert_eq!(intercepted["static_saw_dynamic"], false);
+    assert_eq!(intercepted["native_plugin"], true);
+    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 1);
+
+    unsafe {
+        assert_eq!(
+            api::nemo_relay_plugin_activation_clear(activation),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_plugin_activation_free(&mut activation);
+    }
+    assert!(!plugin_kinds().iter().any(|kind| kind == "fixture_native"));
+    assert_eq!(
+        tool_request_intercepts("ffi-layered-tool", json!({"input": true})),
+        json!({"input": true})
+    );
+    assert_eq!(DISCOVERED_STATIC_CALLBACKS.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        unsafe { api::nemo_relay_deregister_plugin(plugin_kind.as_ptr()) },
+        NemoRelayStatus::Ok
+    );
+}
+
+unsafe extern "C" fn discovered_static_register(
+    _user_data: *mut libc::c_void,
+    plugin_config_json: *const c_char,
+    ctx: *mut FfiPluginContext,
+) -> NemoRelayStatus {
+    let config = unsafe { CStr::from_ptr(plugin_config_json) }
+        .to_str()
+        .ok()
+        .and_then(|value| serde_json::from_str(value).ok());
+    *DISCOVERED_STATIC_CONFIG.lock().unwrap() = config;
+    DISCOVERED_STATIC_REGISTRATIONS.fetch_add(1, Ordering::SeqCst);
+    let name = cstring("project_file_intercept");
+    unsafe {
+        api::nemo_relay_plugin_context_register_tool_request_intercept(
+            ctx,
+            name.as_ptr(),
+            -1,
+            false,
+            discovered_static_tool_request,
+            ptr::null_mut(),
+            None,
+        )
+    }
+}
+
+unsafe extern "C" fn discovered_static_tool_request(
+    _user_data: *mut libc::c_void,
+    _name: *const c_char,
+    args_json: *const c_char,
+) -> *mut c_char {
+    DISCOVERED_STATIC_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+    let mut args: Json = serde_json::from_str(
+        unsafe { CStr::from_ptr(args_json) }
+            .to_str()
+            .unwrap_or("null"),
+    )
+    .unwrap_or_else(|_| json!({}));
+    args["static_saw_dynamic"] = json!(args.get("native_plugin").is_some());
+    args["file_static"] = json!(true);
+    CString::new(args.to_string()).unwrap().into_raw()
+}
 
 #[test]
 fn ffi_activation_loads_native_callbacks_and_removes_them_before_free() {

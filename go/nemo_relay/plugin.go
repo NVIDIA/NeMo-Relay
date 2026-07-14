@@ -388,11 +388,14 @@ func InitializePlugins(config PluginConfig) (ConfigReport, error) {
 	return report, nil
 }
 
-// ActivateDynamicPlugins loads explicit dynamic plugins and activates them
-// together with the supplied base plugin configuration as one transaction.
-// Static components in config are initialized before components appended by
-// dynamic plugins. At least one dynamic plugin specification is required; use
-// InitializePlugins for a static-only configuration.
+// ActivateDynamicPlugins discovers plugins.toml once during startup, layers the
+// supplied config over the discovered configuration, and activates explicit
+// dynamic plugins in the same transaction. Explicit values take precedence
+// where both sources configure the same setting. Static components in the
+// resolved configuration are initialized before components appended by dynamic
+// plugins. Configuration files are not watched or reloaded. At least one
+// dynamic plugin specification is required; use InitializePlugins for a
+// static-only configuration.
 //
 // The caller must retain the returned activation for as long as plugin
 // callbacks may run and call Close during orderly shutdown.

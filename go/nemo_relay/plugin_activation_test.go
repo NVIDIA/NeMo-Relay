@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
@@ -491,18 +492,60 @@ func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	if err := ClearPluginConfiguration(); err != nil {
 		t.Fatalf("ClearPluginConfiguration() error = %v", err)
 	}
+	library := goNativePluginFixture(t)
+	manifest := writeGoNativePluginManifest(t, library)
+	projectDir := t.TempDir()
+	projectConfigDir := filepath.Join(projectDir, ".nemo-relay")
+	if err := os.MkdirAll(projectConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(project config) error = %v", err)
+	}
+	pluginsTOML := filepath.Join(projectConfigDir, "plugins.toml")
 	const staticKind = "go.fixture.static_base"
+	fileConfig := fmt.Sprintf(`version = 999
+
+[[components]]
+kind = %q
+enabled = true
+
+[components.config]
+source = "project-file"
+`, staticKind)
+	if err := os.WriteFile(pluginsTOML, []byte(fileConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile(plugins.toml) error = %v", err)
+	}
+	previousCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("Chdir(project) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousCWD); err != nil {
+			t.Errorf("restore working directory error = %v", err)
+		}
+	})
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(projectDir, "xdg"))
+
+	var staticRegistrations atomic.Int32
+	var staticCallbacks atomic.Int32
 	if err := RegisterPlugin(staticKind, PluginFuncs{
-		RegisterFunc: func(_ map[string]any, ctx *PluginContext) error {
+		RegisterFunc: func(config map[string]any, ctx *PluginContext) error {
+			if config["source"] != "project-file" {
+				return fmt.Errorf("static plugin config = %#v, want project-file source", config)
+			}
+			staticRegistrations.Add(1)
 			return ctx.RegisterToolRequestIntercept(
 				"go_static_base",
 				-1,
 				false,
 				func(_ string, args json.RawMessage) json.RawMessage {
+					staticCallbacks.Add(1)
 					var payload map[string]any
 					if err := json.Unmarshal(args, &payload); err != nil {
 						return args
 					}
+					payload["static_saw_dynamic"] = payload["native_plugin"] == true
 					payload["go_static_base"] = true
 					out, _ := json.Marshal(payload)
 					return out
@@ -518,11 +561,7 @@ func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 		}
 	}()
 
-	library := goNativePluginFixture(t)
-	manifest := writeGoNativePluginManifest(t, library)
-	config := NewPluginConfig()
-	config.Components = append(config.Components, NewPluginComponent(staticKind))
-	activation, report, err := ActivateDynamicPlugins(config, []DynamicPluginActivationSpec{{
+	activation, report, err := ActivateDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
 		PluginID:    "fixture_native",
 		Kind:        DynamicPluginKindRustDynamic,
 		ManifestRef: manifest,
@@ -539,6 +578,14 @@ func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	if len(report.Diagnostics) != 0 {
 		t.Fatalf("activation diagnostics = %#v, want none", report.Diagnostics)
 	}
+	if got := staticRegistrations.Load(); got != 1 {
+		t.Fatalf("static registrations = %d, want 1", got)
+	}
+	// The activation has already resolved its configuration; subsequent file
+	// mutations are neither watched nor reloaded.
+	if err := os.WriteFile(pluginsTOML, []byte("invalid = ["), 0o600); err != nil {
+		t.Fatalf("mutate plugins.toml error = %v", err)
+	}
 
 	transformed, err := ToolRequestIntercepts("go-native-tool", json.RawMessage(`{"input":true}`))
 	if err != nil {
@@ -554,6 +601,12 @@ func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	if transformedObject["go_static_base"] != true {
 		t.Fatalf("transformed tool args = %s, want static base marker", transformed)
 	}
+	if transformedObject["static_saw_dynamic"] != false {
+		t.Fatalf("transformed tool args = %s, want static callback before dynamic callback", transformed)
+	}
+	if got := staticCallbacks.Load(); got != 1 {
+		t.Fatalf("static callbacks = %d, want 1", got)
+	}
 
 	if err := activation.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -565,6 +618,9 @@ func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	if string(afterClose) != `{"input":true}` {
 		t.Fatalf("tool args after Close = %s, want unchanged args", afterClose)
 	}
+	if got := staticCallbacks.Load(); got != 1 {
+		t.Fatalf("static callbacks after Close = %d, want 1", got)
+	}
 	kinds, err := ListPluginKinds()
 	if err != nil {
 		t.Fatalf("ListPluginKinds() error = %v", err)
@@ -573,6 +629,9 @@ func TestActivateDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 		if kind == "fixture_native" {
 			t.Fatal("fixture_native remains registered after Close")
 		}
+	}
+	if err := os.Remove(pluginsTOML); err != nil {
+		t.Fatalf("Remove(plugins.toml) error = %v", err)
 	}
 
 	_, _, err = ActivateDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{

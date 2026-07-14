@@ -167,13 +167,16 @@ fn lock_plugin_activation(
 /// **Experimental:** this API needs a production consumer before its lifecycle
 /// contract is considered stable.
 ///
-/// `config_json` is the base `PluginConfig` document. Its static components
-/// initialize before components appended by the dynamic plugins.
+/// Relay discovers `plugins.toml` once during this startup call and layers
+/// `config_json` over the discovered configuration. Explicit values take
+/// precedence where both sources configure the same setting. Static components
+/// from the resolved configuration initialize before components appended by
+/// the dynamic plugins. Configuration files are not watched or reloaded.
 /// `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
 /// activation specification; use `nemo_relay_initialize_plugins` for a
 /// static-only configuration.
 ///
-/// The base configuration uses this JSON shape:
+/// The explicit configuration uses this JSON shape:
 ///
 /// ```text
 /// {"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
@@ -242,11 +245,12 @@ pub unsafe extern "C" fn nemo_relay_activate_dynamic_plugins(
         Ok(dynamic_plugins) => dynamic_plugins,
         Err(status) => return status,
     };
-    let (activation, report) =
-        match tokio_runtime().block_on(PluginHostActivation::activate(config, dynamic_plugins)) {
-            Ok(result) => result,
-            Err(error) => return status_from_plugin_error(&error),
-        };
+    let (activation, report) = match tokio_runtime().block_on(
+        PluginHostActivation::activate_with_discovered_config(config, dynamic_plugins),
+    ) {
+        Ok(result) => result,
+        Err(error) => return status_from_plugin_error(&error),
+    };
     let report_json = match serde_json::to_value(report) {
         Ok(value) => value,
         Err(error) => {
