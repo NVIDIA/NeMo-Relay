@@ -4177,7 +4177,10 @@ impl DynamicPluginActivation {
         self.report.clone()
     }
 
-    /// Return whether this object still owns the dynamic plugin host.
+    /// Return whether this activation handle has not begun teardown.
+    ///
+    /// `false` does not guarantee another process-wide activation can start;
+    /// failed teardown may intentionally retain the activation owner.
     #[napi(getter)]
     pub fn active(&self) -> napi::Result<bool> {
         Ok(self.close_state.active())

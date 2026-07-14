@@ -61,7 +61,10 @@ export interface DynamicPluginActivationSpec {
 export interface DynamicPluginActivation {
   /** Validation report produced by the successful activation. */
   readonly report: ConfigReport;
-  /** Whether this object still owns the dynamic plugin host. */
+  /**
+   * Whether this activation handle has not begun teardown. `false` does not
+   * guarantee another process-wide activation can start after failed teardown.
+   */
   readonly active: boolean;
   /** Clear callbacks before unloading libraries and workers. Idempotent. */
   close(): Promise<void>;
