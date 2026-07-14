@@ -354,7 +354,8 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
     plugin_config.components.push(PluginComponentSpec {
         kind: "observability".into(),
         enabled: true,
-        config: json!({"atof": {"enabled": true, "endpoints": [{
+        config: json!({"atof": {"enabled": true, "sinks": [{
+            "type": "stream",
             "name": "other",
             "url": "http://events.test/v1/atof/events",
             "header_env": {"authorization": "TOKEN"}
@@ -369,17 +370,17 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
             .contains("requires named ATOF endpoint")
     );
 
-    plugin_config.components[1].config["atof"]["endpoints"][0]["name"] = json!("switchyard");
+    plugin_config.components[1].config["atof"]["sinks"][0]["name"] = json!("switchyard");
     assert!(validate_switchyard_atof_configuration(&plugin_config).is_ok());
-    plugin_config.components[1].config["atof"]["endpoints"][0]["transport"] = json!("websocket");
+    plugin_config.components[1].config["atof"]["sinks"][0]["transport"] = json!("websocket");
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
             .unwrap_err()
             .contains("transport = http_post")
     );
-    plugin_config.components[1].config["atof"]["endpoints"][0]["transport"] = json!("http_post");
-    let duplicate = plugin_config.components[1].config["atof"]["endpoints"][0].clone();
-    plugin_config.components[1].config["atof"]["endpoints"]
+    plugin_config.components[1].config["atof"]["sinks"][0]["transport"] = json!("http_post");
+    let duplicate = plugin_config.components[1].config["atof"]["sinks"][0].clone();
+    plugin_config.components[1].config["atof"]["sinks"]
         .as_array_mut()
         .unwrap()
         .push(duplicate);
@@ -388,18 +389,18 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
             .unwrap_err()
             .contains("exactly one endpoint")
     );
-    plugin_config.components[1].config["atof"]["endpoints"]
+    plugin_config.components[1].config["atof"]["sinks"]
         .as_array_mut()
         .unwrap()
         .pop();
-    plugin_config.components[1].config["atof"]["endpoints"][0]["field_name_policy"] =
+    plugin_config.components[1].config["atof"]["sinks"][0]["field_name_policy"] =
         json!("snake_case");
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
             .unwrap_err()
             .contains("field_name_policy = preserve")
     );
-    let endpoint = &mut plugin_config.components[1].config["atof"]["endpoints"][0];
+    let endpoint = &mut plugin_config.components[1].config["atof"]["sinks"][0];
     endpoint["field_name_policy"] = json!("preserve");
     endpoint.as_object_mut().unwrap().remove("header_env");
     assert!(
@@ -848,7 +849,8 @@ fn atof_required_cross_component_validation_is_context_sensitive() {
         enabled: true,
         config: json!({"atof": {
             "enabled": true,
-            "endpoints": [{
+            "sinks": [{
+                "type": "stream",
                 "name": "switchyard",
                 "url": "http://switchyard.test:8080/v1/atof/events",
                 "transport": "http_post",

@@ -55,24 +55,27 @@ class ConfigPolicy:
 
 
 @dataclass(slots=True)
-class AtofEndpointConfig:
-    """Streaming destination for raw ATOF events."""
+class AtofStreamSinkConfig:
+    """Stream sink for raw ATOF events."""
 
     url: str
     name: str | None = None
     transport: Literal["http_post", "websocket", "ndjson"] = "http_post"
     headers: dict[str, str] = field(default_factory=dict)
+    header_env: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
     field_name_policy: Literal["preserve", "replace_dots"] = "preserve"
 
     def to_dict(self) -> JsonObject:
-        """Serialize this ATOF endpoint config to the canonical JSON object shape."""
+        """Serialize this ATOF stream sink to the canonical JSON object shape."""
         return _normalize_object(
             {
+                "type": "stream",
                 "name": self.name,
                 "url": self.url,
                 "transport": self.transport,
                 "headers": self.headers,
+                "header_env": self.header_env,
                 "timeout_millis": self.timeout_millis,
                 "field_name_policy": self.field_name_policy,
             }
@@ -81,25 +84,42 @@ class AtofEndpointConfig:
 
 @dataclass(slots=True)
 class AtofConfig:
-    """Filesystem-backed raw ATOF JSONL export settings."""
+    """Multi-sink raw ATOF export settings."""
 
     enabled: bool = False
-    output_directory: str | None = None
-    filename: str | None = None
-    mode: Literal["append", "overwrite"] = "append"
-    endpoints: list[AtofEndpointConfig] | None = None
+    sinks: list["AtofFileSinkConfig | AtofStreamSinkConfig"] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF config to the canonical JSON object shape."""
         return _normalize_object(
             {
                 "enabled": self.enabled,
+                "sinks": self.sinks,
+            }
+        )
+
+
+@dataclass(slots=True)
+class AtofFileSinkConfig:
+    """Filesystem destination for raw ATOF JSONL events."""
+
+    output_directory: str | None = None
+    filename: str | None = None
+    mode: Literal["append", "overwrite"] = "append"
+
+    def to_dict(self) -> JsonObject:
+        return _normalize_object(
+            {
+                "type": "file",
                 "output_directory": self.output_directory,
                 "filename": self.filename,
                 "mode": self.mode,
-                "endpoints": self.endpoints,
             }
         )
+
+
+# Compatibility alias for the former plugin helper name.
+AtofEndpointConfig = AtofStreamSinkConfig
 
 
 @dataclass(slots=True)
@@ -234,7 +254,7 @@ class OtlpConfig:
 class ObservabilityConfig:
     """Canonical config document for the top-level observability component."""
 
-    version: int = 1
+    version: int = 2
     atof: AtofConfig | None = None
     atif: AtifConfig | None = None
     opentelemetry: OtlpConfig | None = None
@@ -277,6 +297,8 @@ class ComponentSpec:
 __all__ = [
     "ConfigPolicy",
     "AtofEndpointConfig",
+    "AtofFileSinkConfig",
+    "AtofStreamSinkConfig",
     "AtofConfig",
     "AtifConfig",
     "HttpStorageConfig",

@@ -56,14 +56,18 @@ enabled = true
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 mode = "append"
 
-[[components.config.atof.endpoints]]
+[[components.config.atof.sinks]]
+type = "stream"
 name = "switchyard"
 url = "http://127.0.0.1:4000/v1/atof/events"
 transport = "http_post"
 field_name_policy = "preserve"
 timeout_millis = 1000
 
-[components.config.atof.endpoints.header_env]
+[components.config.atof.sinks.header_env]
 authorization = "SWITCHYARD_AUTHORIZATION"

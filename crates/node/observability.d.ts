@@ -8,20 +8,31 @@ export { ConfigPolicy, ConfigDiagnostic, ConfigReport };
 
 export interface AtofConfig {
   enabled?: boolean;
+  sinks?: AtofSinkConfig[];
+}
+
+export type AtofSinkConfig = AtofFileSinkConfig | AtofStreamSinkConfig;
+
+export interface AtofFileSinkConfig {
+  type: 'file';
   output_directory?: string;
   filename?: string;
   mode?: 'append' | 'overwrite' | string;
-  endpoints?: AtofEndpointConfig[];
 }
 
-export interface AtofEndpointConfig {
+export interface AtofStreamSinkConfig {
+  type: 'stream';
   name?: string;
   url: string;
   transport?: 'http_post' | 'websocket' | 'ndjson' | string;
   headers?: Record<string, string>;
+  header_env?: Record<string, string>;
   timeout_millis?: number;
   field_name_policy?: 'preserve' | 'replace_dots' | string;
 }
+
+/** @deprecated Use AtofStreamSinkConfig. */
+export type AtofEndpointConfig = AtofStreamSinkConfig;
 
 export interface S3StorageConfig {
   type: 's3';

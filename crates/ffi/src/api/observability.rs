@@ -468,7 +468,7 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_shutdown(
     }
 }
 
-/// Returns the ATOF exporter output path as a string.
+/// Returns the ATOF exporter output path as a string when its sink is a file.
 ///
 /// # Safety
 /// `exporter` and `out` must be valid, non-null pointers.
@@ -486,7 +486,11 @@ pub unsafe extern "C" fn nemo_relay_atof_exporter_path(
         set_last_error("out pointer is null");
         return NemoRelayStatus::NullPointer;
     }
-    let path = unsafe { &*exporter }.0.path().to_string_lossy();
+    let Some(path) = unsafe { &*exporter }.0.path() else {
+        unsafe { *out = std::ptr::null_mut() };
+        return NemoRelayStatus::Ok;
+    };
+    let path = path.to_string_lossy();
     unsafe { *out = str_to_c_string(&path) };
     NemoRelayStatus::Ok
 }

@@ -166,9 +166,9 @@ impl AtofEndpointTransport {
     }
 }
 
-/// Streaming destination for raw ATOF events.
+/// Streaming sink for raw ATOF events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AtofEndpointConfig {
+pub struct AtofStreamSinkConfig {
     /// Endpoint URL.
     pub url: String,
     /// Endpoint transport.
@@ -188,7 +188,7 @@ pub struct AtofEndpointConfig {
     pub field_name_policy: AtofEndpointFieldNamePolicy,
 }
 
-impl AtofEndpointConfig {
+impl AtofStreamSinkConfig {
     /// Create a streaming endpoint with defaults.
     pub fn new(url: impl Into<String>, transport: AtofEndpointTransport) -> Self {
         Self {
@@ -234,9 +234,12 @@ impl AtofEndpointConfig {
     }
 }
 
-/// Configuration for [`AtofExporter`].
+/// Backward-compatible name for an ATOF stream sink.
+pub type AtofEndpointConfig = AtofStreamSinkConfig;
+
+/// Filesystem sink for raw ATOF JSONL events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AtofExporterConfig {
+pub struct AtofFileSinkConfig {
     /// Directory that contains the JSONL output file.
     #[serde(default = "default_output_directory")]
     pub output_directory: PathBuf,
@@ -246,18 +249,52 @@ pub struct AtofExporterConfig {
     /// Output filename.
     #[serde(default = "default_filename")]
     pub filename: String,
-    /// Optional streaming endpoints that receive every raw ATOF event.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub endpoints: Vec<AtofEndpointConfig>,
+}
+
+impl Default for AtofFileSinkConfig {
+    fn default() -> Self {
+        Self {
+            output_directory: default_output_directory(),
+            mode: AtofExporterMode::Append,
+            filename: default_filename(),
+        }
+    }
+}
+
+impl AtofFileSinkConfig {
+    /// Create a file sink with native defaults.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the full output path for this sink.
+    pub fn path(&self) -> PathBuf {
+        self.output_directory.join(&self.filename)
+    }
+}
+
+/// One destination for raw ATOF events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AtofSinkConfig {
+    /// Write canonical ATOF records to one JSONL file.
+    File(AtofFileSinkConfig),
+    /// Send canonical ATOF records to one remote stream.
+    Stream(AtofStreamSinkConfig),
+}
+
+/// Configuration for [`AtofExporter`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AtofExporterConfig {
+    /// The one output sink owned by this exporter.
+    #[serde(flatten)]
+    pub sink: AtofSinkConfig,
 }
 
 impl Default for AtofExporterConfig {
     fn default() -> Self {
         Self {
-            output_directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            mode: AtofExporterMode::Append,
-            filename: default_filename(),
-            endpoints: Vec::new(),
+            sink: AtofSinkConfig::File(AtofFileSinkConfig::default()),
         }
     }
 }
@@ -268,44 +305,64 @@ impl AtofExporterConfig {
         Self::default()
     }
 
-    /// Override the output directory.
+    /// Override the file sink output directory.
+    ///
+    /// This has no effect after selecting a stream sink with
+    /// [`Self::with_stream_sink`] or [`Self::with_endpoint`].
     pub fn with_output_directory(mut self, output_directory: impl Into<PathBuf>) -> Self {
-        self.output_directory = output_directory.into();
+        if let AtofSinkConfig::File(file) = &mut self.sink {
+            file.output_directory = output_directory.into();
+        }
         self
     }
 
-    /// Override the output mode.
+    /// Override the file sink output mode.
+    ///
+    /// This has no effect after selecting a stream sink with
+    /// [`Self::with_stream_sink`] or [`Self::with_endpoint`].
     pub fn with_mode(mut self, mode: AtofExporterMode) -> Self {
-        self.mode = mode;
+        if let AtofSinkConfig::File(file) = &mut self.sink {
+            file.mode = mode;
+        }
         self
     }
 
-    /// Override the output filename.
+    /// Override the file sink output filename.
+    ///
+    /// This has no effect after selecting a stream sink with
+    /// [`Self::with_stream_sink`] or [`Self::with_endpoint`].
     pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
-        self.filename = filename.into();
+        if let AtofSinkConfig::File(file) = &mut self.sink {
+            file.filename = filename.into();
+        }
         self
     }
 
-    /// Override streaming endpoints.
-    pub fn with_endpoints(mut self, endpoints: Vec<AtofEndpointConfig>) -> Self {
-        self.endpoints = endpoints;
+    /// Select one stream sink.
+    pub fn with_stream_sink(mut self, sink: AtofStreamSinkConfig) -> Self {
+        self.sink = AtofSinkConfig::Stream(sink);
         self
     }
 
-    /// Add one streaming endpoint.
-    pub fn with_endpoint(mut self, endpoint: AtofEndpointConfig) -> Self {
-        self.endpoints.push(endpoint);
-        self
+    /// Select one stream sink.
+    ///
+    /// This compatibility spelling replaces the configured file sink; use the
+    /// observability plugin's `sinks` array for file-and-stream fan-out.
+    pub fn with_endpoint(self, endpoint: AtofEndpointConfig) -> Self {
+        self.with_stream_sink(endpoint)
     }
 
     /// Return the full output path for this config.
-    pub fn path(&self) -> PathBuf {
-        self.output_directory.join(&self.filename)
+    pub fn path(&self) -> Option<PathBuf> {
+        match &self.sink {
+            AtofSinkConfig::File(file) => Some(file.path()),
+            AtofSinkConfig::Stream(_) => None,
+        }
     }
 }
 
 struct AtofExporterState {
-    writer: BufWriter<File>,
+    writer: Option<BufWriter<File>>,
     last_error: Option<String>,
     endpoints: Vec<AtofEndpointWorker>,
     closed: bool,
@@ -313,24 +370,34 @@ struct AtofExporterState {
 
 /// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
 pub struct AtofExporter {
-    path: PathBuf,
+    path: Option<PathBuf>,
     state: Arc<Mutex<AtofExporterState>>,
 }
 
 impl AtofExporter {
     /// Create a new exporter from config and open its output file.
     pub fn new(config: AtofExporterConfig) -> Result<Self> {
-        let path = config.path();
-        create_dir_all(&config.output_directory).map_err(|source| AtofExporterError::OpenFile {
-            path: path.clone(),
-            source,
-        })?;
-        let file = open_file(&path, config.mode)?;
-        let endpoints = start_endpoint_workers(&config.endpoints)?;
+        let (path, writer, endpoints) = match config.sink {
+            AtofSinkConfig::File(file_sink) => {
+                let path = file_sink.path();
+                create_dir_all(&file_sink.output_directory).map_err(|source| {
+                    AtofExporterError::OpenFile {
+                        path: path.clone(),
+                        source,
+                    }
+                })?;
+                let file = open_file(&path, file_sink.mode)?;
+                (Some(path), Some(BufWriter::new(file)), Vec::new())
+            }
+            AtofSinkConfig::Stream(stream_sink) => {
+                let workers = start_endpoint_workers(&[stream_sink])?;
+                (None, None, workers)
+            }
+        };
         Ok(Self {
             path,
             state: Arc::new(Mutex::new(AtofExporterState {
-                writer: BufWriter::new(file),
+                writer,
                 last_error: None,
                 endpoints,
                 closed: false,
@@ -339,8 +406,8 @@ impl AtofExporter {
     }
 
     /// Return the output JSONL path.
-    pub fn path(&self) -> &Path {
-        self.path.as_path()
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Return an event subscriber that writes one JSONL record per observed event.
@@ -357,7 +424,9 @@ impl AtofExporter {
                 state.last_error = Some("failed to serialize ATOF event".to_string());
                 return;
             };
-            if let Err(error) = write_json_value(&mut state.writer, &value) {
+            if let Some(writer) = &mut state.writer
+                && let Err(error) = write_json_value(writer, &value)
+            {
                 state.last_error = Some(error);
                 return;
             }
@@ -389,19 +458,34 @@ impl AtofExporter {
             .lock()
             .map_err(|_| AtofExporterError::LockPoisoned)?;
         if state.closed {
-            return stored_failure_result(&self.path, &state);
+            return stored_failure_result(
+                self.path
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("<stream>")),
+                &state,
+            );
         }
         state
             .writer
-            .flush()
+            .as_mut()
+            .map(|writer| writer.flush())
+            .transpose()
             .map_err(|source| AtofExporterError::Flush {
-                path: self.path.clone(),
+                path: self
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("<stream>")),
                 source,
             })?;
         for endpoint in &state.endpoints {
             endpoint.flush();
         }
-        stored_failure_result(&self.path, &state)
+        stored_failure_result(
+            self.path
+                .as_deref()
+                .unwrap_or_else(|| Path::new("<stream>")),
+            &state,
+        )
     }
 
     /// Shut down the exporter by flushing buffered data and closing endpoints.
@@ -412,21 +496,36 @@ impl AtofExporter {
             .lock()
             .map_err(|_| AtofExporterError::LockPoisoned)?;
         if state.closed {
-            return stored_failure_result(&self.path, &state);
+            return stored_failure_result(
+                self.path
+                    .as_deref()
+                    .unwrap_or_else(|| Path::new("<stream>")),
+                &state,
+            );
         }
         state.closed = true;
         let flush_result = state
             .writer
-            .flush()
+            .as_mut()
+            .map(|writer| writer.flush())
+            .transpose()
             .map_err(|source| AtofExporterError::Flush {
-                path: self.path.clone(),
+                path: self
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("<stream>")),
                 source,
             });
         for endpoint in &state.endpoints {
             endpoint.close();
         }
         flush_result?;
-        stored_failure_result(&self.path, &state)
+        stored_failure_result(
+            self.path
+                .as_deref()
+                .unwrap_or_else(|| Path::new("<stream>")),
+            &state,
+        )
     }
 }
 
@@ -532,7 +631,7 @@ impl AtofEndpointWorker {
 }
 
 #[cfg(feature = "atof-streaming")]
-fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndpointWorker>> {
+fn start_endpoint_workers(configs: &[AtofStreamSinkConfig]) -> Result<Vec<AtofEndpointWorker>> {
     let mut workers = Vec::with_capacity(configs.len());
     for (index, config) in configs.iter().enumerate() {
         match start_endpoint_worker(index, config.clone()) {

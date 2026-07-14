@@ -79,6 +79,30 @@ function initialize(config) {
 }
 
 /**
+ * @typedef {object} DynamicPluginActivationSpec
+ * @property {string} pluginId - Manifest plugin identifier.
+ * @property {'rust_dynamic'|'worker'} kind - Dynamic plugin execution kind.
+ * @property {string} manifestRef - Path to the plugin manifest.
+ * @property {string|null} [environmentRef] - Optional worker environment path.
+ * @property {Object<string, unknown>} [config] - Plugin component configuration.
+ */
+
+/**
+ * Initialize with explicitly resolved dynamic plugins.
+ *
+ * @param {object} config - Base configuration layered over discovered `plugins.toml` files.
+ * @param {DynamicPluginActivationSpec[]} specs - Non-empty native-library or worker plugin specifications.
+ * @returns {Promise<object>} An owned activation with `report`, `active`, `close()`, and async disposal.
+ * @remarks File-configured static components initialize before dynamic
+ * components. Keep the returned activation alive while its callbacks may run
+ * and call `close()` or use `await using` for deterministic teardown. Use
+ * `initialize()` for a static-only configuration.
+ */
+function initializeWithDynamicPlugins(config, specs) {
+  return lib.initializeWithDynamicPlugins(config, specs);
+}
+
+/**
  * Clear the active plugin configuration.
  *
  * Removes the currently active component registrations while leaving plugin
@@ -161,6 +185,7 @@ module.exports = {
   ComponentSpec,
   validate,
   initialize,
+  initializeWithDynamicPlugins,
   clear,
   report,
   listKinds,

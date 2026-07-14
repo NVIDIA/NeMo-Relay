@@ -10,16 +10,16 @@ const OBSERVABILITY_PLUGIN_KIND = 'observability';
 /**
  * Create a default observability component config.
  *
- * @returns {object} The minimal observability config with schema version 1.
+ * @returns {object} The minimal observability config with schema version 2.
  */
 function defaultConfig() {
   return {
-    version: 1,
+    version: 2,
   };
 }
 
 /**
- * Create filesystem-backed ATOF JSONL settings with defaults applied.
+ * Create multi-sink ATOF settings with defaults applied.
  *
  * @param {object} [config={}] - Partial ATOF settings to override.
  * @returns {object} A normalized ATOF config object.
@@ -27,7 +27,6 @@ function defaultConfig() {
 function atofConfig(config = {}) {
   return {
     enabled: false,
-    mode: 'append',
     ...config,
   };
 }

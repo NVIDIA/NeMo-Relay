@@ -410,21 +410,24 @@ pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(
         .iter()
         .find(|component| component.enabled && component.kind == "observability")
         .ok_or_else(|| "atof_required Switchyard profiles require observability".to_string())?;
-    let endpoints = observability
+    let sinks = observability
         .config
         .get("atof")
         .filter(|atof| atof.get("enabled").and_then(Json::as_bool) == Some(true))
-        .and_then(|atof| atof.get("endpoints"))
+        .and_then(|atof| atof.get("sinks"))
         .and_then(Json::as_array)
         .ok_or_else(|| {
             "atof_required Switchyard profiles require an enabled ATOF endpoint".to_string()
         })?;
-    let matching_endpoints = endpoints
+    let matching_sinks = sinks
         .iter()
-        .filter(|endpoint| endpoint.get("name").and_then(Json::as_str) == Some(required_name))
+        .filter(|sink| {
+            sink.get("type").and_then(Json::as_str) == Some("stream")
+                && sink.get("name").and_then(Json::as_str) == Some(required_name)
+        })
         .collect::<Vec<_>>();
-    let endpoint = match matching_endpoints.as_slice() {
-        [endpoint] => *endpoint,
+    let endpoint = match matching_sinks.as_slice() {
+        [sink] => *sink,
         [] => {
             return Err(format!(
                 "atof_required Switchyard profile requires named ATOF endpoint {required_name:?}"
