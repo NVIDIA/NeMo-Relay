@@ -1451,10 +1451,18 @@ async fn initialize_plugin_components_catching_panics(
 /// default `version`/`policy`/`enabled` override the file, while `config` bodies
 /// merge field-by-field. Delegates to [`initialize_plugins_exact`].
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
+    let config = resolve_plugin_config(config)?;
+    initialize_plugins_exact(config).await
+}
+
+/// Layers `config` over the default discovered `plugins.toml` files.
+///
+/// This is crate-visible so owned dynamic-plugin activation can use the same
+/// one-time configuration resolution as regular harness-native initialization.
+pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<PluginConfig> {
     let mut base = resolve_default_file_plugin_config()?;
     layer_config(&mut base, serde_json::to_value(config)?);
-    let config: PluginConfig = serde_json::from_value(base)?;
-    initialize_plugins_exact(config).await
+    Ok(serde_json::from_value(base)?)
 }
 
 /// Resolves the default `plugins.toml` layering into one JSON document, or an

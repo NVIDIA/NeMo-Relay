@@ -18,7 +18,7 @@ use serde_json::{Map, Value as Json};
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
     acquire_plugin_host_lease, clear_plugin_configuration_for_host,
-    ensure_builtin_plugins_registered, initialize_plugins_exact_for_host,
+    ensure_builtin_plugins_registered, initialize_plugins_exact_for_host, resolve_plugin_config,
     run_owned_plugin_mutation,
 };
 
@@ -79,6 +79,32 @@ impl PluginHostActivation {
     {
         let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
         validate_dynamic_plugin_specs(&dynamic_plugins)?;
+        Self::activate_validated(config, dynamic_plugins).await
+    }
+
+    /// Load dynamic plugins after layering `config` over discovered `plugins.toml` files.
+    ///
+    /// This is the harness-native entrypoint for language and FFI bindings. File
+    /// discovery and merging happen once before activation, and the explicit
+    /// `config` has higher precedence. Hosts such as the Relay CLI that already
+    /// resolved plugin configuration should call [`Self::activate`] instead.
+    pub async fn activate_with_discovered_config<I>(
+        config: PluginConfig,
+        dynamic_plugins: I,
+    ) -> Result<(Self, ConfigReport)>
+    where
+        I: IntoIterator<Item = DynamicPluginActivationSpec>,
+    {
+        let dynamic_plugins = dynamic_plugins.into_iter().collect::<Vec<_>>();
+        validate_dynamic_plugin_specs(&dynamic_plugins)?;
+        let config = resolve_plugin_config(config)?;
+        Self::activate_validated(config, dynamic_plugins).await
+    }
+
+    async fn activate_validated(
+        config: PluginConfig,
+        dynamic_plugins: Vec<DynamicPluginActivationSpec>,
+    ) -> Result<(Self, ConfigReport)> {
         run_owned_plugin_mutation("dynamic plugin activation", move || async move {
             Self::activate_inner(config, dynamic_plugins).await
         })
