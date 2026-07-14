@@ -58,7 +58,7 @@ export interface DynamicPluginActivationSpec {
 }
 
 /** Owns one process-wide dynamic plugin host activation. */
-export interface DynamicPluginActivation {
+export interface DynamicPluginActivation extends AsyncDisposable {
   /** Validation report produced by the successful activation. */
   readonly report: ConfigReport;
   /**
@@ -68,6 +68,8 @@ export interface DynamicPluginActivation {
   readonly active: boolean;
   /** Clear callbacks before unloading libraries and workers. Idempotent. */
   close(): Promise<void>;
+  /** Delegate structured `await using` cleanup to `close()`. */
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /** A mark Relay materializes under a managed lifecycle. */

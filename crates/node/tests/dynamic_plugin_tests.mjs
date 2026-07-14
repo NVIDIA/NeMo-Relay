@@ -266,6 +266,26 @@ describe('dynamic plugin host', () => {
     }
   });
 
+  it('supports structured async disposal when the managed scope throws', async () => {
+    let disposedActivation;
+    await assert.rejects(async () => {
+      await using activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
+        activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
+      ]);
+      disposedActivation = activation;
+
+      assert.equal(activation[Symbol.asyncDispose], lib.DynamicPluginActivation.prototype.close);
+      const toolResult = await executeTool('node_native_async_dispose_tool');
+      assert.equal(toolResult.native_plugin_tool_execution, true);
+      throw new Error('managed activation scope failed');
+    }, /managed activation scope failed/);
+
+    assert.equal(disposedActivation.active, false);
+    await disposedActivation[Symbol.asyncDispose]();
+    const toolAfterDispose = await executeTool('node_native_async_disposed_tool');
+    assert.deepEqual(toolAfterDispose, { original: true, downstream: true });
+  });
+
   it('owns worker managed callbacks until close', async () => {
     const activation = await plugin.activateDynamicPlugins({ version: 1, components: [] }, [
       activationSpec('fixture_worker', 'worker', workerManifestRef),

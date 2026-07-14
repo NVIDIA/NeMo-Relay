@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
-use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
-use napi_derive::napi;
+use napi::{JsFunction, JsObject, JsSymbol, JsUnknown, NapiRaw, NapiValue};
+use napi_derive::{module_exports, napi};
 use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -87,6 +87,18 @@ fn init() {
         .expect("node adaptive plugin component registration should succeed");
     register_pii_redaction_component()
         .expect("node pii redaction plugin component registration should succeed");
+}
+
+#[module_exports]
+fn install_well_known_symbol_methods(exports: JsObject, env: Env) -> napi::Result<()> {
+    let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
+    let activation = activation.coerce_to_object()?;
+    let mut prototype: JsObject = activation.get_named_property("prototype")?;
+    let symbol: JsFunction = env.get_global()?.get_named_property("Symbol")?;
+    let symbol = symbol.coerce_to_object()?;
+    let async_dispose: JsSymbol = symbol.get_named_property("asyncDispose")?;
+    let close: JsFunction = prototype.get_named_property("close")?;
+    prototype.set_property(async_dispose, close)
 }
 
 fn parse_string_map(
@@ -4203,6 +4215,12 @@ impl DynamicPluginActivation {
             },
             |env, _| env.get_undefined(),
         )
+    }
+
+    /// Delegate structured `await using` cleanup to `close()`.
+    #[napi(js_name = "[Symbol.asyncDispose]", ts_return_type = "Promise<void>")]
+    pub fn async_dispose(&self, env: Env) -> napi::Result<JsObject> {
+        self.close(env)
     }
 }
 
