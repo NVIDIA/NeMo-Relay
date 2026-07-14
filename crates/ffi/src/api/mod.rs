@@ -36,8 +36,8 @@ use crate::error::{
 };
 use crate::types::{
     FfiAtifExporter, FfiAtofExporter, FfiCodecHandle, FfiLLMHandle, FfiLLMRequest,
-    FfiOpenInferenceSubscriber, FfiOpenTelemetrySubscriber, FfiPluginContext, FfiScopeHandle,
-    FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
+    FfiOpenInferenceSubscriber, FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiPluginContext,
+    FfiScopeHandle, FfiScopeStack, FfiThreadScopeStackBinding, FfiToolHandle, NemoRelayScopeType,
 };
 pub use crate::types::{nemo_relay_openinference_subscriber_free, nemo_relay_otel_subscriber_free};
 use libc::c_char;
@@ -57,6 +57,7 @@ use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::Result as FlowResult;
+use nemo_relay::plugin::dynamic::{DynamicPluginActivationSpec, PluginHostActivation};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError,
     PluginRegistrationContext, active_plugin_report, clear_plugin_configuration, deregister_plugin,

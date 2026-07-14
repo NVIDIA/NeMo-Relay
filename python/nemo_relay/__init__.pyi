@@ -49,9 +49,6 @@ from nemo_relay._native import (
     AtifExporter as AtifExporter,
 )
 from nemo_relay._native import (
-    AtofEndpointConfig as AtofEndpointConfig,
-)
-from nemo_relay._native import (
     AtofExporter as AtofExporter,
 )
 from nemo_relay._native import (
@@ -59,6 +56,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     AtofExporterMode as AtofExporterMode,
+)
+from nemo_relay._native import (
+    AtofStreamSinkConfig as AtofStreamSinkConfig,
 )
 from nemo_relay._native import (
     LLMAttributes as LLMAttributes,

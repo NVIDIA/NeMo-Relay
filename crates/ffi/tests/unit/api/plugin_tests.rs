@@ -6,6 +6,173 @@
 use super::*;
 
 #[test]
+fn test_ffi_dynamic_plugin_activation_rejects_empty_specs_without_outputs() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_globals();
+    let _ = nemo_relay_clear_plugin_configuration();
+
+    let config = cstring(r#"{"version":1,"components":[]}"#);
+    let specs = cstring("[]");
+    for _ in 0..2 {
+        let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
+        let mut report_json = std::ptr::dangling_mut::<c_char>();
+        unsafe {
+            assert_eq!(
+                nemo_relay_initialize_with_dynamic_plugins(
+                    config.as_ptr(),
+                    specs.as_ptr(),
+                    &mut activation,
+                    &mut report_json,
+                ),
+                NemoRelayStatus::InvalidArg
+            );
+            assert!(activation.is_null());
+            assert!(report_json.is_null());
+            assert!(
+                read_last_error()
+                    .unwrap_or_default()
+                    .contains("at least one dynamic plugin")
+            );
+        }
+    }
+}
+
+#[test]
+fn test_ffi_dynamic_plugin_activation_rejects_invalid_inputs_without_outputs() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_globals();
+    let _ = nemo_relay_clear_plugin_configuration();
+
+    let config = cstring(r#"{"version":1,"components":[]}"#);
+    let specs = cstring("[]");
+    let invalid = cstring("not-json");
+    unsafe {
+        let mut report = std::ptr::dangling_mut::<c_char>();
+        assert_eq!(
+            nemo_relay_initialize_with_dynamic_plugins(
+                config.as_ptr(),
+                specs.as_ptr(),
+                ptr::null_mut(),
+                &mut report,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert!(report.is_null());
+
+        let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
+        assert_eq!(
+            nemo_relay_initialize_with_dynamic_plugins(
+                config.as_ptr(),
+                specs.as_ptr(),
+                &mut activation,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert!(activation.is_null());
+
+        for (config_json, specs_json, expected_error) in [
+            (invalid.as_ptr(), specs.as_ptr(), "invalid JSON"),
+            (config.as_ptr(), invalid.as_ptr(), "invalid JSON"),
+        ] {
+            let mut activation = std::ptr::dangling_mut::<FfiPluginActivation>();
+            let mut report = std::ptr::dangling_mut::<c_char>();
+            assert_eq!(
+                nemo_relay_initialize_with_dynamic_plugins(
+                    config_json,
+                    specs_json,
+                    &mut activation,
+                    &mut report,
+                ),
+                NemoRelayStatus::InvalidJson
+            );
+            assert!(activation.is_null());
+            assert!(report.is_null());
+            assert!(
+                read_last_error()
+                    .unwrap_or_default()
+                    .contains(expected_error)
+            );
+        }
+
+        let invalid_shape = cstring(r#"{"plugin_id":"not-an-array"}"#);
+        let mut activation = ptr::null_mut();
+        let mut report = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_initialize_with_dynamic_plugins(
+                config.as_ptr(),
+                invalid_shape.as_ptr(),
+                &mut activation,
+                &mut report,
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+        assert!(
+            read_last_error()
+                .unwrap_or_default()
+                .contains("invalid dynamic plugin specifications")
+        );
+    }
+}
+
+#[test]
+fn test_ffi_dynamic_plugin_activation_surfaces_load_failures_and_releases_owner() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    reset_globals();
+    let _ = nemo_relay_clear_plugin_configuration();
+
+    let config = cstring(r#"{"version":1,"components":[]}"#);
+    let missing_manifest = std::env::temp_dir()
+        .join(format!("missing-relay-plugin-{}.toml", Uuid::now_v7()))
+        .to_string_lossy()
+        .into_owned();
+    let specs = cstring(
+        &json!([{
+            "plugin_id": "fixture_missing",
+            "kind": "rust_dynamic",
+            "manifest_ref": missing_manifest,
+            "config": {}
+        }])
+        .to_string(),
+    );
+
+    unsafe {
+        let mut activation = ptr::null_mut();
+        let mut report = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_initialize_with_dynamic_plugins(
+                config.as_ptr(),
+                specs.as_ptr(),
+                &mut activation,
+                &mut report,
+            ),
+            NemoRelayStatus::NotFound
+        );
+        assert!(activation.is_null());
+        assert!(report.is_null());
+        assert!(
+            read_last_error()
+                .unwrap_or_default()
+                .contains("native plugin load failed")
+        );
+
+        let mut retry_activation = ptr::null_mut();
+        let mut retry_report = ptr::null_mut();
+        assert_eq!(
+            nemo_relay_initialize_with_dynamic_plugins(
+                config.as_ptr(),
+                specs.as_ptr(),
+                &mut retry_activation,
+                &mut retry_report,
+            ),
+            NemoRelayStatus::NotFound
+        );
+        assert!(retry_activation.is_null());
+        assert!(retry_report.is_null());
+    }
+}
+
+#[test]
 fn test_ffi_plugin_registration_validation_and_cleanup() {
     let _guard = TEST_MUTEX.lock().unwrap();
     reset_globals();
