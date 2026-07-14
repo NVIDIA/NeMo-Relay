@@ -22,13 +22,13 @@ export interface AtofFileSinkConfig {
 
 export interface AtofStreamSinkConfig {
   type: 'stream';
-  name?: string;
   url: string;
   transport?: 'http_post' | 'websocket' | 'ndjson' | string;
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
   timeout_millis?: number;
   field_name_policy?: 'preserve' | 'replace_dots' | string;
+  name?: string;
 }
 
 /** @deprecated Use AtofStreamSinkConfig. */
