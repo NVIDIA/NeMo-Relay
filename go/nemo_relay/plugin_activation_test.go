@@ -300,12 +300,59 @@ func TestPluginActivationFinalizerReportsClearFailure(t *testing.T) {
 	wantErr := errors.New("teardown failed")
 	clearPluginActivation = func(unsafe.Pointer) error { return wantErr }
 	freePluginActivation = func(unsafe.Pointer) {}
-	var reported error
-	reportPluginActivationCleanupError = func(err error) { reported = err }
+	reported := make(chan error, 1)
+	reportPluginActivationCleanupError = func(err error) { reported <- err }
 
 	finalizePluginActivation(&pluginActivationState{ptr: unsafe.Pointer(token)})
-	if !errors.Is(reported, wantErr) {
-		t.Fatalf("reported finalizer error = %v, want %v", reported, wantErr)
+	select {
+	case err := <-reported:
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("reported finalizer error = %v, want %v", err, wantErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("finalizer did not report the clear failure")
+	}
+	runtime.KeepAlive(token)
+}
+
+func TestPluginActivationFinalizerDoesNotBlockOnCleanup(t *testing.T) {
+	withPluginActivationStubs(t)
+
+	token := new(byte)
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	cleanupFinished := make(chan struct{})
+	clearPluginActivation = func(unsafe.Pointer) error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return nil
+	}
+	freePluginActivation = func(unsafe.Pointer) { close(cleanupFinished) }
+
+	finalizerReturned := make(chan struct{})
+	go func() {
+		finalizePluginActivation(&pluginActivationState{ptr: unsafe.Pointer(token)})
+		close(finalizerReturned)
+	}()
+
+	select {
+	case <-cleanupStarted:
+	case <-time.After(time.Second):
+		close(releaseCleanup)
+		t.Fatal("finalizer cleanup did not start")
+	}
+	select {
+	case <-finalizerReturned:
+	case <-time.After(time.Second):
+		close(releaseCleanup)
+		t.Fatal("finalizer blocked while native cleanup was in progress")
+	}
+
+	close(releaseCleanup)
+	select {
+	case <-cleanupFinished:
+	case <-time.After(time.Second):
+		t.Fatal("asynchronous finalizer cleanup did not finish")
 	}
 	runtime.KeepAlive(token)
 }

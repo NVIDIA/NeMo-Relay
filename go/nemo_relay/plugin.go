@@ -132,23 +132,11 @@ var (
 			&report,
 		)
 		if err := checkStatus(status); err != nil {
-			if report != nil {
-				C.nemo_relay_string_free(report)
-			}
-			if activation != nil {
-				C.nemo_relay_plugin_activation_clear(activation)
-				C.nemo_relay_plugin_activation_free(&activation)
-			}
+			cleanupPartialPluginActivation(activation, report)
 			return nil, "", err
 		}
 		if activation == nil || report == nil {
-			if report != nil {
-				C.nemo_relay_string_free(report)
-			}
-			if activation != nil {
-				C.nemo_relay_plugin_activation_clear(activation)
-				C.nemo_relay_plugin_activation_free(&activation)
-			}
+			cleanupPartialPluginActivation(activation, report)
 			return nil, "", errors.New("dynamic plugin activation returned incomplete outputs")
 		}
 		defer C.nemo_relay_string_free(report)
@@ -179,6 +167,16 @@ var (
 		})
 	}
 )
+
+func cleanupPartialPluginActivation(activation *C.FfiPluginActivation, report *C.char) {
+	if report != nil {
+		C.nemo_relay_string_free(report)
+	}
+	if activation != nil {
+		C.nemo_relay_plugin_activation_clear(activation)
+		C.nemo_relay_plugin_activation_free(&activation)
+	}
+}
 
 // DiagnosticLevel is the severity level for one plugin diagnostic.
 type DiagnosticLevel string
@@ -447,9 +445,11 @@ var reportPluginActivationCleanupError = func(err error) {
 }
 
 func finalizePluginActivation(state *pluginActivationState) {
-	if err := state.close(); err != nil {
-		reportPluginActivationCleanupError(err)
-	}
+	go func() {
+		if err := state.close(); err != nil {
+			reportPluginActivationCleanupError(err)
+		}
+	}()
 }
 
 // Close removes callbacks and subscribers before unloading plugin libraries
