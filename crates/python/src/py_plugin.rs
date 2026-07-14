@@ -892,7 +892,10 @@ impl PyPluginHostActivation {
         json_to_py(py, &report)
     }
 
-    /// Return whether this object still owns an active dynamic plugin host.
+    /// Return whether this activation handle has not begun teardown.
+    ///
+    /// `False` does not guarantee another process-wide activation can start;
+    /// failed teardown may intentionally retain the activation owner.
     #[getter]
     fn is_active(&self) -> PyResult<bool> {
         Ok(self.close_state.is_active())

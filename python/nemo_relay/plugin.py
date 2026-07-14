@@ -363,7 +363,11 @@ class PluginHostActivation:
 
     @property
     def is_active(self) -> bool:
-        """Return whether this object still owns the active plugin host."""
+        """Return whether this activation handle has not begun teardown.
+
+        ``False`` does not guarantee another process-wide activation can start;
+        failed teardown may intentionally retain the activation owner.
+        """
         return self._native.is_active
 
     async def close(self) -> None:
