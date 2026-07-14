@@ -1258,6 +1258,7 @@ async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_compo
 
     activation.clear().expect("discovered host should clear");
     assert_eq!(STATIC_BASE_DEREGISTRATIONS.load(Ordering::SeqCst), 1);
+    assert!(lookup_plugin("fixture_native").is_none());
     assert!(deregister_plugin(STATIC_BASE_PLUGIN_KIND));
 }
 
