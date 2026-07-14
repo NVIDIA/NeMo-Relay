@@ -93,6 +93,18 @@ Selects how point-in-time marks are represented in exported traces.
 
 Excludes named marks from tool projection while preserving their native event representation. The default excludes high-volume `llm.chunk` marks.
 
+#### `with_attribute_mapping`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mapping(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    alias: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Adds a typed attribute copy after event payload projection.
+
+#### `with_attribute_mappings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mappings&lt;I&gt;(self, mappings: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
+
+Replaces the configured typed attribute copies.
+
 ## Trait Implementations
 
 ### `impl Clone for OpenInferenceConfig`

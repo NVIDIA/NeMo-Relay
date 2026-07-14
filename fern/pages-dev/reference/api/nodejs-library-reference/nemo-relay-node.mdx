@@ -67,6 +67,21 @@ export interface OpenTelemetryConfig {
   instrumentationScope?: string
   /** Export timeout in milliseconds. Defaults to `3000`. */
   timeoutMillis?: number
+  /** Typed projected attributes copied to aliases. */
+  attributeMappings?: Array<OtlpAttributeMapping>
+}
+```
+
+### `OtlpAttributeMapping`
+
+Typed projected attribute copy configuration.
+
+```ts
+export interface OtlpAttributeMapping {
+  /** Fully-qualified projected attribute to copy. */
+  key: string
+  /** Additional attribute name receiving the copied value. */
+  alias: string
 }
 ```
 
@@ -94,6 +109,8 @@ export interface OpenInferenceConfig {
   instrumentationScope?: string
   /** Export timeout in milliseconds. Defaults to `3000`. */
   timeoutMillis?: number
+  /** Typed projected attributes copied to aliases. */
+  attributeMappings?: Array<OtlpAttributeMapping>
 }
 ```
 

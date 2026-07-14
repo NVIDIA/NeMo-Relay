@@ -45,6 +45,18 @@ Builds a subscriber from a tracer provider with an explicit mark projection.
 
 Builds a subscriber with explicit mark projection and exclusion names.
 
+#### `from_tracer_provider_with_attribute_mappings`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_attribute_mappings&lt;I&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    attribute_mappings: I,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
+
+Builds a subscriber from a tracer provider with typed attribute copies.
+
+#### `from_tracer_provider_with_options`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_options(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    options: <a href=\"struct-openinferencesubscriberoptions\">OpenInferenceSubscriberOptions</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+
+Builds a subscriber from a tracer provider with composable projection options.
+
 #### `subscriber`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn subscriber(&amp;self) -&gt; <a href=\"../../api/runtime/callbacks/type-eventsubscriberfn\">EventSubscriberFn</a>"}} /></pre>

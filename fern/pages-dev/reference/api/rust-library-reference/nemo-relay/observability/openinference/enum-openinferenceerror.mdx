@@ -2,14 +2,14 @@
 title: "Enum Open Inference Error"
 sidebar-title: "OpenInferenceError"
 description: "Errors produced while configuring or operating the OpenInference subscriber."
-position: 3
+position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenInferenceError &#123;\n    MissingTokioRuntime,\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum OpenInferenceError &#123;\n    MissingTokioRuntime,\n    InvalidGrpcHeader &#123;\n        key: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        message: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ExporterBuild(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Core(<a href=\"../../error/enum-flowerror\">FlowError</a>),\n&#125;"}} /></pre>
 
 Errors produced while configuring or operating the OpenInference subscriber.
 
@@ -48,6 +48,12 @@ Failed to build the OTLP exporter.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Provider(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 The underlying tracer provider returned an error.
+
+### `InvalidAttributeMappings(String)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidAttributeMappings(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+
+Attribute mapping configuration was invalid.
 
 ### `Core(FlowError)`
 
