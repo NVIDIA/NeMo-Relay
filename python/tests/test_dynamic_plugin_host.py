@@ -227,6 +227,56 @@ async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
     assert result == {"args": {"input": True}}
 
 
+async def test_dynamic_activation_layers_plugins_toml_static_components(
+    native_dynamic_plugin: _BuiltPlugin,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    static_kind = "python.fixture.file-static-base"
+
+    class FileStaticPlugin:
+        def validate(self, _plugin_config):
+            return None
+
+        def register(self, _plugin_config, context):
+            context.register_tool_request_intercept(
+                "mark-file-static-base",
+                0,
+                False,
+                lambda _name, args: {**args, "file_static_base": True},
+            )
+
+    project_config = tmp_path / ".nemo-relay"
+    project_config.mkdir()
+    (project_config / "plugins.toml").write_text(
+        textwrap.dedent(
+            f"""
+            version = 1
+
+            [[components]]
+            kind = {static_kind!r}
+            enabled = true
+            """
+        )
+    )
+    isolated_user_config = tmp_path / "xdg"
+    isolated_user_config.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(isolated_user_config))
+
+    plugin.register(static_kind, cast(plugin.Plugin, FileStaticPlugin()))
+    activation = None
+    try:
+        activation = await plugin.activate_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
+        result = await tools.execute("python-file-static-base", {"input": True}, lambda args: args)
+        assert result["file_static_base"] is True
+        assert result["native_plugin_tool_execution"] is True
+    finally:
+        if activation is not None:
+            await activation.close()
+        plugin.deregister(static_kind)
+
+
 async def test_concurrent_close_waiters_share_cancellation_resistant_teardown(
     native_dynamic_plugin: _BuiltPlugin,
 ):

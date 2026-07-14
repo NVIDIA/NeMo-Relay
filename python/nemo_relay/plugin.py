@@ -429,8 +429,9 @@ async def activate_dynamic_plugins(
     """Load dynamic plugins and activate their components as one owned host.
 
     Args:
-        config: Base plugin configuration activated before the dynamic
-            components. It may contain statically registered components.
+        config: Base plugin configuration layered over the discovered
+            ``plugins.toml`` files before dynamic components are appended. It
+            may contain statically registered components.
         dynamic_plugins: Non-empty ordered activation specifications. Dataclass
             instances and equivalent JSON objects may be mixed.
 

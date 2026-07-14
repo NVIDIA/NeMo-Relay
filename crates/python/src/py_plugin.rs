@@ -937,9 +937,10 @@ fn activate_dynamic_plugins_py<'py>(
         serde_json::from_value(dynamic_plugins_json)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let (activation, report) = PluginHostActivation::activate(config, dynamic_plugins)
-            .await
-            .map_err(plugin_error_to_py_err)?;
+        let (activation, report) =
+            PluginHostActivation::activate_with_discovered_config(config, dynamic_plugins)
+                .await
+                .map_err(plugin_error_to_py_err)?;
         Python::attach(|py| {
             Py::new(
                 py,
