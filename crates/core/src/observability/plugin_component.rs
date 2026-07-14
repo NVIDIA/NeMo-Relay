@@ -55,7 +55,7 @@ use crate::observability::{MarkProjection, default_mark_exclude_names};
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    deregister_plugin, register_plugin,
+    deregister_plugin, register_builtin_plugin,
 };
 
 /// The plugin kind registered by the core crate.
@@ -199,6 +199,9 @@ pub struct AtofEndpointSectionConfig {
     /// Headers applied to endpoint requests or handshakes.
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// Header names mapped to environment variables containing their values.
+    #[serde(default)]
+    pub header_env: HashMap<String, String>,
     /// Per-endpoint timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
@@ -545,13 +548,7 @@ impl Plugin for ObservabilityPlugin {
 /// automatically before listing, looking up, validating, or initializing plugin
 /// components, so applications normally do not need to invoke it directly.
 pub fn register_observability_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(ObservabilityPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    register_builtin_plugin(Arc::new(ObservabilityPlugin))
 }
 
 /// Deregisters the observability component kind from the core plugin registry.
@@ -695,6 +692,9 @@ fn build_atof_endpoint_config(
         .with_field_name_policy(field_name_policy);
     for (key, value) in endpoint.headers {
         config = config.with_header(key, value);
+    }
+    for (key, variable) in endpoint.header_env {
+        config = config.with_header_env(key, variable);
     }
     Ok(config)
 }

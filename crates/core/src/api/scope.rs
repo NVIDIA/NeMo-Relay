@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::api::event::{BaseEvent, MarkEvent};
+use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
@@ -18,6 +18,9 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
+
+/// Canonical mark-event name used to indicate agent context compaction.
+pub const COMPACTION_EVENT_NAME: &str = "compaction";
 
 /// Runtime-owned handle identifying an active or completed scope.
 #[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
@@ -152,9 +155,18 @@ pub struct EmitMarkEventParams<'a> {
     /// Optional JSON payload recorded as the mark data.
     #[builder(default)]
     pub data: Option<Json>,
+    /// Optional schema identifier for the mark data.
+    #[builder(default)]
+    pub data_schema: Option<DataSchema>,
     /// Optional JSON metadata recorded on the emitted event.
     #[builder(default)]
     pub metadata: Option<Json>,
+    /// Optional semantic category for the mark.
+    #[builder(default)]
+    pub category: Option<EventCategory>,
+    /// Optional category-specific mark profile.
+    #[builder(default)]
+    pub category_profile: Option<CategoryProfile>,
     /// Optional timestamp recorded on the emitted mark event. When omitted, the
     /// current UTC time is used.
     #[builder(default)]
@@ -328,11 +340,18 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
+    let scope_stack = current_scope_stack();
     let (event, subscribers) = {
-        let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
-        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
+        let subscribers = if params.name == COMPACTION_EVENT_NAME {
+            let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+            let subscribers =
+                snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+            scope_guard.mark_agent_fresh(parent_uuid);
+            subscribers
+        } else {
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+        };
         let context = global_context();
         let state = context
             .read()
@@ -343,10 +362,11 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
                 .parent_uuid_opt(parent_uuid)
                 .timestamp(params.timestamp.unwrap_or_else(Utc::now))
                 .data_opt(params.data)
+                .data_schema_opt(params.data_schema)
                 .metadata_opt(params.metadata)
                 .build(),
-            None,
-            None,
+            params.category,
+            params.category_profile,
         ));
         (event, subscribers)
     };

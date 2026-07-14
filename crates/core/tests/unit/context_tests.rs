@@ -96,6 +96,46 @@ fn scope_stack_rejects_removing_non_top_or_root_scopes() {
 }
 
 #[test]
+fn scope_stack_tracks_freshness_per_owning_agent() {
+    let mut stack = ScopeStack::new();
+    let root_uuid = stack.root_uuid();
+    assert!(stack.take_agent_freshness(Some(root_uuid)));
+    assert!(!stack.take_agent_freshness(Some(root_uuid)));
+
+    let parent = ScopeHandle::builder()
+        .name("parent-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(root_uuid)
+        .build();
+    let parent_uuid = parent.uuid;
+    stack.push(parent);
+    let turn = ScopeHandle::builder()
+        .name("turn")
+        .scope_type(ScopeType::Custom)
+        .parent_uuid(parent_uuid)
+        .build();
+    let turn_uuid = turn.uuid;
+    stack.push(turn);
+    assert!(stack.take_agent_freshness(Some(turn_uuid)));
+
+    let child = ScopeHandle::builder()
+        .name("child-agent")
+        .scope_type(ScopeType::Agent)
+        .parent_uuid(turn_uuid)
+        .build();
+    let child_uuid = child.uuid;
+    stack.push(child);
+    assert!(stack.take_agent_freshness(Some(child_uuid)));
+    stack.mark_agent_fresh(Some(turn_uuid));
+    assert!(!stack.take_agent_freshness(Some(child_uuid)));
+
+    stack.remove(&child_uuid).unwrap();
+    assert!(stack.take_agent_freshness(Some(turn_uuid)));
+    stack.remove(&turn_uuid).unwrap();
+    stack.remove(&parent_uuid).unwrap();
+}
+
+#[test]
 fn merge_helpers_preserve_global_and_scope_local_priority_order() {
     let mut global_guardrails = SortedRegistry::new();
     global_guardrails

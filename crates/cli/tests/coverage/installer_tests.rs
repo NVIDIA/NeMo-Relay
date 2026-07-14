@@ -78,6 +78,13 @@ fn merge_hooks_is_idempotent_and_preserves_existing_entries() {
     let twice = merge_hooks(once.clone(), generated).unwrap();
     assert_eq!(once, twice);
     assert_eq!(twice["hooks"]["Stop"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        twice["hooks"]["UserPromptExpansion"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]

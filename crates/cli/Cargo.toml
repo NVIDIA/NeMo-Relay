@@ -23,11 +23,13 @@ workspace = true
 [features]
 default = ["atof-streaming"]
 atof-streaming = ["nemo-relay/atof-streaming"]
+switchyard = ["dep:nemo-relay-switchyard"]
 
 [dependencies]
 nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "otel", "openinference", "worker-grpc"] }
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
+nemo-relay-switchyard = { workspace = true, optional = true, features = ["schema"] }
 async-stream = "0.3"
 axum = "0.8"
 base64 = "0.22"
@@ -61,3 +63,8 @@ opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+[[test]]
+name = "switchyard_process_e2e"
+path = "tests/switchyard_process_e2e.rs"
+required-features = ["switchyard"]

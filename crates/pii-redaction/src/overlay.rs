@@ -4,6 +4,7 @@
 use serde_json::{Map, Value as Json};
 
 use nemo_relay::codec::request::{ContentPart, MessageContent};
+use nemo_relay::codec::resolve::ProviderSurface;
 use nemo_relay::codec::response::{AnnotatedLlmResponse, FinishReason, ResponseToolCall};
 
 #[derive(Clone, Copy)]
@@ -14,12 +15,11 @@ pub(crate) enum BuiltinCodecName {
 }
 
 impl BuiltinCodecName {
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        match value {
-            "openai_chat" => Some(Self::OpenAIChat),
-            "openai_responses" => Some(Self::OpenAIResponses),
-            "anthropic_messages" => Some(Self::AnthropicMessages),
-            _ => None,
+    pub(crate) fn from_provider_surface(surface: ProviderSurface) -> Self {
+        match surface {
+            ProviderSurface::OpenAIChat => Self::OpenAIChat,
+            ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
+            ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
         }
     }
 

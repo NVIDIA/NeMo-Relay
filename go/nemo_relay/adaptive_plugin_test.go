@@ -300,6 +300,10 @@ func assertClosedContextRegistrationFails(t *testing.T, name string, err error) 
 }
 
 func TestTopLevelPluginValidationAndLifecycle(t *testing.T) {
+	runTestWithScopeStack(t, testTopLevelPluginValidationAndLifecycle)
+}
+
+func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	pluginKind := "go.test.plugin"
 	registerCalls := 0
 

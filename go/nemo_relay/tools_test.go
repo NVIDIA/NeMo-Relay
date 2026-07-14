@@ -70,6 +70,10 @@ func TestToolCallWithDataMetadata(t *testing.T) {
 }
 
 func TestToolCallWithParent(t *testing.T) {
+	runTestWithScopeStack(t, testToolCallWithParent)
+}
+
+func testToolCallWithParent(t *testing.T) {
 	parent, _ := PushScope("tool_parent", ScopeTypeAgent)
 	defer PopScope(parent)
 

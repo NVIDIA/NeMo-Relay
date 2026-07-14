@@ -1238,8 +1238,24 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("headers.x-test must be a string")
     );
 
-    let unsupported = probe_atof_endpoint(
+    let mixed_case_duplicate = probe_atof_endpoint(
         4,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"Authorization": "Bearer literal"},
+            "header_env": {"authorization": "PATH"}
+        }),
+    )
+    .await;
+    assert_eq!(mixed_case_duplicate.status, Status::Fail);
+    assert!(
+        mixed_case_duplicate
+            .details
+            .contains("cannot appear in both headers and header_env")
+    );
+
+    let unsupported = probe_atof_endpoint(
+        5,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "transport": "grpc"
@@ -1624,4 +1640,27 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
+}
+
+#[test]
+fn claude_hook_floor_warning_pins_version_boundary() {
+    // 2.1.116 is the first Claude Code whose plugin hook whitelist accepts UserPromptExpansion;
+    // 2.1.114 is the newest published version that rejects it (2.1.115 was never published).
+    let cases = [
+        ("2.1.114 (Claude Code)", true),
+        ("2.1.116 (Claude Code)", false),
+        ("2.1.206 (Claude Code)", false),
+        ("2.0.999 (Claude Code)", true),
+        ("3.0.0 (Claude Code)", false),
+        ("2.1.116-beta (Claude Code)", false),
+        ("not a version", false),
+        ("", false),
+    ];
+    for (version, expect_warning) in cases {
+        assert_eq!(
+            claude_hook_floor_warning(version).is_some(),
+            expect_warning,
+            "unexpected floor verdict for {version:?}"
+        );
+    }
 }

@@ -20,6 +20,10 @@ use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
+#[cfg(feature = "switchyard")]
+use nemo_relay_switchyard::{
+    register_switchyard_component, validate_switchyard_atof_configuration,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::time::timeout;
@@ -430,6 +434,12 @@ async fn collect_agents(
         if !hook_details.is_empty() {
             details.push(hook_details);
         }
+        if agent == CodingAgent::ClaudeCode
+            && let Some(warning) = version.as_deref().and_then(claude_hook_floor_warning)
+        {
+            status = combine_status(status, Status::Warn, true);
+            details.push(warning);
+        }
         out.push(AgentInfo {
             name: display_name,
             status,
@@ -577,6 +587,36 @@ fn hook_file_status(
     }
 }
 
+// Claude Code validates plugin hooks.json against a strict event-name whitelist and rejects the
+// entire plugin's hooks on one unknown name. 2.1.116 is the oldest release that accepts every
+// event in the generated hook config (`UserPromptExpansion` was added to the whitelist there),
+// so older hosts silently load no relay hooks at all. Keep in sync with `HOOK_EVENTS` in
+// installer.rs.
+const CLAUDE_HOOK_EVENT_FLOOR: (u64, u64, u64) = (2, 1, 116);
+
+// Returns a doctor warning when a probed Claude Code version predates the hook-event floor.
+// Unparseable version strings return None: a missing warning is recoverable, a false one is not.
+fn claude_hook_floor_warning(version: &str) -> Option<String> {
+    let parsed = parse_leading_semver(version)?;
+    (parsed < CLAUDE_HOOK_EVENT_FLOOR).then(|| {
+        let (major, minor, patch) = CLAUDE_HOOK_EVENT_FLOOR;
+        format!(
+            "version predates {major}.{minor}.{patch}; this Claude Code rejects \
+             UserPromptExpansion and will silently load no relay hooks"
+        )
+    })
+}
+
+// Parses the leading `major.minor.patch` token from a probed version line such as
+// "2.1.206 (Claude Code)". Suffixes like prerelease tags fail the numeric parse and yield None.
+fn parse_leading_semver(version: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = version.split_whitespace().next()?.splitn(3, '.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
+}
+
 async fn probe_version(binary: &Path) -> Option<String> {
     // Spawn `<binary> --version` and read the first line of stdout. Bounded by the network
     // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
@@ -639,6 +679,24 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             name: "PII redaction plugin",
             status: Status::Fail,
             details: format!("registration failed: {error}"),
+        });
+        return checks;
+    }
+    #[cfg(feature = "switchyard")]
+    if let Err(error) = register_switchyard_component() {
+        checks.push(Check {
+            name: "Switchyard plugin",
+            status: Status::Fail,
+            details: format!("registration failed: {error}"),
+        });
+        return checks;
+    }
+    #[cfg(feature = "switchyard")]
+    if let Err(error) = validate_switchyard_atof_configuration(&plugin_config) {
+        checks.push(Check {
+            name: "Switchyard ATOF",
+            status: Status::Fail,
+            details: error,
         });
         return checks;
     }
@@ -946,18 +1004,45 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
 }
 
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
-    let Some(headers) = endpoint.get("headers") else {
-        return Ok(Vec::new());
-    };
-    let Some(object) = headers.as_object() else {
-        return Err("headers must be an object of string values".into());
-    };
-    let mut out = Vec::with_capacity(object.len());
-    for (key, value) in object {
-        let Some(value) = value.as_str() else {
-            return Err(format!("headers.{key} must be a string"));
+    let mut out = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    if let Some(headers) = endpoint.get("headers") {
+        let Some(object) = headers.as_object() else {
+            return Err("headers must be an object of string values".into());
         };
-        out.push((key.clone(), value.to_string()));
+        for (key, value) in object {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
+            let Some(value) = value.as_str() else {
+                return Err(format!("headers.{key} must be a string"));
+            };
+            names.insert(name);
+            out.push((key.clone(), value.to_string()));
+        }
+    }
+    if let Some(header_env) = endpoint.get("header_env") {
+        let Some(object) = header_env.as_object() else {
+            return Err("header_env must be an object of string values".into());
+        };
+        for (key, variable) in object {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
+            if names.contains(&name) {
+                return Err(format!(
+                    "header {key:?} cannot appear in both headers and header_env"
+                ));
+            }
+            let Some(variable) = variable.as_str() else {
+                return Err(format!("header_env.{key} must be a string"));
+            };
+            let value = std::env::var(variable)
+                .map_err(|_| format!("environment variable {variable:?} is not set"))?;
+            if value.trim().is_empty() {
+                return Err(format!("environment variable {variable:?} is blank"));
+            }
+            names.insert(name);
+            out.push((key.clone(), value));
+        }
     }
     Ok(out)
 }

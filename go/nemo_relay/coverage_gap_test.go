@@ -61,6 +61,10 @@ func TestEventBaseNilPointerFallbacks(t *testing.T) {
 }
 
 func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
+	runTestWithScopeStack(t, testPublicAPIErrorAndDefaultCoverage)
+}
+
+func testPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		opt  ScopeOption
@@ -153,6 +157,10 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 }
 
 func TestWrapperAndCodecFinalizersRun(t *testing.T) {
+	runTestWithScopeStack(t, testWrapperAndCodecFinalizersRun)
+}
+
+func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	scopeHandle, err := PushScope("finalizer_scope", ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf("PushScope failed: %v", err)

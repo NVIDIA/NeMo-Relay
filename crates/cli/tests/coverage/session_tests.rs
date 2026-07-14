@@ -21,6 +21,80 @@ use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 const HERMES_ROUTED_TEST_SESSION_KEY: &str = "hermes_routed_test_session_id";
 
+#[test]
+fn routing_identity_enrichment_replaces_untrusted_reserved_headers() {
+    let mut request = LlmRequest {
+        headers: Map::from_iter([
+            ("X-Nemo-Relay-Session-Id".into(), json!("spoofed-session")),
+            ("x-nemo-relay-agent-kind".into(), json!("spoofed-agent")),
+            ("x-nemo-relay-turn-id".into(), json!("spoofed-turn")),
+            ("x-nemo-relay-request-id".into(), json!("spoofed-request")),
+            ("x-nemo-relay-owner-id".into(), json!("spoofed-owner")),
+            ("x-nemo-relay-subagent-id".into(), json!("spoofed-subagent")),
+            (
+                "x-nemo-relay-parent-scope-id".into(),
+                json!("spoofed-parent"),
+            ),
+            ("x-nemo-relay-root-scope-id".into(), json!("spoofed-root")),
+            (
+                "x-nemo-relay-identity-quality".into(),
+                json!("spoofed-quality"),
+            ),
+            ("x-nemo-relay-source".into(), json!("spoofed-source")),
+            ("x-nemo-relay-config-profile".into(), json!("preserved")),
+        ]),
+        content: json!({}),
+    };
+
+    enrich_routing_identity_headers(
+        &mut request,
+        RoutingIdentityHeaderContext {
+            session_id: "trusted-session",
+            agent_kind: AgentKind::Hermes,
+            turn_index: 7,
+            request_id: Some("trusted-request"),
+            owner_id: None,
+            parent: None,
+            root: None,
+            metadata: &json!({}),
+        },
+    );
+
+    assert_eq!(
+        request.headers["x-nemo-relay-session-id"],
+        json!("trusted-session")
+    );
+    assert_eq!(
+        request.headers["x-nemo-relay-request-id"],
+        json!("trusted-request")
+    );
+    assert_eq!(request.headers["x-nemo-relay-agent-kind"], json!("hermes"));
+    assert_eq!(request.headers["x-nemo-relay-turn-id"], json!("7"));
+    assert_eq!(
+        request.headers["x-nemo-relay-identity-quality"],
+        json!("native")
+    );
+    assert_eq!(request.headers["x-nemo-relay-source"], json!("gateway"));
+    for absent in [
+        "x-nemo-relay-owner-id",
+        "x-nemo-relay-subagent-id",
+        "x-nemo-relay-parent-scope-id",
+        "x-nemo-relay-root-scope-id",
+    ] {
+        assert!(!request.headers.contains_key(absent));
+    }
+    assert_eq!(
+        request.headers["x-nemo-relay-config-profile"],
+        json!("preserved")
+    );
+    assert!(
+        request
+            .headers
+            .keys()
+            .all(|name| name != "X-Nemo-Relay-Session-Id")
+    );
+}
+
 async fn install_test_atif_plugin(output_directory: &Path) {
     let _ = clear_plugin_configuration();
     std::fs::create_dir_all(output_directory).unwrap();
@@ -3386,6 +3460,72 @@ async fn empty_hook_marks_do_not_create_empty_atif_steps() {
 }
 
 #[tokio::test]
+async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _ = clear_plugin_configuration();
+    let atof_exporter = make_atof_test_exporter(&temp.path().join("atof"), "events.jsonl");
+    let subscriber_name = "cli-inferred-skill-load-atof-test";
+    let _ = deregister_subscriber(subscriber_name);
+    register_subscriber(subscriber_name, atof_exporter.subscriber()).unwrap();
+    let manager = SessionManager::new(session_test_config());
+
+    manager
+        .apply_events(
+            &HeaderMap::new(),
+            vec![
+                NormalizedEvent::AgentStarted(SessionEvent {
+                    session_id: "inferred-skill-load".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionStart".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+                NormalizedEvent::HookMark(SessionEvent {
+                    session_id: "inferred-skill-load".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "UserPromptExpansion".into(),
+                    payload: json!({"skill_name": "review"}),
+                    metadata: json!({
+                        "agent_kind": "claude-code",
+                        "skill_load_source": "prompt_expansion",
+                        "inferred": true
+                    }),
+                }),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: "inferred-skill-load".into(),
+                    agent_kind: AgentKind::ClaudeCode,
+                    event_name: "SessionEnd".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+
+    atof_exporter.force_flush().unwrap();
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+    let events = read_atof_events(atof_exporter.path());
+    let marks = events
+        .iter()
+        .filter(|event| event["name"] == "skill.load.inferred")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marks.len(),
+        1,
+        "expected one inferred skill mark: {events:#?}"
+    );
+    assert_eq!(marks[0]["data"], json!({"skill_name": "review"}));
+    assert_eq!(marks[0]["metadata"]["agent_kind"], "claude-code");
+    assert_eq!(
+        marks[0]["metadata"]["skill_load_source"],
+        "prompt_expansion"
+    );
+    assert_eq!(marks[0]["metadata"]["inferred"], true);
+}
+
+#[tokio::test]
 async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
@@ -5051,6 +5191,15 @@ async fn claude_agent_tool_async_launch_keeps_subagent_open_for_later_hooks() {
     assert_eq!(
         tool.metadata.as_ref().unwrap()["tool_correlation_subagent_id"],
         json!("worker")
+    );
+    assert_eq!(
+        tool.metadata.as_ref().unwrap()["session_id"],
+        json!("agent-tool-async")
+    );
+    assert_eq!(tool.metadata.as_ref().unwrap()["turn_id"], json!("1"));
+    assert_eq!(
+        tool.metadata.as_ref().unwrap()["identity_quality"],
+        json!("native")
     );
 }
 

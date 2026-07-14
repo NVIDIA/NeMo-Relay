@@ -23,6 +23,10 @@ type capturedScopeEvent struct {
 }
 
 func TestScopeShorthands(t *testing.T) {
+	runWithTestScopeStack(t, testScopeShorthands)
+}
+
+func testScopeShorthands(t *testing.T) {
 	var sawMark bool
 	var mu sync.Mutex
 
@@ -68,6 +72,10 @@ func TestScopeShorthands(t *testing.T) {
 }
 
 func TestScopeShorthandsForwardTimestamps(t *testing.T) {
+	runWithTestScopeStack(t, testScopeShorthandsForwardTimestamps)
+}
+
+func testScopeShorthandsForwardTimestamps(t *testing.T) {
 	var (
 		events []capturedScopeEvent
 		mu     sync.Mutex
@@ -117,6 +125,18 @@ func TestScopeShorthandsForwardTimestamps(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assertCapturedScopeEvents(t, events, expected)
+}
+
+func runWithTestScopeStack(t *testing.T, fn func(*testing.T)) {
+	t.Helper()
+
+	stack, err := nemo_relay.NewScopeStack()
+	if err != nil {
+		t.Fatalf("NewScopeStack failed: %v", err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() { fn(t) })
 }
 
 func assertCapturedScopeEvents(t *testing.T, events, expected []capturedScopeEvent) {

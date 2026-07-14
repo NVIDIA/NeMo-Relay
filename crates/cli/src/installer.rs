@@ -10,14 +10,18 @@ use serde_json::{Value, json};
 use crate::config::{CodingAgent, GatewayMode, HookForwardCommand};
 use crate::error::CliError;
 
-// Claude Code's hook loader strictly whitelists event names — any unknown event causes the
-// entire hooks file to be rejected (no hooks register). Only events present in Claude Code's
-// whitelist as of 2.1.x belong here. Codex 0.129 has a smaller subset (SessionStart,
-// UserPromptSubmit, PreToolUse, PostToolUse, Stop, PreCompact, PostCompact, PermissionRequest)
-// and silently ignores events it doesn't recognize, so the union list is safe for both agents.
+// Claude Code validates plugin hooks.json against a strict event-name whitelist — one unknown
+// event rejects the entire plugin's hooks (no hooks register, silently). Both Claude vectors
+// (the transparent-run temp plugin and the marketplace plugin) are plugin hooks.json, so every
+// event here must exist in the oldest supported Claude Code. UserPromptExpansion sets that
+// floor: 2.1.116 (verified empirically; 2.1.114 rejects it — see `claude_hook_floor_warning`
+// in doctor.rs). Codex 0.129 has a smaller subset (SessionStart, UserPromptSubmit, PreToolUse,
+// PostToolUse, Stop, PreCompact, PostCompact, PermissionRequest) and silently ignores events
+// it doesn't recognize, so the union list is safe for both agents.
 const HOOK_EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
+    "UserPromptExpansion",
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",

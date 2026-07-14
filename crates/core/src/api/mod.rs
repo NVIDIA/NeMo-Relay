@@ -21,3 +21,4 @@ pub mod subscriber;
 pub mod tool;
 
 pub(crate) mod shared;
+pub(crate) mod skill_load;
