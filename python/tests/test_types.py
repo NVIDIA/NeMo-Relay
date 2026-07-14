@@ -92,15 +92,20 @@ class _OtelCollectorServer(http.server.ThreadingHTTPServer):
     request_event: threading.Event
 
 
+def _encode_varint(value: int) -> bytes:
+    result = bytearray()
+    while value >= 0x80:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
+    result.append(value)
+    return bytes(result)
+
+
 def _otlp_string_attribute(key: str, value: str) -> bytes:
-    return (
-        b"\x0a"
-        + bytes([len(key)])
-        + key.encode()
-        + b"\x12"
-        + bytes([len(value) + 2, 0x0A, len(value)])
-        + value.encode()
-    )
+    key_bytes = key.encode()
+    value_bytes = value.encode()
+    any_value = b"\x0a" + _encode_varint(len(value_bytes)) + value_bytes
+    return b"\x0a" + _encode_varint(len(key_bytes)) + key_bytes + b"\x12" + _encode_varint(len(any_value)) + any_value
 
 
 def _scope_event(events, name: str, category: str, scope_category: str) -> ScopeEvent:
@@ -630,6 +635,7 @@ class TestOpenTelemetryTypes:
 
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
+            source = "python-é" * 20
             config = OpenTelemetryConfig()
             config.endpoint = collector.endpoint
             config.service_name = "py-agent"
@@ -646,7 +652,7 @@ class TestOpenTelemetryTypes:
                         "otel_mark",
                         handle=handle,
                         data={"step": 1},
-                        metadata={"source": "python"},
+                        metadata={"source": source},
                     )
                 finally:
                     scope.pop(handle)
@@ -656,7 +662,7 @@ class TestOpenTelemetryTypes:
                 assert request["path"] == "/v1/traces"
                 assert request["headers"]["content-type"] == "application/x-protobuf"
                 assert request["body"]
-                assert _otlp_string_attribute("tenant.id", "python") in request["body"]
+                assert _otlp_string_attribute("tenant.id", source) in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()
@@ -742,6 +748,7 @@ class TestOpenInferenceTypes:
 
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
+            source = "python-é" * 20
             config = OpenInferenceConfig()
             config.endpoint = collector.endpoint
             config.service_name = "py-agent"
@@ -758,7 +765,7 @@ class TestOpenInferenceTypes:
                         "openinference_mark",
                         handle=handle,
                         data={"step": 1},
-                        metadata={"source": "python"},
+                        metadata={"source": source},
                     )
                 finally:
                     scope.pop(handle)
@@ -772,7 +779,7 @@ class TestOpenInferenceTypes:
                 assert b"AGENT" in request["body"]
                 assert b"metadata" in request["body"]
                 assert b"openinference_mark" in request["body"]
-                assert _otlp_string_attribute("tenant.id", "python") in request["body"]
+                assert _otlp_string_attribute("tenant.id", source) in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

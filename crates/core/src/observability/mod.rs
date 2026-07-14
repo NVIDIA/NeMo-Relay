@@ -175,6 +175,28 @@ pub(crate) fn apply_attribute_mappings(
     attributes.extend(attribute_mapping_aliases(attributes, mappings));
 }
 
+/// Keeps the start attributes needed to resolve mappings at the end of a span.
+///
+/// The final span attributes must still take precedence over mapped aliases, so
+/// retain both mapped source keys and aliases that were already present at
+/// start. The span itself owns all other start attributes and does not need a
+/// second copy in the active-span state.
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn attribute_mapping_inputs(
+    attributes: &[opentelemetry::KeyValue],
+    mappings: &[OtlpAttributeMapping],
+) -> Vec<opentelemetry::KeyValue> {
+    attributes
+        .iter()
+        .filter(|attribute| {
+            mappings.iter().any(|mapping| {
+                attribute.key.as_str() == mapping.key || attribute.key.as_str() == mapping.alias
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// Resolves typed aliases from a complete set of projected attributes.
 ///
 /// Callers that project a span across multiple lifecycle events must pass every
@@ -360,7 +382,34 @@ where
 
 #[cfg(all(test, any(feature = "otel", feature = "openinference")))]
 mod attribute_projection_tests {
-    use super::{OtlpAttributeMapping, apply_attribute_mappings, push_top_level_json_attributes};
+    use super::{
+        OtlpAttributeMapping, apply_attribute_mappings, attribute_mapping_inputs,
+        push_top_level_json_attributes,
+    };
+
+    #[test]
+    fn retains_only_mapping_sources_and_existing_aliases_between_span_events() {
+        let attributes = vec![
+            opentelemetry::KeyValue::new("source", "value"),
+            opentelemetry::KeyValue::new("alias", "existing"),
+            opentelemetry::KeyValue::new("large.request", "payload"),
+        ];
+
+        let retained =
+            attribute_mapping_inputs(&attributes, &[OtlpAttributeMapping::new("source", "alias")]);
+
+        assert_eq!(retained.len(), 2);
+        assert!(
+            retained
+                .iter()
+                .any(|attribute| attribute.key.as_str() == "source")
+        );
+        assert!(
+            retained
+                .iter()
+                .any(|attribute| attribute.key.as_str() == "alias")
+        );
+    }
 
     #[test]
     fn projects_typed_json_and_copies_configured_aliases() {

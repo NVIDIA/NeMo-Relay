@@ -587,20 +587,28 @@ fn subscriber_registration_and_provider_lifecycle_methods_work() {
 #[test]
 fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
     let (provider, exporter) = make_provider();
-    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_attribute_mappings(
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_options(
         provider,
         "mapping-scope",
-        [
-            crate::observability::OtlpAttributeMapping::new(
-                "nemo_relay.start.data.tenant",
-                "tenant.id",
-            ),
-            crate::observability::OtlpAttributeMapping::new(
-                "nemo_relay.end.data.tenant",
-                "nemo_relay.start.data.tenant",
-            ),
-            crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
-        ],
+        OpenTelemetrySubscriberOptions {
+            mark_projection: MarkProjection::Tool,
+            mark_exclude_names: vec!["custom.mark".to_string()],
+            attribute_mappings: vec![
+                crate::observability::OtlpAttributeMapping::new(
+                    "nemo_relay.start.data.tenant",
+                    "tenant.id",
+                ),
+                crate::observability::OtlpAttributeMapping::new(
+                    "nemo_relay.end.data.tenant",
+                    "nemo_relay.start.data.tenant",
+                ),
+                crate::observability::OtlpAttributeMapping::new(
+                    "nemo_relay.start.data.tenant",
+                    "nemo_relay.start.data.existing",
+                ),
+                crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
+            ],
+        },
     )
     .unwrap();
     let callback = subscriber.subscriber();
@@ -610,7 +618,7 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
         None,
         "mapped-scope",
         ScopeType::Agent,
-        Some(json!({"tenant": 7})),
+        Some(json!({"tenant": 7, "existing": 9})),
     ));
     callback(&make_end_event(
         uuid,
@@ -639,6 +647,20 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
             .find(|attribute| attribute.key.as_str() == "tenant.id")
             .map(|attribute| &attribute.value),
         Some(&opentelemetry::Value::I64(7))
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "nemo_relay.start.data.existing")
+            .count(),
+        1
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "nemo_relay.start.data.existing")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::I64(9))
     );
     assert!(
         !span

@@ -22,9 +22,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
     MarkProjection, OtlpAttributeMapping, apply_attribute_mappings, attribute_mapping_aliases,
-    default_mark_exclude_names, effective_mark_projection, estimate_cost_for_response_or_model,
-    estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
-    push_serialized_top_level_attributes, push_top_level_json_attributes,
+    attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
+    model_name_for_llm_event, push_serialized_top_level_attributes, push_top_level_json_attributes,
     validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
@@ -236,6 +236,27 @@ pub struct OpenTelemetrySubscriber {
     inner: Arc<Inner>,
 }
 
+/// Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
+#[derive(Debug, Clone)]
+pub struct OpenTelemetrySubscriberOptions {
+    /// How mark events are projected into the trace.
+    pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection.
+    pub mark_exclude_names: Vec<String>,
+    /// Typed OTLP attributes copied to alias keys.
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
+}
+
+impl Default for OpenTelemetrySubscriberOptions {
+    fn default() -> Self {
+        Self {
+            mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
+        }
+    }
+}
+
 struct Inner {
     processor: Arc<Mutex<OtelEventProcessor>>,
     subscriber: EventSubscriberFn,
@@ -320,14 +341,30 @@ impl OpenTelemetrySubscriber {
         I: IntoIterator<Item = OtlpAttributeMapping>,
     {
         let attribute_mappings = attribute_mappings.into_iter().collect::<Vec<_>>();
-        validate_attribute_mappings(&attribute_mappings)
+        Self::from_tracer_provider_with_options(
+            provider,
+            instrumentation_scope,
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Builds a subscriber from a tracer provider with composable projection options.
+    pub fn from_tracer_provider_with_options(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        options: OpenTelemetrySubscriberOptions,
+    ) -> Result<Self> {
+        validate_attribute_mappings(&options.attribute_mappings)
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
         Ok(Self::from_tracer_provider_with_scope(
             provider,
             instrumentation_scope.into(),
-            MarkProjection::default(),
-            default_mark_exclude_names(),
-            attribute_mappings,
+            options.mark_projection,
+            options.mark_exclude_names,
+            options.attribute_mappings,
         ))
     }
 
@@ -590,11 +627,7 @@ impl OtelEventProcessor {
             .with_start_time(to_system_time(*event.timestamp()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         let attributes = start_attributes(event);
-        let projected_attributes = if self.attribute_mappings.is_empty() {
-            Vec::new()
-        } else {
-            attributes.clone()
-        };
+        let projected_attributes = attribute_mapping_inputs(&attributes, &self.attribute_mappings);
         span.set_attributes(attributes);
         let span_context = local_parent_span_context(span.span_context());
         self.active_spans.insert(
