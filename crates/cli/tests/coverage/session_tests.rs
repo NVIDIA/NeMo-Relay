@@ -3019,7 +3019,7 @@ async fn hermes_orphan_subagent_stop_links_atof_and_openinference_to_turn() {
     assert!(deregister_subscriber(atof_name).unwrap());
     assert!(deregister_subscriber(openinference_name).unwrap());
 
-    let atof_events = read_atof_events(atof_exporter.path());
+    let atof_events = read_atof_events(atof_exporter.path().expect("file sink path"));
     let turn_start = atof_events
         .iter()
         .find(|event| {
@@ -3162,7 +3162,7 @@ async fn hermes_subagent_child_session_preserves_atof_and_openinference_lineage(
     assert!(deregister_subscriber(atof_name).unwrap());
     assert!(deregister_subscriber(openinference_name).unwrap());
 
-    let atof_events = read_atof_events(atof_exporter.path());
+    let atof_events = read_atof_events(atof_exporter.path().expect("file sink path"));
     let parent_turn = atof_events
         .iter()
         .find(|event| {
@@ -3506,7 +3506,7 @@ async fn inferred_skill_load_hook_marks_use_the_stable_event_contract() {
 
     atof_exporter.force_flush().unwrap();
     assert!(deregister_subscriber(subscriber_name).unwrap());
-    let events = read_atof_events(atof_exporter.path());
+    let events = read_atof_events(atof_exporter.path().expect("file sink path"));
     let marks = events
         .iter()
         .filter(|event| event["name"] == "skill.load.inferred")

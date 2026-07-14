@@ -1293,7 +1293,7 @@ NemoRelayStatus nemo_relay_atof_exporter_force_flush(const struct FfiAtofExporte
 NemoRelayStatus nemo_relay_atof_exporter_shutdown(const struct FfiAtofExporter *exporter);
 
 /**
- * Returns the ATOF exporter output path as a string.
+ * Returns the ATOF exporter output path as a string when its sink is a file.
  *
  * # Safety
  * `exporter` and `out` must be valid, non-null pointers.

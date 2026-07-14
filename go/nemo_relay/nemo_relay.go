@@ -335,38 +335,14 @@ var (
 		return checkedValue(int32(status), &AtifExporter{ptr: ptr})
 	}
 	newAtofExporterFunc = func(config AtofExporterConfig) (*AtofExporter, error) {
-		if config.Mode == "" {
-			config.Mode = AtofExporterModeAppend
+		payload, err := json.Marshal(config)
+		if err != nil {
+			return nil, err
 		}
-		if len(config.Endpoints) > 0 {
-			payload, err := json.Marshal(config)
-			if err != nil {
-				return nil, err
-			}
-			cConfig := C.CString(string(payload))
-			defer C.free(unsafe.Pointer(cConfig))
-			var ptr unsafe.Pointer
-			status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
-			return checkedValue(int32(status), &AtofExporter{ptr: ptr})
-		}
-
-		var cOutputDirectory *C.char
-		if config.OutputDirectory != "" {
-			cOutputDirectory = C.CString(config.OutputDirectory)
-			defer C.free(unsafe.Pointer(cOutputDirectory))
-		}
-
-		cMode := C.CString(string(config.Mode))
-		defer C.free(unsafe.Pointer(cMode))
-
-		var cFilename *C.char
-		if config.Filename != "" {
-			cFilename = C.CString(config.Filename)
-			defer C.free(unsafe.Pointer(cFilename))
-		}
-
+		cConfig := C.CString(string(payload))
+		defer C.free(unsafe.Pointer(cConfig))
 		var ptr unsafe.Pointer
-		status := C.nemo_relay_atof_exporter_create(cOutputDirectory, cMode, cFilename, &ptr)
+		status := C.nemo_relay_atof_exporter_create_from_json(cConfig, &ptr)
 		return checkedValue(int32(status), &AtofExporter{ptr: ptr})
 	}
 )
@@ -1704,12 +1680,42 @@ const (
 	AtofExporterModeOverwrite AtofExporterMode = "overwrite"
 )
 
-// AtofExporterConfig configures the filesystem-backed ATOF JSONL exporter.
+// AtofExporterConfig configures one tagged ATOF sink.
 type AtofExporterConfig struct {
-	OutputDirectory string               `json:"output_directory,omitempty"`
-	Mode            AtofExporterMode     `json:"mode,omitempty"`
-	Filename        string               `json:"filename,omitempty"`
-	Endpoints       []AtofEndpointConfig `json:"endpoints,omitempty"`
+	Sink AtofSinkConfigurer `json:"-"`
+}
+
+// MarshalJSON serializes the selected tagged sink directly, matching the Rust API.
+func (config AtofExporterConfig) MarshalJSON() ([]byte, error) {
+	if config.Sink == nil {
+		return json.Marshal(NewAtofFileSinkConfig())
+	}
+	return json.Marshal(config.Sink)
+}
+
+// AtofSinkConfigurer is one ATOF exporter destination.
+type AtofSinkConfigurer interface {
+	atofExporterSink()
+}
+
+// AtofFileSinkConfig configures one filesystem ATOF JSONL destination.
+type AtofFileSinkConfig struct {
+	OutputDirectory string           `json:"output_directory,omitempty"`
+	Mode            AtofExporterMode `json:"mode,omitempty"`
+	Filename        string           `json:"filename,omitempty"`
+}
+
+func (AtofFileSinkConfig) atofExporterSink() {}
+
+// MarshalJSON serializes the fixed file sink discriminator.
+func (config AtofFileSinkConfig) MarshalJSON() ([]byte, error) {
+	type fileSinkJSON struct {
+		Type            string           `json:"type"`
+		OutputDirectory string           `json:"output_directory,omitempty"`
+		Mode            AtofExporterMode `json:"mode,omitempty"`
+		Filename        string           `json:"filename,omitempty"`
+	}
+	return json.Marshal(fileSinkJSON{"file", config.OutputDirectory, config.Mode, config.Filename})
 }
 
 // AtofEndpointTransport controls how an ATOF streaming endpoint receives events.
@@ -1734,19 +1740,49 @@ const (
 	AtofEndpointFieldNamePolicyReplaceDots AtofEndpointFieldNamePolicy = "replace_dots"
 )
 
-// AtofEndpointConfig configures one streaming destination for raw ATOF events.
-type AtofEndpointConfig struct {
+// AtofStreamSinkConfig configures one streaming destination for raw ATOF events.
+type AtofStreamSinkConfig struct {
 	URL             string                      `json:"url"`
 	Transport       AtofEndpointTransport       `json:"transport,omitempty"`
 	Headers         map[string]string           `json:"headers,omitempty"`
+	HeaderEnv       map[string]string           `json:"header_env,omitempty"`
 	TimeoutMillis   uint64                      `json:"timeout_millis,omitempty"`
 	FieldNamePolicy AtofEndpointFieldNamePolicy `json:"field_name_policy,omitempty"`
 }
 
+func (AtofStreamSinkConfig) atofExporterSink() {}
+
+// MarshalJSON serializes the fixed stream sink discriminator.
+func (config AtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
+	type streamSinkJSON struct {
+		Type            string                      `json:"type"`
+		URL             string                      `json:"url"`
+		Transport       AtofEndpointTransport       `json:"transport,omitempty"`
+		Headers         map[string]string           `json:"headers,omitempty"`
+		HeaderEnv       map[string]string           `json:"header_env,omitempty"`
+		TimeoutMillis   uint64                      `json:"timeout_millis,omitempty"`
+		FieldNamePolicy AtofEndpointFieldNamePolicy `json:"field_name_policy,omitempty"`
+	}
+	return json.Marshal(streamSinkJSON{"stream", config.URL, config.Transport, config.Headers, config.HeaderEnv, config.TimeoutMillis, config.FieldNamePolicy})
+}
+
 // NewAtofExporterConfig returns a config initialized with native defaults.
 func NewAtofExporterConfig() AtofExporterConfig {
-	return AtofExporterConfig{
-		Mode: AtofExporterModeAppend,
+	return AtofExporterConfig{Sink: NewAtofFileSinkConfig()}
+}
+
+// NewAtofFileSinkConfig returns a file sink initialized with native defaults.
+func NewAtofFileSinkConfig() AtofFileSinkConfig {
+	return AtofFileSinkConfig{Mode: AtofExporterModeAppend}
+}
+
+// NewAtofStreamSinkConfig returns an HTTP POST stream sink with native defaults.
+func NewAtofStreamSinkConfig(url string) AtofStreamSinkConfig {
+	return AtofStreamSinkConfig{
+		URL:             url,
+		Transport:       AtofEndpointTransportHTTPPost,
+		TimeoutMillis:   3000,
+		FieldNamePolicy: AtofEndpointFieldNamePolicyPreserve,
 	}
 }
 
@@ -1755,20 +1791,24 @@ type AtofExporter struct {
 	ptr unsafe.Pointer
 }
 
-// NewAtofExporter creates a new filesystem-backed ATOF JSONL exporter.
+// NewAtofExporter creates a new single-sink ATOF exporter.
 func NewAtofExporter(config AtofExporterConfig) (*AtofExporter, error) {
 	return newAtofExporterFunc(config)
 }
 
-// Path returns the JSONL output path.
-func (e *AtofExporter) Path() (string, error) {
+// Path returns the JSONL output path, or nil for a stream-backed exporter.
+func (e *AtofExporter) Path() (*string, error) {
 	var cOut *C.char
 	status := C.nemo_relay_atof_exporter_path(e.ptr, &cOut)
 	if err := checkStatus(status); err != nil {
-		return "", err
+		return nil, err
+	}
+	if cOut == nil {
+		return nil, nil
 	}
 	defer C.nemo_relay_string_free(cOut)
-	return C.GoString(cOut), nil
+	path := C.GoString(cOut)
+	return &path, nil
 }
 
 // Register registers the exporter as a global event subscriber.

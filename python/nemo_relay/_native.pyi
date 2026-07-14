@@ -830,12 +830,13 @@ class AtofExporterMode:
     Append: ClassVar[AtofExporterMode]
     Overwrite: ClassVar[AtofExporterMode]
 
-class AtofEndpointConfig:
-    """Streaming destination for raw ATOF events."""
+class AtofStreamSinkConfig:
+    """One stream sink for raw ATOF events."""
 
     url: str
     transport: str
     headers: dict[str, str]
+    header_env: dict[str, str]
     timeout_millis: int
     field_name_policy: str
 
@@ -845,36 +846,43 @@ class AtofEndpointConfig:
         *,
         transport: str = "http_post",
         headers: dict[str, str] | None = None,
+        header_env: dict[str, str] | None = None,
         timeout_millis: int = 3000,
         field_name_policy: str = "preserve",
     ) -> None:
-        """Create an ATOF streaming endpoint config.
+        """Create an ATOF stream sink config.
 
         ``headers=None`` is converted to an empty dict; the instance field is
         always non-optional.
         """
 
 class AtofExporterConfig:
-    """Mutable configuration for the filesystem-backed ATOF JSONL exporter."""
+    """One tagged sink configuration for the manual ATOF exporter."""
 
+    sink_type: str
     output_directory: str
     mode: AtofExporterMode
     filename: str
-    endpoints: list[AtofEndpointConfig]
+    url: str
+    transport: str
+    headers: dict[str, str]
+    header_env: dict[str, str]
+    timeout_millis: int
+    field_name_policy: str
 
     def __init__(self) -> None:
         """Create an ATOF exporter config with native defaults."""
         ...
 
 class AtofExporter:
-    """Filesystem-backed exporter that writes raw ATOF events as JSONL."""
+    """Single-sink exporter that writes or streams raw ATOF events."""
 
     def __init__(self, config: AtofExporterConfig) -> None:
         """Create an ATOF JSONL exporter from config."""
         ...
     @property
-    def path(self) -> str:
-        """Return the JSONL output path."""
+    def path(self) -> str | None:
+        """Return the JSONL output path, or ``None`` for a stream sink."""
         ...
     def register(self, name: str) -> None:
         """Register the exporter under ``name``."""

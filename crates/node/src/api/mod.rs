@@ -176,59 +176,67 @@ fn build_atof_config(
     options: Option<AtofExporterConfig>,
 ) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
     let options = options.unwrap_or_default();
-    let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
-
-    if let Some(output_directory) = options.output_directory {
-        config = config.with_output_directory(PathBuf::from(output_directory));
-    }
-    if let Some(filename) = options.filename {
-        config = config.with_filename(filename);
-    }
-    if let Some(mode) = options.mode {
-        let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode) else {
-            return Err(napi::Error::from_reason(
-                "mode must be 'append' or 'overwrite'",
-            ));
-        };
-        config = config.with_mode(mode);
-    }
-    let mut endpoints = Vec::new();
-    for endpoint in options.endpoints.unwrap_or_default() {
-        let transport = endpoint
-            .transport
-            .unwrap_or_else(|| "http_post".to_string());
-        let Some(transport) =
-            nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
-        else {
-            return Err(napi::Error::from_reason(
-                "endpoint transport must be 'http_post', 'websocket', or 'ndjson'",
-            ));
-        };
-        let mut endpoint_config =
-            nemo_relay::observability::atof::AtofEndpointConfig::new(endpoint.url, transport);
-        if let Some(timeout_millis) = endpoint.timeout_millis {
-            endpoint_config = endpoint_config.with_timeout_millis(timeout_millis.into());
+    match options.r#type.as_deref().unwrap_or("file") {
+        "file" => {
+            let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
+            if let Some(output_directory) = options.output_directory {
+                config = config.with_output_directory(PathBuf::from(output_directory));
+            }
+            if let Some(filename) = options.filename {
+                config = config.with_filename(filename);
+            }
+            if let Some(mode) = options.mode {
+                let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode)
+                else {
+                    return Err(napi::Error::from_reason(
+                        "mode must be 'append' or 'overwrite'",
+                    ));
+                };
+                config = config.with_mode(mode);
+            }
+            Ok(config)
         }
-        if let Some(field_name_policy) = endpoint.field_name_policy {
-            let Some(field_name_policy) =
-                nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
-                    &field_name_policy,
-                )
+        "stream" => {
+            let url = options
+                .url
+                .ok_or_else(|| napi::Error::from_reason("stream sink requires url"))?;
+            let transport = options.transport.unwrap_or_else(|| "http_post".to_string());
+            let Some(transport) =
+                nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
             else {
                 return Err(napi::Error::from_reason(
-                    "endpoint field_name_policy must be 'preserve' or 'replace_dots'",
+                    "stream transport must be 'http_post', 'websocket', or 'ndjson'",
                 ));
             };
-            endpoint_config = endpoint_config.with_field_name_policy(field_name_policy);
+            let mut sink =
+                nemo_relay::observability::atof::AtofStreamSinkConfig::new(url, transport);
+            if let Some(timeout_millis) = options.timeout_millis {
+                sink = sink.with_timeout_millis(timeout_millis.into());
+            }
+            if let Some(field_name_policy) = options.field_name_policy {
+                let Some(field_name_policy) =
+                    nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                        &field_name_policy,
+                    )
+                else {
+                    return Err(napi::Error::from_reason(
+                        "stream field_name_policy must be 'preserve' or 'replace_dots'",
+                    ));
+                };
+                sink = sink.with_field_name_policy(field_name_policy);
+            }
+            for (key, value) in parse_string_map(options.headers, "headers")? {
+                sink = sink.with_header(key, value);
+            }
+            for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+                sink = sink.with_header_env(key, variable);
+            }
+            Ok(nemo_relay::observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
         }
-        for (key, value) in parse_string_map(endpoint.headers, "endpoint.headers")? {
-            endpoint_config = endpoint_config.with_header(key, value);
-        }
-        endpoints.push(endpoint_config);
+        _ => Err(napi::Error::from_reason(
+            "ATOF sink type must be 'file' or 'stream'",
+        )),
     }
-    config = config.with_endpoints(endpoints);
-
-    Ok(config)
 }
 
 fn build_openinference_config(
@@ -3341,37 +3349,33 @@ impl AtifExporter {
     }
 }
 
-/// Mutable configuration object for `AtofExporter`.
+/// One tagged sink configuration for `AtofExporter`.
 #[napi(object)]
 #[derive(Default)]
 pub struct AtofExporterConfig {
+    /// Sink type: `"file"` (default) or `"stream"`.
+    pub r#type: Option<String>,
     /// Output directory. Defaults to the current working directory.
     pub output_directory: Option<String>,
     /// `"append"` (default) or `"overwrite"`.
     pub mode: Option<String>,
     /// Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
     pub filename: Option<String>,
-    /// Streaming endpoints that receive every raw ATOF event.
-    pub endpoints: Option<Vec<AtofEndpointConfig>>,
-}
-
-/// Mutable configuration object for one ATOF streaming endpoint.
-#[napi(object)]
-#[derive(Default)]
-pub struct AtofEndpointConfig {
-    /// Endpoint URL.
-    pub url: String,
+    /// Stream endpoint URL. Required when `type` is `"stream"`.
+    pub url: Option<String>,
     /// `"http_post"` (default), `"websocket"`, or `"ndjson"`.
     pub transport: Option<String>,
-    /// Extra endpoint headers as string key/value pairs.
+    /// Extra stream headers as string key/value pairs.
     pub headers: Option<Json>,
-    /// Per-endpoint timeout in milliseconds.
+    /// Header names mapped to environment variables that supply their values.
+    pub header_env: Option<Json>,
+    /// Per-stream timeout in milliseconds.
     pub timeout_millis: Option<u32>,
-    /// Field name policy applied before sending events.
+    /// Field name policy applied before sending stream events.
     pub field_name_policy: Option<String>,
 }
 
-/// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
+/// Single-sink Agent Trajectory Observability Format (ATOF) exporter.
 #[napi]
 pub struct AtofExporter {
     inner: nemo_relay::observability::atof::AtofExporter,
@@ -3388,10 +3392,12 @@ impl AtofExporter {
         Ok(Self { inner })
     }
 
-    /// Return the JSONL output path.
+    /// Return the JSONL output path, or `null` for a stream sink.
     #[napi(getter)]
-    pub fn path(&self) -> String {
-        self.inner.path().to_string_lossy().into_owned()
+    pub fn path(&self) -> Option<String> {
+        self.inner
+            .path()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     /// Register this exporter globally with the given name.

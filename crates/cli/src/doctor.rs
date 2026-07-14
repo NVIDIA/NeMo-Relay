@@ -736,26 +736,64 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
 }
 
 async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {
-    for section in ["atof", "atif"] {
-        if let Some(check) = observability_file_exporter_check(config, section) {
-            checks.push(check);
-        }
+    checks.extend(observability_atof_file_checks(config));
+    if let Some(check) = observability_file_exporter_check(config, "atif") {
+        checks.push(check);
     }
     for section in ["opentelemetry", "openinference"] {
         if let Some(check) = observability_http_exporter_check(config, section).await {
             checks.push(check);
         }
     }
-    if section_enabled(config, "atof") && atof_endpoint_count(config) > 0 {
+    if section_enabled(config, "atof") && !atof_stream_sinks(config).is_empty() {
         if atof_streaming_supported() {
-            checks.extend(observability_atof_endpoint_checks(config).await);
+            checks.extend(observability_atof_stream_checks(config).await);
         } else {
             checks.push(Check {
-                name: "ATOF endpoint",
+                name: "ATOF stream sink",
                 status: Status::Fail,
-                details: "ATOF streaming endpoints are not available in this binary".into(),
+                details: "ATOF stream sinks are not available in this binary".into(),
             });
         }
+    }
+}
+
+fn observability_atof_file_checks(config: &Value) -> Vec<Check> {
+    if !section_enabled(config, "atof") {
+        return Vec::new();
+    }
+    let sinks = config
+        .get("atof")
+        .and_then(|section| section.get("sinks"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, sink)| sink.get("type").and_then(Value::as_str) == Some("file"));
+    let checks = sinks
+        .map(
+            |(index, sink)| match sink.get("output_directory").and_then(Value::as_str) {
+                Some(path) => {
+                    let mut check = check_directory("ATOF file sink", Path::new(path));
+                    check.details = format!("sinks[{index}]: {}", check.details);
+                    check
+                }
+                None => Check {
+                    name: "ATOF file sink",
+                    status: Status::Info,
+                    details: format!("sinks[{index}] uses the runtime default output directory"),
+                },
+            },
+        )
+        .collect::<Vec<_>>();
+    if checks.is_empty() {
+        vec![Check {
+            name: "ATOF file sink",
+            status: Status::Info,
+            details: "no file sinks configured".into(),
+        }]
+    } else {
+        checks
     }
 }
 
@@ -919,40 +957,41 @@ fn section_endpoint(config: &Value, section: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn atof_endpoint_count(config: &Value) -> usize {
+fn atof_stream_sinks(config: &Value) -> Vec<(usize, &Value)> {
     config
         .get("atof")
-        .and_then(|section| section.get("endpoints"))
+        .and_then(|section| section.get("sinks"))
         .and_then(Value::as_array)
-        .map_or(0, Vec::len)
+        .map(|sinks| {
+            sinks
+                .iter()
+                .enumerate()
+                .filter(|(_, sink)| sink.get("type").and_then(Value::as_str) == Some("stream"))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn atof_streaming_supported() -> bool {
     cfg!(feature = "atof-streaming")
 }
 
-async fn observability_atof_endpoint_checks(config: &Value) -> Vec<Check> {
-    let Some(endpoints) = config
-        .get("atof")
-        .and_then(|section| section.get("endpoints"))
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
-    };
-    let mut checks = Vec::with_capacity(endpoints.len());
-    for (index, endpoint) in endpoints.iter().enumerate() {
-        checks.push(probe_atof_endpoint(index, endpoint).await);
+async fn observability_atof_stream_checks(config: &Value) -> Vec<Check> {
+    let streams = atof_stream_sinks(config);
+    let mut checks = Vec::with_capacity(streams.len());
+    for (index, sink) in streams {
+        checks.push(probe_atof_stream_sink(index, sink).await);
     }
     checks
 }
 
-async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
-    let name = "ATOF endpoint";
+async fn probe_atof_stream_sink(index: usize, endpoint: &Value) -> Check {
+    let name = "ATOF stream sink";
     let Some(url) = endpoint.get("url").and_then(Value::as_str) else {
         return Check {
             name,
             status: Status::Fail,
-            details: format!("endpoints[{index}]: missing url"),
+            details: format!("sinks[{index}]: missing url"),
         };
     };
     let transport = endpoint
@@ -967,7 +1006,7 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
         return Check {
             name,
             status: Status::Fail,
-            details: format!("endpoints[{index}] {transport} {url}: timeout_millis must be > 0"),
+            details: format!("sinks[{index}] {transport} {url}: timeout_millis must be > 0"),
         };
     }
     let headers = match endpoint_headers(endpoint) {
@@ -976,7 +1015,7 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
             return Check {
                 name,
                 status: Status::Fail,
-                details: format!("endpoints[{index}] {transport} {url}: {err}"),
+                details: format!("sinks[{index}] {transport} {url}: {err}"),
             };
         }
     };
@@ -986,7 +1025,7 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
             return Check {
                 name,
                 status: Status::Fail,
-                details: format!("endpoints[{index}] {transport} {url}: {err}"),
+                details: format!("sinks[{index}] {transport} {url}: {err}"),
             };
         }
     };
@@ -998,9 +1037,14 @@ async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
         _ => Check {
             name,
             status: Status::Fail,
-            details: format!("endpoints[{index}] {transport} {url}: unsupported transport"),
+            details: format!("sinks[{index}] {transport} {url}: unsupported transport"),
         },
     }
+}
+
+#[cfg(test)]
+async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
+    probe_atof_stream_sink(index, endpoint).await
 }
 
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
@@ -1096,11 +1140,9 @@ async fn probe_atof_http_upload(
         Ok(client) => client,
         Err(err) => {
             return Check {
-                name: "ATOF endpoint",
+                name: "ATOF stream sink",
                 status: Status::Fail,
-                details: format!(
-                    "endpoints[{index}] {transport} {url}: could not build client: {err}"
-                ),
+                details: format!("sinks[{index}] {transport} {url}: could not build client: {err}"),
             };
         }
     };
@@ -1113,25 +1155,25 @@ async fn probe_atof_http_upload(
     }
     match request.send().await {
         Ok(response) if response.status().is_success() => Check {
-            name: "ATOF endpoint",
+            name: "ATOF stream sink",
             status: Status::Pass,
             details: format!(
-                "endpoints[{index}] {transport} {url} (HTTP {})",
+                "sinks[{index}] {transport} {url} (HTTP {})",
                 response.status()
             ),
         },
         Ok(response) => Check {
-            name: "ATOF endpoint",
+            name: "ATOF stream sink",
             status: Status::Fail,
             details: format!(
-                "endpoints[{index}] {transport} {url} (HTTP {})",
+                "sinks[{index}] {transport} {url} (HTTP {})",
                 response.status()
             ),
         },
         Err(err) => Check {
-            name: "ATOF endpoint",
+            name: "ATOF stream sink",
             status: Status::Fail,
-            details: format!("endpoints[{index}] {transport} {url}: {err}"),
+            details: format!("sinks[{index}] {transport} {url}: {err}"),
         },
     }
 }
@@ -1147,18 +1189,18 @@ async fn probe_atof_websocket(
         Ok(parsed) if matches!(parsed.scheme(), "ws" | "wss") => {}
         Ok(_) => {
             return Check {
-                name: "ATOF endpoint",
+                name: "ATOF stream sink",
                 status: Status::Fail,
                 details: format!(
-                    "endpoints[{index}] websocket {url}: invalid scheme (must be ws or wss)"
+                    "sinks[{index}] websocket {url}: invalid scheme (must be ws or wss)"
                 ),
             };
         }
         Err(err) => {
             return Check {
-                name: "ATOF endpoint",
+                name: "ATOF stream sink",
                 status: Status::Fail,
-                details: format!("endpoints[{index}] websocket {url}: {err}"),
+                details: format!("sinks[{index}] websocket {url}: {err}"),
             };
         }
     }
@@ -1166,9 +1208,9 @@ async fn probe_atof_websocket(
         Ok(request) => request,
         Err(err) => {
             return Check {
-                name: "ATOF endpoint",
+                name: "ATOF stream sink",
                 status: Status::Fail,
-                details: format!("endpoints[{index}] websocket {url}: {err}"),
+                details: format!("sinks[{index}] websocket {url}: {err}"),
             };
         }
     };
@@ -1179,9 +1221,9 @@ async fn probe_atof_websocket(
             Ok(name) => name,
             Err(err) => {
                 return Check {
-                    name: "ATOF endpoint",
+                    name: "ATOF stream sink",
                     status: Status::Fail,
-                    details: format!("endpoints[{index}] websocket {url}: {err}"),
+                    details: format!("sinks[{index}] websocket {url}: {err}"),
                 };
             }
         };
@@ -1190,9 +1232,9 @@ async fn probe_atof_websocket(
                 Ok(value) => value,
                 Err(err) => {
                     return Check {
-                        name: "ATOF endpoint",
+                        name: "ATOF stream sink",
                         status: Status::Fail,
-                        details: format!("endpoints[{index}] websocket {url}: {err}"),
+                        details: format!("sinks[{index}] websocket {url}: {err}"),
                     };
                 }
             };
@@ -1210,33 +1252,33 @@ async fn probe_atof_websocket(
             let _ = timeout(timeout_duration, socket.close(None)).await;
             match send {
                 Ok(Ok(())) => Check {
-                    name: "ATOF endpoint",
+                    name: "ATOF stream sink",
                     status: Status::Pass,
-                    details: format!("endpoints[{index}] websocket {url}"),
+                    details: format!("sinks[{index}] websocket {url}"),
                 },
                 Ok(Err(err)) => Check {
-                    name: "ATOF endpoint",
+                    name: "ATOF stream sink",
                     status: Status::Fail,
-                    details: format!("endpoints[{index}] websocket {url}: {err}"),
+                    details: format!("sinks[{index}] websocket {url}: {err}"),
                 },
                 Err(_) => Check {
-                    name: "ATOF endpoint",
+                    name: "ATOF stream sink",
                     status: Status::Fail,
                     details: format!(
-                        "endpoints[{index}] websocket {url}: timed out sending probe payload"
+                        "sinks[{index}] websocket {url}: timed out sending probe payload"
                     ),
                 },
             }
         }
         Ok(Err(err)) => Check {
-            name: "ATOF endpoint",
+            name: "ATOF stream sink",
             status: Status::Fail,
-            details: format!("endpoints[{index}] websocket {url}: {err}"),
+            details: format!("sinks[{index}] websocket {url}: {err}"),
         },
         Err(_) => Check {
-            name: "ATOF endpoint",
+            name: "ATOF stream sink",
             status: Status::Fail,
-            details: format!("endpoints[{index}] websocket {url}: timed out"),
+            details: format!("sinks[{index}] websocket {url}: timed out"),
         },
     }
 }

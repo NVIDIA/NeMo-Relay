@@ -809,7 +809,7 @@ fn atof_exporter_create_from_json_reports_string_statuses() {
     );
 
     let invalid_endpoint =
-        cstring(r#"{"endpoints":[{"url":"http://localhost/events","transport":"websocket"}]}"#);
+        cstring(r#"{"type":"stream","url":"http://localhost/events","transport":"websocket"}"#);
     assert_eq!(
         unsafe {
             api::nemo_relay_atof_exporter_create_from_json(invalid_endpoint.as_ptr(), &mut exporter)

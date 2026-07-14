@@ -9,7 +9,9 @@ use crate::config::{
 use nemo_relay::config_editor::{
     EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
 };
-use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
+use nemo_relay::observability::plugin_component::{
+    AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
+};
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
 use nemo_relay::plugins::nemo_guardrails::component::{
     LocalBackendConfig, NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig, RemoteBackendConfig,
@@ -2532,4 +2534,22 @@ fn target_path_resolves_user_scope_from_xdg_and_reports_missing_home() {
         }
     }
     drop(guard);
+}
+
+#[test]
+fn typed_list_metadata_describes_atof_sinks() {
+    let sinks = AtofSectionConfig::editor_schema().field("sinks").unwrap();
+    let sink_item = sinks.list_item.expect("ATOF sink item metadata");
+    assert_eq!(sinks.kind, EditorFieldKind::List);
+    assert_eq!(sink_item.kind, EditorFieldKind::Section);
+    assert_eq!(
+        sink_item
+            .tagged_union
+            .expect("ATOF sink tagged union")
+            .variants
+            .iter()
+            .map(|variant| variant.tag)
+            .collect::<Vec<_>>(),
+        vec!["file", "stream"]
+    );
 }

@@ -13,7 +13,6 @@ import pytest
 
 from nemo_relay import (
     AtifExporter,
-    AtofEndpointConfig,
     AtofExporter,
     AtofExporterConfig,
     AtofExporterMode,
@@ -458,39 +457,35 @@ class TestAtofExporterType:
         assert config.mode == AtofExporterMode.Append
         assert config.filename.startswith("nemo-relay-events-")
         assert config.filename.endswith(".jsonl")
-        assert config.endpoints == []
+        assert config.sink_type == "file"
         assert "AtofExporterConfig" in repr(config)
 
         config.output_directory = str(tmp_path)
         config.mode = AtofExporterMode.Overwrite
         config.filename = "events.jsonl"
-        endpoint = AtofEndpointConfig(
-            "http://localhost:8080/events",
-            transport="http_post",
-            headers={"X-Test": "yes"},
-            timeout_millis=1000,
-            field_name_policy="replace_dots",
-        )
-        config.endpoints = [endpoint]
+        config.sink_type = "stream"
+        config.url = "http://localhost:8080/events"
+        config.transport = "http_post"
+        config.headers = {"X-Test": "yes"}
+        config.header_env = {"authorization": "NEMO_RELAY_ATOF_AUTH"}
+        config.timeout_millis = 1000
+        config.field_name_policy = "replace_dots"
 
         assert config.output_directory == str(tmp_path)
         assert config.mode == AtofExporterMode.Overwrite
         assert config.filename == "events.jsonl"
-        assert config.endpoints[0].url == "http://localhost:8080/events"
-        assert config.endpoints[0].transport == "http_post"
-        assert config.endpoints[0].headers == {"X-Test": "yes"}
-        assert config.endpoints[0].timeout_millis == 1000
-        assert config.endpoints[0].field_name_policy == "replace_dots"
+        assert config.url == "http://localhost:8080/events"
+        assert config.transport == "http_post"
+        assert config.headers == {"X-Test": "yes"}
+        assert config.header_env == {"authorization": "NEMO_RELAY_ATOF_AUTH"}
+        assert config.timeout_millis == 1000
+        assert config.field_name_policy == "replace_dots"
 
     def test_endpoint_field_name_policy_is_validated(self, tmp_path):
         config = AtofExporterConfig()
-        config.output_directory = str(tmp_path)
-        config.endpoints = [
-            AtofEndpointConfig(
-                "http://localhost:8080/events",
-                field_name_policy="bogus",  # type: ignore[arg-type]
-            )
-        ]
+        config.sink_type = "stream"
+        config.url = "http://localhost:8080/events"
+        config.field_name_policy = "bogus"
 
         with pytest.raises(ValueError, match="field_name_policy"):
             AtofExporter(config)
@@ -503,6 +498,7 @@ class TestAtofExporterType:
 
         exporter = AtofExporter(config)
         assert "<AtofExporter>" in repr(exporter)
+        assert exporter.path is not None
         assert exporter.path.endswith("events.jsonl")
 
         subscriber_name = f"py_atof_{uuid4().hex}"

@@ -19,8 +19,8 @@ function tempDir(prefix) {
 
 describe('observability plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
-    assert.deepEqual(observability.defaultConfig(), { version: 1 });
-    assert.deepEqual(observability.atofConfig(), { enabled: false, mode: 'append' });
+    assert.deepEqual(observability.defaultConfig(), { version: 2 });
+    assert.deepEqual(observability.atofConfig(), { enabled: false });
     assert.deepEqual(observability.atifConfig(), {
       enabled: false,
       agent_name: 'NeMo Relay',
@@ -39,7 +39,7 @@ describe('observability plugin helpers', () => {
     });
     assert.equal(observability.otlpConfig({ mark_projection: 'tool' }).mark_projection, 'tool');
 
-    const component = observability.ComponentSpec({ version: 1, atof: observability.atofConfig() });
+    const component = observability.ComponentSpec({ version: 2, atof: observability.atofConfig() });
     assert.equal(component.kind, observability.OBSERVABILITY_PLUGIN_KIND);
     assert.equal(component.enabled, true);
   });
@@ -50,19 +50,20 @@ describe('observability plugin helpers', () => {
       version: 1,
       components: [
         observability.ComponentSpec({
-          version: 1,
-          atof: observability.atofConfig({ mode: 'bad' }),
+          version: 2,
+          atof: observability.atofConfig({ sinks: [{ type: 'file', mode: 'bad' }] }),
           atif: observability.atifConfig({ filename_template: 'missing-placeholder.json' }),
         }),
       ],
     });
-    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'mode']);
+    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'sinks[0].mode']);
   });
 
-  it('serializes ATOF streaming endpoints', () => {
+  it('serializes ATOF stream sinks', () => {
     const config = observability.atofConfig({
-      endpoints: [
+      sinks: [
         {
+          type: 'stream',
           url: 'http://localhost:8080/events',
           transport: 'http_post',
           headers: { 'X-Test': 'yes' },
@@ -72,8 +73,9 @@ describe('observability plugin helpers', () => {
       ],
     });
 
-    assert.deepEqual(config.endpoints, [
+    assert.deepEqual(config.sinks, [
       {
+        type: 'stream',
         url: 'http://localhost:8080/events',
         transport: 'http_post',
         headers: { 'X-Test': 'yes' },
@@ -106,12 +108,10 @@ describe('observability plugin helpers', () => {
   it('activates ATOF and ATIF file sinks', async () => {
     const outputDirectory = tempDir('node-observability-plugin');
     const config = {
-      version: 1,
+      version: 2,
       atof: observability.atofConfig({
         enabled: true,
-        output_directory: outputDirectory,
-        filename: 'events.jsonl',
-        mode: 'overwrite',
+        sinks: [{ type: 'file', output_directory: outputDirectory, filename: 'events.jsonl', mode: 'overwrite' }],
       }),
       atif: observability.atifConfig({
         enabled: true,
@@ -160,7 +160,7 @@ describe('observability plugin helpers', () => {
   it('splits ATIF files for multiple top-level agent scopes', async () => {
     const outputDirectory = tempDir('node-observability-plugin-multi-agent');
     const config = {
-      version: 1,
+      version: 2,
       atif: observability.atifConfig({
         enabled: true,
         output_directory: outputDirectory,

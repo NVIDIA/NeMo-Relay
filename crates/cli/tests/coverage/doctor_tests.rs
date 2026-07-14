@@ -873,6 +873,23 @@ fn observability_component_helpers_cover_disabled_and_default_paths() {
 }
 
 #[test]
+fn atof_file_checks_preserve_configured_sink_indices() {
+    let config = serde_json::json!({
+        "atof": {
+            "enabled": true,
+            "sinks": [
+                {"type": "stream", "url": "http://127.0.0.1/events"},
+                {"type": "file"}
+            ]
+        }
+    });
+
+    let checks = observability_atof_file_checks(&config);
+    assert_eq!(checks.len(), 1);
+    assert!(checks[0].details.starts_with("sinks[1]"));
+}
+
+#[test]
 fn check_directory_reports_pass_warn_and_fail() {
     let temp = tempfile::tempdir().unwrap();
     let pass = check_directory("ATOF dir", temp.path());
