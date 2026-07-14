@@ -1103,10 +1103,11 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "endpoints": [{
+                        "sinks": [{
+                            "type": "stream",
                             "url": url,
                             "transport": "http_post",
                             "headers": {"X-Test": "doctor"}
@@ -1135,8 +1136,8 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
 
     let endpoint = checks
         .iter()
-        .find(|check| check.name == "ATOF endpoint")
-        .expect("ATOF endpoint check");
+        .find(|check| check.name == "ATOF stream sink")
+        .expect("ATOF stream sink check");
     assert_eq!(endpoint.status, Status::Pass);
     assert!(body.contains("\"kind\":\"mark\""));
     assert!(body.contains("\"name\":\"nemo_relay.doctor.atof_probe\""));
@@ -1187,10 +1188,11 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atof": {
                         "enabled": true,
-                        "endpoints": [{
+                        "sinks": [{
+                            "type": "stream",
                             "url": "http://localhost:9/events",
                             "transport": "websocket"
                         }]
@@ -1205,8 +1207,8 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
 
     let endpoint = checks
         .iter()
-        .find(|check| check.name == "ATOF endpoint")
-        .expect("ATOF endpoint check");
+        .find(|check| check.name == "ATOF stream sink")
+        .expect("ATOF stream sink check");
     assert_eq!(endpoint.status, Status::Fail);
     assert!(endpoint.details.contains("invalid scheme"));
     assert!(endpoint.details.contains("must be ws or wss"));

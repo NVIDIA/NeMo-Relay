@@ -105,7 +105,7 @@ async fn install_test_atif_plugin(output_directory: &Path) {
                 "kind": "observability",
                 "enabled": true,
                 "config": {
-                    "version": 1,
+                    "version": 2,
                     "atif": {
                         "enabled": true,
                         "output_directory": output_directory,

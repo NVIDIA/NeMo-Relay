@@ -2052,6 +2052,8 @@ fn validate_atof_stream_header(
     value: &str,
 ) {
     validate_atof_stream_header_name(diagnostics, policy, field, header);
+    #[cfg(not(feature = "atof-streaming"))]
+    let _ = value;
     #[cfg(feature = "atof-streaming")]
     if let Err(error) = reqwest::header::HeaderValue::from_str(value) {
         push_policy_diag(
