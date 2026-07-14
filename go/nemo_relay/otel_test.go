@@ -5,6 +5,7 @@ package nemo_relay
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -15,9 +16,13 @@ import (
 
 func assertOtlpStringAttribute(t *testing.T, body []byte, key string, value string) {
 	t.Helper()
-	encoded := append([]byte{0x0a, byte(len(key))}, key...)
-	encoded = append(encoded, 0x12, byte(len(value)+2), 0x0a, byte(len(value)))
-	encoded = append(encoded, value...)
+	encoded := append([]byte{0x0a}, binary.AppendUvarint(nil, uint64(len(key)))...)
+	encoded = append(encoded, key...)
+	attributeValue := append([]byte{0x0a}, binary.AppendUvarint(nil, uint64(len(value)))...)
+	attributeValue = append(attributeValue, value...)
+	encoded = append(encoded, 0x12)
+	encoded = binary.AppendUvarint(encoded, uint64(len(attributeValue)))
+	encoded = append(encoded, attributeValue...)
 	if !bytes.Contains(body, encoded) {
 		t.Fatalf("expected OTLP string attribute %s=%s", key, value)
 	}

@@ -5,6 +5,33 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 
+function encodeVarint(value) {
+  const bytes = [];
+  do {
+    const byte = value % 128;
+    value = Math.floor(value / 128);
+    bytes.push(value === 0 ? byte : byte | 0x80);
+  } while (value !== 0);
+  return Buffer.from(bytes);
+}
+
+export function assertOtlpStringAttribute(body, key, value) {
+  const keyBuffer = Buffer.from(key, 'utf8');
+  const valueBuffer = Buffer.from(value, 'utf8');
+  const attributeValue = Buffer.concat([Buffer.from([0x0a]), encodeVarint(valueBuffer.length), valueBuffer]);
+  const encoded = Buffer.concat([
+    Buffer.from([0x0a]),
+    encodeVarint(keyBuffer.length),
+    keyBuffer,
+    Buffer.from([0x12]),
+    encodeVarint(attributeValue.length),
+    attributeValue,
+  ]);
+  if (!body.includes(encoded)) {
+    throw new Error(`expected OTLP string attribute ${key}=${value}`);
+  }
+}
+
 export async function startCollector() {
   const requests = [];
   let nextRequestIndex = 0;
@@ -68,7 +95,9 @@ export async function startCollector() {
   });
   const endpoint = await Promise.race([
     readyPromise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('timed out waiting for OTLP collector startup')), 5000)),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('timed out waiting for OTLP collector startup')), 5000),
+    ),
   ]);
 
   return {
@@ -86,7 +115,9 @@ export async function startCollector() {
       });
       return await Promise.race([
         requestPromise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timed out waiting for OTLP request')), timeoutMs)),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('timed out waiting for OTLP request')), timeoutMs),
+        ),
       ]);
     },
     async close() {

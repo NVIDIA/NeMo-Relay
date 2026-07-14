@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
+import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
 const { OpenInferenceSubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
@@ -15,16 +15,6 @@ function unique(prefix) {
 
 function assertBodyContains(body, text) {
   assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
-}
-
-function assertStringAttribute(body, key, value) {
-  const encoded = Buffer.concat([
-    Buffer.from([0x0a, Buffer.byteLength(key)]),
-    Buffer.from(key),
-    Buffer.from([0x12, Buffer.byteLength(value) + 2, 0x0a, Buffer.byteLength(value)]),
-    Buffer.from(value),
-  ]);
-  assert.equal(body.includes(encoded), true, `expected OTLP string attribute ${key}=${value}`);
 }
 
 describe('OpenInferenceSubscriber', () => {
@@ -121,7 +111,7 @@ describe('OpenInferenceSubscriber', () => {
       assertBodyContains(request.body, 'AGENT');
       assertBodyContains(request.body, 'metadata');
       assertBodyContains(request.body, 'openinference_mark');
-      assertStringAttribute(request.body, 'tenant.id', 'node');
+      assertOtlpStringAttribute(request.body, 'tenant.id', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

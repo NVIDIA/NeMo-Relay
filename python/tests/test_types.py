@@ -599,7 +599,7 @@ class TestOpenTelemetryTypes:
         with pytest.raises(ValueError, match="attribute mapping alias must not be blank"):
             config.attribute_mappings = [{"key": "nemo_relay.mark.metadata.source", "alias": ""}]
 
-        with pytest.raises(ValueError, match="attribute mapping alias .* duplicated"):
+        with pytest.raises(ValueError, match=r"attribute mapping alias .* duplicated"):
             config.attribute_mappings = [
                 {"key": "one", "alias": "tenant.id"},
                 {"key": "two", "alias": "tenant.id"},
@@ -704,7 +704,7 @@ class TestOpenInferenceTypes:
         with pytest.raises(ValueError, match="attribute mapping alias must not be blank"):
             config.attribute_mappings = [{"key": "openinference.metadata.tenant", "alias": ""}]
 
-        with pytest.raises(ValueError, match="attribute mapping alias .* duplicated"):
+        with pytest.raises(ValueError, match=r"attribute mapping alias .* duplicated"):
             config.attribute_mappings = [
                 {"key": "one", "alias": "tenant.id"},
                 {"key": "two", "alias": "tenant.id"},

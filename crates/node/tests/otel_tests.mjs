@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
+import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
 const { OpenTelemetrySubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
@@ -15,16 +15,6 @@ function uniqueId(prefix) {
 
 function assertBodyContains(body, text) {
   assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
-}
-
-function assertStringAttribute(body, key, value) {
-  const encoded = Buffer.concat([
-    Buffer.from([0x0a, Buffer.byteLength(key)]),
-    Buffer.from(key),
-    Buffer.from([0x12, Buffer.byteLength(value) + 2, 0x0a, Buffer.byteLength(value)]),
-    Buffer.from(value),
-  ]);
-  assert.equal(body.includes(encoded), true, `expected OTLP string attribute ${key}=${value}`);
 }
 
 describe('OpenTelemetrySubscriber', () => {
@@ -117,7 +107,7 @@ describe('OpenTelemetrySubscriber', () => {
       assert.equal(request.url, '/v1/traces');
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
       assert.ok(request.body.length > 0);
-      assertStringAttribute(request.body, 'tenant.id', 'node');
+      assertOtlpStringAttribute(request.body, 'tenant.id', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

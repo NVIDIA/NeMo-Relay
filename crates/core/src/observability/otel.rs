@@ -590,14 +590,19 @@ impl OtelEventProcessor {
             .with_start_time(to_system_time(*event.timestamp()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         let attributes = start_attributes(event);
-        span.set_attributes(attributes.clone());
+        let projected_attributes = if self.attribute_mappings.is_empty() {
+            Vec::new()
+        } else {
+            attributes.clone()
+        };
+        span.set_attributes(attributes);
         let span_context = local_parent_span_context(span.span_context());
         self.active_spans.insert(
             event.uuid(),
             ActiveSpan {
                 span,
                 span_context,
-                projected_attributes: attributes,
+                projected_attributes,
             },
         );
     }
@@ -610,12 +615,14 @@ impl OtelEventProcessor {
 
         super::set_span_status_from_event_metadata(&mut active_span.span, event);
         let mut attributes = end_attributes(event);
-        let mut projected_attributes = active_span.projected_attributes;
-        projected_attributes.extend(attributes.iter().cloned());
-        attributes.extend(attribute_mapping_aliases(
-            &projected_attributes,
-            &self.attribute_mappings,
-        ));
+        if !self.attribute_mappings.is_empty() {
+            let mut projected_attributes = active_span.projected_attributes;
+            projected_attributes.extend(attributes.iter().cloned());
+            attributes.extend(attribute_mapping_aliases(
+                &projected_attributes,
+                &self.attribute_mappings,
+            ));
+        }
         active_span.span.set_attributes(attributes);
         active_span
             .span
