@@ -37,6 +37,7 @@ filename = "events.jsonl"
 mode = "overwrite"
 
 [[components.config.atof.endpoints]]
+name = "archive"
 url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
@@ -69,11 +70,17 @@ The following table describes each streaming endpoint:
 
 | Field | Default | Notes |
 |---|---|---|
+| `name` | None | Optional unique name that another component can use to reference this endpoint. Names must be non-empty and cannot have leading or trailing whitespace. |
 | `url` | Required | Endpoint URL. |
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
+| `header_env` | `{}` | Map of header names to environment-variable names. Referenced values must be present and non-blank. |
 | `timeout_millis` | `3000` | Per-endpoint timeout. Must be greater than `0`. |
 | `field_name_policy` | `preserve` | Field-name handling before Relay sends endpoint events. Accepted values are `preserve` and `replace_dots`. |
+
+Do not define the same header in both `headers` and `header_env`. Use
+`header_env` for secrets so configuration stores the environment-variable name
+instead of the secret value.
 
 `preserve` sends canonical ATOF field names unchanged. `replace_dots` replaces
 dots in JSON object keys with underscores recursively. If replacement produces
@@ -226,9 +233,11 @@ let component = ComponentSpec::new(ObservabilityConfig {
         filename: Some("events.jsonl".into()),
         mode: "overwrite".into(),
         endpoints: vec![AtofEndpointSectionConfig {
+            name: Some("archive".into()),
             url: "http://localhost:8080/events".into(),
             transport: "http_post".into(),
             headers: Default::default(),
+            header_env: Default::default(),
             timeout_millis: 3000,
             field_name_policy: "replace_dots".into(),
         }],

@@ -73,6 +73,7 @@ filename = "events.jsonl"
 mode = "overwrite"
 
 [[components.config.atof.endpoints]]
+name = "archive"
 url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
@@ -320,9 +321,11 @@ let component = ComponentSpec::new(ObservabilityConfig {
         filename: Some("events.jsonl".into()),
         mode: "overwrite".into(),
         endpoints: vec![AtofEndpointSectionConfig {
+            name: Some("archive".into()),
             url: "http://localhost:8080/events".into(),
             transport: "http_post".into(),
             headers: [("authorization".into(), "Bearer <token>".into())].into(),
+            header_env: Default::default(),
             timeout_millis: 3000,
             field_name_policy: "preserve".into(),
         }],

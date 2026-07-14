@@ -19,7 +19,7 @@ This crate is intentionally not published to crates.io yet. Build it from the
 NeMo Relay source checkout with the optional CLI feature while the Switchyard
 Decision API contract and service/library boundary are still evolving.
 
-## Why use it?
+## Why Use It?
 
 - **Route through Switchyard decisions**: Select an exact Relay-owned target
   using a versioned Decision API contract.
@@ -31,7 +31,7 @@ Decision API contract and service/library boundary are still evolving.
 - **Support staged rollout**: Run in enforce or observe-only mode with
   explicit target bindings and protocol defaults.
 
-## What you get
+## What You Get
 
 - `SwitchyardConfig`: the typed plugin configuration contract.
 - `SwitchyardRuntime`: buffered and streaming routing intercepts.
@@ -43,7 +43,7 @@ Decision API contract and service/library boundary are still evolving.
 - Switchyard-owned protocol translation through the pinned
   `switchyard-translation` dependency.
 
-## Source build
+## Source Build
 
 The crate is a private workspace member and must be built from source:
 
@@ -56,7 +56,7 @@ The resulting CLI includes the Switchyard component only when the `switchyard`
 feature is enabled. A default Relay build does not include this experimental
 integration.
 
-## Runtime boundary
+## Runtime Boundary
 
 The current integration calls Switchyard's HTTP Decision API at runtime. Relay
 does not start or supervise the Switchyard service. For ATOF-backed profiles,
@@ -70,10 +70,10 @@ the pinned topic-branch commit, local configuration, compatibility smoke test,
 and trajectory workflow.
 
 Translation is already in-process through Switchyard's Rust translation
-library. A future in-process DecisionProvider may replace the HTTP Decision API
+library. A future in-process DecisionProvider can replace the HTTP Decision API
 call without changing the Relay-owned dispatch and observability boundary.
 
-## Configuration and registration
+## Configuration and Registration
 
 The CLI registers the component when built with `--features switchyard` and
 accepts a `[[components]]` entry with `kind = "switchyard"`. A minimal
@@ -98,9 +98,11 @@ anthropic_messages = "my-anthropic-target"
 ```
 
 For ATOF-backed profiles, configure an enabled Relay ATOF HTTP exporter that
-targets the Switchyard `/v1/atof/events` endpoint and use environment-referenced
-authentication headers. Keep provider and Decision API credentials outside
-tracked configuration files.
+has a unique `name`, targets the Switchyard ingestion URL, and uses
+environment-referenced authentication headers. Set `atof_endpoint_name` in the
+Switchyard component to that name. Local ATOF JSONL output alone does not
+populate the Switchyard accumulator. Keep provider and Decision API credentials
+outside tracked configuration files.
 
 ## Documentation
 

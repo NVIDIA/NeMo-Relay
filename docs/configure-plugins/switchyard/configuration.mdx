@@ -1,0 +1,333 @@
+---
+title: "Switchyard Configuration"
+sidebar-title: "Configuration"
+description: "Configure the experimental Relay-native Switchyard Decision API plugin."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+> **Experimental:** This page describes the current service-based Switchyard
+> integration. Its configuration and service boundary can change as Switchyard
+> develops an in-process Decision Provider.
+
+The Switchyard component connects Relay's CLI gateway to a separately running
+[Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) Decision API. Relay
+owns provider credentials, backend endpoints, dispatch, retries, and trusted
+fallbacks. The Switchyard service selects a backend. Relay validates the
+decision, translates requests and responses in process through the
+`switchyard-translation` library, and dispatches directly to the selected
+Relay-owned target.
+
+## How the Configuration Fits Together
+
+Configure the integration in four core steps. Profiles that use ATOF history
+add the fifth requirement:
+
+1. Set `decision_api_url` and authentication so Relay can call the Switchyard
+   Decision API.
+2. Select the Switchyard routing profile with `decision_profile_id`.
+3. Add a Relay-owned `targets` binding for every Switchyard `backend_id` that
+   the profile can return. Relay validates the returned backend ID, model,
+   protocol, and endpoint exactly before dispatch.
+4. Choose a trusted same-protocol target for each inbound protocol under
+   `default_targets`. Relay uses these defaults for observe-only traffic and
+   fail-open dispatch.
+5. For a profile that depends on ATOF history, including StageRouter, set
+   `context_mode = "atof_required"`, set `atof_endpoint_name`, and configure the
+   matching observability endpoint. Relay fails startup validation if the
+   named endpoint is missing or invalid.
+
+The following is a complete component configuration. The referenced
+environment variables must be set before Relay starts.
+
+```toml
+version = 1
+
+[[components]]
+kind = "switchyard"
+enabled = true
+
+[components.config]
+version = 1
+mode = "enforce"
+priority = 0
+decision_api_url = "http://127.0.0.1:4000/v1/routing/decision"
+decision_profile_id = "stage-router"
+request_materialization = "recent_message_window"
+context_mode = "atof_required"
+atof_endpoint_name = "switchyard"
+decision_timeout_millis = 25
+max_retries = 3
+recent_message_count = 8
+enabled_inbound_profiles = ["openai_chat", "openai_responses", "anthropic_messages"]
+
+[components.config.decision_header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"
+
+[components.config.default_targets]
+openai_chat = "openai-default"
+openai_responses = "responses-default"
+anthropic_messages = "anthropic-default"
+
+[components.config.targets.openai-default]
+model = "provider/efficient-chat"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "https://provider.example.com"
+
+[components.config.targets.openai-default.header_env]
+authorization = "OPENAI_PROVIDER_AUTHORIZATION"
+
+[components.config.targets.responses-default]
+model = "provider/efficient-responses"
+protocol = "openai_responses"
+endpoint = "/v1/responses"
+base_url = "https://provider.example.com"
+
+[components.config.targets.responses-default.header_env]
+authorization = "OPENAI_PROVIDER_AUTHORIZATION"
+
+[components.config.targets.anthropic-default]
+model = "provider/efficient-messages"
+protocol = "anthropic_messages"
+endpoint = "/v1/messages"
+base_url = "https://provider.example.com"
+
+[components.config.targets.anthropic-default.header_env]
+x-api-key = "ANTHROPIC_PROVIDER_API_KEY"
+
+[components.config.targets.capable-chat]
+model = "provider/capable-chat"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "https://provider.example.com"
+
+[components.config.targets.capable-chat.header_env]
+authorization = "OPENAI_PROVIDER_AUTHORIZATION"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.endpoints]]
+name = "switchyard"
+url = "http://127.0.0.1:4000/v1/atof/events"
+transport = "http_post"
+field_name_policy = "preserve"
+
+[components.config.atof.endpoints.header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"
+```
+
+## Decision API and Rollout Options
+
+| Option | Default | Description and constraints |
+| --- | --- | --- |
+| `version` | `1` | Component configuration version. |
+| `mode` | `"enforce"` | `enforce` applies valid decisions. `observe_only` records the hypothetical decision but dispatches the trusted same-protocol default once. |
+| `priority` | `0` | Component execution priority. |
+| `decision_api_url` | Required | HTTP or HTTPS URL for the Switchyard Decision API. |
+| `decision_profile_id` | Required | Non-empty Switchyard profile identifier sent with each routing request. |
+| `decision_timeout_millis` | `25` | Decision API timeout in milliseconds; must be greater than zero. |
+| `decision_headers` | Empty | Optional non-sensitive static Decision API headers. |
+| `decision_header_env` | Empty | Map of header names to environment-variable names for sensitive Decision API headers. Referenced values must be present and non-blank. |
+
+Do not define the same header in both a static header map and its environment
+map. Keep bearer tokens, API keys, cookies, and other secrets in environment
+variables rather than tracked configuration.
+
+## Request Materialization
+
+Every Decision API request contains routing identity, inbound protocol, a
+request summary, and the attempt number. `request_materialization` controls how
+much additional request content is included.
+
+| Mode | Material sent to Switchyard |
+| --- | --- |
+| `none` | No `current_request`; use identity, protocol, summary, and attempt metadata only. |
+| `summary_only` | No `current_request`; explicitly selects summary-based routing. |
+| `latest_user_prompt` | A provider-valid body containing the latest user material plus an explicit prompt field. The request fails open if no user message is available. |
+| `recent_message_window` | The most recent normalized messages, bounded by `recent_message_count`, re-encoded for the inbound protocol. |
+| `annotated_request` | The final intercepted provider body plus Relay's normalized request representation. |
+| `full_body` | The final intercepted provider request body. |
+
+Choose the least materialization needed by the selected profile. In particular,
+`none` and `summary_only` intentionally share the same current wire behavior but
+express different configuration intent.
+
+## Context, Retries, and Inbound Protocols
+
+| Option | Default | Description and constraints |
+| --- | --- | --- |
+| `context_mode` | Required | `payload_only` or `atof_required`. See below. |
+| `max_retries` | `3` | Provider retries after the initial attempt; maximum `10`. Each retry obtains a new Switchyard decision. |
+| `recent_message_count` | `8` | Message limit for `recent_message_window`; must be greater than zero. |
+| `enabled_inbound_profiles` | All three supported protocols | Non-empty list containing `openai_chat`, `openai_responses`, and/or `anthropic_messages`. |
+| `atof_endpoint_name` | Required for `atof_required` | Name of exactly one endpoint under the observability component's `atof.endpoints` list. |
+
+`payload_only` supports request-aware routing without an ATOF dependency.
+Relay can create request-scoped synthetic identity when stable identity is not
+available.
+
+`atof_required` is for profiles that classify from accumulated ATOF context. It
+requires stable session and request identity plus an enabled, authenticated
+Relay HTTP ATOF endpoint whose `name` matches `atof_endpoint_name`. The endpoint
+specifies the Switchyard ingestion URL, must use `transport = "http_post"`, and
+must set `field_name_policy = "preserve"`. Relay rejects missing or duplicate
+named endpoints during startup validation. The ATOF exporter's local JSONL file
+does not satisfy this delivery requirement by itself.
+
+## Target Bindings and Trusted Defaults
+
+| Option | Required fields | Purpose |
+| --- | --- | --- |
+| `targets.<backend_id>` | `model`, `protocol`, `endpoint`, `base_url` | Binds an exact Switchyard backend ID to a Relay-owned provider destination. |
+| `targets.<backend_id>.headers` | None | Optional non-sensitive static provider headers. |
+| `targets.<backend_id>.header_env` | None | Optional provider header names mapped to environment-variable names. Referenced values must be present and non-blank. |
+| `default_targets.openai_chat` | Target using `openai_chat` | Trusted fallback for OpenAI Chat Completions requests. |
+| `default_targets.openai_responses` | Target using `openai_responses` | Trusted fallback for OpenAI Responses requests. |
+| `default_targets.anthropic_messages` | Target using `anthropic_messages` | Trusted fallback for Anthropic Messages requests. |
+
+Protocol and endpoint pairs are fixed:
+
+| Protocol | Endpoint |
+| --- | --- |
+| `openai_chat` | `/v1/chat/completions` |
+| `openai_responses` | `/v1/responses` |
+| `anthropic_messages` | `/v1/messages` |
+
+Each protocol in `enabled_inbound_profiles` requires a corresponding
+`default_targets` entry. Defaults for disabled protocols can be omitted. Each
+configured default must refer to a target with the matching protocol. Duplicate
+exact bindings for model, protocol, endpoint, and base URL are rejected.
+
+## Recommended Recipes
+
+### Observe-Only Rollout
+
+Use observe-only mode to verify decisions and routing marks without sending
+traffic to the selected target:
+
+```toml
+[components.config]
+mode = "observe_only"
+context_mode = "payload_only"
+request_materialization = "summary_only"
+```
+
+Relay calls the Decision API and records the hypothetical selection, but sends
+the request to the inbound protocol's trusted default once. Routing retries are
+not applied.
+
+### Payload-Only Request-Aware Routing
+
+Use recent request content for routing without operating the ATOF accumulator:
+
+```toml
+[components.config]
+mode = "enforce"
+context_mode = "payload_only"
+request_materialization = "recent_message_window"
+recent_message_count = 8
+```
+
+### ATOF-Backed StageRouter Routing
+
+Use ATOF context when StageRouter should classify from accumulated session
+signals:
+
+```toml
+[components.config]
+mode = "enforce"
+decision_profile_id = "stage-router"
+context_mode = "atof_required"
+request_materialization = "summary_only"
+atof_endpoint_name = "switchyard"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 1
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.endpoints]]
+name = "switchyard"
+url = "http://127.0.0.1:4000/v1/atof/events"
+transport = "http_post"
+field_name_policy = "preserve"
+
+[components.config.atof.endpoints.header_env]
+authorization = "SWITCHYARD_AUTHORIZATION"
+```
+
+## Runtime and Fail-Open Behavior
+
+- Relay validates the decision's backend ID, model, protocol, and endpoint
+  against its target binding before dispatch. Unknown backends, malformed
+  decisions, and target drift fail open.
+- Decision API errors are not recursively retried. Relay immediately dispatches
+  the trusted same-protocol default.
+- Retryable provider connection, timeout, status, context-window, and
+  model-unavailable failures can obtain a new decision, bounded by
+  `max_retries`.
+- Non-retryable provider failures use the trusted fallback immediately. After
+  retry exhaustion, Relay dispatches that fallback once.
+- A streaming request can retry only before receiving its first upstream item.
+  After the stream commits, Relay propagates later failures without another
+  dispatch.
+- Unsupported provider extensions and request translation failures before
+  provider dispatch fail open to the trusted same-protocol default. Buffered
+  response translation failures also fail open. After a streaming response
+  emits its first item, later provider or translation failures propagate
+  without another dispatch.
+- Routing-mark delivery is best-effort and does not change provider results.
+
+## Experimental Limitations
+
+- The plugin is source-only, is not independently published, and is excluded
+  from default Relay builds. Build the CLI with
+  `cargo build -p nemo-relay-cli --features switchyard`.
+- The routing boundary is currently service-based. Relay calls Switchyard's
+  HTTP Decision API but does not start, supervise, or health-gate the service.
+  The service can be unavailable at Relay startup; requests fail open while it
+  remains unavailable.
+- ATOF-backed profiles additionally depend on Switchyard's HTTP ingestion and
+  accumulator runtime, stable request and session identity, and one named,
+  authenticated Relay ATOF HTTP endpoint. Local JSONL output does not populate
+  the Switchyard accumulator.
+- Provider-protocol translation runs in Relay's process through the
+  `switchyard-translation` Rust library. Routing decisions and ATOF accumulation
+  remain out of process.
+- The Rust Switchyard component is currently registered only by Relay's CLI
+  gateway. Hermes native plugins and the LangChain, LangGraph, and Deep Agents
+  integrations do not load it in process. They receive Switchyard routing only
+  when their provider traffic is explicitly sent through the Relay gateway.
+- The Switchyard examples are manual compatibility and trajectory workflows,
+  not production deployment orchestration.
+- Compatibility is pinned to Switchyard commit
+  [`8f9db9a6`](https://github.com/NVIDIA-NeMo/Switchyard/commit/8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8)
+  on `topic/nemo-relay-integration`. Testing another revision is deliberate and
+  can expose contract drift.
+- The Decision API and service/library boundary are experimental and can change
+  when Switchyard introduces an in-process Decision Provider.
+- Unsupported provider extensions, malformed decisions, service failures,
+  pre-dispatch translation failures, buffered-response translation failures,
+  and target drift fail open to Relay's trusted same-protocol default. Failures
+  after a streaming response commits propagate without another dispatch.
+- Secrets must remain environment-referenced. The examples generate ephemeral
+  local credentials and are not credential-management guidance.
+
+Run `nemo-relay doctor` to validate component configuration before startup. For
+the pinned local service and manual compatibility workflow, refer to the
+[Switchyard integration examples](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/switchyard).
