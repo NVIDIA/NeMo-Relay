@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::api::event::{BaseEvent, MarkEvent};
+use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::{
@@ -155,9 +155,18 @@ pub struct EmitMarkEventParams<'a> {
     /// Optional JSON payload recorded as the mark data.
     #[builder(default)]
     pub data: Option<Json>,
+    /// Optional schema identifier for the mark data.
+    #[builder(default)]
+    pub data_schema: Option<DataSchema>,
     /// Optional JSON metadata recorded on the emitted event.
     #[builder(default)]
     pub metadata: Option<Json>,
+    /// Optional semantic category for the mark.
+    #[builder(default)]
+    pub category: Option<EventCategory>,
+    /// Optional category-specific mark profile.
+    #[builder(default)]
+    pub category_profile: Option<CategoryProfile>,
     /// Optional timestamp recorded on the emitted mark event. When omitted, the
     /// current UTC time is used.
     #[builder(default)]
@@ -353,10 +362,11 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
                 .parent_uuid_opt(parent_uuid)
                 .timestamp(params.timestamp.unwrap_or_else(Utc::now))
                 .data_opt(params.data)
+                .data_schema_opt(params.data_schema)
                 .metadata_opt(params.metadata)
                 .build(),
-            None,
-            None,
+            params.category,
+            params.category_profile,
         ));
         (event, subscribers)
     };

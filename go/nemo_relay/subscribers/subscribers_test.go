@@ -55,29 +55,37 @@ func TestSubscriberShorthands(t *testing.T) {
 	var seenStart bool
 	var mu sync.Mutex
 
-	if err := subscriberspkg.Register("subs_global", func(event nemo_relay.Event) {
-		if event.Kind() == "scope" && event.ScopeCategory() == "start" {
-			mu.Lock()
-			seenStart = true
-			mu.Unlock()
-		}
-	}); err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
-
-	handle, err := nemo_relay.PushScope("subs_scope", nemo_relay.ScopeTypeAgent)
+	stack, err := nemo_relay.NewScopeStack()
 	if err != nil {
-		t.Fatalf("PushScope failed: %v", err)
+		t.Fatalf("NewScopeStack failed: %v", err)
 	}
-	if err := nemo_relay.PopScope(handle); err != nil {
-		t.Fatalf("PopScope failed: %v", err)
-	}
-	if err := subscriberspkg.Deregister("subs_global"); err != nil {
-		t.Fatalf("Deregister failed: %v", err)
-	}
-	if err := subscriberspkg.Flush(); err != nil {
-		t.Fatalf("Flush failed: %v", err)
-	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		if err := subscriberspkg.Register("subs_global", func(event nemo_relay.Event) {
+			if event.Kind() == "scope" && event.ScopeCategory() == "start" {
+				mu.Lock()
+				seenStart = true
+				mu.Unlock()
+			}
+		}); err != nil {
+			t.Fatalf("Register failed: %v", err)
+		}
+
+		handle, err := nemo_relay.PushScope("subs_scope", nemo_relay.ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		if err := nemo_relay.PopScope(handle); err != nil {
+			t.Fatalf("PopScope failed: %v", err)
+		}
+		if err := subscriberspkg.Deregister("subs_global"); err != nil {
+			t.Fatalf("Deregister failed: %v", err)
+		}
+		if err := subscriberspkg.Flush(); err != nil {
+			t.Fatalf("Flush failed: %v", err)
+		}
+	})
 
 	mu.Lock()
 	assertSeenStart(t, seenStart)

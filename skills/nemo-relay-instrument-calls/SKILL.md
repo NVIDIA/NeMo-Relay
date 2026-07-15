@@ -1,10 +1,10 @@
 ---
 name: nemo-relay-instrument-calls
-description: Wrap application tool calls and LLM/provider calls with NeMo Relay scopes and managed execution APIs
-author: NVIDIA Corporation and Affiliates
+description: Use this skill when an application owns tool or LLM/provider call sites and needs to wrap them with NeMo Relay scopes and managed execution APIs for lifecycle events, middleware, or guardrails.
 license: Apache-2.0
+metadata:
+  author: NVIDIA Corporation and Affiliates
 ---
-
 
 # Instrument Tool And LLM Calls
 
@@ -64,17 +64,21 @@ needs to run them through NeMo Relay correctly.
 
 ## Use Another Skill When
 
-- You need traces, ATIF, or export setup -> `nemo-relay-setup-observability`
-- You are debugging missing events or load failures ->
-  `nemo-relay-debug-runtime-integration`
-- You need per-request isolation or worker-pool advice ->
-  `nemo-relay-use-context-isolation`
-- You need reusable config-activated runtime behavior ->
-  `nemo-relay-build-plugin`
+Choose another skill when the task requires a neighboring workflow:
+
+- Use `nemo-relay-plugin-observability` for traces, ATIF, or export setup.
+- Use `nemo-relay-debug-runtime-integration` to debug missing events or load
+  failures.
+- Use `nemo-relay-instrument-context-isolation` for per-request isolation or
+  worker-pool guidance.
+- Use `nemo-relay-plugin-build` for reusable, configuration-activated runtime
+  behavior.
 
 ## Related Skills
 
-- `nemo-relay-start`
-- `nemo-relay-typed-wrappers-codecs`
-- `nemo-relay-setup-observability`
-- `nemo-relay-build-plugin`
+Use these skills for adjacent workflows:
+
+- Start onboarding with `nemo-relay-get-started`.
+- Add typed wrappers with `nemo-relay-instrument-typed-wrappers`.
+- Configure export with `nemo-relay-plugin-observability`.
+- Package reusable behavior with `nemo-relay-plugin-build`.

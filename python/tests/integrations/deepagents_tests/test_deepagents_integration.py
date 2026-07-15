@@ -329,6 +329,51 @@ def test_tool_call_routes_through_langchain_execution_middleware(
     assert kwargs["handle"] is parent_handle
 
 
+def test_skill_load_mark_survives_deepagents_middleware(
+    subscribed_events: list[nemo_relay.Event],
+    deepagents_integration_module: types.ModuleType,
+):
+    from langchain.agents.middleware import ToolCallRequest
+    from langchain_core.messages import ToolMessage
+
+    middleware = deepagents_integration_module.NemoRelayDeepAgentsMiddleware()
+    request = ToolCallRequest(
+        tool_call={
+            "name": "read_file",
+            "args": {"path": "/skills/review/SKILL.md"},
+            "id": "call-skill",
+        },
+        tool=None,
+        state={},
+        runtime=MagicMock(),
+    )
+
+    with nemo_relay.scope.scope("deepagents-skill", nemo_relay.ScopeType.Agent):
+        response = middleware.wrap_tool_call(
+            request,
+            lambda next_request: ToolMessage(
+                content="loaded",
+                tool_call_id=next_request.tool_call["id"],
+            ),
+        )
+
+    nemo_relay.subscribers.flush()
+    assert response.content == "loaded"
+    marks = _filter_mark_events(subscribed_events)
+    assert [mark.name for mark in marks] == ["skill.load"]
+    assert _mark_data(marks[0]) == {"skill_name": "review"}
+    assert _mark_metadata(marks[0]) == {
+        "skill_load_source": "structured_read",
+        "tool_name": "read_file",
+    }
+    tool_start = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.name == "read_file" and event.scope_category == "start"
+    )
+    assert marks[0].parent_uuid == tool_start.uuid
+
+
 def test_callback_handler_emits_human_in_the_loop_marks(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,

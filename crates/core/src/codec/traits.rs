@@ -77,3 +77,12 @@ pub trait LlmResponseCodec: Send + Sync {
     /// Implementations should return `Err` only for genuinely unparseable input.
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse>;
 }
+
+/// Additive encoder for materializing a normalized response in a provider wire format.
+///
+/// Existing response codecs remain decode-only. Components that perform cross-protocol dispatch
+/// can supply this companion trait without changing the managed observability pipeline.
+pub trait LlmResponseEncoder: Send + Sync {
+    /// Encode a normalized response into the target provider's buffered JSON representation.
+    fn encode_response(&self, response: &AnnotatedLlmResponse) -> Result<Json>;
+}

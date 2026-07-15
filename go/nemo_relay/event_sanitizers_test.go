@@ -10,6 +10,10 @@ import (
 )
 
 func TestEventSanitizerRegistries(t *testing.T) {
+	runTestWithScopeStack(t, testEventSanitizerRegistries)
+}
+
+func testEventSanitizerRegistries(t *testing.T) {
 	var mu sync.Mutex
 	var events []Event
 	if err := RegisterSubscriber("go-event-sanitize-sub", func(event Event) {
@@ -79,6 +83,10 @@ func TestEventSanitizerRegistries(t *testing.T) {
 }
 
 func TestScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {
+	runTestWithScopeStack(t, testScopeLocalEventSanitizerInheritanceAndCleanup)
+}
+
+func testScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {
 	var mu sync.Mutex
 	seen := map[string]json.RawMessage{}
 	if err := RegisterSubscriber("go-local-event-sub", func(event Event) {

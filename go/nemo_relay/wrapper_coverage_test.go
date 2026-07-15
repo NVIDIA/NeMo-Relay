@@ -192,6 +192,10 @@ func TestNewLLMRequestRoundTrip(t *testing.T) {
 }
 
 func TestWrapperHelpersCoverNilAndErrorPaths(t *testing.T) {
+	runTestWithScopeStack(t, testWrapperHelpersCoverNilAndErrorPaths)
+}
+
+func testWrapperHelpersCoverNilAndErrorPaths(t *testing.T) {
 	if got := goString(nil); got != "" {
 		t.Fatalf("expected empty string for nil goString, got %q", got)
 	}

@@ -8,6 +8,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -66,10 +67,13 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin, register_plugin,
+    deregister_plugin_registration_checked, register_plugin_tracked,
 };
 
-use super::{DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad, WorkerRuntime};
+use super::{
+    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
+    DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
+};
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
@@ -118,7 +122,7 @@ pub struct WorkerPluginLoadSpec {
 /// callbacks cannot outlive the worker activation.
 pub struct WorkerPluginActivation {
     plugins: Vec<Arc<WorkerPluginInstance>>,
-    plugin_kinds: Vec<String>,
+    plugin_registrations: Vec<(String, u64)>,
 }
 
 impl WorkerPluginActivation {
@@ -129,12 +133,24 @@ impl WorkerPluginActivation {
 
     /// Consumes the activation; deregistration runs from `Drop`.
     pub fn clear(self) {}
+
+    pub(crate) fn deregister_plugin_kinds_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        deregister_tracked_registrations_checked(&mut self.plugin_registrations, "worker")
+    }
+
+    pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        for plugin in self.plugins.iter().rev() {
+            outcome.merge(plugin.shutdown_checked());
+        }
+        outcome
+    }
 }
 
 impl Drop for WorkerPluginActivation {
     fn drop(&mut self) {
-        for plugin_kind in self.plugin_kinds.iter().rev() {
-            let _ = deregister_plugin(plugin_kind);
+        for (plugin_kind, registration_id) in self.plugin_registrations.iter().rev() {
+            let _ = deregister_plugin_registration_checked(plugin_kind, *registration_id);
         }
     }
 }
@@ -149,18 +165,20 @@ where
 {
     let mut activation = WorkerPluginActivation {
         plugins: Vec::new(),
-        plugin_kinds: Vec::new(),
+        plugin_registrations: Vec::new(),
     };
     for spec in specs {
         let instance = load_one_worker_plugin(&spec)?;
         let plugin_kind = instance.plugin_kind.clone();
-        register_plugin(Arc::new(WorkerPluginAdapter {
+        let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
             instance: instance.clone(),
         }))?;
         activation.plugins.push(instance);
-        activation.plugin_kinds.push(plugin_kind);
+        activation
+            .plugin_registrations
+            .push((plugin_kind, registration_id));
     }
     Ok(activation)
 }
@@ -221,32 +239,165 @@ struct WorkerPluginInstance {
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     process: Mutex<Option<Child>>,
     activation_dir: PathBuf,
+    teardown_started: AtomicBool,
 }
 
 impl Drop for WorkerPluginInstance {
     fn drop(&mut self) {
+        let _ = self.shutdown_checked();
+    }
+}
+
+impl WorkerPluginInstance {
+    fn shutdown_checked(&self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        if self.teardown_started.swap(true, Ordering::AcqRel) {
+            return outcome;
+        }
+
         let mut client = self.client.clone();
         let request = ShutdownRequest {
             activation_id: self.host_state.activation_id.clone(),
             auth_token: self.host_state.auth_token.clone(),
-            reason: "plugin activation dropped".into(),
+            reason: "plugin activation cleared".into(),
         };
-        let _ = block_on_runtime(self.runtime.runtime(), async move {
-            worker_rpc(client.shutdown(worker_rpc_request(request))).await
-        });
-        if let Ok(mut shutdown) = self.shutdown.lock()
-            && let Some(sender) = shutdown.take()
-        {
-            let _ = sender.send(());
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            block_on_runtime(self.runtime.runtime(), async move {
+                worker_rpc(client.shutdown(worker_rpc_request(request))).await
+            })
+        })) {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' shutdown RPC failed: {error}",
+                    self.plugin_kind
+                ),
+                true,
+            ),
+            Err(payload) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' shutdown RPC panicked: {}",
+                    self.plugin_kind,
+                    panic_payload_message(payload.as_ref())
+                ),
+                true,
+            ),
         }
-        if let Ok(mut process) = self.process.lock()
-            && let Some(mut child) = process.take()
-        {
-            let _ = child.kill();
-            let _ = child.wait();
+
+        match self.shutdown.lock() {
+            Ok(mut shutdown) => {
+                if let Some(sender) = shutdown.take()
+                    && sender.send(()).is_err()
+                {
+                    outcome.record_error(
+                        format!(
+                            "worker plugin '{}' host runtime shutdown channel was closed",
+                            self.plugin_kind
+                        ),
+                        true,
+                    );
+                }
+            }
+            Err(error) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' host runtime shutdown lock poisoned: {error}",
+                    self.plugin_kind
+                ),
+                true,
+            ),
         }
-        let _ = std::fs::remove_dir_all(&self.activation_dir);
+
+        self.stop_process_checked(&mut outcome);
+        if outcome.safe_to_unload
+            && let Err(error) = std::fs::remove_dir_all(&self.activation_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            outcome.record_error(
+                format!(
+                    "worker plugin '{}' activation directory cleanup failed for '{}': {error}",
+                    self.plugin_kind,
+                    self.activation_dir.display()
+                ),
+                true,
+            );
+        }
+        outcome
     }
+
+    fn stop_process_checked(&self, outcome: &mut DynamicPluginTeardownOutcome) {
+        let mut process = match self.process.lock() {
+            Ok(process) => process,
+            Err(error) => {
+                outcome.record_error(
+                    format!(
+                        "worker plugin '{}' process lock poisoned: {error}",
+                        self.plugin_kind
+                    ),
+                    false,
+                );
+                return;
+            }
+        };
+        let Some(child) = process.as_mut() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                process.take();
+            }
+            Ok(None) => {
+                if let Err(kill_error) = child.kill() {
+                    match child.try_wait() {
+                        Ok(Some(_)) => {
+                            process.take();
+                            outcome.record_error(
+                                format!(
+                                    "worker plugin '{}' process kill failed after exit: {kill_error}",
+                                    self.plugin_kind
+                                ),
+                                true,
+                            );
+                        }
+                        Ok(None) | Err(_) => outcome.record_error(
+                            format!(
+                                "worker plugin '{}' process kill failed: {kill_error}",
+                                self.plugin_kind
+                            ),
+                            false,
+                        ),
+                    }
+                    return;
+                }
+                match child.wait() {
+                    Ok(_) => {
+                        process.take();
+                    }
+                    Err(error) => outcome.record_error(
+                        format!(
+                            "worker plugin '{}' process wait failed after kill: {error}",
+                            self.plugin_kind
+                        ),
+                        false,
+                    ),
+                }
+            }
+            Err(error) => outcome.record_error(
+                format!(
+                    "worker plugin '{}' process status check failed: {error}",
+                    self.plugin_kind
+                ),
+                false,
+            ),
+        }
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic payload")
 }
 
 fn load_one_worker_plugin(
@@ -426,6 +577,7 @@ fn load_one_worker_plugin(
         shutdown: Mutex::new(Some(shutdown_tx)),
         process: Mutex::new(Some(child.take())),
         activation_dir: activation_dir_guard.keep(),
+        teardown_started: AtomicBool::new(false),
     }))
 }
 

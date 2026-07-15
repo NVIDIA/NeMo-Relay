@@ -28,17 +28,19 @@ const (
 
 func TestObservabilityConfigHelpers(t *testing.T) {
 	config := NewObservabilityConfig()
-	if config.Version != 1 {
-		t.Fatalf("expected version 1, got %d", config.Version)
+	if config.Version != 2 {
+		t.Fatalf("expected version 2, got %d", config.Version)
 	}
 	atof := NewObservabilityAtofConfig()
-	if atof.Enabled || atof.Mode != "append" {
+	if atof.Enabled || len(atof.Sinks) != 0 {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
-	atof.Endpoints = []ObservabilityAtofEndpoint{{
+	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofEndpoint{
+		Name:            "archive",
 		URL:             "http://localhost:8080/events",
 		Transport:       "http_post",
 		Headers:         map[string]string{"X-Test": "yes"},
+		HeaderEnv:       map[string]string{"authorization": "NEMO_RELAY_ATOF_AUTH"},
 		TimeoutMillis:   1000,
 		FieldNamePolicy: "replace_dots",
 	}}
@@ -80,20 +82,21 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
 	}
 	atofConfig := wrapped.Config["atof"].(map[string]any)
-	endpoints, ok := atofConfig["endpoints"].([]any)
+	sinks, ok := atofConfig["sinks"].([]any)
 	if !ok {
-		t.Fatalf("expected serialized ATOF endpoints, got %#v", atofConfig)
+		t.Fatalf("expected serialized ATOF sinks, got %#v", atofConfig)
 	}
-	firstEndpoint, ok := endpoints[0].(map[string]any)
-	if !ok || firstEndpoint["field_name_policy"] != "replace_dots" {
-		t.Fatalf("expected serialized ATOF endpoint field name policy, got %#v", endpoints)
+	firstSink, ok := sinks[0].(map[string]any)
+	if !ok || firstSink["name"] != "archive" || firstSink["field_name_policy"] != "replace_dots" ||
+		firstSink["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" {
+		t.Fatalf("expected serialized ATOF stream sink settings, got %#v", sinks)
 	}
 	serialized, err := json.Marshal(wrapped)
 	if err != nil {
 		t.Fatalf("marshal observability component failed: %v", err)
 	}
-	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
-		t.Fatalf("expected field_name_policy in serialized component, got %s", serialized)
+	if !strings.Contains(string(serialized), `"name":"archive"`) || !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
+		t.Fatalf("expected named ATOF endpoint in serialized component, got %s", serialized)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
 	if wrapped.Config["opentelemetry"].(map[string]any)["mark_projection"] != "tool" {
@@ -228,9 +231,7 @@ func NewAtofAndAtifTestConfig(dir string) ObservabilityConfig {
 	config := NewObservabilityConfig()
 	atof := NewObservabilityAtofConfig()
 	atof.Enabled = true
-	atof.OutputDirectory = dir
-	atof.Filename = eventsJSONLFilename
-	atof.Mode = "overwrite"
+	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofFileSinkConfig{OutputDirectory: dir, Filename: eventsJSONLFilename, Mode: "overwrite"}}
 	config.Atof = &atof
 
 	atif := NewObservabilityAtifConfig()
@@ -322,7 +323,7 @@ func TestObservabilityPluginAtifSplitsMultipleTopLevelAgents(t *testing.T) {
 func TestObservabilityPluginValidationRejectsBadValues(t *testing.T) {
 	config := NewObservabilityConfig()
 	atof := NewObservabilityAtofConfig()
-	atof.Mode = "bad"
+	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofFileSinkConfig{Mode: "bad"}}
 	config.Atof = &atof
 	atif := NewObservabilityAtifConfig()
 	atif.FilenameTemplate = "missing-placeholder.json"
