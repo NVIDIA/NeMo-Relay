@@ -1707,7 +1707,9 @@ type AtofFileSinkConfig struct {
 	Filename        string           `json:"filename,omitempty"`
 }
 
-func (AtofFileSinkConfig) atofExporterSink() {}
+func (AtofFileSinkConfig) atofExporterSink() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 // MarshalJSON serializes the fixed file sink discriminator.
 func (config AtofFileSinkConfig) MarshalJSON() ([]byte, error) {
@@ -1750,7 +1752,9 @@ type AtofStreamSinkConfig struct {
 	FieldNamePolicy AtofEndpointFieldNamePolicy `json:"field_name_policy,omitempty"`
 }
 
-func (AtofStreamSinkConfig) atofExporterSink() {}
+func (AtofStreamSinkConfig) atofExporterSink() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 // MarshalJSON serializes the fixed stream sink discriminator.
 func (config AtofStreamSinkConfig) MarshalJSON() ([]byte, error) {

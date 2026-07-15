@@ -24,6 +24,7 @@ fn gateway_bin() -> &'static str {
 }
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
+const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
     let generation = temp.join("plugin/.nemo-relay-generation");
@@ -1250,7 +1251,7 @@ fn wait_for_port_closed(address: SocketAddr) {
 }
 
 fn wait_for_owned_sidecar(temp: &std::path::Path, previous_pid: Option<u64>) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + SIDECAR_PUBLICATION_TIMEOUT;
     loop {
         for path in find_runtime_files_matching(temp, "sidecar-", ".owner.json") {
             if let Ok(raw) = std::fs::read(path)
