@@ -13,9 +13,8 @@ calls and sanitizes emitted mark and scope events.
 
 ## What Middleware Is
 
-Middleware is the runtime behavior that runs around tool and LLM execution.
-NeMo Relay uses middleware to control, transform, or observe work at specific
-lifecycle points.
+Middleware controls or transforms tool and LLM execution and sanitizes emitted
+events. NeMo Relay applies each surface at a specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -141,7 +140,7 @@ sequenceDiagram
     participant Exec as Execution Intercepts
     participant Callback as Real Callback
     participant San as Tool / LLM Sanitizers
-    participant EventSan as Scope Event Sanitizers
+    participant EventSan as Mark / Scope Event Sanitizers
     participant Dispatch as Async Subscriber Dispatcher
     participant Consumers as Subscribers / Exporters
 
@@ -149,6 +148,7 @@ sequenceDiagram
     Runtime->>Cond: decide whether work may proceed
 
     alt blocked
+        Runtime->>EventSan: sanitize guardrail scopes and rejection mark
         Cond-->>Caller: reject execution
     else allowed
         Runtime->>Req: rewrite the real request
@@ -227,6 +227,7 @@ flowchart TB
             direction TB
             SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
             SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
+            MarkSanitizers[/Mark Event Sanitizers/]
             ScopeStartSanitizers[/Scope-Start Event Sanitizers/]
             ScopeEndSanitizers[/Scope-End Event Sanitizers/]
             StartEvent[Emit Start Event]
@@ -240,7 +241,8 @@ flowchart TB
 
     Request --> ConditionalExecutionGuardrails
     RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
-    ConditionalExecutionGuardrails -->|"(rejected event)"| Dispatcher
+    ConditionalExecutionGuardrails -->|"(rejection mark)"| MarkSanitizers
+    MarkSanitizers -->|Sanitized Mark Fields| Dispatcher
     ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
     ConditionalExecutionGuardrails -->|"(passed)"| RequestIntercepts
     SanitizeRequestGuardrails -->|Sanitized Start Payload| ScopeStartSanitizers
@@ -272,7 +274,7 @@ flowchart TB
     class Execution,Invocation,Streaming,Observability,Request,Response grey-lightest;
     class Dispatcher,EventConsumers,StartEvent,EndEvent teal-lightest;
     class RequestIntercepts,HasExecutionIntercept,ExecutionIntercepts yellow-lightest;
-    class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails,ScopeStartSanitizers,ScopeEndSanitizers green-lightest;
+    class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails,MarkSanitizers,ScopeStartSanitizers,ScopeEndSanitizers green-lightest;
     class RaiseException red-lightest;
     class DefaultCallable,InterceptResult,Collector,Finalizer magenta-lightest;
 ```

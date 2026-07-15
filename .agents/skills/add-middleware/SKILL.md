@@ -93,7 +93,7 @@ Follow the `add-binding-feature` skill for the cross-binding implementation chec
 - [ ] Registration and duplicate-name behavior
 - [ ] Deregistration and no-op missing-name behavior
 - [ ] Ordering by priority
-- [ ] Callback error propagation
+- [ ] Callback failure policy, including fail-open behavior when required
 - [ ] Scope-local registration, inheritance, and cleanup on pop
 - [ ] Event payload semantics after middleware mutation
 - [ ] Mark and scope event field semantics, including immutable identity fields

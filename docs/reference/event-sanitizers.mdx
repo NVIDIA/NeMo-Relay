@@ -36,8 +36,10 @@ The callback receives:
 Return the three observability fields that should be applied. Event identity,
 parentage, timestamps, kind, scope category, semantic category, attributes,
 semantic input and output meaning, and schemas cannot be changed through this
-API. Set a field to `None` in Rust or Python, or `null` in Node.js, to remove
-it. Preserve fields that your policy does not change.
+API. The return value is a complete replacement, not a patch. Start from the
+provided fields and return all three. Omitting a field can clear it in bindings
+that accept a partial object. Set a field to `None` in Rust or Python, `null` in
+Node.js, or a zero-value `json.RawMessage` in Go to remove it.
 
 Registries are priority ordered. Lower priorities run first, and each callback
 receives the fields returned by the preceding callback. Invalid binding
@@ -171,7 +173,9 @@ Global names begin with `nemo_relay_register_`; scope-local names begin with
 The Go binding exposes `EventSanitizeFields`, `EventSanitizeFunc`, global
 `Register*SanitizeGuardrail` helpers, scope-local
 `ScopeRegister*SanitizeGuardrail` helpers, and the same methods on
-`PluginContext`. The `guardrails` package provides shorter aliases.
+`PluginContext`. The `guardrails` package provides shorter aliases. A returned
+`EventSanitizeFields` replaces all three fields, so copy the provided value and
+modify only the fields that should change.
 
 ## Related Topics
 
