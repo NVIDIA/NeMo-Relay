@@ -911,8 +911,9 @@ async fn nests_agent_subagent_and_tool_lifecycle() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2163,8 +2164,9 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2434,8 +2436,9 @@ async fn duplicate_agent_end_does_not_overwrite_atif_with_empty_session() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2514,8 +2517,9 @@ async fn writes_hermes_api_hook_usage_to_atif_metrics() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -2597,8 +2601,9 @@ async fn writes_hermes_api_hook_reported_cost_to_atif_metrics() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -3903,8 +3908,9 @@ async fn handles_out_of_order_subagent_and_tool_end_events() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -3980,8 +3986,9 @@ async fn out_of_order_started_subagent_end_does_not_leak_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -4053,8 +4060,9 @@ async fn agent_end_closes_nested_active_subagents_lifo() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -4110,8 +4118,9 @@ async fn llm_lifecycle_starts_implicit_gateway_session() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -4594,8 +4603,9 @@ async fn llm_lifecycle_uses_single_active_hook_session_when_header_is_missing() 
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -4722,8 +4732,9 @@ async fn single_pending_llm_hint_claims_next_gateway_llm() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -4820,8 +4831,9 @@ async fn multiple_llm_hints_resolve_by_generation_id() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -4936,8 +4948,9 @@ async fn ambiguous_llm_hints_fall_back_to_agent_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -5030,8 +5043,9 @@ async fn no_active_hint_reuses_last_llm_owner() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -6860,8 +6874,9 @@ fn session_test_config() -> GatewayConfig {
     GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -6875,8 +6890,9 @@ async fn turn_ended_is_noop_without_active_turn_scope() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://127.0.0.1".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,

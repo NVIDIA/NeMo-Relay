@@ -57,12 +57,14 @@ pub(super) async fn prepare_gateway_request(
         &parts.headers,
         path_and_query,
         authorization.allow_environment_provider_auth,
+        config,
     )
     .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
     parts.headers = super::routes::strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
         authorization.allow_environment_provider_auth,
+        provider.configured_auth_header(config),
     );
     authorization.source_credential = authorization
         .source_credential

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderValue};
 use nemo_relay::logging::LoggingConfig;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
@@ -65,7 +65,9 @@ struct FileGatewayConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileUpstreamConfig {
     openai_base_url: Option<String>,
+    openai_auth_header: Option<String>,
     anthropic_base_url: Option<String>,
+    anthropic_auth_header: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -236,7 +238,9 @@ fn persistent_bootstrap_fingerprint(
         "bootstrap_protocol": crate::bootstrap::BOOTSTRAP_PROTOCOL_VERSION,
         "relay_version": env!("CARGO_PKG_VERSION"),
         "openai_base_url": gateway.openai_base_url,
+        "openai_auth_header": gateway.openai_auth_header,
         "anthropic_base_url": gateway.anthropic_base_url,
+        "anthropic_auth_header": gateway.anthropic_auth_header,
         "metadata": gateway.metadata,
         "plugin_config": gateway.plugin_config,
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
@@ -1156,7 +1160,7 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
         CliError::Config(format!("invalid gateway configuration shape: {error}"))
     })?;
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
-    apply_file_upstream_config(&mut resolved.gateway, config.upstream);
+    apply_file_upstream_config(&mut resolved.gateway, config.upstream)?;
     apply_file_agents_config(&mut resolved.agents, config.agents);
     logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
     Ok(())
@@ -1182,16 +1186,30 @@ fn apply_file_gateway_config(
 
 // Applies upstream LLM provider URLs. These are the bases for OpenAI- and Anthropic-shaped
 // gateway routes; transparent `run` mode can still override them per invocation.
-fn apply_file_upstream_config(gateway: &mut GatewayConfig, upstream: Option<FileUpstreamConfig>) {
+fn apply_file_upstream_config(
+    gateway: &mut GatewayConfig,
+    upstream: Option<FileUpstreamConfig>,
+) -> Result<(), CliError> {
     let Some(upstream) = upstream else {
-        return;
+        return Ok(());
     };
     if let Some(value) = upstream.openai_base_url {
         gateway.openai_base_url = value;
     }
+    if let Some(value) = upstream.openai_auth_header {
+        gateway.openai_auth_header =
+            Some(validate_auth_header("upstream.openai_auth_header", value)?);
+    }
     if let Some(value) = upstream.anthropic_base_url {
         gateway.anthropic_base_url = value;
     }
+    if let Some(value) = upstream.anthropic_auth_header {
+        gateway.anthropic_auth_header = Some(validate_auth_header(
+            "upstream.anthropic_auth_header",
+            value,
+        )?);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -1461,8 +1479,20 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
         config.openai_base_url = value;
     }
+    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER") {
+        config.openai_auth_header = Some(validate_auth_header(
+            "NEMO_RELAY_OPENAI_AUTH_HEADER",
+            value,
+        )?);
+    }
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         config.anthropic_base_url = value;
+    }
+    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
+        config.anthropic_auth_header = Some(validate_auth_header(
+            "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
+            value,
+        )?);
     }
     if let Ok(value) = std::env::var("NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES") {
         config.max_hook_payload_bytes =
@@ -1473,6 +1503,16 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
             parse_env_body_limit("NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES", &value)?;
     }
     Ok(())
+}
+
+fn validate_auth_header(name: &str, value: String) -> Result<String, CliError> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(CliError::Config(format!("{name} must not be empty")));
+    }
+    HeaderValue::from_str(&value)
+        .map_err(|_| CliError::Config(format!("{name} must be a valid HTTP header value")))?;
+    Ok(value)
 }
 
 fn parse_env_body_limit(name: &str, raw: &str) -> Result<usize, CliError> {

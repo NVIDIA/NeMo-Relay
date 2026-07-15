@@ -130,7 +130,7 @@ async fn run_unmanaged_gateway(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        ProviderForwarding::new(prepared.provider, prepared.authorization),
+        ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config),
     )
     .await?;
     let status = response.status();
@@ -252,9 +252,11 @@ fn build_buffered_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
-    let forwarding = ProviderForwarding::new(prepared.provider, prepared.authorization);
+    let forwarding =
+        ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
+        let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
         let body_bytes = body_bytes.clone();
@@ -434,9 +436,11 @@ fn build_streaming_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
-    let forwarding = ProviderForwarding::new(prepared.provider, prepared.authorization);
+    let forwarding =
+        ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config);
     Arc::new(move |request| {
         let http = http.clone();
+        let forwarding = forwarding.clone();
         let method = method.clone();
         let url = url.clone();
         let body_bytes = body_bytes.clone();
@@ -709,6 +713,7 @@ async fn forward_upstream_request(
         url,
         forwarding.source_route,
     );
+    let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
     let mut upstream = http
         .request(method.clone(), &effective.url)
         .body(effective.body_bytes.clone());
@@ -725,6 +730,7 @@ async fn forward_upstream_request(
             effective.credential_policy,
             TargetCredentialPolicy::SourceOrEnvironment
         ) && forwarding.authorization.allow_environment_provider_auth,
+        configured_auth_header,
     );
     upstream.send().await
 }
@@ -885,12 +891,14 @@ fn inject_provider_auth(
     route: ProviderRoute,
     inbound: &HeaderMap,
     allow_environment_provider_auth: bool,
+    configured_auth_header: Option<&str>,
 ) -> reqwest::RequestBuilder {
     inject_provider_auth_with_env(
         builder,
         route,
         inbound,
         allow_environment_provider_auth,
+        configured_auth_header,
         |key| std::env::var(key).ok(),
     )
 }
@@ -902,6 +910,7 @@ fn inject_provider_auth_with_env<F>(
     route: ProviderRoute,
     inbound: &HeaderMap,
     allow_environment_provider_auth: bool,
+    configured_auth_header: Option<&str>,
     env_lookup: F,
 ) -> reqwest::RequestBuilder
 where
@@ -916,6 +925,9 @@ where
         || inbound.contains_key("anthropic-api-key");
     if already_authed {
         return builder;
+    }
+    if let Some(value) = configured_auth_header {
+        return builder.header(http::header::AUTHORIZATION, value);
     }
     let (env_var, header_name) = match route {
         ProviderRoute::OpenAiResponses
@@ -957,7 +969,7 @@ async fn passthrough_streaming(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        ProviderForwarding::new(prepared.provider, prepared.authorization),
+        ProviderForwarding::new(prepared.provider, prepared.authorization, &state.config),
     )
     .await?;
     let status = response.status();
@@ -1096,6 +1108,7 @@ pub(crate) async fn models(
         );
     }
     let provider = ProviderRoute::OpenAiModels;
+    let configured_auth_header = provider.configured_auth_header(&state.config);
     let path_and_query = parts
         .uri
         .path_and_query()
@@ -1109,12 +1122,14 @@ pub(crate) async fn models(
         &parts.headers,
         path_and_query,
         allow_environment_provider_auth,
+        &state.config,
     )
     .unwrap_or_else(|| provider.upstream_url(&state.config, path_and_query));
     let sanitized = strip_replaceable_agent_auth_headers(
         &parts.headers,
         provider,
         allow_environment_provider_auth,
+        configured_auth_header,
     );
     let mut upstream = state.http.get(upstream_url);
     for (name, value) in &sanitized {
@@ -1127,6 +1142,7 @@ pub(crate) async fn models(
         provider,
         &sanitized,
         allow_environment_provider_auth,
+        configured_auth_header,
     );
     let upstream_response = upstream.send().await?;
     let status = upstream_response.status();

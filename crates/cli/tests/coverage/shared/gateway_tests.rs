@@ -211,8 +211,9 @@ fn provider_routes_preserve_path_query_and_choose_upstream() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai/v1/".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://anthropic/".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -242,7 +243,9 @@ fn openai_upstream_url_accepts_origin_or_v1_base() {
     let mut config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
+        openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -507,6 +510,7 @@ fn cross_protocol_target_uses_only_binding_owned_authentication() {
         effective.target_route,
         &effective.headers,
         false,
+        None,
         |_: &str| Some("ambient-key-must-not-win".into()),
     )
     .build()
@@ -1163,10 +1167,16 @@ fn injects_openai_bearer_when_inbound_has_no_auth() {
         _ => None,
     };
     let builder = http.get("http://upstream/v1/responses");
-    let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, true, env)
-            .build()
-            .unwrap();
+    let built = inject_provider_auth_with_env(
+        builder,
+        ProviderRoute::OpenAiResponses,
+        &inbound,
+        true,
+        None,
+        env,
+    )
+    .build()
+    .unwrap();
     assert_eq!(
         built.headers().get("authorization").unwrap(),
         "Bearer sk-test-123"
@@ -1187,6 +1197,7 @@ fn injects_anthropic_x_api_key_for_anthropic_routes() {
         ProviderRoute::AnthropicMessages,
         &inbound,
         true,
+        None,
         env,
     )
     .build()
@@ -1196,6 +1207,94 @@ fn injects_anthropic_x_api_key_for_anthropic_routes() {
     // into a Bearer header — that would defeat the purpose of using the provider's standard
     // auth scheme and might trigger upstream-side rejection of the conflicting auth.
     assert!(built.headers().get("authorization").is_none());
+}
+
+#[test]
+fn configured_auth_headers_are_provider_specific_and_precede_environment_keys() {
+    let config = GatewayConfig {
+        openai_auth_header: Some("Basic openai-custom".into()),
+        anthropic_auth_header: Some("Bearer anthropic-custom".into()),
+        ..GatewayConfig::default()
+    };
+    let forwarding = ProviderForwarding::new(
+        ProviderRoute::OpenAiResponses,
+        crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: true,
+        },
+        &config,
+    );
+
+    for (route, expected) in [
+        (ProviderRoute::OpenAiResponses, "Basic openai-custom"),
+        (ProviderRoute::OpenAiChatCompletions, "Basic openai-custom"),
+        (ProviderRoute::OpenAiModels, "Basic openai-custom"),
+        (ProviderRoute::AnthropicMessages, "Bearer anthropic-custom"),
+        (
+            ProviderRoute::AnthropicCountTokens,
+            "Bearer anthropic-custom",
+        ),
+    ] {
+        let built = inject_provider_auth_with_env(
+            test_http_client().post("http://upstream"),
+            route,
+            &HeaderMap::new(),
+            true,
+            forwarding.configured_auth_header(route),
+            |_| Some("standard-env-key".into()),
+        )
+        .build()
+        .unwrap();
+
+        assert_eq!(built.headers().get("authorization").unwrap(), expected);
+        assert!(built.headers().get("x-api-key").is_none());
+    }
+}
+
+#[test]
+fn configured_openai_auth_replaces_chatgpt_jwt() {
+    let config = GatewayConfig {
+        openai_auth_header: Some("Basic configured-openai".into()),
+        ..GatewayConfig::default()
+    };
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer eyJhbGciOiJIUzI1NiJ9.deadbeef.signature"),
+    );
+    let configured_auth_header = ProviderRoute::OpenAiResponses.configured_auth_header(&config);
+    let sanitized = strip_replaceable_agent_auth_headers(
+        &inbound,
+        ProviderRoute::OpenAiResponses,
+        true,
+        configured_auth_header,
+    );
+    assert!(sanitized.get("authorization").is_none());
+    assert_eq!(
+        gateway_upstream_url_override(
+            ProviderRoute::OpenAiResponses,
+            &inbound,
+            "/responses",
+            true,
+            &config,
+        ),
+        None
+    );
+
+    let request = inject_provider_auth_with_env(
+        test_http_client().post("http://upstream"),
+        ProviderRoute::OpenAiResponses,
+        &sanitized,
+        true,
+        configured_auth_header,
+        |_| None,
+    )
+    .build()
+    .unwrap();
+    assert_eq!(
+        request.headers().get("authorization").unwrap(),
+        "Basic configured-openai"
+    );
 }
 
 #[test]
@@ -1210,10 +1309,16 @@ fn skips_injection_when_inbound_already_has_authorization() {
     );
     let env = |_: &str| Some("sk-test-from-env".into());
     let builder = http.post("http://upstream/v1/responses");
-    let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, true, env)
-            .build()
-            .unwrap();
+    let built = inject_provider_auth_with_env(
+        builder,
+        ProviderRoute::OpenAiResponses,
+        &inbound,
+        true,
+        None,
+        env,
+    )
+    .build()
+    .unwrap();
     // The builder doesn't carry inbound headers itself (forward_upstream_request adds them in a
     // separate loop), so the only header on `built` would be the env-injected one. Since the
     // inbound had auth, we expect no injection at all.
@@ -1226,10 +1331,16 @@ fn skips_injection_when_env_var_unset() {
     let inbound = HeaderMap::new();
     let env = |_: &str| None;
     let builder = http.post("http://upstream/v1/responses");
-    let built =
-        inject_provider_auth_with_env(builder, ProviderRoute::OpenAiResponses, &inbound, true, env)
-            .build()
-            .unwrap();
+    let built = inject_provider_auth_with_env(
+        builder,
+        ProviderRoute::OpenAiResponses,
+        &inbound,
+        true,
+        None,
+        env,
+    )
+    .build()
+    .unwrap();
     assert!(built.headers().get("authorization").is_none());
 }
 
@@ -1244,6 +1355,7 @@ fn managed_sidecar_never_injects_forwarded_provider_credentials() {
         ProviderRoute::OpenAiResponses,
         &inbound,
         false,
+        None,
         env,
     )
     .build()
@@ -1367,8 +1479,9 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -1404,8 +1517,9 @@ async fn models_rejects_non_get_requests_directly() {
     let config = GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://openai".into(),
-
+        openai_auth_header: None,
         anthropic_base_url: "http://anthropic".into(),
+        anthropic_auth_header: None,
         metadata: None,
         plugin_config: None,
         max_hook_payload_bytes: crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
