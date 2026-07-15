@@ -285,8 +285,64 @@ fn install_host_locked(
     require_host_cli(host, options, runner)?;
     host::validate_host_version(host, options, runner)?;
     let layout = PluginLayout::new(host, &options.install_dir);
+    let (staged, mut force_snapshot, mut replacement_generation_lock) =
+        prepare_install_transaction(host, &relay, &layout, options, runner, setup_runner)?;
+    install_marketplace_content(
+        host,
+        &relay,
+        &layout,
+        staged.as_ref(),
+        &mut force_snapshot,
+        &mut replacement_generation_lock,
+        options,
+        runner,
+        setup_runner,
+    )?;
+    write_install_state(
+        host,
+        &layout,
+        &mut force_snapshot,
+        &mut replacement_generation_lock,
+        options,
+        runner,
+        setup_runner,
+    )?;
+    finish_install_registration(
+        host,
+        &layout,
+        &mut force_snapshot,
+        &mut replacement_generation_lock,
+        options,
+        runner,
+        setup_runner,
+    )?;
+    if let Some(snapshot) = force_snapshot {
+        snapshot.commit(&layout.generation_lock);
+    }
+    println!(
+        "installed {} plugin marketplace at {}",
+        host.label(),
+        layout.marketplace_root.display()
+    );
+    Ok(())
+}
+
+type PreparedInstall = (
+    Option<StagedPluginMarketplace>,
+    Option<ForceInstallSnapshot>,
+    Option<ReplacementGenerationLock>,
+);
+
+fn prepare_install_transaction(
+    host: impl MarketplaceHost,
+    relay: &Path,
+    layout: &PluginLayout,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<PreparedInstall, String> {
     let plugin_preflight = if !options.dry_run {
-        Some(prepare_plugin_install(host, &layout, options, runner)?)
+        Some(prepare_plugin_install(host, layout, options, runner)?)
     } else {
         None
     };
@@ -306,7 +362,7 @@ fn install_host_locked(
             None => true,
         };
         let staged =
-            stage_plugin_marketplace(host, &relay, &layout, initialize_generation_lock, options)?;
+            stage_plugin_marketplace(host, relay, layout, initialize_generation_lock, options)?;
         if initialize_generation_lock {
             replacement_generation_lock = match acquire_replacement_generation_lock(
                 host,
@@ -324,13 +380,13 @@ fn install_host_locked(
                 }
             };
         }
-        match begin_force_replacement(host, &layout, preflight, options, runner, setup_runner) {
+        match begin_force_replacement(host, layout, preflight, options, runner, setup_runner) {
             Ok(mut snapshot) => {
                 if let Err(error) = setup_runner.refresh_gateway() {
                     staged.cleanup();
                     return restore_force_replacement_after_error(
                         host,
-                        &layout,
+                        layout,
                         &mut snapshot,
                         options,
                         runner,
@@ -349,15 +405,30 @@ fn install_host_locked(
     } else {
         None
     };
+    Ok((staged, force_snapshot, replacement_generation_lock))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_marketplace_content(
+    host: impl MarketplaceHost,
+    relay: &Path,
+    layout: &PluginLayout,
+    staged: Option<&StagedPluginMarketplace>,
+    force_snapshot: &mut Option<ForceInstallSnapshot>,
+    replacement_generation_lock: &mut Option<ReplacementGenerationLock>,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
     if options.force && staged.is_none() {
-        force_cleanup_existing_install(host, &layout, options, runner, setup_runner)?;
+        force_cleanup_existing_install(host, layout, options, runner, setup_runner)?;
     }
-    if let Some(staged) = staged.as_ref() {
-        if let Err(error) = staged.promote(&layout) {
+    if let Some(staged) = staged {
+        if let Err(error) = staged.promote(layout) {
             staged.cleanup();
             return restore_force_replacement_after_error(
                 host,
-                &layout,
+                layout,
                 force_snapshot.as_mut().expect("force snapshot exists"),
                 options,
                 runner,
@@ -375,7 +446,7 @@ fn install_host_locked(
             staged.cleanup();
             return restore_force_replacement_after_error(
                 host,
-                &layout,
+                layout,
                 force_snapshot.as_mut().expect("force snapshot exists"),
                 options,
                 runner,
@@ -387,7 +458,7 @@ fn install_host_locked(
     } else {
         let generation_lock_created =
             !options.dry_run && generation_lock_is_absent(&layout.generation_lock);
-        if let Err(error) = write_plugin_marketplace(host, &layout, &relay, options) {
+        if let Err(error) = write_plugin_marketplace(host, layout, relay, options) {
             let cleanup_error = (!options.dry_run)
                 .then(|| remove_path(&layout.marketplace_root, options).err())
                 .flatten();
@@ -402,7 +473,7 @@ fn install_host_locked(
             };
         }
         if !options.dry_run {
-            replacement_generation_lock = match acquire_replacement_generation_lock(
+            *replacement_generation_lock = match acquire_replacement_generation_lock(
                 host,
                 &layout.generation_fence,
                 &layout.generation_lock,
@@ -424,7 +495,20 @@ fn install_host_locked(
             };
         }
     }
-    if let Err(error) = write_state(&layout, options) {
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_install_state(
+    host: impl MarketplaceHost,
+    layout: &PluginLayout,
+    force_snapshot: &mut Option<ForceInstallSnapshot>,
+    replacement_generation_lock: &mut Option<ReplacementGenerationLock>,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
+    if let Err(error) = write_state(layout, options) {
         let _replacement_retirement = if force_snapshot.is_some() {
             let existing_retirement = replacement_generation_lock
                 .as_mut()
@@ -436,7 +520,7 @@ fn install_host_locked(
                 });
             match retire_replacement_before_rollback(
                 host,
-                &layout,
+                layout,
                 options,
                 setup_runner,
                 existing_retirement,
@@ -453,7 +537,7 @@ fn install_host_locked(
         };
         let cleanup_error = remove_path(&layout.marketplace_root, options).err();
         let restore_error = force_snapshot.as_mut().and_then(|snapshot| {
-            restore_force_replacement(host, &layout, snapshot, options, runner, setup_runner).err()
+            restore_force_replacement(host, layout, snapshot, options, runner, setup_runner).err()
         });
         let errors = [cleanup_error, restore_error]
             .into_iter()
@@ -464,6 +548,19 @@ fn install_host_locked(
         }
         return Err(error);
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_install_registration(
+    host: impl MarketplaceHost,
+    layout: &PluginLayout,
+    force_snapshot: &mut Option<ForceInstallSnapshot>,
+    replacement_generation_lock: &mut Option<ReplacementGenerationLock>,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    setup_runner: &dyn PluginSetupRunner,
+) -> Result<(), String> {
     let mut registration = HostRegistrationProgress::default();
     let mut registration_state_uncertain = false;
     let mut setup_installed = false;
@@ -495,13 +592,13 @@ fn install_host_locked(
         }
         run_plugin_setup_with_generation(
             host,
-            &layout,
+            layout,
             options,
             setup_runner,
             generation_token.as_deref(),
         )?;
         setup_installed = true;
-        mark_plugin_setup_installed(host, &layout, options)?;
+        mark_plugin_setup_installed(host, layout, options)?;
         if !options.skip_doctor {
             run_plugin_doctor_with_generation(
                 host,
@@ -535,7 +632,7 @@ fn install_host_locked(
                 });
             match retire_replacement_before_rollback(
                 host,
-                &layout,
+                layout,
                 options,
                 setup_runner,
                 existing_retirement,
@@ -552,7 +649,7 @@ fn install_host_locked(
         };
         let rollback_error = rollback_install(
             host,
-            &layout,
+            layout,
             registration,
             setup_installed,
             options,
@@ -561,7 +658,7 @@ fn install_host_locked(
         )
         .err();
         let restore_error = force_snapshot.as_mut().and_then(|snapshot| {
-            restore_force_replacement(host, &layout, snapshot, options, runner, setup_runner).err()
+            restore_force_replacement(host, layout, snapshot, options, runner, setup_runner).err()
         });
         let rollback_errors = [
             rollback_error.map(|error| format!("failed to roll back install: {error}")),
@@ -578,14 +675,6 @@ fn install_host_locked(
         }
         return Err(error);
     }
-    if let Some(snapshot) = force_snapshot {
-        snapshot.commit(&layout.generation_lock);
-    }
-    println!(
-        "installed {} plugin marketplace at {}",
-        host.label(),
-        layout.marketplace_root.display()
-    );
     Ok(())
 }
 
@@ -1779,98 +1868,141 @@ fn restore_force_replacement(
     setup_runner: &dyn PluginSetupRunner,
 ) -> Result<(), String> {
     let mut errors = Vec::new();
-    if snapshot.replacement_promoted {
-        match host_registration_report(host, options, runner) {
-            Ok(report) => {
-                if report.host_plugin_registered
-                    && let Err(error) = run_host_plugin_removal(host, options, runner)
-                {
-                    errors.push(error);
-                }
-                if report.host_marketplace_registered
-                    && let Err(error) = run_host_marketplace_removal(host, options, runner)
-                {
-                    errors.push(error);
-                }
-            }
-            Err(error) => errors.push(error),
-        }
-        if let Err(error) = remove_path(&layout.marketplace_root, options) {
-            errors.push(error);
-        }
-        snapshot.replacement_promoted = false;
-    }
-    if snapshot.marketplace_moved {
-        if let Err(error) = fs::rename(
-            &snapshot.backup_marketplace_root,
-            &snapshot.original_marketplace_root,
-        ) {
-            errors.push(format!(
-                "failed to restore marketplace {}: {error}",
-                snapshot.original_marketplace_root.display()
-            ));
-        } else {
-            snapshot.marketplace_moved = false;
-        }
-    }
-    if snapshot.plugin_moved
-        && let Some(backup_plugin_root) = snapshot.backup_plugin_root.as_ref()
-    {
-        if let Err(error) = fs::rename(backup_plugin_root, &snapshot.original_plugin_root) {
-            errors.push(format!(
-                "failed to restore plugin root {} containing generation marker {}: {error}",
-                snapshot.original_plugin_root.display(),
-                snapshot.original_generation_fence.display()
-            ));
-        } else {
-            snapshot.plugin_moved = false;
-        }
-    }
+    remove_promoted_replacement(host, layout, snapshot, options, runner, &mut errors);
+    restore_replaced_paths(snapshot, &mut errors);
     if let Some(retirement) = snapshot.generation_retirement.as_mut()
         && let Err(error) = retirement.restore_after_rollback()
     {
         errors.push(error);
     }
+    reconcile_restored_registration(host, snapshot, options, runner, &mut errors);
+    restore_setup_snapshot(snapshot, setup_runner, &mut errors);
+    restore_install_state(layout, snapshot.state_bytes.as_deref(), &mut errors);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn remove_promoted_replacement(
+    host: impl MarketplaceHost,
+    layout: &PluginLayout,
+    snapshot: &mut ForceInstallSnapshot,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    errors: &mut Vec<String>,
+) {
+    if !snapshot.replacement_promoted {
+        return;
+    }
     match host_registration_report(host, options, runner) {
         Ok(report) => {
             if report.host_plugin_registered
-                && !snapshot.plugin_registered
                 && let Err(error) = run_host_plugin_removal(host, options, runner)
             {
                 errors.push(error);
             }
             if report.host_marketplace_registered
-                && !snapshot.marketplace_registered
                 && let Err(error) = run_host_marketplace_removal(host, options, runner)
-            {
-                errors.push(error);
-            }
-            if snapshot.marketplace_registered
-                && !report.host_marketplace_registered
-                && let Err(error) = run_host_marketplace_registration(
-                    host,
-                    &snapshot.original_marketplace_root,
-                    options,
-                    runner,
-                )
-            {
-                errors.push(error);
-            }
-            if snapshot.plugin_registered
-                && !report.host_plugin_registered
-                && let Err(error) = run_host_plugin_registration(host, options, runner)
             {
                 errors.push(error);
             }
         }
         Err(error) => errors.push(error),
     }
+    if let Err(error) = remove_path(&layout.marketplace_root, options) {
+        errors.push(error);
+    }
+    snapshot.replacement_promoted = false;
+}
+
+fn restore_replaced_paths(snapshot: &mut ForceInstallSnapshot, errors: &mut Vec<String>) {
+    if snapshot.marketplace_moved {
+        match fs::rename(
+            &snapshot.backup_marketplace_root,
+            &snapshot.original_marketplace_root,
+        ) {
+            Ok(()) => snapshot.marketplace_moved = false,
+            Err(error) => errors.push(format!(
+                "failed to restore marketplace {}: {error}",
+                snapshot.original_marketplace_root.display()
+            )),
+        }
+    }
+    if snapshot.plugin_moved
+        && let Some(backup_plugin_root) = snapshot.backup_plugin_root.as_ref()
+    {
+        match fs::rename(backup_plugin_root, &snapshot.original_plugin_root) {
+            Ok(()) => snapshot.plugin_moved = false,
+            Err(error) => errors.push(format!(
+                "failed to restore plugin root {} containing generation marker {}: {error}",
+                snapshot.original_plugin_root.display(),
+                snapshot.original_generation_fence.display()
+            )),
+        }
+    }
+}
+
+fn reconcile_restored_registration(
+    host: impl MarketplaceHost,
+    snapshot: &ForceInstallSnapshot,
+    options: &PluginInstallOptions,
+    runner: &dyn CommandRunner,
+    errors: &mut Vec<String>,
+) {
+    let report = match host_registration_report(host, options, runner) {
+        Ok(report) => report,
+        Err(error) => {
+            errors.push(error);
+            return;
+        }
+    };
+    if report.host_plugin_registered
+        && !snapshot.plugin_registered
+        && let Err(error) = run_host_plugin_removal(host, options, runner)
+    {
+        errors.push(error);
+    }
+    if report.host_marketplace_registered
+        && !snapshot.marketplace_registered
+        && let Err(error) = run_host_marketplace_removal(host, options, runner)
+    {
+        errors.push(error);
+    }
+    if snapshot.marketplace_registered
+        && !report.host_marketplace_registered
+        && let Err(error) = run_host_marketplace_registration(
+            host,
+            &snapshot.original_marketplace_root,
+            options,
+            runner,
+        )
+    {
+        errors.push(error);
+    }
+    if snapshot.plugin_registered
+        && !report.host_plugin_registered
+        && let Err(error) = run_host_plugin_registration(host, options, runner)
+    {
+        errors.push(error);
+    }
+}
+
+fn restore_setup_snapshot(
+    snapshot: &ForceInstallSnapshot,
+    setup_runner: &dyn PluginSetupRunner,
+    errors: &mut Vec<String>,
+) {
     if let Some(setup_snapshot) = snapshot.setup_snapshot.as_ref()
         && let Err(error) = setup_runner.restore_snapshot(setup_snapshot)
     {
         errors.push(error);
     }
-    if let Some(bytes) = snapshot.state_bytes.as_deref() {
+}
+
+fn restore_install_state(layout: &PluginLayout, bytes: Option<&[u8]>, errors: &mut Vec<String>) {
+    if let Some(bytes) = bytes {
         if let Some(parent) = layout.state_path.parent()
             && let Err(error) = fs::create_dir_all(parent)
         {
@@ -1889,11 +2021,6 @@ fn restore_force_replacement(
             "failed to remove {}: {error}",
             layout.state_path.display()
         ));
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
     }
 }
 

@@ -8,7 +8,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
 use crate::error::CliError;
-use crate::installation::generation::InstallGeneration;
+use crate::installation::generation::{ActiveGenerationGuard, InstallGeneration};
 
 use super::destination::{
     HookGatewayLifecycle, hook_destination, recovery_plan, transparent_gateway_spec,
@@ -32,10 +32,7 @@ pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliE
     let fail_closed =
         command.fail_closed || std::env::var("NEMO_RELAY_FAIL_CLOSED").ok().as_deref() == Some("1");
     let destination = hook_destination(&command);
-    let persistent = match (destination.lifecycle != HookGatewayLifecycle::Transparent)
-        .then(|| recovery_plan(&destination.gateway_url))
-        .transpose()
-    {
+    let persistent = match persistent_gateway(&destination) {
         Ok(persistent) => persistent,
         Err(error) => return handle_hook_error(error, fail_closed),
     };
@@ -47,34 +44,9 @@ pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliE
         Ok(gateway) => gateway,
         Err(error) => return handle_hook_error(error, fail_closed),
     };
-    let _generation_guard = if destination.lifecycle == HookGatewayLifecycle::Existing
-        && !command.forward_only
-    {
-        let install_host = command.agent.install_arg();
-        let Some(generation_file) = command.generation_file.clone() else {
-            return handle_hook_error(
-                CliError::Launch(format!(
-                    "persistent {} hook is missing its install-generation fence; run `nemo-relay install {install_host} --force`",
-                    command.agent.label()
-                )),
-                fail_closed,
-            );
-        };
-        let Some(generation_token) = command.generation_token.as_deref() else {
-            return handle_hook_error(
-                CliError::Launch(format!(
-                    "persistent {} hook is missing its expected install-generation identity; run `nemo-relay install {install_host} --force`",
-                    command.agent.label()
-                )),
-                fail_closed,
-            );
-        };
-        match InstallGeneration::capture_guarded_expected(generation_file, generation_token) {
-            Ok((_generation, guard)) => Some(guard),
-            Err(error) => return handle_hook_error(CliError::Launch(error), fail_closed),
-        }
-    } else {
-        None
+    let _generation_guard = match capture_generation_guard(&command, destination.lifecycle) {
+        Ok(guard) => guard,
+        Err(error) => return handle_hook_error(error, fail_closed),
     };
     let input = match read_hook_payload(persistent.as_ref().map_or(
         crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES,
@@ -124,6 +96,39 @@ pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliE
         Err(error) => return handle_hook_error(error, fail_closed),
     };
     handle_hook_forward_response(response, fail_closed).await
+}
+
+fn persistent_gateway(
+    destination: &super::destination::HookDestination,
+) -> Result<Option<crate::bootstrap::PluginGatewaySpec>, CliError> {
+    (destination.lifecycle != HookGatewayLifecycle::Transparent)
+        .then(|| recovery_plan(&destination.gateway_url))
+        .transpose()
+}
+
+fn capture_generation_guard(
+    command: &HookForwardRequest,
+    lifecycle: HookGatewayLifecycle,
+) -> Result<Option<ActiveGenerationGuard>, CliError> {
+    if lifecycle != HookGatewayLifecycle::Existing || command.forward_only {
+        return Ok(None);
+    }
+    let install_host = command.agent.install_arg();
+    let generation_file = command.generation_file.clone().ok_or_else(|| {
+        CliError::Launch(format!(
+            "persistent {} hook is missing its install-generation fence; run `nemo-relay install {install_host} --force`",
+            command.agent.label()
+        ))
+    })?;
+    let generation_token = command.generation_token.as_deref().ok_or_else(|| {
+        CliError::Launch(format!(
+            "persistent {} hook is missing its expected install-generation identity; run `nemo-relay install {install_host} --force`",
+            command.agent.label()
+        ))
+    })?;
+    InstallGeneration::capture_guarded_expected(generation_file, generation_token)
+        .map(|(_generation, guard)| Some(guard))
+        .map_err(CliError::Launch)
 }
 
 fn handle_hook_error(error: CliError, fail_closed: bool) -> Result<(), CliError> {

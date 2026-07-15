@@ -299,80 +299,106 @@ async fn collect_agents(
         if target_agent.is_some_and(|target| target != agent) {
             continue;
         }
-        let configured = agent_configured(agent, &resolved.agents);
-        let target_requested = target_agent == Some(agent);
-        let command = agent_command(agent, &resolved.agents);
-        let argv = crate::process::command_argv(&command);
-        let exec = argv.first().map(String::as_str).unwrap_or_default();
-        let path = crate::process::resolve_executable(exec);
-        let version = match &path {
-            Some(_) => {
-                let probe = crate::process::version_probe_argv(agent, &argv);
-                probe_version(&probe).await
-            }
-            None => None,
-        };
-        let mut status = agent_command_status(path.as_deref(), configured, target_requested);
-        let (hook_status, hook_details) = hook_status(agent, &resolved.agents);
-        status = combine_status(status, hook_status, configured || target_requested);
-        let mut details = Vec::new();
-        details.push(if configured {
-            "configured".to_string()
-        } else if target_requested {
-            "not configured; first run will launch setup".to_string()
-        } else {
-            "not configured".to_string()
-        });
-        if path.is_none() {
-            details.push(format!("command `{exec}` not found"));
-        }
-        if !hook_details.is_empty() {
-            details.push(hook_details);
-        }
-        let version_required = configured || target_requested;
-        match version.as_deref() {
-            Some(version) => {
-                if let Err(error) = agent.validate_version_output(version) {
-                    status = combine_status(
-                        status,
-                        if version_required {
-                            Status::Fail
-                        } else {
-                            Status::Warn
-                        },
-                        true,
-                    );
-                    details.push(error);
-                }
-            }
-            None if path.is_some() => {
-                status = combine_status(
-                    status,
-                    if version_required {
-                        Status::Fail
-                    } else {
-                        Status::Warn
-                    },
-                    true,
-                );
-                details.push(format!(
-                    "could not determine version; NeMo Relay requires {}",
-                    agent.version_requirement()
-                ));
-            }
-            None => {}
-        }
-        out.push(AgentInfo {
-            name: agent.as_arg(),
-            status,
-            configured,
-            command,
-            path,
-            version,
-            annotation: details.join("; "),
-        });
+        out.push(collect_agent(agent, target_agent == Some(agent), resolved).await);
     }
     out
+}
+
+async fn collect_agent(
+    agent: CodingAgent,
+    target_requested: bool,
+    resolved: &ResolvedConfig,
+) -> AgentInfo {
+    let configured = agent_configured(agent, &resolved.agents);
+    let command = agent_command(agent, &resolved.agents);
+    let argv = crate::process::command_argv(&command);
+    let exec = argv.first().map(String::as_str).unwrap_or_default();
+    let path = crate::process::resolve_executable(exec);
+    let version = if path.is_some() {
+        probe_version(&crate::process::version_probe_argv(agent, &argv)).await
+    } else {
+        None
+    };
+    let mut status = agent_command_status(path.as_deref(), configured, target_requested);
+    let (hook_status, hook_details) = hook_status(agent, &resolved.agents);
+    status = combine_status(status, hook_status, configured || target_requested);
+    let mut details = agent_details(
+        configured,
+        target_requested,
+        path.as_deref(),
+        exec,
+        hook_details,
+    );
+    apply_agent_version_status(
+        agent,
+        version.as_deref(),
+        path.is_some(),
+        configured || target_requested,
+        &mut status,
+        &mut details,
+    );
+    AgentInfo {
+        name: agent.as_arg(),
+        status,
+        configured,
+        command,
+        path,
+        version,
+        annotation: details.join("; "),
+    }
+}
+
+fn agent_details(
+    configured: bool,
+    target_requested: bool,
+    path: Option<&Path>,
+    exec: &str,
+    hook_details: String,
+) -> Vec<String> {
+    let mut details = vec![if configured {
+        "configured".to_string()
+    } else if target_requested {
+        "not configured; first run will launch setup".to_string()
+    } else {
+        "not configured".to_string()
+    }];
+    if path.is_none() {
+        details.push(format!("command `{exec}` not found"));
+    }
+    if !hook_details.is_empty() {
+        details.push(hook_details);
+    }
+    details
+}
+
+fn apply_agent_version_status(
+    agent: CodingAgent,
+    version: Option<&str>,
+    executable_found: bool,
+    version_required: bool,
+    status: &mut Status,
+    details: &mut Vec<String>,
+) {
+    let problem = match version {
+        Some(version) => agent.validate_version_output(version).err(),
+        None if executable_found => Some(format!(
+            "could not determine version; NeMo Relay requires {}",
+            agent.version_requirement()
+        )),
+        None => None,
+    };
+    if let Some(problem) = problem {
+        *status = combine_status(
+            *status,
+            if version_required {
+                Status::Fail
+            } else {
+                Status::Warn
+            },
+            true,
+        );
+        details.push(problem);
+    }
 }
 
 fn agent_command(agent: CodingAgent, agents: &AgentConfigs) -> String {

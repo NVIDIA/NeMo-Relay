@@ -135,7 +135,6 @@ fn resume_suspended_process(process_id: u32) -> std::io::Result<()> {
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
-    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
 
     // SAFETY: A system-wide thread snapshot does not borrow caller memory.
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
@@ -152,42 +151,10 @@ fn resume_suspended_process(process_id: u32) -> std::io::Result<()> {
     let mut has_entry = unsafe { Thread32First(snapshot, &mut entry) } != 0;
     while has_entry {
         if entry.th32OwnerProcessID == process_id {
-            // SAFETY: The snapshot supplied this live thread identifier and only resume access is
-            // requested.
-            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-            if thread.is_null() {
-                let error =
-                    last_windows_error("failed to open the suspended coding-agent primary thread");
-                // SAFETY: `snapshot` is uniquely owned and closed exactly once on this path.
-                unsafe { CloseHandle(snapshot) };
-                return Err(error);
-            }
-            // CREATE_SUSPENDED starts the primary thread with a suspend count of one. Resume until
-            // that count reaches zero, while rejecting a zero count that would imply the process
-            // had already run before Job Object assignment.
-            // SAFETY: `thread` is live and was opened with THREAD_SUSPEND_RESUME.
-            let mut previous_count = unsafe { ResumeThread(thread) };
-            while previous_count > 1 && previous_count != u32::MAX {
-                // SAFETY: The same live thread handle remains owned by this function.
-                previous_count = unsafe { ResumeThread(thread) };
-            }
-            let resume_error = if previous_count == u32::MAX {
-                Some(last_windows_error(
-                    "failed to resume the Job-owned coding-agent process",
-                ))
-            } else if previous_count == 0 {
-                Some(std::io::Error::other(
-                    "coding-agent primary thread was not suspended before Job Object assignment",
-                ))
-            } else {
-                None
-            };
-            // SAFETY: Both handles are uniquely owned and closed exactly once on this path.
-            unsafe {
-                CloseHandle(thread);
-                CloseHandle(snapshot);
-            }
-            return resume_error.map_or(Ok(()), Err);
+            let result = resume_thread(entry.th32ThreadID);
+            // SAFETY: `snapshot` is uniquely owned and closed exactly once on this path.
+            unsafe { CloseHandle(snapshot) };
+            return result;
         }
         // SAFETY: `snapshot` and `entry` remain valid for the next enumeration result.
         has_entry = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
@@ -197,6 +164,41 @@ fn resume_suspended_process(process_id: u32) -> std::io::Result<()> {
     Err(std::io::Error::other(format!(
         "could not find the suspended primary thread for coding-agent process {process_id}"
     )))
+}
+
+fn resume_thread(thread_id: u32) -> std::io::Result<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    // SAFETY: The system snapshot supplied this live thread identifier and only resume access is
+    // requested.
+    let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, thread_id) };
+    if thread.is_null() {
+        return Err(last_windows_error(
+            "failed to open the suspended coding-agent primary thread",
+        ));
+    }
+    // CREATE_SUSPENDED starts the primary thread with a suspend count of one. Resume until that
+    // count reaches zero, while rejecting a zero count that would imply the process had already
+    // run before Job Object assignment.
+    // SAFETY: `thread` is live and was opened with THREAD_SUSPEND_RESUME.
+    let mut previous_count = unsafe { ResumeThread(thread) };
+    while previous_count > 1 && previous_count != u32::MAX {
+        // SAFETY: The same live thread handle remains owned by this function.
+        previous_count = unsafe { ResumeThread(thread) };
+    }
+    let result = match previous_count {
+        u32::MAX => Err(last_windows_error(
+            "failed to resume the Job-owned coding-agent process",
+        )),
+        0 => Err(std::io::Error::other(
+            "coding-agent primary thread was not suspended before Job Object assignment",
+        )),
+        _ => Ok(()),
+    };
+    // SAFETY: `thread` is uniquely owned and closed exactly once.
+    unsafe { CloseHandle(thread) };
+    result
 }
 
 fn last_windows_error(context: &str) -> std::io::Error {

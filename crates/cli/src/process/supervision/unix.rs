@@ -70,15 +70,8 @@ pub(super) async fn wait(
             tokio::task::yield_now().await;
             continue;
         }
-        if tree.terminal.is_some() && child_is_stopped(tree.process_group)? {
-            tree.restore_terminal()?;
-            tree.stop_supervisor_group()?;
-            if let Some(status) = child.try_wait()? {
-                return Ok(status);
-            }
-            if let Some(terminal) = tree.terminal.as_mut() {
-                terminal.resume_after_supervisor()?;
-            }
+        if let Some(status) = handle_stopped_child(tree, child)? {
+            return Ok(status);
         }
         if termination_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
             tree.terminate(child)?;
@@ -97,6 +90,24 @@ pub(super) async fn wait(
             }
         }
     }
+}
+
+fn handle_stopped_child(
+    tree: &mut ProcessTree,
+    child: &mut tokio::process::Child,
+) -> std::io::Result<Option<ExitStatus>> {
+    if tree.terminal.is_none() || !child_is_stopped(tree.process_group)? {
+        return Ok(None);
+    }
+    tree.restore_terminal()?;
+    tree.stop_supervisor_group()?;
+    if let Some(status) = child.try_wait()? {
+        return Ok(Some(status));
+    }
+    if let Some(terminal) = tree.terminal.as_mut() {
+        terminal.resume_after_supervisor()?;
+    }
+    Ok(None)
 }
 
 impl ProcessTree {
