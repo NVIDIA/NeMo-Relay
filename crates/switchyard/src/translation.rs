@@ -5,9 +5,9 @@ use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::error::{FlowError, Result};
 use serde_json::{Map, Value as Json};
 use switchyard_translation::{
-    ContentBlock, ConversationRequest, DeterministicIdPolicy, ImageSource, LossyConversionPolicy,
-    PreservationPolicy, Role, TargetCapabilities, TranslationDiagnostic, TranslationEngine,
-    TranslationPolicy, UnknownFieldPolicy, WireFormat,
+    ContentBlock, DeterministicIdPolicy, ImageSource, LlmRequest as TranslationRequest,
+    LossyConversionPolicy, PreservationPolicy, Role, TargetCapabilities, TranslationDiagnostic,
+    TranslationEngine, TranslationPolicy, UnknownFieldPolicy, WireFormat,
 };
 
 use crate::component::WireProtocol;
@@ -20,7 +20,7 @@ pub(crate) fn decode_request(
     engine: &TranslationEngine,
     protocol: WireProtocol,
     request: &LlmRequest,
-) -> Result<ConversationRequest> {
+) -> Result<TranslationRequest> {
     let output = engine
         .decode_request(
             wire_format(protocol),
@@ -35,7 +35,7 @@ pub(crate) fn decode_request(
 pub(crate) fn encode_request(
     engine: &TranslationEngine,
     protocol: WireProtocol,
-    request: &ConversationRequest,
+    request: &TranslationRequest,
     headers: Map<String, Json>,
 ) -> Result<LlmRequest> {
     let output = engine
@@ -90,7 +90,7 @@ pub(crate) fn validate_portable_request(
     Ok(())
 }
 
-pub(crate) fn latest_user_prompt(request: &ConversationRequest) -> Option<String> {
+pub(crate) fn latest_user_prompt(request: &TranslationRequest) -> Option<String> {
     request
         .messages
         .iter()
@@ -100,9 +100,9 @@ pub(crate) fn latest_user_prompt(request: &ConversationRequest) -> Option<String
 }
 
 pub(crate) fn recent_message_window(
-    request: &ConversationRequest,
+    request: &TranslationRequest,
     count: usize,
-) -> ConversationRequest {
+) -> TranslationRequest {
     let mut window = request.clone();
     let split = window.messages.len().saturating_sub(count);
     window.messages = window.messages.split_off(split);
@@ -172,7 +172,7 @@ fn portable_stream_options(value: &Json) -> bool {
     options.len() == 1 && options.get("include_usage").is_some_and(Json::is_boolean)
 }
 
-fn request_contains_unsupported_content(request: &ConversationRequest) -> bool {
+fn request_contains_unsupported_content(request: &TranslationRequest) -> bool {
     request
         .instructions
         .iter()

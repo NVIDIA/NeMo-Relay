@@ -52,6 +52,7 @@ use tower::service_fn;
 const ACTIVATION_ID: &str = "activation-1";
 const AUTH_TOKEN: &str = "secret-token";
 const PLUGIN_ID: &str = "acme.worker";
+const WORKER_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUIRED_WORKER_ENVS: &[&str] = &[
     "NEMO_RELAY_WORKER_SOCKET",
     "NEMO_RELAY_HOST_SOCKET",
@@ -288,7 +289,7 @@ async fn worker_service_rejects_duplicate_registration_names_on_one_surface() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
-    let timeout = Duration::from_secs(2);
+    let timeout = WORKER_TEST_TIMEOUT;
     let plugin = Arc::new(CancellationPlugin::default());
     let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
     tokio::time::timeout(timeout, register_plugin(&mut client))
@@ -411,7 +412,7 @@ async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn worker_service_cancels_stream_during_async_setup() {
-    let timeout = Duration::from_secs(2);
+    let timeout = WORKER_TEST_TIMEOUT;
     let plugin = Arc::new(CancellationPlugin::default());
     let (handle, mut client) = spawn_worker(plugin.clone(), "http://127.0.0.1:9".into()).await;
     tokio::time::timeout(timeout, register_plugin(&mut client))

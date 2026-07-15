@@ -17,6 +17,11 @@ static DISCOVERED_STATIC_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static DISCOVERED_STATIC_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
 static DISCOVERED_STATIC_CONFIG: Mutex<Option<Json>> = Mutex::new(None);
 
+struct NativeFixture {
+    _source_dir: TempDir,
+    library: PathBuf,
+}
+
 struct PluginDiscoveryTestEnv {
     previous_cwd: PathBuf,
     previous_xdg_config_home: Option<std::ffi::OsString>,
@@ -495,51 +500,58 @@ fn plugin_kinds() -> Vec<String> {
 }
 
 fn build_native_fixture() -> &'static Path {
-    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
-    FIXTURE.get_or_init(|| {
-        let source_dir = TempDir::new().expect("native fixture source tempdir");
-        let fixture_dir = source_dir.path().join("native_plugin");
-        let source = fixture_dir.join("src");
-        std::fs::create_dir_all(&source).expect("native fixture src dir");
-        let plugin_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin");
-        let manifest_template = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../core/tests/fixtures/native_plugin/Cargo.toml"),
-        )
-        .expect("native fixture Cargo.toml");
-        let manifest = manifest_template.replace(
-            r#"nemo-relay-plugin = { path = "../../../../plugin" }"#,
-            &format!("nemo-relay-plugin = {{ path = {plugin_path:?} }}"),
-        );
-        std::fs::write(fixture_dir.join("Cargo.toml"), manifest)
-            .expect("write native fixture Cargo.toml");
-        std::fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../core/tests/fixtures/native_plugin/src/lib.rs"),
-            source.join("lib.rs"),
-        )
-        .expect("copy native fixture source");
+    static FIXTURE: OnceLock<NativeFixture> = OnceLock::new();
+    &FIXTURE
+        .get_or_init(|| {
+            let source_dir = TempDir::new().expect("native fixture source tempdir");
+            let fixture_dir = source_dir.path().join("native_plugin");
+            let source = fixture_dir.join("src");
+            std::fs::create_dir_all(&source).expect("native fixture src dir");
+            let plugin_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin");
+            let manifest_template = std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../core/tests/fixtures/native_plugin/Cargo.toml"),
+            )
+            .expect("native fixture Cargo.toml");
+            let manifest = manifest_template.replace(
+                r#"nemo-relay-plugin = { path = "../../../../plugin" }"#,
+                &format!("nemo-relay-plugin = {{ path = {plugin_path:?} }}"),
+            );
+            std::fs::write(fixture_dir.join("Cargo.toml"), manifest)
+                .expect("write native fixture Cargo.toml");
+            std::fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../core/tests/fixtures/native_plugin/src/lib.rs"),
+                source.join("lib.rs"),
+            )
+            .expect("copy native fixture source");
 
-        let target =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ffi-native-plugin-fixture");
-        let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-            .arg("build")
-            .arg("--quiet")
-            .arg("--manifest-path")
-            .arg(fixture_dir.join("Cargo.toml"))
-            .arg("--target-dir")
-            .arg(&target)
-            .status()
-            .expect("native fixture build should start");
-        assert!(status.success(), "native fixture build failed: {status}");
-        let library = target.join("debug").join(native_library_name());
-        assert!(
-            library.exists(),
-            "missing native fixture: {}",
-            library.display()
-        );
-        library
-    })
+            // Nextest runs each test in a separate process. Keep this process's
+            // generated crate and target directory together so parallel tests do
+            // not race on a shared fixture artifact.
+            let target = source_dir.path().join("target");
+            let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+                .arg("build")
+                .arg("--quiet")
+                .arg("--manifest-path")
+                .arg(fixture_dir.join("Cargo.toml"))
+                .arg("--target-dir")
+                .arg(&target)
+                .status()
+                .expect("native fixture build should start");
+            assert!(status.success(), "native fixture build failed: {status}");
+            let library = target.join("debug").join(native_library_name());
+            assert!(
+                library.exists(),
+                "missing native fixture: {}",
+                library.display()
+            );
+            NativeFixture {
+                _source_dir: source_dir,
+                library,
+            }
+        })
+        .library
 }
 
 fn build_worker_fixture() -> &'static Path {

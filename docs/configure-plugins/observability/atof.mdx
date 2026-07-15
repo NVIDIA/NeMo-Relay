@@ -99,6 +99,12 @@ Each emitted scope, tool, LLM, middleware, or mark event is written as one ATOF
 JSON object per line. For event field semantics, refer to
 [Events](/about-nemo-relay/concepts/events).
 
+Coding-agent sessions emit a `session.start` mark with the logical
+`metadata.session_id`, a Relay-owned UUIDv7 `metadata.session_instance_id`, and
+optional session metadata such as `metadata.user_id`. Later trace exporters
+use these identities for correlation, but ATOF preserves them as raw event
+metadata.
+
 ATOF is the raw-event export path. It preserves the canonical event shape; it
 does not add semantic extraction, replay policy, scope-owner resolution, or
 exporter projection rules.

@@ -94,6 +94,21 @@ attributes. These values match ATIF `step.extra.ancestry.function_id` and
 the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
+Coding-agent trace roots also carry these correlation attributes:
+
+| Attribute | Meaning |
+|---|---|
+| `session.id` | Logical harness session ID. |
+| `user.id` | Optional top-level string `user_id` from session metadata. |
+| `nemo_relay.session.instance_id` | Relay-owned root scope UUID shared by trace roots from the same runtime session instance. |
+
+These canonical fields are emitted on trace roots rather than repeated on
+every child span. Filter roots by `session.id`, `user.id`, or
+`nemo_relay.session.instance_id`, then use the backend `trace_id` to select the
+remaining rows in each trace. A `session.start` mark carries the same fields:
+it is a span event when a parent is active and a zero-duration root span when
+it is orphaned.
+
 For LLM end spans, cost is emitted as `nemo_relay.llm.cost.total` and
 `nemo_relay.llm.cost.currency` (any currency). Token counts are not emitted as
 discrete attributes. Refer to

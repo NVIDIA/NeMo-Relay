@@ -1155,6 +1155,17 @@ fn test_initialize_plugins_transaction_finishes_after_caller_cancellation() {
         })
         .await
         .expect("owned initialization transaction did not finish after caller cancellation");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if *PLUGIN_MUTATION_OWNER.lock().unwrap() == PluginMutationOwner::Idle {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("owned initialization transaction did not release its mutation lease");
     });
 
     reset_global();

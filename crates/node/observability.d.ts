@@ -28,6 +28,7 @@ export interface AtofStreamSinkConfig {
   header_env?: Record<string, string>;
   timeout_millis?: number;
   field_name_policy?: 'preserve' | 'replace_dots' | string;
+  name?: string;
 }
 
 /** @deprecated Use AtofStreamSinkConfig. */

@@ -20,6 +20,7 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, ScopeCategory,
     ScopeEvent,
 };
+use crate::api::runtime::{create_scope_stack, with_scope_stack};
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -814,5 +815,67 @@ fn test_manual_fallback_payload_parity() {
     assert_eq!(
         openinference.get("llm.token_count.total"),
         Some(&"1500".to_string())
+    );
+}
+
+#[test]
+fn session_instance_correlates_distinct_otel_and_openinference_traces() {
+    let scope_stack = create_scope_stack();
+    let expected_root_uuid = scope_stack.read().unwrap().root_uuid().to_string();
+    let uuid = Uuid::now_v7();
+    let metadata = json!({"session_id": "logical-session", "user_id": "alice"});
+    let start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("session-root")
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let end = make_scope_event(
+        ScopeCategory::End,
+        uuid,
+        "session-root",
+        EventCategory::agent(),
+        None,
+        None,
+    );
+    let exports = with_scope_stack(scope_stack, || export_through_all_exporters(&[start, end]));
+    let otel = exports
+        .otel_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "session-root")
+        .unwrap();
+    let openinference = exports
+        .openinference_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "session-root")
+        .unwrap();
+    let otel_attributes = attr_map(&otel.attributes);
+    let openinference_attributes = attr_map(&openinference.attributes);
+
+    assert_eq!(otel_attributes["nemo_relay.uuid"], uuid.to_string());
+    assert_eq!(
+        openinference_attributes["nemo_relay.uuid"],
+        uuid.to_string()
+    );
+    assert_eq!(otel_attributes["session.id"], "logical-session");
+    assert_eq!(openinference_attributes["session.id"], "logical-session");
+    assert_eq!(otel_attributes["user.id"], "alice");
+    assert_eq!(openinference_attributes["user.id"], "alice");
+    assert_eq!(
+        otel_attributes["nemo_relay.session.instance_id"],
+        expected_root_uuid
+    );
+    assert_eq!(
+        openinference_attributes["nemo_relay.session.instance_id"],
+        expected_root_uuid
+    );
+    assert_ne!(
+        otel.span_context.trace_id(),
+        openinference.span_context.trace_id()
     );
 }

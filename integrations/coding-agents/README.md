@@ -192,7 +192,8 @@ status to the host.
 Useful wrapper options:
 
 - `--session-metadata '<json>'` adds structured metadata to the agent begin
-  event.
+  event. For example, `--session-metadata '{"user_id":"alice"}'` exposes the
+  string as `user.id` on OTLP trace roots.
 - `--profile <name>` records a configuration profile in session metadata.
 - `--gateway-mode hook-only|passthrough|required` records the expected gateway
   behavior in session metadata.
