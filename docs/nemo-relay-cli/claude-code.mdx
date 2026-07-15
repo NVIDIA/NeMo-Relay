@@ -121,14 +121,15 @@ process.
 ## Captured Events
 
 Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
-`SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`,
-`PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, and
-`PostCompact` for scope, tool, and mark events. `UserPromptExpansion` records
-nonempty slash-command expansions as `skill.load.inferred`; Claude Code does
-not identify whether an expansion came from a skill or a legacy custom command.
+`UserPromptSubmit`, `UserPromptExpansion`, `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `PermissionRequest`, `SubagentStart`, `SubagentStop`,
+`Notification`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
+emit canonical `compaction` marks. Relay normalizes the other hooks as scope,
+prompt, tool, notification, subagent, or private LLM correlation events
+according to the hook payload. `UserPromptExpansion` records nonempty
+slash-command expansions as `skill.load.inferred`; Claude Code does not
+identify whether an expansion came from a skill or a legacy custom command.
 The normal `Skill` pre-tool hook emits an observed `skill.load` mark.
-`UserPromptSubmit` and `Stop` are retained as private LLM correlation hints and
-are not emitted as standalone NeMo Relay events.
 
 The wrapper requires Claude Code 2.1.121 or newer. Earlier versions do not
 support every required hook event, and `nemo-relay doctor` reports the version
