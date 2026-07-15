@@ -19,8 +19,14 @@ live OTLP spans.
 ## Embedded ATIF Semantics
 
 - ATIF export translates NeMo Relay events into ATIF v1.7 trajectory data.
-- LLM start events become `user` steps. ATIF uses the latest user message from
-  the request annotation when possible, then falls back to the raw event input.
+- LLM start events become `user` steps. ATIF extracts the latest user message
+  from the request annotation when possible. It does not export the annotation's
+  complete history as the step message. Each owning agent scope starts fresh,
+  and a `compaction` mark refreshes it. The first subsequent LLM start annotation
+  retains complete history. Later starts retain system instructions, the latest
+  user message, and every following assistant or tool message. When a request
+  codec supplies an annotation, the event input uses the same projection.
+  Provider execution remains unchanged.
 - LLM end events become `agent` steps with response content, model metadata,
   token metrics, reasoning fields, and promoted `tool_calls` when the response
   uses a supported tool-call shape.
