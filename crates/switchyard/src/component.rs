@@ -494,6 +494,13 @@ enum StreamAttempt {
     Fallback(&'static str),
 }
 
+struct StreamAttemptContext {
+    routing_request: RoutingRequest,
+    decision: RoutingDecision,
+    attempt: u32,
+    max_attempts: u32,
+}
+
 fn provider_fallback_reason(error: &FlowError) -> &'static str {
     if error_is_retryable(error) {
         "retry_exhausted"
@@ -716,42 +723,35 @@ impl SwitchyardRuntime {
             }
         };
         let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
+        let context = StreamAttemptContext {
+            routing_request,
+            decision,
+            attempt,
+            max_attempts,
+        };
         match next(routed).await {
             Ok(mut upstream) => {
                 let first = upstream.next().await;
-                Ok(self.classify_open_stream(
-                    inbound,
-                    target_protocol,
-                    routing_request,
-                    decision,
-                    upstream,
-                    first,
-                    attempt,
-                    max_attempts,
-                ))
+                Ok(self.classify_open_stream(inbound, target_protocol, context, upstream, first))
             }
-            Err(error) => Ok(self.classify_stream_setup_error(
-                routing_request,
-                decision,
-                error,
-                attempt,
-                max_attempts,
-            )),
+            Err(error) => Ok(self.classify_stream_setup_error(context, error)),
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn classify_open_stream(
         &self,
         inbound: WireProtocol,
         target_protocol: WireProtocol,
-        routing_request: RoutingRequest,
-        decision: RoutingDecision,
+        context: StreamAttemptContext,
         upstream: LlmJsonStream,
         first: Option<FlowResult<Json>>,
-        attempt: u32,
-        max_attempts: u32,
     ) -> StreamAttempt {
+        let StreamAttemptContext {
+            routing_request,
+            decision,
+            attempt,
+            max_attempts,
+        } = context;
         match first {
             Some(Ok(first)) => {
                 self.record_routing_contribution(&decision, attempt, true);
@@ -806,12 +806,15 @@ impl SwitchyardRuntime {
 
     fn classify_stream_setup_error(
         &self,
-        routing_request: RoutingRequest,
-        decision: RoutingDecision,
+        context: StreamAttemptContext,
         error: FlowError,
-        attempt: u32,
-        max_attempts: u32,
     ) -> StreamAttempt {
+        let StreamAttemptContext {
+            routing_request,
+            decision,
+            attempt,
+            max_attempts,
+        } = context;
         let summary = provider_error_summary(&error);
         if error_is_retryable(&error) && attempt < max_attempts {
             return self.retry_stream_attempt(
