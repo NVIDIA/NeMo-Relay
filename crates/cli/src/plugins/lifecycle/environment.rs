@@ -429,58 +429,85 @@ fn digest_environment_directory(
     }
     children.sort_by_key(std::fs::DirEntry::file_name);
     for child in children {
-        let path = child.path();
-        let relative = relative_directory.join(child.file_name());
-        if relative == Path::new(ENVIRONMENT_ATTESTATION_FILE)
-            || path.file_name().and_then(|name| name.to_str()) == Some("__pycache__")
-            || path.extension().and_then(|extension| extension.to_str()) == Some("pyc")
-        {
-            continue;
-        }
-        let metadata = std::fs::symlink_metadata(&path)
-            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-        let source = if metadata.file_type().is_symlink() {
-            std::fs::canonicalize(&path)
-                .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?
-        } else {
-            path.clone()
-        };
-        let source_metadata = std::fs::metadata(&source)
-            .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
-        if source_metadata.is_dir() {
-            update_tree_digest(digest, b'd', &relative, &[]);
-            digest_environment_directory(
-                &source,
-                &relative,
-                ancestors,
-                digest,
-                total,
-                entries,
-                max_entries,
-            )?;
-            continue;
-        }
-        if !source_metadata.is_file() {
-            return Err(format!(
-                "managed Python environment entry {} must resolve to a regular file or directory",
-                path.display()
-            ));
-        }
-        let bytes = crate::filesystem::bounded::read_bounded_regular_file(
-            &source,
-            "managed Python environment file",
+        digest_environment_entry(
+            child,
+            relative_directory,
+            ancestors,
+            digest,
+            total,
+            entries,
+            max_entries,
         )?;
-        *total = total.saturating_add(bytes.len() as u64);
-        if *total > crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES {
-            return Err(format!(
-                "managed Python environment exceeds the {}-byte attestation budget",
-                crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES
-            ));
-        }
-        update_tree_digest(digest, b'f', &relative, &bytes);
     }
     ancestors.pop();
     Ok(())
+}
+
+fn digest_environment_entry(
+    child: std::fs::DirEntry,
+    relative_directory: &Path,
+    ancestors: &mut Vec<PathBuf>,
+    digest: &mut Sha256,
+    total: &mut u64,
+    entries: &mut usize,
+    max_entries: usize,
+) -> Result<(), String> {
+    let path = child.path();
+    let relative = relative_directory.join(child.file_name());
+    if environment_entry_is_ignored(&path, &relative) {
+        return Ok(());
+    }
+    let source = resolve_environment_entry(&path)?;
+    let metadata = std::fs::metadata(&source)
+        .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
+    if metadata.is_dir() {
+        update_tree_digest(digest, b'd', &relative, &[]);
+        return digest_environment_directory(
+            &source,
+            &relative,
+            ancestors,
+            digest,
+            total,
+            entries,
+            max_entries,
+        );
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "managed Python environment entry {} must resolve to a regular file or directory",
+            path.display()
+        ));
+    }
+    let bytes = crate::filesystem::bounded::read_bounded_regular_file(
+        &source,
+        "managed Python environment file",
+    )?;
+    *total = total.saturating_add(bytes.len() as u64);
+    if *total > crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES {
+        return Err(format!(
+            "managed Python environment exceeds the {}-byte attestation budget",
+            crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES
+        ));
+    }
+    update_tree_digest(digest, b'f', &relative, &bytes);
+    Ok(())
+}
+
+fn environment_entry_is_ignored(path: &Path, relative: &Path) -> bool {
+    relative == Path::new(ENVIRONMENT_ATTESTATION_FILE)
+        || path.file_name().and_then(|name| name.to_str()) == Some("__pycache__")
+        || path.extension().and_then(|extension| extension.to_str()) == Some("pyc")
+}
+
+fn resolve_environment_entry(path: &Path) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        std::fs::canonicalize(path)
+            .map_err(|error| format!("failed to resolve {}: {error}", path.display()))
+    } else {
+        Ok(path.to_path_buf())
+    }
 }
 
 fn update_tree_digest(digest: &mut Sha256, entry_type: u8, path: &Path, payload: &[u8]) {

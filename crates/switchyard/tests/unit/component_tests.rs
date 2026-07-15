@@ -6,7 +6,12 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use axum::{Json as AxumJson, Router, extract::State, routing::post};
+use axum::{
+    Json as AxumJson, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
@@ -210,8 +215,41 @@ fn wire_protocol_and_plugin_lifecycle_contracts_are_stable() {
 #[tokio::test]
 async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts() {
     let plugin = SwitchyardPlugin;
-    let component: PluginComponentSpec =
-        config("http://127.0.0.1:1/v1/routing/decision".into()).into();
+    let decision_api_url = health_server(StatusCode::OK, r#"{"status":"ok"}"#).await;
+    for (mode, profile_id) in [
+        (RoutingMode::Enforce, "random"),
+        (RoutingMode::Enforce, "llm"),
+        (RoutingMode::Enforce, "stage_router"),
+        (RoutingMode::ObserveOnly, "random"),
+        (RoutingMode::ObserveOnly, "llm"),
+        (RoutingMode::ObserveOnly, "stage_router"),
+    ] {
+        let mut candidate = config(decision_api_url.clone());
+        candidate.mode = mode;
+        candidate.decision_profile_id = profile_id.into();
+        let component: PluginComponentSpec = candidate.into();
+        let mut context = PluginRegistrationContext::with_namespace(format!(
+            "switchyard-test-{}-",
+            Uuid::now_v7()
+        ));
+
+        plugin
+            .register(&component.config, &mut context)
+            .await
+            .unwrap();
+
+        let mut registrations = context.into_registrations();
+        assert_eq!(registrations.len(), 2);
+        rollback_registrations(&mut registrations);
+        assert!(registrations.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn plugin_registration_retries_transient_sidecar_health_failures() {
+    let (decision_api_url, attempts) = recovering_health_server(2).await;
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec = config(decision_api_url).into();
     let mut context =
         PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
 
@@ -220,10 +258,86 @@ async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts()
         .await
         .unwrap();
 
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
     let mut registrations = context.into_registrations();
     assert_eq!(registrations.len(), 2);
     rollback_registrations(&mut registrations);
     assert!(registrations.is_empty());
+}
+
+#[tokio::test]
+async fn plugin_registration_returns_the_final_health_failure_after_retry_exhaustion() {
+    let (decision_api_url, attempts) = recovering_health_server(usize::MAX).await;
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec = config(decision_api_url).into();
+    let mut context =
+        PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
+
+    let error = plugin
+        .register(&component.config, &mut context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(
+        error
+            .to_string()
+            .contains("returned HTTP 503 Service Unavailable")
+    );
+    assert!(context.into_registrations().is_empty());
+}
+
+#[tokio::test]
+async fn plugin_registration_rejects_unhealthy_or_invalid_sidecars() {
+    for (status, body, expected) in [
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"status":"starting"}"#,
+            "returned HTTP 503 Service Unavailable",
+        ),
+        (StatusCode::OK, "not-json", "returned invalid JSON"),
+        (
+            StatusCode::OK,
+            r#"{"status":"starting"}"#,
+            "did not report status=ok",
+        ),
+    ] {
+        let plugin = SwitchyardPlugin;
+        let component: PluginComponentSpec = config(health_server(status, body).await).into();
+        let mut context = PluginRegistrationContext::with_namespace(format!(
+            "switchyard-test-{}-",
+            Uuid::now_v7()
+        ));
+        let error = plugin
+            .register(&component.config, &mut context)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "{error:?} did not contain {expected:?}"
+        );
+        assert!(context.into_registrations().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn plugin_registration_rejects_an_unreachable_sidecar() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec =
+        config(format!("http://{address}/v1/routing/decision")).into();
+    let mut context =
+        PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
+    let error = plugin
+        .register(&component.config, &mut context)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Switchyard service is required"));
+    assert!(error.to_string().contains("/health"));
+    assert!(context.into_registrations().is_empty());
 }
 
 #[test]
@@ -928,6 +1042,54 @@ async fn decision_server_for(
         .unwrap();
     });
     (format!("http://{address}/v1/routing/decision"), requests)
+}
+
+async fn health_server(status: StatusCode, body: &'static str) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/health",
+                get(move || async move { (status, [("content-type", "application/json")], body) }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    format!("http://{address}/nested/v1/routing/decision?source=test#ignored")
+}
+
+async fn recovering_health_server(failures_before_ready: usize) -> (String, Arc<AtomicUsize>) {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&attempts);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/health",
+                get(move || {
+                    let attempts = Arc::clone(&captured);
+                    async move {
+                        if attempts.fetch_add(1, Ordering::SeqCst) < failures_before_ready {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                AxumJson(json!({"status": "starting"})),
+                            )
+                        } else {
+                            (StatusCode::OK, AxumJson(json!({"status": "ok"})))
+                        }
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    (format!("http://{address}/v1/routing/decision"), attempts)
 }
 
 async fn managed_buffered_events(

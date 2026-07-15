@@ -35,6 +35,7 @@ cleanup() {
     else
         rm -rf "$work"
     fi
+    return 0
 }
 trap cleanup EXIT
 
@@ -143,6 +144,7 @@ while time.monotonic() < deadline:
     time.sleep(0.1)
 raise SystemExit("Relay port 47632 did not become free")
 PY
+    return 0
 }
 
 run_claude() {
@@ -176,6 +178,7 @@ assert log.count("SessionEnd:other") == 1, log
 assert log.count('MCP server "plugin:nemo-relay-plugin:nemo-relay": Successfully connected') == 1, log
 assert '"hasTools":false' in log, log
 PY
+    return 0
 }
 
 run_transparent_claude() {
@@ -211,6 +214,7 @@ assert 1 <= log.count('Hook Stop (Stop) success') <= 2, log
 assert 1 <= log.count("SessionEnd:other") <= 2, log
 assert log.count('MCP server "plugin:nemo-relay-plugin:nemo-relay": Successfully connected') == 1, log
 PY
+    return 0
 }
 
 # The transparent wrapper preserves the explicit Claude settings source. The installed Relay MCP

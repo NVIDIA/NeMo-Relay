@@ -78,6 +78,11 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
 	}
+	assertWrappedObservabilityConfig(t, wrapped)
+}
+
+func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec) {
+	t.Helper()
 	if _, ok := wrapped.Config["atof"].(map[string]any); !ok {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
 	}

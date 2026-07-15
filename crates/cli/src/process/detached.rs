@@ -14,6 +14,77 @@ use std::sync::Mutex;
 #[cfg(windows)]
 static SIDECAR_SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(windows)]
+fn wide_nul(value: &std::ffi::OsStr) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn append_quoted(command_line: &mut Vec<u16>, value: &std::ffi::OsStr) {
+    use std::os::windows::ffi::OsStrExt;
+
+    const BACKSLASH: u16 = b'\\' as u16;
+    const QUOTE: u16 = b'"' as u16;
+    command_line.push(QUOTE);
+    let mut slashes = 0;
+    for unit in value.encode_wide() {
+        if unit == BACKSLASH {
+            slashes += 1;
+            continue;
+        }
+        if unit == QUOTE {
+            command_line.extend(std::iter::repeat_n(BACKSLASH, slashes * 2 + 1));
+        } else {
+            command_line.extend(std::iter::repeat_n(BACKSLASH, slashes));
+        }
+        slashes = 0;
+        command_line.push(unit);
+    }
+    command_line.extend(std::iter::repeat_n(BACKSLASH, slashes * 2));
+    command_line.push(QUOTE);
+}
+
+#[cfg(windows)]
+fn environment_block(command: &Command) -> Vec<u16> {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut environment = BTreeMap::<String, (OsString, OsString)>::new();
+    for (name, value) in std::env::vars_os() {
+        environment.insert(name.to_string_lossy().to_uppercase(), (name, value));
+    }
+    for (name, value) in command.get_envs() {
+        let key = name.to_string_lossy().to_uppercase();
+        if let Some(value) = value {
+            environment.insert(key, (name.to_owned(), value.to_owned()));
+        } else {
+            environment.remove(&key);
+        }
+    }
+    let mut block = Vec::new();
+    for (_, (name, value)) in environment {
+        block.extend(name.encode_wide());
+        block.push(b'=' as u16);
+        block.extend(value.encode_wide());
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+#[cfg(windows)]
+struct AttributeList(*mut std::ffi::c_void);
+
+#[cfg(windows)]
+impl Drop for AttributeList {
+    fn drop(&mut self) {
+        // SAFETY: The list was initialized successfully and is still live.
+        unsafe { windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList(self.0) };
+    }
+}
+
 #[cfg(not(windows))]
 pub(crate) type DetachedChild = Child;
 
@@ -83,76 +154,15 @@ impl Drop for DetachedChild {
 
 #[cfg(windows)]
 fn spawn_detached_with_handle_list(command: &Command) -> std::io::Result<DetachedChild> {
-    use std::collections::BTreeMap;
-    use std::ffi::{OsStr, OsString, c_void};
+    use std::ffi::c_void;
     use std::fs::OpenOptions;
-    use std::os::windows::ffi::OsStrExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
     use windows_sys::Win32::System::Threading::{
-        CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
-        EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-        STARTUPINFOEXW, UpdateProcThreadAttribute,
+        CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT,
+        InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
+        STARTF_USESTDHANDLES, STARTUPINFOEXW, UpdateProcThreadAttribute,
     };
-
-    fn wide_nul(value: &OsStr) -> Vec<u16> {
-        value.encode_wide().chain(std::iter::once(0)).collect()
-    }
-
-    fn append_quoted(command_line: &mut Vec<u16>, value: &OsStr) {
-        const BACKSLASH: u16 = b'\\' as u16;
-        const QUOTE: u16 = b'"' as u16;
-        command_line.push(QUOTE);
-        let mut slashes = 0;
-        for unit in value.encode_wide() {
-            if unit == BACKSLASH {
-                slashes += 1;
-                continue;
-            }
-            if unit == QUOTE {
-                command_line.extend(std::iter::repeat_n(BACKSLASH, slashes * 2 + 1));
-            } else {
-                command_line.extend(std::iter::repeat_n(BACKSLASH, slashes));
-            }
-            slashes = 0;
-            command_line.push(unit);
-        }
-        command_line.extend(std::iter::repeat_n(BACKSLASH, slashes * 2));
-        command_line.push(QUOTE);
-    }
-
-    fn environment_block(command: &Command) -> Vec<u16> {
-        let mut environment = BTreeMap::<String, (OsString, OsString)>::new();
-        for (name, value) in std::env::vars_os() {
-            environment.insert(name.to_string_lossy().to_uppercase(), (name, value));
-        }
-        for (name, value) in command.get_envs() {
-            let key = name.to_string_lossy().to_uppercase();
-            if let Some(value) = value {
-                environment.insert(key, (name.to_owned(), value.to_owned()));
-            } else {
-                environment.remove(&key);
-            }
-        }
-        let mut block = Vec::new();
-        for (_, (name, value)) in environment {
-            block.extend(name.encode_wide());
-            block.push(b'=' as u16);
-            block.extend(value.encode_wide());
-            block.push(0);
-        }
-        block.push(0);
-        block
-    }
-
-    struct AttributeList(*mut c_void);
-    impl Drop for AttributeList {
-        fn drop(&mut self) {
-            // SAFETY: The list was initialized successfully and is still live.
-            unsafe { DeleteProcThreadAttributeList(self.0) };
-        }
-    }
 
     let stdin = OpenOptions::new().read(true).open(r"\\.\NUL")?;
     let stdout = OpenOptions::new().write(true).open(r"\\.\NUL")?;

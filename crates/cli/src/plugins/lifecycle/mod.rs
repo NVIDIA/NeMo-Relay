@@ -670,41 +670,14 @@ impl DynamicPluginActivationSnapshot {
             integrity.signature = Some(copied.to_string_lossy().into_owned());
         }
 
-        let activation_environment_ref = if matches!(
-            &manifest.load,
-            DynamicPluginManifestLoad::Worker(load)
-                if load.runtime == Some(WorkerRuntime::Python)
-        ) {
-            let environment = environment_ref.ok_or_else(|| {
-                CliError::Config(format!(
-                    "Python worker dynamic plugin '{expected_plugin_id}' has no managed environment"
-                ))
-            })?;
-            let source_artifact_sha256 = trusted_source_artifact_sha256(&manifest)?;
-            let environment = PathBuf::from(environment);
-            verify_environment_attestation(&environment, source_artifact_sha256)
-                .map_err(CliError::Config)?;
-            let environment_name = environment.file_name().ok_or_else(|| {
-                CliError::Config(format!(
-                    "managed Python environment {} has no lifecycle environment name",
-                    environment.display()
-                ))
-            })?;
-            let copied_environment = root.join(MANAGED_ENVIRONMENTS_DIR).join(environment_name);
-            copy_snapshot_directory(
-                &environment,
-                &copied_environment,
-                &mut copied_files,
-                &mut budget,
-                true,
-                &mut Vec::new(),
-            )?;
-            verify_environment_attestation(&copied_environment, source_artifact_sha256)
-                .map_err(CliError::Config)?;
-            Some(copied_environment.to_string_lossy().into_owned())
-        } else {
-            None
-        };
+        let activation_environment_ref = snapshot_python_environment(
+            &manifest,
+            environment_ref,
+            expected_plugin_id,
+            &root,
+            &mut copied_files,
+            &mut budget,
+        )?;
 
         let activation_manifest = runtime_root.join("relay-plugin.toml");
         let rendered = toml::to_string(&manifest).map_err(|error| {
@@ -794,6 +767,49 @@ impl DynamicPluginActivationSnapshot {
     pub(crate) fn identity_file(&self, logical_path: &Path) -> Option<&Path> {
         self.identity_files.get(logical_path).map(PathBuf::as_path)
     }
+}
+
+fn snapshot_python_environment(
+    manifest: &DynamicPluginManifest,
+    environment_ref: Option<&str>,
+    expected_plugin_id: &str,
+    root: &Path,
+    copied_files: &mut HashMap<PathBuf, PathBuf>,
+    budget: &mut SnapshotBudget,
+) -> Result<Option<String>, CliError> {
+    if !matches!(
+        &manifest.load,
+        DynamicPluginManifestLoad::Worker(load) if load.runtime == Some(WorkerRuntime::Python)
+    ) {
+        return Ok(None);
+    }
+    let environment = environment_ref.ok_or_else(|| {
+        CliError::Config(format!(
+            "Python worker dynamic plugin '{expected_plugin_id}' has no managed environment"
+        ))
+    })?;
+    let source_artifact_sha256 = trusted_source_artifact_sha256(manifest)?;
+    let environment = PathBuf::from(environment);
+    verify_environment_attestation(&environment, source_artifact_sha256)
+        .map_err(CliError::Config)?;
+    let environment_name = environment.file_name().ok_or_else(|| {
+        CliError::Config(format!(
+            "managed Python environment {} has no lifecycle environment name",
+            environment.display()
+        ))
+    })?;
+    let copied_environment = root.join(MANAGED_ENVIRONMENTS_DIR).join(environment_name);
+    copy_snapshot_directory(
+        &environment,
+        &copied_environment,
+        copied_files,
+        budget,
+        true,
+        &mut Vec::new(),
+    )?;
+    verify_environment_attestation(&copied_environment, source_artifact_sha256)
+        .map_err(CliError::Config)?;
+    Ok(Some(copied_environment.to_string_lossy().into_owned()))
 }
 
 struct SnapshotRootGuard(Option<PathBuf>);
@@ -979,81 +995,126 @@ fn copy_snapshot_directory_contents(
     budget.record_entries(source, entries.len())?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for entry in entries {
-        let source_path = entry.path();
-        if skip_python_cache
-            && (entry.file_name() == "__pycache__"
-                || source_path.extension().and_then(|value| value.to_str()) == Some("pyc"))
-        {
-            continue;
-        }
-        let destination_path = destination.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path)
-            .map_err(|error| CliError::Config(error.to_string()))?;
-        let resolved = if metadata.file_type().is_symlink() {
-            fs::canonicalize(&source_path).map_err(|error| {
-                CliError::Config(format!(
-                    "failed to resolve dynamic plugin runtime symlink {}: {error}",
-                    source_path.display()
-                ))
-            })?
-        } else {
-            source_path.clone()
-        };
-        let resolved_metadata =
-            fs::metadata(&resolved).map_err(|error| CliError::Config(error.to_string()))?;
-        if resolved_metadata.is_dir() {
-            copy_snapshot_directory_contents(
-                &resolved,
-                &destination_path,
-                copied_files,
-                budget,
-                skip_python_cache,
-                ancestors,
-            )?;
-        } else if resolved_metadata.is_file() {
-            // A macOS venv's `bin/python` is normally an absolute symlink to the managed
-            // interpreter.  Dereferencing that link while snapshotting turns the interpreter
-            // into a standalone file whose @rpath no longer points at libpython, so the worker
-            // exits before it can create its socket. Preserve only these launcher links; all
-            // other runtime symlinks remain dereferenced to keep the activation snapshot
-            // self-contained and deterministic.
-            #[cfg(unix)]
-            if metadata.file_type().is_symlink() && is_python_venv_launcher(&source_path) {
-                let target = fs::read_link(&source_path).map_err(|error| {
-                    CliError::Config(format!(
-                        "failed to read Python venv launcher symlink {}: {error}",
-                        source_path.display()
-                    ))
-                })?;
-                if let Some(parent) = destination_path.parent() {
-                    fs::create_dir_all(parent)
-                        .map_err(|error| CliError::Config(error.to_string()))?;
-                }
-                std::os::unix::fs::symlink(&target, &destination_path).map_err(|error| {
-                    CliError::Config(format!(
-                        "failed to preserve Python venv launcher symlink {}: {error}",
-                        destination_path.display()
-                    ))
-                })?;
-                copied_files.insert(resolved, destination_path);
-                continue;
-            }
-            copy_snapshot_regular_file(
-                &resolved,
-                &destination_path,
-                copied_files,
-                budget,
-                "runtime file",
-            )?;
-        } else {
-            return Err(CliError::Config(format!(
-                "dynamic plugin runtime entry {} must resolve to a regular file or directory",
-                source_path.display()
-            )));
-        }
+        copy_snapshot_entry(
+            entry,
+            destination,
+            copied_files,
+            budget,
+            skip_python_cache,
+            ancestors,
+        )?;
     }
     ancestors.pop();
     Ok(())
+}
+
+fn copy_snapshot_entry(
+    entry: fs::DirEntry,
+    destination: &Path,
+    copied_files: &mut HashMap<PathBuf, PathBuf>,
+    budget: &mut SnapshotBudget,
+    skip_python_cache: bool,
+    ancestors: &mut Vec<PathBuf>,
+) -> Result<(), CliError> {
+    let source_path = entry.path();
+    if skip_python_cache
+        && (entry.file_name() == "__pycache__"
+            || source_path.extension().and_then(|value| value.to_str()) == Some("pyc"))
+    {
+        return Ok(());
+    }
+    let destination_path = destination.join(entry.file_name());
+    let metadata =
+        fs::symlink_metadata(&source_path).map_err(|error| CliError::Config(error.to_string()))?;
+    let resolved = resolve_snapshot_entry(&source_path, &metadata)?;
+    let resolved_metadata =
+        fs::metadata(&resolved).map_err(|error| CliError::Config(error.to_string()))?;
+    if resolved_metadata.is_dir() {
+        return copy_snapshot_directory_contents(
+            &resolved,
+            &destination_path,
+            copied_files,
+            budget,
+            skip_python_cache,
+            ancestors,
+        );
+    }
+    if !resolved_metadata.is_file() {
+        return Err(CliError::Config(format!(
+            "dynamic plugin runtime entry {} must resolve to a regular file or directory",
+            source_path.display()
+        )));
+    }
+    if preserve_python_launcher(
+        &source_path,
+        &destination_path,
+        &resolved,
+        &metadata,
+        copied_files,
+    )? {
+        return Ok(());
+    }
+    copy_snapshot_regular_file(
+        &resolved,
+        &destination_path,
+        copied_files,
+        budget,
+        "runtime file",
+    )
+}
+
+fn resolve_snapshot_entry(path: &Path, metadata: &fs::Metadata) -> Result<PathBuf, CliError> {
+    if metadata.file_type().is_symlink() {
+        fs::canonicalize(path).map_err(|error| {
+            CliError::Config(format!(
+                "failed to resolve dynamic plugin runtime symlink {}: {error}",
+                path.display()
+            ))
+        })
+    } else {
+        Ok(path.to_path_buf())
+    }
+}
+
+#[cfg(unix)]
+fn preserve_python_launcher(
+    source: &Path,
+    destination: &Path,
+    resolved: &Path,
+    metadata: &fs::Metadata,
+    copied_files: &mut HashMap<PathBuf, PathBuf>,
+) -> Result<bool, CliError> {
+    if !metadata.file_type().is_symlink() || !is_python_venv_launcher(source) {
+        return Ok(false);
+    }
+    let target = fs::read_link(source).map_err(|error| {
+        CliError::Config(format!(
+            "failed to read Python venv launcher symlink {}: {error}",
+            source.display()
+        ))
+    })?;
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| CliError::Config(error.to_string()))?;
+    }
+    std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+        CliError::Config(format!(
+            "failed to preserve Python venv launcher symlink {}: {error}",
+            destination.display()
+        ))
+    })?;
+    copied_files.insert(resolved.to_path_buf(), destination.to_path_buf());
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+fn preserve_python_launcher(
+    _source: &Path,
+    _destination: &Path,
+    _resolved: &Path,
+    _metadata: &fs::Metadata,
+    _copied_files: &mut HashMap<PathBuf, PathBuf>,
+) -> Result<bool, CliError> {
+    Ok(false)
 }
 
 #[cfg(unix)]
