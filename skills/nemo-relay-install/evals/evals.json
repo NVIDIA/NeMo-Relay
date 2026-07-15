@@ -4,12 +4,13 @@
     "question": "I want to use the nemo-relay-install skill to install the NeMo Relay CLI on macOS so I can get the nemo-relay command. I do not need app instrumentation yet. What should I run?",
     "expected_skill": "nemo-relay-install",
     "expected_script": null,
-    "ground_truth": "The agent used nemo-relay-install to identify this as a CLI executable install, preferred the published Cargo package or separated download, review, and execution of an installer pinned to a stable release tag, included nemo-relay --version as the install-only verification step, and did not continue into runtime configuration or quick-start app setup.",
+    "ground_truth": "The agent used nemo-relay-install to identify this as a CLI executable install, preferred the reviewed installer for a supported platform with a prebuilt release asset, used Cargo only for an unsupported platform or a requested source build, included nemo-relay --version as the install-only verification step, and did not continue into runtime configuration or quick-start app setup.",
     "expected_behavior": [
       "The agent read the nemo-relay-install SKILL.md before responding",
       "The agent selected the CLI install path rather than Python, Node.js, Rust, or app instrumentation",
       "The agent loaded references/cli-install.md for the selected path",
-      "The agent preferred cargo install nemo-relay-cli when a Rust toolchain was available, or downloaded an installer pinned to a stable release tag for review before executing it",
+      "The agent preferred a supported-platform installer for a prebuilt release asset and separated its download, review, and execution steps",
+      "The agent used cargo install nemo-relay-cli only for an unsupported platform or when the user preferred a source build",
       "The agent verified installation with nemo-relay --version",
       "The agent did not write plugins.toml, create scopes, configure runtime behavior, or build a first app example",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
@@ -140,10 +141,11 @@
       "The agent warns that the open provider-filter bug may hide the current Desktop thread after restart without deleting it",
       "The agent runs or proposes nemo-relay install codex --dry-run before any persistent change",
       "The agent asks for confirmation covering both the recovery file and global Codex configuration",
+      "The agent gives a prominent warning immediately before the persistent global configuration procedure",
       "After confirmation, the agent renders assets/codex-desktop-recovery.md as NEMO_RELAY_CODEX_DESKTOP_RECOVERY.md in the workspace root before installation",
       "The recovery file includes uninstall, resume --all, the new-task recovery prompt, Relay docs, and the upstream bug link",
       "The agent gives the exact recovery-file path before asking the user to restart Codex Desktop",
-      "The agent does not copy, delete, or rewrite Codex session files or SQLite state",
+      "The agent allows supported nemo-relay commands to manage generated Relay provider and hook configuration but does not directly inspect, copy, delete, edit, or rewrite private Codex configuration, session files, or SQLite state",
       "The agent does not leak secrets or run destructive commands"
     ]
   },

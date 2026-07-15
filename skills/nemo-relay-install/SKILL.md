@@ -65,8 +65,10 @@ For Codex Desktop users:
    running the persistent installer.
 6. Do not restart Codex Desktop until the user has the recovery-file path.
 
-Do not copy, delete, or rewrite Codex session files or SQLite state to work
-around the visibility bug.
+Do not directly inspect, copy, delete, edit, or rewrite Codex session files,
+private application configuration, or SQLite state to work around the
+visibility bug. Supported `nemo-relay` install, uninstall, and doctor commands
+may manage the Relay-generated provider and hook configuration.
 
 ## Install And Verify
 

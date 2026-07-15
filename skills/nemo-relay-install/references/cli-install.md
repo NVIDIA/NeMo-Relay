@@ -27,16 +27,10 @@ Confirm these prerequisites before selecting an installation command:
 
 ## Install
 
-Prefer the published Cargo package when a Rust toolchain is available. This
-keeps package acquisition and execution separate:
-
-```bash
-cargo install nemo-relay-cli
-```
-
-For a prebuilt binary, resolve a specific stable tag from the NeMo Relay GitHub
-Releases page. Download the installer from that immutable tag, review it, and
-run it as a separate step. Do not execute a response directly from a mutable
+Use the installer on a supported platform when a prebuilt release asset is
+available. Resolve a specific stable version from the NeMo Relay GitHub
+Releases page. Download that version's installer, review it, and run it as a
+separate step. Do not execute a response directly from the repository's `main`
 branch.
 
 For a supported Unix-like shell:
@@ -67,6 +61,13 @@ The reviewed installer downloads the selected release binary and its published
 SHA-256 checksum, verifies them before replacing an existing binary, and does
 not invoke `sudo`. Remove the downloaded installer only after verification if
 the user does not want to retain it for audit.
+
+Use Cargo on an unsupported platform or when the user prefers to build from
+source:
+
+```bash
+cargo install nemo-relay-cli
+```
 
 ## Verify
 
@@ -104,6 +105,11 @@ appear missing after restart. This is a visibility bug, not session deletion.
 
 Before changing persistent configuration:
 
+> **WARNING:** Persistent Codex installation changes global application
+> configuration and can make existing Desktop threads appear missing after
+> restart. Complete the recovery-file steps and obtain explicit confirmation
+> before making this change.
+
 1. Explain the difference between temporary `nemo-relay codex` and persistent
    `nemo-relay install codex`. Recommend temporary mode for evaluation.
 2. Preview the persistent change without writing it:
@@ -131,8 +137,11 @@ The recovery file must include both supported exits:
   quitting Desktop and running `nemo-relay codex -- resume --all` or
   `nemo-relay codex -- resume <thread-id>`.
 
-Avoid `resume --last` when crossing providers. Never inspect, copy, or rewrite
-Codex session storage or SQLite state as a migration workaround.
+Avoid `resume --last` when crossing providers. Never directly inspect, copy,
+delete, edit, or rewrite Codex session storage, private application
+configuration, or SQLite state as a migration workaround. Supported
+`nemo-relay` commands may manage Relay-generated provider and hook
+configuration.
 
 Use these references for the supported installation and host-integration paths:
 

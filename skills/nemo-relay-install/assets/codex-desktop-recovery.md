@@ -73,10 +73,12 @@ Paste this into a new Codex task if you want an agent to perform the recovery:
 
 > I enabled persistent NeMo Relay integration for Codex and need to restore
 > normal Codex Desktop history visibility. Run `nemo-relay uninstall codex`,
-> verify that generated Relay provider and hook configuration was removed or
-> restored without inspecting or modifying Codex session storage, private
-> application configuration, or SQLite state, then tell me when to restart
-> Codex Desktop. If uninstall fails, run
+> then verify from the supported command output that the generated Relay
+> provider and hook configuration was removed or restored. These supported
+> Relay commands may update generated provider and hook configuration, but do
+> not directly inspect, copy, delete, edit, or rewrite Codex session storage,
+> private application configuration, or SQLite state. Then tell me when to
+> restart Codex Desktop. If uninstall fails, run
 > `nemo-relay doctor --plugin codex --json`, redact secrets from its diagnostics,
 > and stop for review rather than opening Codex configuration files directly.
 
