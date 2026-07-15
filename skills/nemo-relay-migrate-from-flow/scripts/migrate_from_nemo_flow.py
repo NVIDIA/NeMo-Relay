@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import secrets
 import stat
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -26,6 +28,10 @@ REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("nemo-flow", "nemo-relay"),
     ("nemo_flow", "nemo_relay"),
 )
+
+LINUX_RENAME_NOREPLACE = 1
+DARWIN_RENAME_EXCL = 0x00000004
+DARWIN_RENAME_NOFOLLOW_ANY = 0x00000010
 
 SKIP_DIRS = {
     ".git",
@@ -117,6 +123,10 @@ class PathChange:
     new: Path
 
 
+class MutationError(RuntimeError):
+    """Raised when a requested write or rename cannot be completed safely."""
+
+
 def apply_replacements(text: str) -> tuple[str, int]:
     count = 0
     updated = text
@@ -163,6 +173,43 @@ def supports_secure_mutation() -> bool:
     )
 
 
+def supports_atomic_no_replace_rename() -> bool:
+    libc = ctypes.CDLL(None)
+    return (sys.platform.startswith("linux") and hasattr(libc, "renameat2")) or (
+        sys.platform == "darwin" and hasattr(libc, "renameatx_np")
+    )
+
+
+def rename_no_replace_at(parent_fd: int, old_name: str, new_name: str) -> None:
+    """Rename one directory entry without replacing an existing destination."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    old_bytes = os.fsencode(old_name)
+    new_bytes = os.fsencode(new_name)
+
+    if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        result = rename(parent_fd, old_bytes, parent_fd, new_bytes, LINUX_RENAME_NOREPLACE)
+    elif sys.platform == "darwin" and hasattr(libc, "renameatx_np"):
+        rename = libc.renameatx_np
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        result = rename(
+            parent_fd,
+            old_bytes,
+            parent_fd,
+            new_bytes,
+            DARWIN_RENAME_EXCL | DARWIN_RENAME_NOFOLLOW_ANY,
+        )
+    else:
+        raise MutationError("atomic no-replace rename is unavailable on this platform")
+
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), new_name)
+
+
 def directory_open_flags() -> int:
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
@@ -200,15 +247,21 @@ def open_relative_directory(root_fd: int, relative_path: Path) -> Iterator[int]:
         os.close(directory_fd)
 
 
-def same_file(left: os.stat_result, right: os.stat_result) -> bool:
-    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+def same_file_version(left: os.stat_result, right: os.stat_result) -> bool:
+    return (
+        left.st_dev == right.st_dev
+        and left.st_ino == right.st_ino
+        and left.st_size == right.st_size
+        and left.st_mtime_ns == right.st_mtime_ns
+        and left.st_ctime_ns == right.st_ctime_ns
+    )
 
 
 def replace_file_at(parent_fd: int, name: str, data: bytes, source_stat: os.stat_result) -> None:
     """Atomically replace name inside parent_fd if the scanned file is unchanged."""
     current_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    if not stat.S_ISREG(current_stat.st_mode) or not same_file(source_stat, current_stat):
-        raise RuntimeError("path changed during scan")
+    if not stat.S_ISREG(current_stat.st_mode) or not same_file_version(source_stat, current_stat):
+        raise MutationError("path changed during scan")
 
     temp_name = f".{name}.nemo-relay-{secrets.token_hex(8)}.tmp"
     temp_fd: int | None = None
@@ -228,8 +281,8 @@ def replace_file_at(parent_fd: int, name: str, data: bytes, source_stat: os.stat
         temp_fd = None
 
         current_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat.S_ISREG(current_stat.st_mode) or not same_file(source_stat, current_stat):
-            raise RuntimeError("path changed during scan")
+        if not stat.S_ISREG(current_stat.st_mode) or not same_file_version(source_stat, current_stat):
+            raise MutationError("path changed during scan")
         os.rename(temp_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
     finally:
         if temp_fd is not None:
@@ -260,29 +313,30 @@ def rewrite_file_secure(path: Path, root: Path, root_fd: int) -> FileChange | No
         with open_relative_directory(root_fd, relative_path.parent) as parent_fd:
             file_fd = os.open(relative_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
             try:
-                source_stat = os.fstat(file_fd)
-                if not stat.S_ISREG(source_stat.st_mode):
-                    print(f"skip unsafe path: {path}")
-                    return None
+                source_stat_before = os.fstat(file_fd)
+                if not stat.S_ISREG(source_stat_before.st_mode):
+                    raise MutationError("path is not a regular file")
                 with os.fdopen(file_fd, "rb", closefd=False) as source_file:
                     raw = source_file.read()
+                source_stat = os.fstat(file_fd)
+                if not same_file_version(source_stat_before, source_stat):
+                    raise MutationError("file changed while it was being read")
+
+                if b"\0" in raw:
+                    return None
+                try:
+                    text = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    return None
+
+                updated, count = apply_replacements(text)
+                if count == 0:
+                    return None
+                replace_file_at(parent_fd, relative_path.name, updated.encode("utf-8"), source_stat)
             finally:
                 os.close(file_fd)
-
-            if b"\0" in raw:
-                return None
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                return None
-
-            updated, count = apply_replacements(text)
-            if count == 0:
-                return None
-            replace_file_at(parent_fd, relative_path.name, updated.encode("utf-8"), source_stat)
     except (OSError, RuntimeError, ValueError) as error:
-        print(f"skip path changed during scan: {path}: {error}")
-        return None
+        raise MutationError(f"path changed during scan: {path}: {error}") from error
 
     return FileChange(path=path, count=count)
 
@@ -290,7 +344,7 @@ def rewrite_file_secure(path: Path, root: Path, root_fd: int) -> FileChange | No
 def rewrite_file(path: Path, root: Path, write: bool, root_fd: int | None = None) -> FileChange | None:
     if write:
         if root_fd is None:
-            raise RuntimeError("write mode requires a confirmed root directory handle")
+            raise MutationError("write mode requires a confirmed root directory handle")
         return rewrite_file_secure(path, root, root_fd)
 
     if not is_safe_entry(path, root) or not path.is_file():
@@ -358,7 +412,7 @@ def apply_path_changes(
     for change in changes:
         if write:
             if root_fd is None:
-                raise RuntimeError("write mode requires a confirmed root directory handle")
+                raise MutationError("write mode requires a confirmed root directory handle")
             try:
                 old_relative = change.old.relative_to(root)
                 new_relative = change.new.relative_to(root)
@@ -368,21 +422,9 @@ def apply_path_changes(
                     source_stat = os.stat(old_relative.name, dir_fd=parent_fd, follow_symlinks=False)
                     if not (stat.S_ISREG(source_stat.st_mode) or stat.S_ISDIR(source_stat.st_mode)):
                         raise ValueError("rename source is not a regular file or directory")
-                    try:
-                        os.stat(new_relative.name, dir_fd=parent_fd, follow_symlinks=False)
-                    except FileNotFoundError:
-                        pass
-                    else:
-                        raise FileExistsError("rename destination already exists")
-                    os.rename(
-                        old_relative.name,
-                        new_relative.name,
-                        src_dir_fd=parent_fd,
-                        dst_dir_fd=parent_fd,
-                    )
+                    rename_no_replace_at(parent_fd, old_relative.name, new_relative.name)
             except (OSError, RuntimeError, ValueError) as error:
-                print(f"skip unsafe rename: {change.old} -> {change.new}: {error}")
-                continue
+                raise MutationError(f"unsafe rename: {change.old} -> {change.new}: {error}") from error
             applied.append(change)
             continue
 
@@ -487,6 +529,8 @@ def main() -> int:
             parser.error("refusing write mode for a filesystem root or home directory")
         if not supports_secure_mutation():
             parser.error("--write requires directory-fd and no-follow support on this platform")
+        if args.rename_paths and not supports_atomic_no_replace_rename():
+            parser.error("--write --rename-paths requires atomic no-replace rename support on this platform")
 
     root_fd: int | None = None
     try:
@@ -510,6 +554,9 @@ def main() -> int:
                 args.write,
                 root_fd,
             )
+    except MutationError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
     finally:
         if root_fd is not None:
             os.close(root_fd)

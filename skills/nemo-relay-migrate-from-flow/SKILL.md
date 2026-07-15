@@ -84,13 +84,17 @@ helper:
 - anchors writes and renames to verified directory handles without following
   symbolic links, and refuses write mode on platforms that cannot provide those
   guarantees
+- uses atomic no-replace path renames and exits nonzero when any requested
+  mutation fails
 - can report or perform path renames with `--rename-paths`
 - rewrites only explicit NeMo Flow identifiers, package names, repository names,
   config paths, headers, environment variables, and FFI type prefixes
 
-The helper updates environment variable names only where they appear in source,
-documentation, or non-secret configuration. Review deployment secret stores
-manually without reading or displaying their values.
+The helper does not classify arbitrary JSON, YAML, TOML, or INI files as secret.
+Review every configuration file in the dry-run report. If any reported file is
+unreviewed or credential-bearing, do not use `--write` on that root. Apply the
+reviewed changes manually and leave secret-bearing files untouched without
+reading or displaying their values.
 
 Set shell-safe absolute paths before invoking the helper. Replace the example
 values with the resolved skill directory and either the source repository or the

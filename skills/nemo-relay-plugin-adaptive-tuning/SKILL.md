@@ -51,6 +51,8 @@ Do not use this skill when the application is not instrumented yet. Start with
 
 ## Default Path
 
+Use this rollout sequence:
+
 1. Confirm the app emits scope events and the managed tool or LLM events needed
    for the behavior being evaluated. Do not require both call types when the
    workflow uses only one.
@@ -77,9 +79,9 @@ Do not use this skill when the application is not instrumented yet. Start with
   path explicitly defines that contract.
 - Do not use environment variables as the primary adaptive configuration model.
 - Do not tune from a single run or unrepresentative traffic.
-- Preserve original tool and model errors. Do not add retries unless the call
-  owner defines their safety; revert adaptive behavior when it increases the
-  failure rate.
+- Do not suppress or replace original tool and model errors.
+- Do not add retries until the call owner defines their safety.
+- Revert adaptive behavior when it increases the failure rate.
 
 ## Load A Reference When
 
