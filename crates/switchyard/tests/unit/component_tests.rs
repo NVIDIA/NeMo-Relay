@@ -262,6 +262,7 @@ async fn plugin_registration_retries_transient_sidecar_health_failures() {
     let mut registrations = context.into_registrations();
     assert_eq!(registrations.len(), 2);
     rollback_registrations(&mut registrations);
+    assert!(registrations.is_empty());
 }
 
 #[tokio::test]
