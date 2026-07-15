@@ -34,8 +34,8 @@ live OTLP spans.
   promoted from the preceding LLM end response.
 - Tool end events become `system` observations. Observations are correlated to
   promoted tool calls by function name and source call ID when available.
-- Mark events with data become `system` steps. Scope start/end events are
-  structural and are not emitted as trajectory steps.
+- Point-in-time mark events and scope start/end events are structural and are
+  not emitted as trajectory steps.
 - Scope nesting becomes ancestry metadata on exported steps.
 - Nested agent scopes become embedded `subagent_trajectories` with
   `subagent_trajectory_ref` observations in the parent trajectory.
