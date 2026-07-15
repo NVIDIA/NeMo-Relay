@@ -775,6 +775,65 @@ fn atof_endpoint_validation_rejects_bad_values() {
 }
 
 #[test]
+fn atof_stream_sink_name_validation_reports_each_invalid_name() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "sinks": [
+                {"type": "stream", "url": "http://localhost/missing"},
+                {"type": "stream", "name": "", "url": "http://localhost/empty"},
+                {"type": "stream", "name": " leading", "url": "http://localhost/leading"},
+                {"type": "stream", "name": "trailing ", "url": "http://localhost/trailing"},
+                {"type": "stream", "name": "duplicate", "url": "http://localhost/first"},
+                {"type": "stream", "name": "duplicate", "url": "http://localhost/second"},
+                {"type": "stream", "name": "valid", "url": "http://localhost/valid"}
+            ]
+        }
+    })));
+
+    let name_diagnostics = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .field
+                .as_deref()
+                .is_some_and(|field| field.ends_with(".name"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(name_diagnostics.len(), 4);
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[1].name")
+            && diagnostic.message.contains("must be non-empty")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[2].name")
+            && diagnostic
+                .message
+                .contains("leading or trailing whitespace")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[3].name")
+            && diagnostic
+                .message
+                .contains("leading or trailing whitespace")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[5].name")
+            && diagnostic.message.contains("must be unique")
+    }));
+    assert!(!name_diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.field.as_deref(),
+            Some("sinks[0].name" | "sinks[4].name" | "sinks[6].name")
+        )
+    }));
+}
+
+#[test]
 fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("authorization".to_string(), "token".to_string());
