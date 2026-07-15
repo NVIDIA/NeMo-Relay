@@ -20,6 +20,7 @@ variables:
   NEMO_RELAY_CI_JUST_VERSION: "1.40.0"
   NEMO_RELAY_CI_NODE_VERSION: "24"
   NEMO_RELAY_CI_PYTHON_VERSION: "3.11"
+  NEMO_RELAY_CI_RUST_IMAGE_DIGEST: "bbde3ca426faeebab3eb58b8005d3d6da70607817a14bb92a55c94611d4d905f"
   NEMO_RELAY_CI_RUST_VERSION: "1.93.0"
   NEMO_RELAY_CI_UV_VERSION: "0.9.28"
   NEMO_RELAY_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Relay"
@@ -30,7 +31,7 @@ variables:
 analyze:rust-clippy:
   stage: analyze
   image:
-    name: rust:${NEMO_RELAY_CI_RUST_VERSION}-${NEMO_RELAY_CI_DEBIAN_VERSION}
+    name: "rust:${NEMO_RELAY_CI_RUST_VERSION}-${NEMO_RELAY_CI_DEBIAN_VERSION}@sha256:${NEMO_RELAY_CI_RUST_IMAGE_DIGEST}"
     pull_policy: if-not-present
   variables:
     CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
@@ -39,7 +40,7 @@ analyze:rust-clippy:
     key:
       files:
         - Cargo.lock
-      prefix: "rust-${NEMO_RELAY_CI_RUST_VERSION}-clippy"
+      prefix: "rust-${NEMO_RELAY_CI_RUST_VERSION}-${NEMO_RELAY_CI_RUST_IMAGE_DIGEST}-clippy"
     paths:
       - .cargo/git
       - .cargo/registry
@@ -52,7 +53,7 @@ analyze:rust-clippy:
     - rustc --version
     - cargo clippy --version
   script:
-    - cargo clippy --workspace --all-targets --message-format=json > clippy-report.json
+    - cargo clippy --locked --workspace --all-targets --message-format=json > clippy-report.json
     - test -s clippy-report.json
   artifacts:
     expire_in: 7 days
