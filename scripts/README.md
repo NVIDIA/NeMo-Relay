@@ -18,6 +18,14 @@ Keep `scripts/` focused on helpers that are still script-native:
 - `test-install.ps1`: Run live GitHub release and local interface checks for the PowerShell CLI installer
 - `test-install-mocks.sh`: Run installer scenarios that require simulated platforms or failures
 
+## Opt-In Coding-Agent E2E Tests
+
+These checks exercise installed coding-agent clients and are intentionally outside the default Rust and CI test suites. Run the recipe that matches an available local client:
+
+- `just test-codex-plugin-e2e`
+- `just test-claude-plugin-e2e`
+- `just test-hermes-mcp-e2e`
+
 ## Internal Layout
 
 - `docs/`: Fern reference-generation, migration cleanup, and `docs-website` branch sync helpers. Generated API reference output under `docs/reference/api/*-library-reference/` is ignored and recreated by `just docs`.

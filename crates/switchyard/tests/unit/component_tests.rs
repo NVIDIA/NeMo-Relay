@@ -254,6 +254,12 @@ fn configuration_validation_rejects_unsafe_or_ambiguous_bindings() {
     let mut candidate = config(url.clone());
     candidate.recent_message_count = 0;
     assert_invalid(candidate, "recent_message_count");
+    let mut candidate = config(url.clone());
+    candidate.context_mode = ContextMode::AtofRequired;
+    assert_invalid(candidate, "atof_endpoint_name");
+    let mut candidate = config(url.clone());
+    candidate.atof_endpoint_name = Some(" switchyard ".into());
+    assert_invalid(candidate, "leading or trailing whitespace");
     let candidate = config("file:///tmp/decision".into());
     assert_invalid(candidate, "must use http or https");
     let mut candidate = config(url.clone());
@@ -329,6 +335,30 @@ fn disabled_protocol_defaults_are_optional() {
 }
 
 #[test]
+fn atof_cross_component_validation_rejects_invalid_endpoint_names_before_lookup() {
+    for (name, expected) in [
+        (" ", "atof_endpoint_name must be non-empty when configured"),
+        (
+            " switchyard ",
+            "atof_endpoint_name must not have leading or trailing whitespace",
+        ),
+    ] {
+        let mut switchyard = config("http://switchyard.test/v1/routing/decision".into());
+        switchyard.context_mode = ContextMode::AtofRequired;
+        switchyard.atof_endpoint_name = Some(name.into());
+        let plugin_config = PluginConfig {
+            components: vec![switchyard.into()],
+            ..PluginConfig::default()
+        };
+
+        assert_eq!(
+            validate_switchyard_atof_configuration(&plugin_config).unwrap_err(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn atof_cross_component_validation_reports_each_activation_mismatch() {
     assert!(validate_switchyard_atof_configuration(&PluginConfig::default()).is_ok());
 
@@ -340,7 +370,7 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
 
     let mut switchyard = config("http://switchyard.test/v1/routing/decision".into());
     switchyard.context_mode = ContextMode::AtofRequired;
-    switchyard.atof_endpoint_url = Some("http://events.test/v1/atof/events".into());
+    switchyard.atof_endpoint_name = Some("switchyard".into());
     let mut plugin_config = PluginConfig {
         components: vec![switchyard.into()],
         ..PluginConfig::default()
@@ -348,8 +378,10 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
     plugin_config.components.push(PluginComponentSpec {
         kind: "observability".into(),
         enabled: true,
-        config: json!({"atof": {"enabled": true, "endpoints": [{
-            "url": "http://wrong.test/v1/atof/events",
+        config: json!({"atof": {"enabled": true, "sinks": [{
+            "type": "stream",
+            "name": "other",
+            "url": "http://events.test/v1/atof/events",
             "header_env": {"authorization": "TOKEN"}
         }]}})
         .as_object()
@@ -359,19 +391,40 @@ fn atof_cross_component_validation_reports_each_activation_mismatch() {
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
             .unwrap_err()
-            .contains("requires HTTP ATOF endpoint")
+            .contains("requires named ATOF endpoint")
     );
 
-    plugin_config.components[1].config["atof"]["endpoints"][0]["url"] =
-        json!("http://events.test/v1/atof/events");
-    plugin_config.components[1].config["atof"]["endpoints"][0]["field_name_policy"] =
+    plugin_config.components[1].config["atof"]["sinks"][0]["name"] = json!("switchyard");
+    assert!(validate_switchyard_atof_configuration(&plugin_config).is_ok());
+    plugin_config.components[1].config["atof"]["sinks"][0]["transport"] = json!("websocket");
+    assert!(
+        validate_switchyard_atof_configuration(&plugin_config)
+            .unwrap_err()
+            .contains("transport = http_post")
+    );
+    plugin_config.components[1].config["atof"]["sinks"][0]["transport"] = json!("http_post");
+    let duplicate = plugin_config.components[1].config["atof"]["sinks"][0].clone();
+    plugin_config.components[1].config["atof"]["sinks"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    assert!(
+        validate_switchyard_atof_configuration(&plugin_config)
+            .unwrap_err()
+            .contains("exactly one endpoint")
+    );
+    plugin_config.components[1].config["atof"]["sinks"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    plugin_config.components[1].config["atof"]["sinks"][0]["field_name_policy"] =
         json!("snake_case");
     assert!(
         validate_switchyard_atof_configuration(&plugin_config)
             .unwrap_err()
             .contains("field_name_policy = preserve")
     );
-    let endpoint = &mut plugin_config.components[1].config["atof"]["endpoints"][0];
+    let endpoint = &mut plugin_config.components[1].config["atof"]["sinks"][0];
     endpoint["field_name_policy"] = json!("preserve");
     endpoint.as_object_mut().unwrap().remove("header_env");
     assert!(
@@ -677,6 +730,7 @@ fn identity_policy_requires_stable_request_scope_only_for_atof_profiles() {
     assert_eq!(synthetic.identity.quality, "synthetic");
 
     config.context_mode = ContextMode::AtofRequired;
+    config.atof_endpoint_name = Some("switchyard".into());
     let atof_runtime = SwitchyardRuntime::new(config).unwrap();
     assert!(
         atof_runtime
@@ -808,6 +862,7 @@ fn routing_decision_mark_has_canonical_shape_and_mirrored_identity() {
 fn atof_required_cross_component_validation_is_context_sensitive() {
     let mut switchyard = config("http://switchyard.test:8080/v1/routing/decision".into());
     switchyard.context_mode = ContextMode::AtofRequired;
+    switchyard.atof_endpoint_name = Some("switchyard".into());
     let mut plugin_config = PluginConfig {
         components: vec![switchyard.into()],
         ..PluginConfig::default()
@@ -818,7 +873,9 @@ fn atof_required_cross_component_validation_is_context_sensitive() {
         enabled: true,
         config: json!({"atof": {
             "enabled": true,
-            "endpoints": [{
+            "sinks": [{
+                "type": "stream",
+                "name": "switchyard",
                 "url": "http://switchyard.test:8080/v1/atof/events",
                 "transport": "http_post",
                 "field_name_policy": "preserve",

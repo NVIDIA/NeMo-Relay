@@ -1,12 +1,12 @@
 {
-  "SPDX-License-Identifier": "Apache-2.0",
+  "description": "SPDX-License-Identifier: Apache-2.0",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -41,19 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "PostToolUseFailure": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -65,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -76,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -87,18 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -109,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -120,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -131,18 +108,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "nemo-relay plugin-shim hook codex",
+            "command": "nemo-relay hook-forward codex --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]

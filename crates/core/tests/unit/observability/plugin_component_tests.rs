@@ -278,12 +278,13 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(atof.sinks.is_empty());
 
     let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "sinks": [{"type": "stream", "url": "http://localhost/events"}]
+        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
     }))
     .unwrap();
     let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
         panic!("expected stream sink");
     };
+    assert_eq!(stream.name.as_deref(), Some("switchyard"));
     assert_eq!(stream.transport, "http_post");
     assert_eq!(stream.field_name_policy, "preserve");
 
@@ -427,6 +428,7 @@ fn schema_contains_every_supported_observability_option() {
         "output_directory",
         "filename",
         "mode",
+        "name",
         "sinks",
         "type",
         "url",
@@ -699,7 +701,10 @@ fn atof_endpoint_validation_rejects_bad_values() {
                 {"type": "stream", "url": "not a url", "transport": "http_post"},
                 {"type": "stream", "url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"},
                 {"type": "stream", "url": "http://localhost/events", "transport": "websocket"},
-                {"type": "stream", "url": "http://localhost/events", "headers": {"invalid header": "value", "x-api-key": "value"}, "header_env": {"X-Api-Key": "NEMO_RELAY_TEST_MISSING_ATOF_HEADER_ENV"}}
+                {"type": "stream", "url": "http://localhost/events", "headers": {"invalid header": "value", "x-api-key": "value"}, "header_env": {"X-Api-Key": "NEMO_RELAY_TEST_MISSING_ATOF_HEADER_ENV"}},
+                {"type": "stream", "name": "switchyard", "url": "http://localhost/first"},
+                {"type": "stream", "name": "switchyard", "url": "http://localhost/second"},
+                {"type": "stream", "name": " ", "url": "http://localhost/blank"}
             ]
         }
     })));
@@ -755,6 +760,18 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("sinks[6].headers.invalid header") })
     );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[8].name") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[9].name") })
+    );
 }
 
 #[test]
@@ -764,6 +781,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let config = build_atof_sink_config(
         2,
         AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: Some("switchyard".into()),
             url: "ws://127.0.0.1:47632/events".into(),
             transport: "websocket".into(),
             headers: headers.clone(),
@@ -799,6 +817,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let error = build_atof_sink_config(
         3,
         AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
@@ -813,6 +832,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let error = build_atof_sink_config(
         4,
         AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "http_post".into(),
             headers: std::collections::HashMap::new(),

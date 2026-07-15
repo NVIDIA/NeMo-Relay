@@ -217,6 +217,9 @@ pub struct AtofStreamSinkSectionConfig {
     /// Field name policy applied before sending events: `preserve` or `replace_dots`.
     #[serde(default = "default_atof_endpoint_field_name_policy")]
     pub field_name_policy: String,
+    /// Optional stable name used by other components to reference this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -509,6 +512,7 @@ crate::editor_config! {
         header_env => { label: "header_env", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
         field_name_policy => { label: "field_name_policy", kind: Enum, values: ["preserve", "replace_dots"] },
+        name => { label: "name", kind: String, optional: true },
     }
 }
 
@@ -1938,6 +1942,7 @@ fn validate_atof_values(
             "ATOF requires at least one configured sink when enabled".to_string(),
         );
     }
+    let mut stream_sink_names = HashSet::new();
     for (index, sink) in section.sinks.iter().enumerate() {
         match sink {
             AtofSinkSectionConfig::File(file) => {
@@ -1953,6 +1958,30 @@ fn validate_atof_values(
                 }
             }
             AtofSinkSectionConfig::Stream(stream) => {
+                if let Some(name) = stream.name.as_deref() {
+                    let trimmed = name.trim();
+                    let message = if trimmed.is_empty() {
+                        Some(format!("ATOF sinks[{index}].name must be non-empty"))
+                    } else if name != trimmed {
+                        Some(format!(
+                            "ATOF sinks[{index}].name must not have leading or trailing whitespace"
+                        ))
+                    } else if !stream_sink_names.insert(name) {
+                        Some(format!("ATOF stream sink name {name:?} must be unique"))
+                    } else {
+                        None
+                    };
+                    if let Some(message) = message {
+                        push_policy_diag(
+                            diagnostics,
+                            policy.unsupported_value,
+                            "observability.unsupported_value",
+                            Some("atof".to_string()),
+                            Some(format!("sinks[{index}].name")),
+                            message,
+                        );
+                    }
+                }
                 validate_atof_stream_sink_values(diagnostics, policy, index, stream);
             }
         }
@@ -2496,11 +2525,11 @@ fn default_atof_mode() -> String {
 }
 
 fn default_atof_endpoint_transport() -> String {
-    "http_post".to_string()
+    AtofEndpointTransport::default().as_str().to_string()
 }
 
 fn default_atof_endpoint_field_name_policy() -> String {
-    "preserve".to_string()
+    AtofEndpointFieldNamePolicy::default().as_str().to_string()
 }
 
 fn default_agent_name() -> String {

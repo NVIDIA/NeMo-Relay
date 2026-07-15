@@ -15,6 +15,7 @@ from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
     AtofConfig,
+    AtofEndpointConfig,
     AtofFileSinkConfig,
     AtofStreamSinkConfig,
     ComponentSpec,
@@ -105,6 +106,7 @@ class TestObservabilityConfigHelpers:
     def test_atof_sink_config_serializes_streaming_fields(self):
         sink = AtofStreamSinkConfig(
             url="http://localhost:8080/events",
+            name="switchyard",
             transport="http_post",
             headers={"X-Test": "yes"},
             header_env={"authorization": "NEMO_RELAY_ATOF_AUTH"},
@@ -113,6 +115,7 @@ class TestObservabilityConfigHelpers:
         )
         assert sink.to_dict() == {
             "type": "stream",
+            "name": "switchyard",
             "url": "http://localhost:8080/events",
             "transport": "http_post",
             "headers": {"X-Test": "yes"},
@@ -121,6 +124,12 @@ class TestObservabilityConfigHelpers:
             "field_name_policy": "replace_dots",
         }
         assert AtofConfig(sinks=[sink]).to_dict()["sinks"] == [sink.to_dict()]
+        assert "name" not in AtofStreamSinkConfig(url="http://localhost:8080/events").to_dict()
+
+    def test_atof_endpoint_alias_preserves_positional_transport(self):
+        endpoint = AtofEndpointConfig("http://localhost:8080/events", "websocket")
+        assert endpoint.transport == "websocket"
+        assert endpoint.name is None
 
     def test_http_storage_config_serializes_headers(self):
         s3 = S3StorageConfig(bucket="archive")

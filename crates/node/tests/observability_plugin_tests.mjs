@@ -57,7 +57,10 @@ describe('observability plugin helpers', () => {
         }),
       ],
     });
-    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), ['filename_template', 'sinks[0].mode']);
+    assert.deepEqual(report.diagnostics.map((diagnostic) => diagnostic.field).sort(), [
+      'filename_template',
+      'sinks[0].mode',
+    ]);
   });
 
   it('serializes ATOF stream sinks', () => {
@@ -65,6 +68,7 @@ describe('observability plugin helpers', () => {
       sinks: [
         {
           type: 'stream',
+          name: 'switchyard',
           url: 'http://localhost:8080/events',
           transport: 'http_post',
           headers: { 'X-Test': 'yes' },
@@ -77,6 +81,7 @@ describe('observability plugin helpers', () => {
     assert.deepEqual(config.sinks, [
       {
         type: 'stream',
+        name: 'switchyard',
         url: 'http://localhost:8080/events',
         transport: 'http_post',
         headers: { 'X-Test': 'yes' },
