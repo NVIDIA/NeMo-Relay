@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "nemo-relay-plugin",
-      "description": "Forward Claude Code lifecycle hooks to a local NeMo Relay sidecar.",
+      "description": "Run the shared native Relay gateway and capture Claude Code lifecycle events.",
       "source": "./integrations/coding-agents/claude-code",
       "category": "development"
     }

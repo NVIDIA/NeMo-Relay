@@ -35,12 +35,15 @@ use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
     scope_deregister_subscriber, try_scope_deregister_subscriber, try_scope_register_subscriber,
 };
+use crate::config_editor::{
+    EditorConfig, EditorFieldKind, EditorListItemSpec, EditorTaggedUnionSpec, EditorVariantSpec,
+};
 use crate::error::FlowError;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter};
 use crate::observability::atof::{
-    AtofEndpointConfig as CoreAtofEndpointConfig, AtofEndpointFieldNamePolicy,
-    AtofEndpointTransport, AtofExporter, AtofExporterConfig as CoreAtofExporterConfig,
-    AtofExporterMode,
+    AtofEndpointFieldNamePolicy, AtofEndpointTransport, AtofExporter,
+    AtofExporterConfig as CoreAtofExporterConfig, AtofExporterMode, AtofFileSinkConfig,
+    AtofSinkConfig as CoreAtofSinkConfig, AtofStreamSinkConfig,
 };
 #[cfg(feature = "openinference")]
 use crate::observability::openinference::{
@@ -51,7 +54,9 @@ use crate::observability::openinference::{
 use crate::observability::otel::{
     OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber,
 };
-use crate::observability::{MarkProjection, default_mark_exclude_names};
+use crate::observability::{
+    MarkProjection, OtlpAttributeMapping, default_mark_exclude_names, validate_attribute_mappings,
+};
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -144,49 +149,53 @@ impl Default for ObservabilityConfig {
     }
 }
 
-/// Filesystem-backed ATOF JSONL exporter config.
+/// Multi-sink ATOF JSONL exporter config.
 ///
 /// When enabled, this section wraps
 /// [`crate::observability::atof::AtofExporter`] and writes the raw ATOF event
-/// stream as JSONL. The exporter uses the current working directory and a
-/// timestamped filename when no explicit path settings are supplied.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// stream to one or more explicitly configured file or stream sinks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AtofSectionConfig {
     /// Whether ATOF JSONL export is active.
     #[serde(default)]
     pub enabled: bool,
+    /// Destinations that each receive every raw ATOF event.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sinks: Vec<AtofSinkSectionConfig>,
+}
+
+/// One plugin-managed destination for raw ATOF events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AtofSinkSectionConfig {
+    /// A local JSONL file.
+    File(AtofFileSinkSectionConfig),
+    /// A remote stream.
+    Stream(AtofStreamSinkSectionConfig),
+}
+
+/// File sink settings for the ATOF plugin section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AtofFileSinkSectionConfig {
     /// Directory containing the JSONL output file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_directory: Option<PathBuf>,
-    /// Output filename. Defaults to the underlying ATOF exporter timestamped filename.
+    /// Output filename. Defaults to the native timestamped filename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
     /// File open mode: `append` or `overwrite`.
     #[serde(default = "default_atof_mode")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "atof_mode_schema"))]
     pub mode: String,
-    /// Optional streaming endpoints that receive every raw ATOF event.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub endpoints: Vec<AtofEndpointSectionConfig>,
 }
 
-impl Default for AtofSectionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            output_directory: None,
-            filename: None,
-            mode: default_atof_mode(),
-            endpoints: Vec::new(),
-        }
-    }
-}
-
-/// Streaming destination for raw ATOF events.
+/// Stream sink settings for the ATOF plugin section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct AtofEndpointSectionConfig {
+pub struct AtofStreamSinkSectionConfig {
     /// Endpoint URL.
     pub url: String,
     /// Transport: `http_post`, `websocket`, or `ndjson`.
@@ -208,6 +217,9 @@ pub struct AtofEndpointSectionConfig {
     /// Field name policy applied before sending events: `preserve` or `replace_dots`.
     #[serde(default = "default_atof_endpoint_field_name_policy")]
     pub field_name_policy: String,
+    /// Optional stable name used by other components to reference this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -385,6 +397,9 @@ pub struct OtlpSectionConfig {
     /// Mark names excluded from tool projection. Defaults to `llm.chunk`.
     #[serde(default = "default_mark_exclude_names")]
     pub mark_exclude_names: Vec<String>,
+    /// Typed projected attributes copied to aliases.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -421,6 +436,7 @@ impl Default for OtlpSectionConfig {
             enabled: false,
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
             transport: default_otlp_transport(),
             endpoint: None,
             headers: HashMap::new(),
@@ -476,10 +492,27 @@ crate::editor_config! {
 crate::editor_config! {
     impl AtofSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
+        sinks => { label: "sinks", kind: List, list: &ATOF_SINK_LIST },
+    }
+}
+
+crate::editor_config! {
+    impl AtofFileSinkSectionConfig {
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename => { label: "filename", kind: String, optional: true },
         mode => { label: "mode", kind: Enum, values: ["append", "overwrite"] },
-        endpoints => { label: "endpoints", kind: Json, optional: true },
+    }
+}
+
+crate::editor_config! {
+    impl AtofStreamSinkSectionConfig {
+        url => { label: "url", kind: String },
+        transport => { label: "transport", kind: Enum, values: ["http_post", "websocket", "ndjson"] },
+        headers => { label: "headers", kind: StringMap },
+        header_env => { label: "header_env", kind: StringMap },
+        timeout_millis => { label: "timeout_millis", kind: Integer },
+        field_name_policy => { label: "field_name_policy", kind: Enum, values: ["preserve", "replace_dots"] },
+        name => { label: "name", kind: String, optional: true },
     }
 }
 
@@ -497,11 +530,81 @@ crate::editor_config! {
     }
 }
 
+fn default_atof_file_sink_editor_value() -> Json {
+    serde_json::json!({"type": "file", "mode": "append"})
+}
+
+fn default_atof_stream_sink_editor_value() -> Json {
+    serde_json::json!({
+        "type": "stream",
+        "url": "",
+        "transport": "http_post",
+        "headers": {},
+        "header_env": {},
+        "timeout_millis": 3000,
+        "field_name_policy": "preserve",
+    })
+}
+
+static ATOF_SINK_VARIANTS: [EditorVariantSpec; 2] = [
+    EditorVariantSpec {
+        label: "File",
+        tag: "file",
+        schema: <AtofFileSinkSectionConfig as EditorConfig>::editor_schema,
+        default: default_atof_file_sink_editor_value,
+    },
+    EditorVariantSpec {
+        label: "Stream",
+        tag: "stream",
+        schema: <AtofStreamSinkSectionConfig as EditorConfig>::editor_schema,
+        default: default_atof_stream_sink_editor_value,
+    },
+];
+
+static ATOF_SINK_TAGGED_UNION: EditorTaggedUnionSpec = EditorTaggedUnionSpec {
+    discriminator: "type",
+    variants: &ATOF_SINK_VARIANTS,
+};
+
+static ATOF_SINK_LIST: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Section,
+    schema: None,
+    default: None,
+    tagged_union: Some(&ATOF_SINK_TAGGED_UNION),
+    list_item: None,
+};
+
+crate::editor_config! {
+    impl OtlpAttributeMapping {
+        key => { label: "key", kind: String },
+        alias => { label: "alias", kind: String },
+    }
+}
+
+fn otlp_attribute_mapping_editor_schema() -> &'static crate::config_editor::EditorSchema {
+    <OtlpAttributeMapping as crate::config_editor::EditorConfig>::editor_schema()
+}
+
+fn default_otlp_attribute_mapping() -> Json {
+    serde_json::to_value(OtlpAttributeMapping::new("", ""))
+        .expect("attribute mapping should serialize")
+}
+
+static OTLP_ATTRIBUTE_MAPPING_LIST_ITEM: crate::config_editor::EditorListItemSpec =
+    crate::config_editor::EditorListItemSpec {
+        kind: crate::config_editor::EditorFieldKind::Section,
+        schema: Some(otlp_attribute_mapping_editor_schema),
+        default: Some(default_otlp_attribute_mapping),
+        tagged_union: None,
+        list_item: None,
+    };
+
 crate::editor_config! {
     impl OtlpSectionConfig {
         enabled => { label: "enabled", kind: Boolean },
         mark_projection => { label: "mark_projection", kind: Enum, values: ["inherit", "event", "tool"] },
         mark_exclude_names => { label: "mark_exclude_names", kind: Json },
+        attribute_mappings => { label: "attribute_mappings", kind: List, list: &OTLP_ATTRIBUTE_MAPPING_LIST_ITEM },
         transport => { label: "transport", kind: Enum, values: ["http_binary", "grpc"] },
         endpoint => { label: "endpoint", kind: String, optional: true },
         headers => { label: "headers", kind: StringMap },
@@ -640,63 +743,91 @@ fn register_atof_exporter(
     section: AtofSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    let mode = AtofExporterMode::parse(&section.mode).ok_or_else(|| {
-        PluginError::InvalidConfig("ATOF mode must be 'append' or 'overwrite'".to_string())
-    })?;
-    let mut config = CoreAtofExporterConfig::new().with_mode(mode);
-    if let Some(output_directory) = section.output_directory {
-        config = config.with_output_directory(output_directory);
-    }
-    if let Some(filename) = section.filename {
-        config = config.with_filename(filename);
-    }
-    let endpoints = section
-        .endpoints
+    let exporters = section
+        .sinks
         .into_iter()
         .enumerate()
-        .map(|(index, endpoint)| build_atof_endpoint_config(index, endpoint))
+        .map(|(index, sink)| {
+            let config = CoreAtofExporterConfig {
+                sink: build_atof_sink_config(index, sink)?,
+            };
+            AtofExporter::new(config)
+                .map(Arc::new)
+                .map_err(observability_registration_error)
+        })
         .collect::<PluginResult<Vec<_>>>()?;
-    config = config.with_endpoints(endpoints);
+    let subscribers = exporters
+        .iter()
+        .map(|exporter| exporter.subscriber())
+        .collect::<Vec<_>>();
+    let subscriber: EventSubscriberFn = Arc::new(move |event| {
+        for subscriber in &subscribers {
+            subscriber(event);
+        }
+    });
 
-    let exporter = Arc::new(AtofExporter::new(config).map_err(observability_registration_error)?);
-    ctx.register_subscriber("atof", exporter.subscriber())?;
+    ctx.register_subscriber("atof", subscriber)?;
     ctx.add_registration(PluginRegistration::new(
         "observability",
         ctx.qualify_name("atof.shutdown"),
         Box::new(move || {
-            exporter
-                .shutdown()
-                .map_err(observability_registration_error)
+            let mut first_error = None;
+            for exporter in &exporters {
+                if let Err(error) = exporter.shutdown() {
+                    first_error.get_or_insert_with(|| observability_registration_error(error));
+                }
+            }
+            first_error.map_or(Ok(()), Err)
         }),
     ));
     Ok(())
 }
 
-fn build_atof_endpoint_config(
+fn build_atof_sink_config(
     index: usize,
-    endpoint: AtofEndpointSectionConfig,
-) -> PluginResult<CoreAtofEndpointConfig> {
-    let transport = AtofEndpointTransport::parse(&endpoint.transport).ok_or_else(|| {
-        PluginError::InvalidConfig(format!(
-            "ATOF endpoints[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"
-        ))
-    })?;
-    let field_name_policy = AtofEndpointFieldNamePolicy::parse(&endpoint.field_name_policy)
-        .ok_or_else(|| {
-            PluginError::InvalidConfig(format!(
-                "ATOF endpoints[{index}].field_name_policy must be 'preserve' or 'replace_dots'"
-            ))
-        })?;
-    let mut config = CoreAtofEndpointConfig::new(endpoint.url, transport)
-        .with_timeout_millis(endpoint.timeout_millis)
-        .with_field_name_policy(field_name_policy);
-    for (key, value) in endpoint.headers {
-        config = config.with_header(key, value);
+    sink: AtofSinkSectionConfig,
+) -> PluginResult<CoreAtofSinkConfig> {
+    match sink {
+        AtofSinkSectionConfig::File(file) => {
+            let mode = AtofExporterMode::parse(&file.mode).ok_or_else(|| {
+                PluginError::InvalidConfig(format!(
+                    "ATOF sinks[{index}].mode must be 'append' or 'overwrite'"
+                ))
+            })?;
+            let mut sink = AtofFileSinkConfig::new();
+            sink.mode = mode;
+            if let Some(output_directory) = file.output_directory {
+                sink.output_directory = output_directory;
+            }
+            if let Some(filename) = file.filename {
+                sink.filename = filename;
+            }
+            Ok(CoreAtofSinkConfig::File(sink))
+        }
+        AtofSinkSectionConfig::Stream(stream) => {
+            let transport = AtofEndpointTransport::parse(&stream.transport).ok_or_else(|| {
+                PluginError::InvalidConfig(format!(
+                    "ATOF sinks[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"
+                ))
+            })?;
+            let field_name_policy = AtofEndpointFieldNamePolicy::parse(&stream.field_name_policy)
+                .ok_or_else(|| {
+                PluginError::InvalidConfig(format!(
+                    "ATOF sinks[{index}].field_name_policy must be 'preserve' or 'replace_dots'"
+                ))
+            })?;
+            let mut config = AtofStreamSinkConfig::new(stream.url, transport)
+                .with_timeout_millis(stream.timeout_millis)
+                .with_field_name_policy(field_name_policy);
+            for (key, value) in stream.headers {
+                config = config.with_header(key, value);
+            }
+            for (key, variable) in stream.header_env {
+                config = config.with_header_env(key, variable);
+            }
+            Ok(CoreAtofSinkConfig::Stream(config))
+        }
     }
-    for (key, variable) in endpoint.header_env {
-        config = config.with_header_env(key, variable);
-    }
-    Ok(config)
 }
 
 type AtifStorageList = Arc<Vec<Arc<AtifRemoteStorage>>>;
@@ -874,6 +1005,7 @@ struct ManagedAtifExporter {
     exporter: AtifExporter,
     filename: String,
     local_path: Option<PathBuf>,
+    correlation: AtifCorrelation,
     observed_events: Vec<Event>,
     observed_event_keys: HashSet<String>,
     written: bool,
@@ -901,6 +1033,51 @@ struct PendingAtifExport {
     exporter: AtifExporter,
     filename: String,
     local_path: Option<PathBuf>,
+    correlation: AtifCorrelation,
+}
+
+#[derive(Clone)]
+struct AtifCorrelation {
+    session_id: Option<String>,
+    session_instance_id: Option<String>,
+    user_id: Option<String>,
+}
+
+impl AtifCorrelation {
+    fn from_event(event: &Event) -> Self {
+        let metadata = event.metadata();
+        Self {
+            session_id: metadata
+                .and_then(|value| value.get("session_id"))
+                .and_then(Json::as_str)
+                .map(ToString::to_string),
+            session_instance_id: current_scope_stack()
+                .read()
+                .ok()
+                .map(|stack| stack.root_uuid().to_string()),
+            user_id: metadata
+                .and_then(|value| value.get("user_id"))
+                .and_then(Json::as_str)
+                .map(ToString::to_string),
+        }
+    }
+
+    fn to_json(&self) -> Json {
+        let mut fields = Map::new();
+        if let Some(session_id) = &self.session_id {
+            fields.insert("session_id".to_string(), Json::String(session_id.clone()));
+        }
+        if let Some(session_instance_id) = &self.session_instance_id {
+            fields.insert(
+                "session_instance_id".to_string(),
+                Json::String(session_instance_id.clone()),
+            );
+        }
+        if let Some(user_id) = &self.user_id {
+            fields.insert("user_id".to_string(), Json::String(user_id.clone()));
+        }
+        Json::Object(fields)
+    }
 }
 
 /// Identifier for a single output sink. `Local` is used when `storage` is empty
@@ -951,6 +1128,7 @@ impl AtifDispatcher {
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
         let (filename, local_path) = self.prepare_destination(&session_id);
+        let correlation = AtifCorrelation::from_event(event);
         self.scope_owners.insert(event.uuid(), event.uuid());
         self.agents.insert(
             event.uuid(),
@@ -958,6 +1136,7 @@ impl AtifDispatcher {
                 exporter,
                 filename,
                 local_path,
+                correlation,
                 observed_events: vec![event.clone()],
                 observed_event_keys: HashSet::from([event_observation_key(event)]),
                 written: false,
@@ -1075,6 +1254,7 @@ impl AtifDispatcher {
                     exporter: agent.exporter.clone(),
                     filename: agent.filename.clone(),
                     local_path: agent.local_path.clone(),
+                    correlation: agent.correlation.clone(),
                 });
             }
         }
@@ -1218,6 +1398,7 @@ fn prepare_atif_file(
         agent.local_path.clone(),
         trajectory,
         observed_events,
+        agent.correlation.clone(),
     )
 }
 
@@ -1241,6 +1422,7 @@ fn prepare_atif_shutdown_file(
         export.local_path.clone(),
         trajectory,
         observed_events,
+        export.correlation.clone(),
     )
 }
 
@@ -1250,15 +1432,30 @@ fn prepare_atif_payload(
     local_path: Option<PathBuf>,
     trajectory: crate::observability::atif::AtifTrajectory,
     observed_events: Vec<Event>,
+    correlation: AtifCorrelation,
 ) -> std::io::Result<PendingAtifWrite> {
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "extra".to_string(),
-            serde_json::json!({
-                "observed_events": observed_events,
-            }),
+        let existing_extra = object.remove("extra");
+        let mut extra = match existing_extra {
+            Some(Json::Object(fields)) => fields,
+            Some(value) => Map::from_iter([("trajectory_extra".to_string(), value)]),
+            None => Map::new(),
+        };
+        extra.insert(
+            "observed_events".to_string(),
+            serde_json::to_value(observed_events)?,
         );
+        let mut nemo_relay = match extra.remove("nemo_relay") {
+            Some(Json::Object(fields)) => fields,
+            Some(value) => Map::from_iter([("trajectory_extra".to_string(), value)]),
+            None => Map::new(),
+        };
+        if let Json::Object(correlation_fields) = correlation.to_json() {
+            nemo_relay.extend(correlation_fields);
+        }
+        extra.insert("nemo_relay".to_string(), Json::Object(nemo_relay));
+        object.insert("extra".to_string(), Json::Object(extra));
     }
     let payload = serde_json::to_vec_pretty(&value)?;
     Ok(PendingAtifWrite {
@@ -1368,7 +1565,8 @@ fn build_otel_config(section: OtlpSectionConfig) -> PluginResult<CoreOpenTelemet
     .with_timeout(Duration::from_millis(section.timeout_millis));
     config = config
         .with_mark_projection(section.mark_projection)
-        .with_mark_exclude_names(section.mark_exclude_names);
+        .with_mark_exclude_names(section.mark_exclude_names)
+        .with_attribute_mappings(section.attribute_mappings);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1407,7 +1605,8 @@ fn build_openinference_config(section: OtlpSectionConfig) -> PluginResult<CoreOp
         .with_service_name(section.service_name)
         .with_timeout(Duration::from_millis(section.timeout_millis))
         .with_mark_projection(section.mark_projection)
-        .with_mark_exclude_names(section.mark_exclude_names);
+        .with_mark_exclude_names(section.mark_exclude_names)
+        .with_attribute_mappings(section.attribute_mappings);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1495,14 +1694,24 @@ fn validate_observability_section_fields(
         policy,
         plugin_config,
         "atof",
-        &[
-            "enabled",
-            "output_directory",
-            "filename",
-            "mode",
-            "endpoints",
-        ],
+        &["enabled", "sinks"],
     );
+    if let Some(atof) = plugin_config.get("atof").and_then(Json::as_object) {
+        for legacy_field in ["output_directory", "filename", "mode", "endpoints"] {
+            if atof.contains_key(legacy_field) {
+                push_policy_diag(
+                    diagnostics,
+                    UnsupportedBehavior::Error,
+                    "observability.legacy_atof_field",
+                    Some("atof".to_string()),
+                    Some(legacy_field.to_string()),
+                    format!(
+                        "ATOF {legacy_field} was removed in observability config version 2; configure typed ATOF sinks instead"
+                    ),
+                );
+            }
+        }
+    }
     validate_section_fields(
         diagnostics,
         policy,
@@ -1529,6 +1738,7 @@ fn validate_observability_section_fields(
             "enabled",
             "mark_projection",
             "mark_exclude_names",
+            "attribute_mappings",
             "transport",
             "endpoint",
             "headers",
@@ -1549,6 +1759,7 @@ fn validate_observability_section_fields(
             "enabled",
             "mark_projection",
             "mark_exclude_names",
+            "attribute_mappings",
             "transport",
             "endpoint",
             "headers",
@@ -1595,14 +1806,19 @@ fn validate_atof_feature_support(
     policy: &ConfigPolicy,
     section: &AtofSectionConfig,
 ) {
-    if section.enabled && !section.endpoints.is_empty() {
+    if section.enabled
+        && section
+            .sinks
+            .iter()
+            .any(|sink| matches!(sink, AtofSinkSectionConfig::Stream(_)))
+    {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some("endpoints".to_string()),
-            "ATOF streaming endpoints are not enabled in this build".to_string(),
+            Some("sinks".to_string()),
+            "ATOF stream sinks are not enabled in this build".to_string(),
         );
     }
 }
@@ -1729,14 +1945,16 @@ fn validate_openinference_feature_support(
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {
-    if version != 1 {
+    if version != 2 {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_config_version",
             Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
             Some("version".to_string()),
-            format!("observability config version {version} is unsupported"),
+            format!(
+                "observability config version {version} is unsupported; use version 2 and migrate ATOF output_directory, filename, mode, and endpoints into sinks"
+            ),
         );
     }
 }
@@ -1780,56 +1998,121 @@ fn validate_atof_values(
     policy: &ConfigPolicy,
     section: &AtofSectionConfig,
 ) {
-    if AtofExporterMode::parse(&section.mode).is_none() {
+    if section.enabled && section.sinks.is_empty() {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some("mode".to_string()),
-            "ATOF mode must be 'append' or 'overwrite'".to_string(),
+            Some("sinks".to_string()),
+            "ATOF requires at least one configured sink when enabled".to_string(),
         );
     }
-    for (index, endpoint) in section.endpoints.iter().enumerate() {
-        validate_atof_endpoint_values(diagnostics, policy, index, endpoint);
+    let mut stream_sink_names = HashSet::new();
+    for (index, sink) in section.sinks.iter().enumerate() {
+        validate_atof_sink(diagnostics, policy, index, sink, &mut stream_sink_names);
     }
 }
 
-fn validate_atof_endpoint_values(
+fn validate_atof_sink<'a>(
     diagnostics: &mut Vec<ConfigDiagnostic>,
     policy: &ConfigPolicy,
     index: usize,
-    endpoint: &AtofEndpointSectionConfig,
+    sink: &'a AtofSinkSectionConfig,
+    stream_sink_names: &mut HashSet<&'a str>,
 ) {
+    match sink {
+        AtofSinkSectionConfig::File(file) => {
+            if AtofExporterMode::parse(&file.mode).is_none() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atof".to_string()),
+                    Some(format!("sinks[{index}].mode")),
+                    format!("ATOF sinks[{index}].mode must be 'append' or 'overwrite'"),
+                );
+            }
+        }
+        AtofSinkSectionConfig::Stream(stream) => {
+            validate_atof_stream_sink_name(diagnostics, policy, index, stream, stream_sink_names);
+            validate_atof_stream_sink_values(diagnostics, policy, index, stream);
+        }
+    }
+}
+
+fn validate_atof_stream_sink_name<'a>(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    stream: &'a AtofStreamSinkSectionConfig,
+    stream_sink_names: &mut HashSet<&'a str>,
+) {
+    let Some(name) = stream.name.as_deref() else {
+        return;
+    };
+    let trimmed = name.trim();
+    let message = if trimmed.is_empty() {
+        Some(format!("ATOF sinks[{index}].name must be non-empty"))
+    } else if name != trimmed {
+        Some(format!(
+            "ATOF sinks[{index}].name must not have leading or trailing whitespace"
+        ))
+    } else if !stream_sink_names.insert(name) {
+        Some(format!("ATOF stream sink name {name:?} must be unique"))
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("sinks[{index}].name")),
+            message,
+        );
+    }
+}
+
+fn validate_atof_stream_sink_values(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    endpoint: &AtofStreamSinkSectionConfig,
+) {
+    let transport = AtofEndpointTransport::parse(&endpoint.transport);
     if endpoint.url.trim().is_empty() {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some(format!("endpoints[{index}].url")),
-            format!("ATOF endpoints[{index}].url must be non-empty"),
+            Some(format!("sinks[{index}].url")),
+            format!("ATOF sinks[{index}].url must be non-empty"),
         );
-    } else if !is_valid_atof_endpoint_url(&endpoint.url) {
+    } else if transport.is_some_and(|transport| !is_valid_atof_stream_url(&endpoint.url, transport))
+    {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some(format!("endpoints[{index}].url")),
-            format!("ATOF endpoints[{index}].url must be a valid URL"),
+            Some(format!("sinks[{index}].url")),
+            format!(
+                "ATOF sinks[{index}].url must be a valid URL for transport {:?}",
+                endpoint.transport
+            ),
         );
     }
-    if AtofEndpointTransport::parse(&endpoint.transport).is_none() {
+    if transport.is_none() {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some(format!("endpoints[{index}].transport")),
-            format!(
-                "ATOF endpoints[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"
-            ),
+            Some(format!("sinks[{index}].transport")),
+            format!("ATOF sinks[{index}].transport must be 'http_post', 'websocket', or 'ndjson'"),
         );
     }
     if endpoint.timeout_millis == 0 {
@@ -1838,8 +2121,8 @@ fn validate_atof_endpoint_values(
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some(format!("endpoints[{index}].timeout_millis")),
-            format!("ATOF endpoints[{index}].timeout_millis must be greater than 0"),
+            Some(format!("sinks[{index}].timeout_millis")),
+            format!("ATOF sinks[{index}].timeout_millis must be greater than 0"),
         );
     }
     if AtofEndpointFieldNamePolicy::parse(&endpoint.field_name_policy).is_none() {
@@ -1848,22 +2131,162 @@ fn validate_atof_endpoint_values(
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atof".to_string()),
-            Some(format!("endpoints[{index}].field_name_policy")),
-            format!(
-                "ATOF endpoints[{index}].field_name_policy must be 'preserve' or 'replace_dots'"
-            ),
+            Some(format!("sinks[{index}].field_name_policy")),
+            format!("ATOF sinks[{index}].field_name_policy must be 'preserve' or 'replace_dots'"),
         );
+    }
+    for (header, value) in &endpoint.headers {
+        validate_atof_stream_header(
+            diagnostics,
+            policy,
+            &format!("sinks[{index}].headers.{header}"),
+            header,
+            value,
+        );
+    }
+    for (header, variable) in &endpoint.header_env {
+        let field = format!("sinks[{index}].header_env.{header}");
+        validate_atof_stream_header_name(diagnostics, policy, &field, header);
+        if endpoint
+            .headers
+            .keys()
+            .any(|configured| configured.eq_ignore_ascii_case(header))
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atof".to_string()),
+                Some(field.clone()),
+                format!(
+                    "ATOF sinks[{index}] header {header:?} cannot appear in both headers and header_env"
+                ),
+            );
+        }
+        validate_atof_stream_header_env(diagnostics, policy, &field, variable);
     }
 }
 
 #[cfg(feature = "atof-streaming")]
-fn is_valid_atof_endpoint_url(url: &str) -> bool {
-    reqwest::Url::parse(url).is_ok()
+fn is_valid_atof_stream_url(url: &str, transport: AtofEndpointTransport) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    url.host_str().is_some()
+        && match transport {
+            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
+                matches!(url.scheme(), "http" | "https")
+            }
+            AtofEndpointTransport::Websocket => matches!(url.scheme(), "ws" | "wss"),
+        }
 }
 
 #[cfg(not(feature = "atof-streaming"))]
-fn is_valid_atof_endpoint_url(_url: &str) -> bool {
-    true
+fn is_valid_atof_stream_url(url: &str, transport: AtofEndpointTransport) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    !rest.is_empty()
+        && !rest.starts_with('/')
+        && match transport {
+            AtofEndpointTransport::HttpPost | AtofEndpointTransport::Ndjson => {
+                matches!(scheme, "http" | "https")
+            }
+            AtofEndpointTransport::Websocket => matches!(scheme, "ws" | "wss"),
+        }
+}
+
+fn validate_atof_stream_header(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    header: &str,
+    value: &str,
+) {
+    validate_atof_stream_header_name(diagnostics, policy, field, header);
+    #[cfg(not(feature = "atof-streaming"))]
+    let _ = value;
+    #[cfg(feature = "atof-streaming")]
+    if let Err(error) = reqwest::header::HeaderValue::from_str(value) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(field.to_string()),
+            format!("ATOF {field} value is invalid: {error}"),
+        );
+    }
+}
+
+fn validate_atof_stream_header_name(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    header: &str,
+) {
+    #[cfg(feature = "atof-streaming")]
+    let is_valid = reqwest::header::HeaderName::from_bytes(header.as_bytes()).is_ok();
+    #[cfg(not(feature = "atof-streaming"))]
+    let is_valid = !header.trim().is_empty() && header.trim() == header;
+    if !is_valid {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(field.to_string()),
+            format!("ATOF {field} header name '{header}' is invalid"),
+        );
+    }
+}
+
+fn validate_atof_stream_header_env(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    variable: &str,
+) {
+    let trimmed = variable.trim();
+    if trimmed.is_empty() {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(field.to_string()),
+            format!("ATOF {field} must name a non-empty environment variable"),
+        );
+    } else if trimmed != variable {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(field.to_string()),
+            format!("ATOF {field} must not have surrounding whitespace; got '{variable}'"),
+        );
+    } else {
+        match std::env::var(variable) {
+            Ok(value) if value.trim().is_empty() => push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atof".to_string()),
+                Some(field.to_string()),
+                format!("ATOF {field} references an environment variable that is blank"),
+            ),
+            Ok(_) => {}
+            Err(error) => push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("atof".to_string()),
+                Some(field.to_string()),
+                format!("ATOF {field} references an environment variable that is not set: {error}"),
+            ),
+        }
+    }
 }
 
 fn validate_atif_values(
@@ -2117,6 +2540,16 @@ fn validate_otlp_values(
             format!("{section_name} transport must be 'http_binary' or 'grpc'"),
         );
     }
+    if let Err(message) = validate_attribute_mappings(&section.attribute_mappings) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some(section_name.to_string()),
+            Some("attribute_mappings".to_string()),
+            message,
+        );
+    }
 }
 
 fn validate_unknown_fields(
@@ -2171,7 +2604,7 @@ fn observability_registration_error(error: impl std::fmt::Display) -> PluginErro
 }
 
 fn default_observability_config_version() -> u32 {
-    1
+    2
 }
 
 fn default_atof_mode() -> String {
@@ -2179,11 +2612,11 @@ fn default_atof_mode() -> String {
 }
 
 fn default_atof_endpoint_transport() -> String {
-    "http_post".to_string()
+    AtofEndpointTransport::default().as_str().to_string()
 }
 
 fn default_atof_endpoint_field_name_policy() -> String {
-    "preserve".to_string()
+    AtofEndpointFieldNamePolicy::default().as_str().to_string()
 }
 
 fn default_agent_name() -> String {

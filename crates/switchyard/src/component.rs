@@ -21,6 +21,7 @@ use nemo_relay::codec::optimization::{
     LlmOptimizationModelTransition,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::observability::atof::{AtofEndpointFieldNamePolicy, AtofEndpointTransport};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig, PluginError,
     PluginRegistrationContext, Result as PluginResult, deregister_plugin, register_plugin,
@@ -44,6 +45,10 @@ use crate::translation::{
 /// Plugin kind used in Relay plugin configuration.
 pub const SWITCHYARD_PLUGIN_KIND: &str = "switchyard";
 
+const SWITCHYARD_HEALTH_PATH: &str = "/health";
+const SWITCHYARD_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
+const SWITCHYARD_HEALTH_MAX_ATTEMPTS: usize = 3;
+const SWITCHYARD_HEALTH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
@@ -217,9 +222,9 @@ pub struct SwitchyardConfig {
     pub targets: BTreeMap<String, TargetBinding>,
     /// Trusted per-protocol fallbacks.
     pub default_targets: ProtocolDefaults,
-    /// Optional explicit ATOF endpoint used by CLI cross-validation.
+    /// Named observability ATOF endpoint used by history-backed profiles.
     #[serde(default)]
-    pub atof_endpoint_url: Option<String>,
+    pub atof_endpoint_name: Option<String>,
 }
 
 impl Default for SwitchyardConfig {
@@ -244,7 +249,7 @@ impl Default for SwitchyardConfig {
                 openai_responses: String::new(),
                 anthropic_messages: String::new(),
             },
-            atof_endpoint_url: None,
+            atof_endpoint_name: None,
         }
     }
 }
@@ -269,7 +274,7 @@ nemo_relay::editor_config! {
         enabled_inbound_profiles => { label: "Enabled inbound profiles", kind: Json },
         targets => { label: "Backend target bindings", kind: Json },
         default_targets => { label: "Trusted protocol defaults", kind: Json },
-        atof_endpoint_url => { label: "ATOF endpoint URL", kind: String, optional: true }
+        atof_endpoint_name => { label: "ATOF endpoint name", kind: String, optional: true }
     }
 }
 
@@ -344,6 +349,10 @@ impl Plugin for SwitchyardPlugin {
                     .and_then(SwitchyardRuntime::new)
                     .map_err(PluginError::InvalidConfig)?,
             );
+            runtime
+                .require_healthy_sidecar()
+                .await
+                .map_err(PluginError::RegistrationFailed)?;
             let buffered = Arc::clone(&runtime);
             let buffered_intercept: LlmExecutionFn = Arc::new(move |name, request, next| {
                 let runtime = Arc::clone(&buffered);
@@ -401,65 +410,72 @@ pub fn validate_switchyard_atof_configuration(config: &PluginConfig) -> Result<(
     if switchyard.context_mode != ContextMode::AtofRequired {
         return Ok(());
     }
-    let required_url = match &switchyard.atof_endpoint_url {
-        Some(url) => url.clone(),
-        None => derived_atof_url(&switchyard.decision_api_url)?,
-    };
+    let required_name = validate_atof_endpoint_name(switchyard.atof_endpoint_name.as_deref())?
+        .ok_or_else(|| {
+            "atof_required Switchyard profiles require atof_endpoint_name".to_string()
+        })?;
     let observability = config
         .components
         .iter()
         .find(|component| component.enabled && component.kind == "observability")
         .ok_or_else(|| "atof_required Switchyard profiles require observability".to_string())?;
-    let endpoints = observability
+    let sinks = observability
         .config
         .get("atof")
         .filter(|atof| atof.get("enabled").and_then(Json::as_bool) == Some(true))
-        .and_then(|atof| atof.get("endpoints"))
+        .and_then(|atof| atof.get("sinks"))
         .and_then(Json::as_array)
         .ok_or_else(|| {
             "atof_required Switchyard profiles require an enabled ATOF endpoint".to_string()
         })?;
-    let endpoint = endpoints
+    let matching_sinks = sinks
         .iter()
-        .find(|endpoint| {
-            endpoint.get("url").and_then(Json::as_str) == Some(required_url.as_str())
-                && endpoint
-                    .get("transport")
-                    .and_then(Json::as_str)
-                    .unwrap_or("http_post")
-                    == "http_post"
+        .filter(|sink| {
+            sink.get("type").and_then(Json::as_str) == Some("stream")
+                && sink.get("name").and_then(Json::as_str) == Some(required_name)
         })
-        .ok_or_else(|| {
-            format!("atof_required Switchyard profile requires HTTP ATOF endpoint {required_url}")
-        })?;
-    if endpoint
-        .get("field_name_policy")
-        .and_then(Json::as_str)
-        .unwrap_or("preserve")
-        != "preserve"
-    {
-        return Err("Switchyard ATOF endpoint must use field_name_policy = preserve".into());
+        .collect::<Vec<_>>();
+    let endpoint = match matching_sinks.as_slice() {
+        [sink] => *sink,
+        [] => {
+            return Err(format!(
+                "atof_required Switchyard profile requires named ATOF endpoint {required_name:?}"
+            ));
+        }
+        _ => {
+            return Err(format!(
+                "ATOF endpoint name {required_name:?} must resolve to exactly one endpoint"
+            ));
+        }
+    };
+    let transport = endpoint.get("transport").map_or_else(
+        || Some(AtofEndpointTransport::default()),
+        |value| value.as_str().and_then(AtofEndpointTransport::parse),
+    );
+    if transport != Some(AtofEndpointTransport::HttpPost) {
+        return Err(format!(
+            "Switchyard ATOF endpoint {required_name:?} must use transport = http_post"
+        ));
+    }
+    let field_name_policy = endpoint.get("field_name_policy").map_or_else(
+        || Some(AtofEndpointFieldNamePolicy::default()),
+        |value| value.as_str().and_then(AtofEndpointFieldNamePolicy::parse),
+    );
+    if field_name_policy != Some(AtofEndpointFieldNamePolicy::Preserve) {
+        return Err(format!(
+            "Switchyard ATOF endpoint {required_name:?} must use field_name_policy = preserve"
+        ));
     }
     if endpoint
         .get("header_env")
         .and_then(Json::as_object)
         .is_none_or(Map::is_empty)
     {
-        return Err(
-            "Switchyard ATOF endpoint authentication must use at least one environment-referenced header"
-                .into(),
-        );
+        return Err(format!(
+            "Switchyard ATOF endpoint {required_name:?} authentication must use at least one environment-referenced header"
+        ));
     }
     Ok(())
-}
-
-fn derived_atof_url(decision_api_url: &str) -> Result<String, String> {
-    let mut url = reqwest::Url::parse(decision_api_url)
-        .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
-    url.set_path("/v1/atof/events");
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string().trim_end_matches('/').to_string())
 }
 
 fn parse_config(config: &Map<String, Json>) -> Result<SwitchyardConfig, String> {
@@ -472,6 +488,33 @@ struct SwitchyardRuntime {
     client: reqwest::Client,
     target_headers: BTreeMap<String, Map<String, Json>>,
     translation: switchyard_translation::TranslationEngine,
+}
+
+enum BufferedAttempt {
+    Complete(Json),
+    Retry((String, String)),
+    Fallback(&'static str),
+}
+
+enum StreamAttempt {
+    Committed(LlmJsonStream),
+    Retry((String, String)),
+    Fallback(&'static str),
+}
+
+struct StreamAttemptContext {
+    routing_request: RoutingRequest,
+    decision: RoutingDecision,
+    attempt: u32,
+    max_attempts: u32,
+}
+
+fn provider_fallback_reason(error: &FlowError) -> &'static str {
+    if error_is_retryable(error) {
+        "retry_exhausted"
+    } else {
+        "non_retryable_provider_error"
+    }
 }
 
 impl SwitchyardRuntime {
@@ -499,6 +542,36 @@ impl SwitchyardRuntime {
         })
     }
 
+    // Skip the portability guard when no configured target uses a different protocol: with no
+    // possible cross-protocol translation, provider-specific fields never need to be portable.
+    fn may_translate_protocol(&self, inbound: WireProtocol) -> bool {
+        self.config
+            .targets
+            .values()
+            .any(|target| target.protocol != inbound)
+    }
+
+    async fn require_healthy_sidecar(&self) -> Result<(), String> {
+        let health_url = switchyard_health_url(&self.config.decision_api_url)?;
+        let client = reqwest::Client::builder()
+            .timeout(SWITCHYARD_HEALTH_TIMEOUT)
+            .build()
+            .map_err(|error| format!("failed to build Switchyard health client: {error}"))?;
+        let mut backoff = SWITCHYARD_HEALTH_INITIAL_BACKOFF;
+        let mut final_error = None;
+        for attempt in 1..=SWITCHYARD_HEALTH_MAX_ATTEMPTS {
+            match check_switchyard_health(&client, &health_url).await {
+                Ok(()) => return Ok(()),
+                Err(error) => final_error = Some(error),
+            }
+            if attempt < SWITCHYARD_HEALTH_MAX_ATTEMPTS {
+                tokio::time::sleep(backoff).await;
+                backoff *= 2;
+            }
+        }
+        Err(final_error.expect("at least one Switchyard health attempt is configured"))
+    }
+
     async fn execute_buffered(
         &self,
         name: &str,
@@ -511,7 +584,9 @@ impl SwitchyardRuntime {
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if let Err(error) = validate_portable_request(&self.translation, inbound, &original) {
+        if self.may_translate_protocol(inbound)
+            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
+        {
             self.emit_error(
                 None,
                 0,
@@ -543,70 +618,75 @@ impl SwitchyardRuntime {
         let max_attempts = self.config.max_retries.saturating_add(1);
         let mut previous = None;
         for attempt in 1..=max_attempts {
-            let decided = self
-                .decided_request(inbound, &original, attempt, previous.clone())
-                .await;
-            let (routing_request, decision, routed) = match decided {
-                Ok(value) => value,
-                Err(error) => {
-                    self.emit_error(None, attempt, "decision_api", &error);
+            match self
+                .buffered_attempt(inbound, &original, &next, attempt, previous, max_attempts)
+                .await?
+            {
+                BufferedAttempt::Complete(response) => return Ok(response),
+                BufferedAttempt::Retry(retry) => previous = Some(retry),
+                BufferedAttempt::Fallback(reason) => {
                     return self
-                        .dispatch_fallback_buffered(inbound, original, next, "decision_error")
-                        .await;
-                }
-            };
-            let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
-            match next(routed).await {
-                Ok(response) => {
-                    match translate_response(&self.translation, target_protocol, inbound, &response)
-                    {
-                        Ok(response) => {
-                            self.record_routing_contribution(&decision, attempt, true);
-                            return Ok(response);
-                        }
-                        Err(error) => {
-                            self.emit_error(
-                                Some(&routing_request),
-                                attempt,
-                                "response_translation",
-                                &error.to_string(),
-                            );
-                            return self
-                                .dispatch_fallback_buffered(
-                                    inbound,
-                                    original,
-                                    next,
-                                    "translation_error",
-                                )
-                                .await;
-                        }
-                    }
-                }
-                Err(error) if error_is_retryable(&error) && attempt < max_attempts => {
-                    let retry_reason = provider_error_summary(&error);
-                    self.emit_error(Some(&routing_request), attempt, "provider", &retry_reason);
-                    self.emit_retry(&routing_request, &decision, attempt, &retry_reason);
-                    previous = Some((decision.route.backend_id, retry_reason));
-                }
-                Err(error) => {
-                    let summary = provider_error_summary(&error);
-                    self.emit_error(Some(&routing_request), attempt, "provider", &summary);
-                    return self
-                        .dispatch_fallback_buffered(
-                            inbound,
-                            original,
-                            next,
-                            if error_is_retryable(&error) {
-                                "retry_exhausted"
-                            } else {
-                                "non_retryable_provider_error"
-                            },
-                        )
+                        .dispatch_fallback_buffered(inbound, original, next, reason)
                         .await;
                 }
             }
         }
         unreachable!("routing attempt loop always returns")
+    }
+
+    async fn buffered_attempt(
+        &self,
+        inbound: WireProtocol,
+        original: &LlmRequest,
+        next: &nemo_relay::api::runtime::LlmExecutionNextFn,
+        attempt: u32,
+        previous: Option<(String, String)>,
+        max_attempts: u32,
+    ) -> FlowResult<BufferedAttempt> {
+        let (routing_request, decision, routed) = match self
+            .decided_request(inbound, original, attempt, previous)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                self.emit_error(None, attempt, "decision_api", &error);
+                return Ok(BufferedAttempt::Fallback("decision_error"));
+            }
+        };
+        let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
+        match next(routed).await {
+            Ok(response) => {
+                match translate_response(&self.translation, target_protocol, inbound, &response) {
+                    Ok(response) => {
+                        self.record_routing_contribution(&decision, attempt, true);
+                        Ok(BufferedAttempt::Complete(response))
+                    }
+                    Err(error) => {
+                        self.emit_error(
+                            Some(&routing_request),
+                            attempt,
+                            "response_translation",
+                            &error.to_string(),
+                        );
+                        Ok(BufferedAttempt::Fallback("translation_error"))
+                    }
+                }
+            }
+            Err(error) if error_is_retryable(&error) && attempt < max_attempts => {
+                let retry_reason = provider_error_summary(&error);
+                self.emit_error(Some(&routing_request), attempt, "provider", &retry_reason);
+                self.emit_retry(&routing_request, &decision, attempt, &retry_reason);
+                Ok(BufferedAttempt::Retry((
+                    decision.route.backend_id,
+                    retry_reason,
+                )))
+            }
+            Err(error) => {
+                let summary = provider_error_summary(&error);
+                self.emit_error(Some(&routing_request), attempt, "provider", &summary);
+                Ok(BufferedAttempt::Fallback(provider_fallback_reason(&error)))
+            }
+        }
     }
 
     async fn execute_stream(
@@ -621,7 +701,9 @@ impl SwitchyardRuntime {
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if let Err(error) = validate_portable_request(&self.translation, inbound, &original) {
+        if self.may_translate_protocol(inbound)
+            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
+        {
             self.emit_error(
                 None,
                 0,
@@ -647,120 +729,166 @@ impl SwitchyardRuntime {
         let max_attempts = self.config.max_retries.saturating_add(1);
         let mut previous = None;
         for attempt in 1..=max_attempts {
-            let (routing_request, decision, routed) = match self
-                .decided_request(inbound, &original, attempt, previous.clone())
-                .await
+            match self
+                .stream_attempt(inbound, &original, &next, attempt, previous, max_attempts)
+                .await?
             {
-                Ok(value) => value,
-                Err(error) => {
-                    self.emit_error(None, attempt, "decision_api", &error);
+                StreamAttempt::Committed(stream) => return Ok(stream),
+                StreamAttempt::Retry(retry) => previous = Some(retry),
+                StreamAttempt::Fallback(reason) => {
                     return self
-                        .dispatch_fallback_stream(inbound, original, next, "decision_error")
-                        .await;
-                }
-            };
-            let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
-            match next(routed).await {
-                Ok(mut upstream) => match upstream.next().await {
-                    Some(Ok(first)) => {
-                        self.record_routing_contribution(&decision, attempt, true);
-                        let committed = Box::pin(
-                            futures_stream::once(async move { Ok(first) }).chain(upstream),
-                        ) as LlmJsonStream;
-                        let output = if target_protocol == inbound {
-                            committed
-                        } else {
-                            translated_stream(
-                                target_protocol,
-                                inbound,
-                                decision.route.target_model.clone(),
-                                committed,
-                            )
-                        };
-                        return Ok(mark_terminal_stream(
-                            output,
-                            "provider_stream_committed",
-                            self.config.mode.label(),
-                            identity_metadata(&routing_request),
-                        ));
-                    }
-                    Some(Err(error)) if error_is_retryable(&error) && attempt < max_attempts => {
-                        let retry_reason = provider_error_summary(&error);
-                        self.emit_error(
-                            Some(&routing_request),
-                            attempt,
-                            "provider_stream_open",
-                            &retry_reason,
-                        );
-                        self.emit_retry(&routing_request, &decision, attempt, &retry_reason);
-                        previous = Some((decision.route.backend_id, retry_reason));
-                    }
-                    None if attempt < max_attempts => {
-                        self.emit_retry(&routing_request, &decision, attempt, "empty_stream");
-                        previous = Some((decision.route.backend_id, "empty_stream".into()));
-                    }
-                    Some(Err(error)) => {
-                        let summary = provider_error_summary(&error);
-                        self.emit_error(
-                            Some(&routing_request),
-                            attempt,
-                            "provider_stream_open",
-                            &summary,
-                        );
-                        return self
-                            .dispatch_fallback_stream(
-                                inbound,
-                                original,
-                                next,
-                                if error_is_retryable(&error) {
-                                    "retry_exhausted"
-                                } else {
-                                    "non_retryable_provider_error"
-                                },
-                            )
-                            .await;
-                    }
-                    None => {
-                        return self
-                            .dispatch_fallback_stream(inbound, original, next, "empty_stream")
-                            .await;
-                    }
-                },
-                Err(error) if error_is_retryable(&error) && attempt < max_attempts => {
-                    let retry_reason = provider_error_summary(&error);
-                    self.emit_error(
-                        Some(&routing_request),
-                        attempt,
-                        "provider_stream_setup",
-                        &retry_reason,
-                    );
-                    self.emit_retry(&routing_request, &decision, attempt, &retry_reason);
-                    previous = Some((decision.route.backend_id, retry_reason));
-                }
-                Err(error) => {
-                    let summary = provider_error_summary(&error);
-                    self.emit_error(
-                        Some(&routing_request),
-                        attempt,
-                        "provider_stream_setup",
-                        &summary,
-                    );
-                    return self
-                        .dispatch_fallback_stream(
-                            inbound,
-                            original,
-                            next,
-                            if error_is_retryable(&error) {
-                                "retry_exhausted"
-                            } else {
-                                "non_retryable_provider_error"
-                            },
-                        )
+                        .dispatch_fallback_stream(inbound, original, next, reason)
                         .await;
                 }
             }
         }
         unreachable!("stream routing attempt loop always returns")
+    }
+
+    async fn stream_attempt(
+        &self,
+        inbound: WireProtocol,
+        original: &LlmRequest,
+        next: &nemo_relay::api::runtime::LlmStreamExecutionNextFn,
+        attempt: u32,
+        previous: Option<(String, String)>,
+        max_attempts: u32,
+    ) -> FlowResult<StreamAttempt> {
+        let (routing_request, decision, routed) = match self
+            .decided_request(inbound, original, attempt, previous)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                self.emit_error(None, attempt, "decision_api", &error);
+                return Ok(StreamAttempt::Fallback("decision_error"));
+            }
+        };
+        let target_protocol = protocol_from_label(&decision.route.target_protocol_profile)?;
+        let context = StreamAttemptContext {
+            routing_request,
+            decision,
+            attempt,
+            max_attempts,
+        };
+        match next(routed).await {
+            Ok(mut upstream) => {
+                let first = upstream.next().await;
+                Ok(self.classify_open_stream(inbound, target_protocol, context, upstream, first))
+            }
+            Err(error) => Ok(self.classify_stream_setup_error(context, error)),
+        }
+    }
+
+    fn classify_open_stream(
+        &self,
+        inbound: WireProtocol,
+        target_protocol: WireProtocol,
+        context: StreamAttemptContext,
+        upstream: LlmJsonStream,
+        first: Option<FlowResult<Json>>,
+    ) -> StreamAttempt {
+        let StreamAttemptContext {
+            routing_request,
+            decision,
+            attempt,
+            max_attempts,
+        } = context;
+        match first {
+            Some(Ok(first)) => {
+                self.record_routing_contribution(&decision, attempt, true);
+                let committed =
+                    Box::pin(futures_stream::once(async move { Ok(first) }).chain(upstream))
+                        as LlmJsonStream;
+                let output = if target_protocol == inbound {
+                    committed
+                } else {
+                    translated_stream(
+                        target_protocol,
+                        inbound,
+                        decision.route.target_model.clone(),
+                        committed,
+                    )
+                };
+                StreamAttempt::Committed(mark_terminal_stream(
+                    output,
+                    "provider_stream_committed",
+                    self.config.mode.label(),
+                    identity_metadata(&routing_request),
+                ))
+            }
+            Some(Err(error)) if error_is_retryable(&error) && attempt < max_attempts => self
+                .retry_stream_attempt(
+                    &routing_request,
+                    decision,
+                    attempt,
+                    "provider_stream_open",
+                    provider_error_summary(&error),
+                ),
+            None if attempt < max_attempts => self.retry_stream_attempt(
+                &routing_request,
+                decision,
+                attempt,
+                "provider_stream_open",
+                "empty_stream".into(),
+            ),
+            Some(Err(error)) => {
+                let summary = provider_error_summary(&error);
+                self.emit_error(
+                    Some(&routing_request),
+                    attempt,
+                    "provider_stream_open",
+                    &summary,
+                );
+                StreamAttempt::Fallback(provider_fallback_reason(&error))
+            }
+            None => StreamAttempt::Fallback("empty_stream"),
+        }
+    }
+
+    fn classify_stream_setup_error(
+        &self,
+        context: StreamAttemptContext,
+        error: FlowError,
+    ) -> StreamAttempt {
+        let StreamAttemptContext {
+            routing_request,
+            decision,
+            attempt,
+            max_attempts,
+        } = context;
+        let summary = provider_error_summary(&error);
+        if error_is_retryable(&error) && attempt < max_attempts {
+            return self.retry_stream_attempt(
+                &routing_request,
+                decision,
+                attempt,
+                "provider_stream_setup",
+                summary,
+            );
+        }
+        self.emit_error(
+            Some(&routing_request),
+            attempt,
+            "provider_stream_setup",
+            &summary,
+        );
+        StreamAttempt::Fallback(provider_fallback_reason(&error))
+    }
+
+    fn retry_stream_attempt(
+        &self,
+        routing_request: &RoutingRequest,
+        decision: RoutingDecision,
+        attempt: u32,
+        error_class: &str,
+        reason: String,
+    ) -> StreamAttempt {
+        if reason != "empty_stream" {
+            self.emit_error(Some(routing_request), attempt, error_class, &reason);
+        }
+        self.emit_retry(routing_request, &decision, attempt, &reason);
+        StreamAttempt::Retry((decision.route.backend_id, reason))
     }
 
     async fn decided_request(
@@ -895,7 +1023,7 @@ impl SwitchyardRuntime {
         &self,
         inbound: WireProtocol,
         request: &LlmRequest,
-        annotated: &switchyard_translation::ConversationRequest,
+        annotated: &switchyard_translation::LlmRequest,
     ) -> Result<Option<Json>, String> {
         match self.config.request_materialization {
             RequestMaterialization::None | RequestMaterialization::SummaryOnly => Ok(None),
@@ -1218,7 +1346,63 @@ impl SwitchyardRuntime {
     }
 }
 
+async fn check_switchyard_health(
+    client: &reqwest::Client,
+    health_url: &reqwest::Url,
+) -> Result<(), String> {
+    let response = client
+        .get(health_url.clone())
+        .send()
+        .await
+        .map_err(|error| {
+            format!("Switchyard service is required but health check {health_url} failed: {error}")
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Switchyard service is required but health check {health_url} returned HTTP {status}"
+        ));
+    }
+    let body = response.json::<Json>().await.map_err(|error| {
+        format!("Switchyard health check {health_url} returned invalid JSON: {error}")
+    })?;
+    if body.get("status").and_then(Json::as_str) != Some("ok") {
+        return Err(format!(
+            "Switchyard health check {health_url} did not report status=ok"
+        ));
+    }
+    Ok(())
+}
+
+fn switchyard_health_url(decision_api_url: &str) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(decision_api_url)
+        .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
+    url.set_path(SWITCHYARD_HEALTH_PATH);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn validate_atof_endpoint_name(name: Option<&str>) -> Result<Option<&str>, String> {
+    if let Some(name) = name {
+        if name.trim().is_empty() {
+            return Err("atof_endpoint_name must be non-empty when configured".into());
+        }
+        if name != name.trim() {
+            return Err("atof_endpoint_name must not have leading or trailing whitespace".into());
+        }
+    }
+    Ok(name)
+}
+
 fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
+    validate_scalar_config(config)?;
+    validate_decision_api_url(&config.decision_api_url)?;
+    validate_target_bindings(config)?;
+    validate_default_targets(config)
+}
+
+fn validate_scalar_config(config: &SwitchyardConfig) -> Result<(), String> {
     if config.version != 1 {
         return Err(format!(
             "unsupported Switchyard config version {}",
@@ -1237,11 +1421,23 @@ fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
     if config.recent_message_count == 0 {
         return Err("recent_message_count must be greater than zero".into());
     }
-    let url = reqwest::Url::parse(&config.decision_api_url)
+    let atof_endpoint_name = validate_atof_endpoint_name(config.atof_endpoint_name.as_deref())?;
+    if config.context_mode == ContextMode::AtofRequired && atof_endpoint_name.is_none() {
+        return Err("atof_required Switchyard profiles require atof_endpoint_name".into());
+    }
+    Ok(())
+}
+
+fn validate_decision_api_url(decision_api_url: &str) -> Result<(), String> {
+    let url = reqwest::Url::parse(decision_api_url)
         .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err("decision_api_url must use http or https".into());
     }
+    Ok(())
+}
+
+fn validate_target_bindings(config: &SwitchyardConfig) -> Result<(), String> {
     if config.targets.is_empty() {
         return Err("targets must not be empty".into());
     }
@@ -1279,6 +1475,10 @@ fn validate_config(config: &SwitchyardConfig) -> Result<(), String> {
             ));
         }
     }
+    Ok(())
+}
+
+fn validate_default_targets(config: &SwitchyardConfig) -> Result<(), String> {
     for &protocol in &config.enabled_inbound_profiles {
         let id = config.default_targets.target(protocol);
         let target = config

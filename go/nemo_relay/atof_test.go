@@ -16,52 +16,49 @@ const eventsJSONLFilename = "events.jsonl"
 
 func TestNewAtofExporterConfigDefaults(t *testing.T) {
 	config := NewAtofExporterConfig()
-
-	if config.Mode != AtofExporterModeAppend {
-		t.Fatalf("expected append mode default, got %q", config.Mode)
+	file, ok := config.Sink.(AtofFileSinkConfig)
+	if !ok || file.Mode != AtofExporterModeAppend {
+		t.Fatalf("expected default append file sink, got %#v", config.Sink)
 	}
-	if config.OutputDirectory != "" {
-		t.Fatalf("expected empty output directory default override, got %q", config.OutputDirectory)
-	}
-	if config.Filename != "" {
-		t.Fatalf("expected empty filename default override, got %q", config.Filename)
-	}
-	if len(config.Endpoints) != 0 {
-		t.Fatalf("expected no streaming endpoints by default, got %#v", config.Endpoints)
-	}
-	config.Endpoints = []AtofEndpointConfig{{
+	config.Sink = AtofStreamSinkConfig{
 		URL:             "http://localhost:8080/events",
 		Transport:       AtofEndpointTransportHTTPPost,
 		Headers:         map[string]string{"X-Test": "yes"},
+		HeaderEnv:       map[string]string{"authorization": "NEMO_RELAY_ATOF_AUTH"},
 		TimeoutMillis:   1000,
 		FieldNamePolicy: AtofEndpointFieldNamePolicyReplaceDots,
-	}}
-	if config.Endpoints[0].Transport != AtofEndpointTransportHTTPPost ||
-		config.Endpoints[0].FieldNamePolicy != AtofEndpointFieldNamePolicyReplaceDots {
-		t.Fatalf("unexpected endpoint config: %#v", config.Endpoints[0])
+	}
+	stream := config.Sink.(AtofStreamSinkConfig)
+	if stream.Transport != AtofEndpointTransportHTTPPost ||
+		stream.FieldNamePolicy != AtofEndpointFieldNamePolicyReplaceDots {
+		t.Fatalf("unexpected stream sink: %#v", stream)
 	}
 	serialized, err := json.Marshal(config)
 	if err != nil {
 		t.Fatalf("marshal config failed: %v", err)
 	}
-	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
-		t.Fatalf("expected field_name_policy in serialized config, got %s", serialized)
+	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) ||
+		!strings.Contains(string(serialized), `"header_env":{"authorization":"NEMO_RELAY_ATOF_AUTH"}`) {
+		t.Fatalf("expected stream sink settings in serialized config, got %s", serialized)
 	}
 }
 
 func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 	dir := t.TempDir()
-	exporter, err := NewAtofExporter(AtofExporterConfig{
+	exporter, err := NewAtofExporter(AtofExporterConfig{Sink: AtofFileSinkConfig{
 		OutputDirectory: dir,
 		Mode:            AtofExporterModeOverwrite,
 		Filename:        eventsJSONLFilename,
-	})
+	}})
 	requireNoError(t, err, "NewAtofExporter failed")
 	defer exporter.Close()
 
 	path, err := exporter.Path()
 	requireNoError(t, err, "Path failed")
-	requireEqual(t, filepath.Base(path), eventsJSONLFilename, "expected %s path", eventsJSONLFilename)
+	if path == nil {
+		t.Fatal("expected file exporter path")
+	}
+	requireEqual(t, filepath.Base(*path), eventsJSONLFilename, "expected %s path", eventsJSONLFilename)
 
 	name := "go_atof_" + time.Now().Format("150405.000000")
 	requireNoError(t, exporter.Register(name), "Register failed")
@@ -87,7 +84,7 @@ func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 	requireNoError(t, exporter.ForceFlush(), "ForceFlush failed")
 	requireNoError(t, exporter.Shutdown(), "Shutdown failed")
 
-	records := readAtofRecords(t, path)
+	records := readAtofRecords(t, *path)
 	if len(records) != 3 {
 		t.Fatalf("expected 3 records, got %d", len(records))
 	}
@@ -109,10 +106,10 @@ func TestAtofExporterAppendAndOverwriteModes(t *testing.T) {
 		t.Fatalf("write seed file: %v", err)
 	}
 
-	appendExporter, err := NewAtofExporter(AtofExporterConfig{
+	appendExporter, err := NewAtofExporter(AtofExporterConfig{Sink: AtofFileSinkConfig{
 		OutputDirectory: dir,
 		Filename:        eventsJSONLFilename,
-	})
+	}})
 	if err != nil {
 		t.Fatalf("append NewAtofExporter failed: %v", err)
 	}
@@ -124,11 +121,11 @@ func TestAtofExporterAppendAndOverwriteModes(t *testing.T) {
 		t.Fatalf("append mode changed file: %q", got)
 	}
 
-	overwriteExporter, err := NewAtofExporter(AtofExporterConfig{
+	overwriteExporter, err := NewAtofExporter(AtofExporterConfig{Sink: AtofFileSinkConfig{
 		OutputDirectory: dir,
 		Mode:            AtofExporterModeOverwrite,
 		Filename:        eventsJSONLFilename,
-	})
+	}})
 	if err != nil {
 		t.Fatalf("overwrite NewAtofExporter failed: %v", err)
 	}

@@ -21,9 +21,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
-    MarkProjection, default_mark_exclude_names, effective_mark_projection,
+    MarkProjection, OtlpAttributeMapping, apply_attribute_mappings, attribute_mapping_aliases,
+    attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
-    model_name_for_llm_event,
+    model_name_for_llm_event, push_serialized_top_level_attributes,
+    push_session_identity_attributes, push_top_level_json_attributes, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
@@ -39,7 +41,6 @@ use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span};
-use serde::Serialize;
 use uuid::Uuid;
 
 const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
@@ -71,6 +72,9 @@ pub enum OpenTelemetryError {
     /// The underlying tracer provider returned an error.
     #[error("OpenTelemetry tracer provider error: {0}")]
     Provider(String),
+    /// Attribute mapping configuration was invalid.
+    #[error("invalid attribute mappings: {0}")]
+    InvalidAttributeMappings(String),
     /// Registration errors from the core runtime.
     #[error(transparent)]
     Core(#[from] FlowError),
@@ -98,6 +102,7 @@ pub struct OpenTelemetryConfig {
     instrumentation_scope: String,
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
+    attribute_mappings: Vec<OtlpAttributeMapping>,
     timeout: Duration,
     transport: OtlpTransport,
 }
@@ -114,6 +119,7 @@ impl Default for OpenTelemetryConfig {
             instrumentation_scope: "nemo-relay-otel".to_string(),
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
         }
@@ -202,12 +208,53 @@ impl OpenTelemetryConfig {
         self.mark_exclude_names = names.into_iter().map(Into::into).collect();
         self
     }
+
+    /// Adds a typed attribute copy after event payload projection.
+    pub fn with_attribute_mapping(
+        mut self,
+        key: impl Into<String>,
+        alias: impl Into<String>,
+    ) -> Self {
+        self.attribute_mappings
+            .push(OtlpAttributeMapping::new(key, alias));
+        self
+    }
+
+    /// Replaces the configured typed attribute copies.
+    pub fn with_attribute_mappings<I>(mut self, mappings: I) -> Self
+    where
+        I: IntoIterator<Item = OtlpAttributeMapping>,
+    {
+        self.attribute_mappings = mappings.into_iter().collect();
+        self
+    }
 }
 
 /// OpenTelemetry-backed NeMo Relay subscriber.
 #[derive(Clone)]
 pub struct OpenTelemetrySubscriber {
     inner: Arc<Inner>,
+}
+
+/// Options for constructing an OpenTelemetry subscriber from an existing tracer provider.
+#[derive(Debug, Clone)]
+pub struct OpenTelemetrySubscriberOptions {
+    /// How mark events are projected into the trace.
+    pub mark_projection: MarkProjection,
+    /// Mark names excluded from tool projection.
+    pub mark_exclude_names: Vec<String>,
+    /// Typed OTLP attributes copied to alias keys.
+    pub attribute_mappings: Vec<OtlpAttributeMapping>,
+}
+
+impl Default for OpenTelemetrySubscriberOptions {
+    fn default() -> Self {
+        Self {
+            mark_projection: MarkProjection::default(),
+            mark_exclude_names: default_mark_exclude_names(),
+            attribute_mappings: Vec::new(),
+        }
+    }
 }
 
 struct Inner {
@@ -222,6 +269,8 @@ impl OpenTelemetrySubscriber {
         {
             return Err(OpenTelemetryError::MissingTokioRuntime);
         }
+        validate_attribute_mappings(&config.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
 
         let provider = build_tracer_provider(&config)?;
         Ok(Self::from_tracer_provider_with_scope(
@@ -229,6 +278,7 @@ impl OpenTelemetrySubscriber {
             config.instrumentation_scope,
             config.mark_projection,
             config.mark_exclude_names,
+            config.attribute_mappings,
         ))
     }
 
@@ -242,6 +292,7 @@ impl OpenTelemetrySubscriber {
             instrumentation_scope.into(),
             MarkProjection::default(),
             default_mark_exclude_names(),
+            Vec::new(),
         )
     }
 
@@ -256,6 +307,7 @@ impl OpenTelemetrySubscriber {
             instrumentation_scope.into(),
             mark_projection,
             default_mark_exclude_names(),
+            Vec::new(),
         )
     }
 
@@ -275,7 +327,45 @@ impl OpenTelemetrySubscriber {
             instrumentation_scope.into(),
             mark_projection,
             mark_exclude_names.into_iter().map(Into::into).collect(),
+            Vec::new(),
         )
+    }
+
+    /// Builds a subscriber from a tracer provider with typed attribute copies.
+    pub fn from_tracer_provider_with_attribute_mappings<I>(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        attribute_mappings: I,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = OtlpAttributeMapping>,
+    {
+        let attribute_mappings = attribute_mappings.into_iter().collect::<Vec<_>>();
+        Self::from_tracer_provider_with_options(
+            provider,
+            instrumentation_scope,
+            OpenTelemetrySubscriberOptions {
+                attribute_mappings,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Builds a subscriber from a tracer provider with composable projection options.
+    pub fn from_tracer_provider_with_options(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        options: OpenTelemetrySubscriberOptions,
+    ) -> Result<Self> {
+        validate_attribute_mappings(&options.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        Ok(Self::from_tracer_provider_with_scope(
+            provider,
+            instrumentation_scope.into(),
+            options.mark_projection,
+            options.mark_exclude_names,
+            options.attribute_mappings,
+        ))
     }
 
     fn from_tracer_provider_with_scope(
@@ -283,13 +373,15 @@ impl OpenTelemetrySubscriber {
         instrumentation_scope: String,
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
     ) -> Self {
         let processor = Arc::new(Mutex::new(
-            OtelEventProcessor::new_with_mark_projection_and_exclusions(
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
                 provider,
                 instrumentation_scope,
                 mark_projection,
                 mark_exclude_names,
+                attribute_mappings,
             ),
         ));
         let processor_for_callback = Arc::clone(&processor);
@@ -436,6 +528,7 @@ fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap>
 struct ActiveSpan {
     span: Span,
     span_context: SpanContext,
+    projected_attributes: Vec<KeyValue>,
 }
 
 struct OtelEventProcessor {
@@ -446,6 +539,7 @@ struct OtelEventProcessor {
     tracer: SdkTracer,
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
+    attribute_mappings: Vec<OtlpAttributeMapping>,
 }
 
 impl OtelEventProcessor {
@@ -468,11 +562,28 @@ impl OtelEventProcessor {
         )
     }
 
+    #[cfg(test)]
     fn new_with_mark_projection_and_exclusions(
         provider: SdkTracerProvider,
         instrumentation_scope: String,
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings(
+            provider,
+            instrumentation_scope,
+            mark_projection,
+            mark_exclude_names,
+            Vec::new(),
+        )
+    }
+
+    fn new_with_mark_projection_and_exclusions_and_mappings(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope);
         Self {
@@ -483,6 +594,7 @@ impl OtelEventProcessor {
             tracer,
             mark_projection,
             mark_exclude_names,
+            attribute_mappings,
         }
     }
 
@@ -508,16 +620,29 @@ impl OtelEventProcessor {
 
     fn process_start(&mut self, event: &Event) {
         self.remove_completed_span_context(event.uuid());
+        let parent_context = self.parent_context(event);
+        let is_trace_root = !parent_context.span().span_context().is_valid();
         let mut span = self
             .tracer
             .span_builder(span_name(event))
             .with_kind(span_kind(event))
             .with_start_time(to_system_time(*event.timestamp()))
-            .start_with_context(&self.tracer, &self.parent_context(event));
-        span.set_attributes(start_attributes(event));
+            .start_with_context(&self.tracer, &parent_context);
+        let mut attributes = start_attributes(event);
+        if is_trace_root {
+            push_session_identity_attributes(&mut attributes, event);
+        }
+        let projected_attributes = attribute_mapping_inputs(&attributes, &self.attribute_mappings);
+        span.set_attributes(attributes);
         let span_context = local_parent_span_context(span.span_context());
-        self.active_spans
-            .insert(event.uuid(), ActiveSpan { span, span_context });
+        self.active_spans.insert(
+            event.uuid(),
+            ActiveSpan {
+                span,
+                span_context,
+                projected_attributes,
+            },
+        );
     }
 
     fn process_end(&mut self, event: &Event) {
@@ -527,7 +652,16 @@ impl OtelEventProcessor {
         self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
 
         super::set_span_status_from_event_metadata(&mut active_span.span, event);
-        active_span.span.set_attributes(end_attributes(event));
+        let mut attributes = end_attributes(event);
+        if !self.attribute_mappings.is_empty() {
+            let mut projected_attributes = active_span.projected_attributes;
+            projected_attributes.extend(attributes.iter().cloned());
+            attributes.extend(attribute_mapping_aliases(
+                &projected_attributes,
+                &self.attribute_mappings,
+            ));
+        }
+        active_span.span.set_attributes(attributes);
         active_span
             .span
             .end_with_timestamp(to_system_time(*event.timestamp()));
@@ -542,9 +676,16 @@ impl OtelEventProcessor {
         }
         let mark_name = event.name().to_string();
         let timestamp = to_system_time(*event.timestamp());
-        let attributes = mark_attributes(event);
+        let mut attributes = mark_attributes(event);
+        if event.name() == "session.start" {
+            push_session_identity_attributes(&mut attributes, event);
+        }
 
-        if let Some(parent_span) = self.find_parent_span_mut(event) {
+        if self.find_parent_span(event).is_some() {
+            apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+            let parent_span = self
+                .find_parent_span_mut(event)
+                .expect("parent span was present during mark projection");
             parent_span
                 .span
                 .add_event_with_timestamp(mark_name, timestamp, attributes);
@@ -557,9 +698,9 @@ impl OtelEventProcessor {
             .with_kind(SpanKind::Internal)
             .with_start_time(timestamp)
             .start_with_context(&self.tracer, &self.parent_context(event));
-        let mut span_attributes = attributes;
-        span_attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
-        span.set_attributes(span_attributes);
+        attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
+        apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
+        span.set_attributes(attributes);
         span.end_with_timestamp(timestamp);
     }
 
@@ -567,11 +708,15 @@ impl OtelEventProcessor {
         let timestamp = to_system_time(*event.timestamp());
         let orphan = self.find_parent_span(event).is_none();
         let mut attributes = mark_attributes(event);
+        if event.name() == "session.start" {
+            push_session_identity_attributes(&mut attributes, event);
+        }
         attributes.push(KeyValue::new("nemo_relay.mark.projection", "tool"));
         attributes.push(KeyValue::new("nemo_relay.scope_type", "tool"));
         if orphan {
             attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         }
+        apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
 
         let mut span = self
             .tracer
@@ -668,37 +813,26 @@ fn scope_type_name(scope_type: Option<ScopeType>) -> &'static str {
 
 fn start_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = common_attributes(event);
-    let handle_attributes = event.attributes();
-    push_serialized(
+    push_serialized_top_level_attributes(
         &mut attributes,
-        "nemo_relay.handle_attributes_json",
-        handle_attributes,
+        "nemo_relay.handle_attributes",
+        event.attributes(),
     );
-    push_serialized(&mut attributes, "nemo_relay.start.data_json", event.data());
-    push_serialized(
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.start.data", event.data());
+    push_top_level_json_attributes(
         &mut attributes,
-        "nemo_relay.start.metadata_json",
+        "nemo_relay.start.metadata",
         event.metadata(),
     );
-    push_serialized(
-        &mut attributes,
-        "nemo_relay.start.input_json",
-        event.input(),
-    );
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.start.input", event.input());
     attributes
 }
 
 fn end_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = Vec::new();
-    push_serialized(&mut attributes, "nemo_relay.end.data_json", event.data());
-
-    let metadata = event.metadata();
-    push_serialized(&mut attributes, "nemo_relay.end.metadata_json", metadata);
-    push_serialized(
-        &mut attributes,
-        "nemo_relay.end.output_json",
-        event.output(),
-    );
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.end.data", event.data());
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.end.metadata", event.metadata());
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
     if event
         .category()
         .is_some_and(|category| category.as_str() == "llm")
@@ -719,143 +853,7 @@ fn push_optimization_attributes(
     attributes: &mut Vec<KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,
 ) {
-    if let Some(model) = summary.baseline_model.as_ref() {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.baseline_model",
-            model.model.clone(),
-        ));
-    }
-    if let Some(model) = summary.effective_model.as_ref() {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.effective_model",
-            model.model.clone(),
-        ));
-    }
-    if let Some(tokens) = summary.tokens_saved.prompt_tokens {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.prompt_tokens_saved",
-            i64::try_from(tokens).unwrap_or(i64::MAX),
-        ));
-    }
-    if let Some(tokens) = summary.tokens_saved.total_tokens {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.total_tokens_saved",
-            i64::try_from(tokens).unwrap_or(i64::MAX),
-        ));
-    }
-    if let Some(cost) = summary
-        .baseline_cost
-        .as_ref()
-        .and_then(|cost| cost.total_or_component_sum())
-    {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.baseline_cost",
-            cost,
-        ));
-    }
-    if let Some(cost) = summary.baseline_cost.as_ref() {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.baseline_cost_currency",
-            cost.currency.clone(),
-        ));
-        if let Some(source) = cost.pricing_source.as_ref() {
-            attributes.push(KeyValue::new(
-                "nemo_relay.llm.optimization.baseline_pricing_source",
-                source.clone(),
-            ));
-        }
-        if let Some(as_of) = cost.pricing_as_of.as_ref() {
-            attributes.push(KeyValue::new(
-                "nemo_relay.llm.optimization.baseline_pricing_as_of",
-                as_of.clone(),
-            ));
-        }
-    }
-    if let Some(cost) = summary
-        .actual_cost
-        .as_ref()
-        .and_then(|cost| cost.total_or_component_sum())
-    {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.actual_cost",
-            cost,
-        ));
-    }
-    if let Some(cost) = summary.actual_cost.as_ref() {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.actual_cost_currency",
-            cost.currency.clone(),
-        ));
-        if let Some(source) = cost.pricing_source.as_ref() {
-            attributes.push(KeyValue::new(
-                "nemo_relay.llm.optimization.actual_pricing_source",
-                source.clone(),
-            ));
-        }
-        if let Some(as_of) = cost.pricing_as_of.as_ref() {
-            attributes.push(KeyValue::new(
-                "nemo_relay.llm.optimization.actual_pricing_as_of",
-                as_of.clone(),
-            ));
-        }
-    }
-    if let Some(cost) = summary.estimated_cost_saved {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.estimated_cost_saved",
-            cost,
-        ));
-        if let Some(currency) = summary.currency.as_ref() {
-            attributes.push(KeyValue::new(
-                "nemo_relay.llm.optimization.estimated_cost_saved_currency",
-                currency.clone(),
-            ));
-        }
-    }
-    if let Some(currency) = summary.currency.as_ref() {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.currency",
-            currency.clone(),
-        ));
-    }
-    attributes.push(KeyValue::new(
-        "nemo_relay.llm.optimization.status",
-        match summary.status {
-            crate::codec::optimization::LlmOptimizationSummaryStatus::Complete => "complete",
-            crate::codec::optimization::LlmOptimizationSummaryStatus::Partial => "partial",
-        },
-    ));
-    if let Some(source) = summary
-        .baseline_cost
-        .as_ref()
-        .and_then(|cost| cost.pricing_source.as_ref())
-        .or_else(|| {
-            summary
-                .actual_cost
-                .as_ref()
-                .and_then(|cost| cost.pricing_source.as_ref())
-        })
-    {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.pricing_source",
-            source.clone(),
-        ));
-    }
-    if let Some(as_of) = summary
-        .baseline_cost
-        .as_ref()
-        .and_then(|cost| cost.pricing_as_of.as_ref())
-        .or_else(|| {
-            summary
-                .actual_cost
-                .as_ref()
-                .and_then(|cost| cost.pricing_as_of.as_ref())
-        })
-    {
-        attributes.push(KeyValue::new(
-            "nemo_relay.llm.optimization.pricing_as_of",
-            as_of.clone(),
-        ));
-    }
+    crate::observability::push_common_optimization_attributes(attributes, summary);
 }
 
 fn cost_from_llm_event(event: &Event) -> Option<(f64, String)> {
@@ -894,7 +892,6 @@ fn cost_total_and_currency(cost: &CostEstimate) -> Option<(f64, String)> {
 }
 
 fn mark_attributes(event: &Event) -> Vec<KeyValue> {
-    let handle_attributes = event.attributes();
     let mut attributes = vec![
         KeyValue::new("nemo_relay.mark.uuid", event.uuid().to_string()),
         KeyValue::new(
@@ -905,15 +902,15 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
                 .unwrap_or_default(),
         ),
     ];
-    push_serialized(
+    push_serialized_top_level_attributes(
         &mut attributes,
-        "nemo_relay.mark.attributes_json",
-        handle_attributes,
+        "nemo_relay.mark.attributes",
+        event.attributes(),
     );
-    push_serialized(&mut attributes, "nemo_relay.mark.data_json", event.data());
-    push_serialized(
+    push_top_level_json_attributes(&mut attributes, "nemo_relay.mark.data", event.data());
+    push_top_level_json_attributes(
         &mut attributes,
-        "nemo_relay.mark.metadata_json",
+        "nemo_relay.mark.metadata",
         event.metadata(),
     );
     if let Some(category) = event.category() {
@@ -922,9 +919,9 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
             category.as_str().to_string(),
         ));
     }
-    push_serialized(
+    push_serialized_top_level_attributes(
         &mut attributes,
-        "nemo_relay.mark.category_profile_json",
+        "nemo_relay.mark.category_profile",
         event.category_profile(),
     );
     attributes
@@ -957,18 +954,6 @@ fn common_attributes(event: &Event) -> Vec<KeyValue> {
     }
 
     attributes
-}
-
-fn push_serialized<T: Serialize + ?Sized>(
-    attributes: &mut Vec<KeyValue>,
-    key: &'static str,
-    value: Option<&T>,
-) {
-    if let Some(value) = value
-        && let Ok(json) = serde_json::to_string(value)
-    {
-        attributes.push(KeyValue::new(key, json));
-    }
 }
 
 fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {

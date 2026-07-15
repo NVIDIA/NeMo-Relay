@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
     EventSanitizeGuardrail,
@@ -31,6 +31,7 @@ from nemo_relay import (
     UnsupportedBehavior,
     subscribers,
 )
+from nemo_relay._native import _PluginHostActivation as _NativePluginHostActivation
 from nemo_relay._native import (
     active_plugin_report as _active_plugin_report,
 )
@@ -44,6 +45,9 @@ from nemo_relay._native import (
     initialize_plugins as _initialize_plugins,
 )
 from nemo_relay._native import (
+    initialize_with_dynamic_plugins as _initialize_with_dynamic_plugins,
+)
+from nemo_relay._native import (
     list_plugin_kinds as _list_plugin_kinds,
 )
 from nemo_relay._native import (
@@ -54,6 +58,8 @@ from nemo_relay._native import (
 )
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from nemo_relay import Event
 
 
@@ -74,6 +80,10 @@ class ConfigReport(TypedDict):
     """Validation or activation report for a plugin config."""
 
     diagnostics: list[ConfigDiagnostic]
+
+
+DynamicPluginKind = Literal["rust_dynamic", "worker"]
+"""Execution lane for a dynamically loaded plugin."""
 
 
 class PluginContext(Protocol):
@@ -199,24 +209,33 @@ class _SupportsToDict(Protocol):
     def to_dict(self) -> JsonObject: ...
 
 
-def _normalize(value: object) -> Json:
+def _normalize(value: object, *, preserve_nulls: bool = False) -> Json:
     if hasattr(value, "to_dict"):
         return cast(_SupportsToDict, value).to_dict()
     if is_dataclass(value) and not isinstance(value, type):
         return {
-            field_info.name: _normalize(field_value)
+            field_info.name: _normalize(field_value, preserve_nulls=preserve_nulls)
             for field_info in fields(value)
-            if (field_value := getattr(value, field_info.name)) is not None
+            for field_value in [getattr(value, field_info.name)]
+            if preserve_nulls or field_value is not None
         }
     if isinstance(value, list):
-        return [_normalize(item) for item in value]
+        return [_normalize(item, preserve_nulls=preserve_nulls) for item in value]
     if isinstance(value, dict):
-        return {cast(str, key): _normalize(val) for key, val in value.items() if val is not None}
+        return {
+            cast(str, key): _normalize(val, preserve_nulls=preserve_nulls or key == "config")
+            for key, val in value.items()
+            if preserve_nulls or val is not None
+        }
     return cast(Json, value)
 
 
 def _normalize_object(value: object) -> JsonObject:
     return cast(JsonObject, _normalize(value))
+
+
+def _normalize_component_config(value: object) -> JsonObject:
+    return cast(JsonObject, _normalize(value, preserve_nulls=True))
 
 
 @dataclass(slots=True)
@@ -270,7 +289,7 @@ class ComponentSpec:
         return {
             "kind": self.kind,
             "enabled": self.enabled,
-            "config": _normalize_object(self.config),
+            "config": _normalize_component_config(self.config),
         }
 
 
@@ -299,6 +318,84 @@ class PluginConfig:
             "components": [_normalize(component) for component in self.components],
             "policy": self.policy.to_dict(),
         }
+
+
+@dataclass(slots=True)
+class DynamicPluginActivationSpec:
+    """One dynamic plugin component to load and activate.
+
+    Args:
+        plugin_id: Expected plugin identifier from the authored manifest.
+        kind: Dynamic plugin execution lane.
+        manifest_ref: Path to the authored ``relay-plugin.toml``.
+        environment_ref: Optional lifecycle-managed environment path. Python
+            workers require the path created by Relay's plugin lifecycle.
+        config: Component-local JSON configuration.
+    """
+
+    plugin_id: str
+    kind: DynamicPluginKind
+    manifest_ref: str
+    environment_ref: str | None = None
+    config: JsonObject = field(default_factory=dict)
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this activation specification to its canonical JSON shape."""
+        value: JsonObject = {
+            "plugin_id": self.plugin_id,
+            "kind": self.kind,
+            "manifest_ref": self.manifest_ref,
+            "config": _normalize_component_config(self.config),
+        }
+        if self.environment_ref is not None:
+            value["environment_ref"] = self.environment_ref
+        return value
+
+
+class PluginHostActivation:
+    """Owned lifetime for one process-wide dynamic plugin host.
+
+    Keep this object alive while agent code may invoke callbacks from the
+    loaded plugins. Prefer ``async with`` or call :meth:`close` explicitly.
+    Native finalization performs best-effort cleanup when an object is dropped.
+    """
+
+    __slots__ = ("_native",)
+
+    def __init__(self, native: _NativePluginHostActivation) -> None:
+        self._native = native
+
+    @property
+    def report(self) -> ConfigReport:
+        """Return the validation report captured during activation."""
+        return cast(ConfigReport, self._native.report)
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether this activation handle has not begun teardown.
+
+        ``False`` does not guarantee another process-wide activation can start;
+        failed teardown may intentionally retain the activation owner.
+        """
+        return self._native.is_active
+
+    async def close(self) -> None:
+        """Clear callbacks and unload plugins; repeated calls are safe."""
+        await self._native.close()
+
+    async def __aenter__(self) -> Self:
+        """Return this active host when entering an async context."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the host when leaving an async context."""
+        del exc_type, exc_value, traceback
+        await self.close()
 
 
 def validate(config: PluginConfig | JsonObject) -> ConfigReport:
@@ -332,6 +429,33 @@ async def initialize(config: PluginConfig | JsonObject) -> ConfigReport:
         is restored when possible.
     """
     return cast(ConfigReport, await _initialize_plugins(_normalize_object(config)))
+
+
+async def initialize_with_dynamic_plugins(
+    config: PluginConfig | JsonObject,
+    dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject],
+) -> PluginHostActivation:
+    """Initialize registered components with dynamic plugins as one owned host.
+
+    Args:
+        config: Base plugin configuration layered over the discovered
+            ``plugins.toml`` files before dynamic components are appended. It
+            may contain statically registered components.
+        dynamic_plugins: Non-empty ordered activation specifications. Dataclass
+            instances and equivalent JSON objects may be mixed.
+
+    Returns:
+        An owned activation containing the successful validation report.
+
+    Behavior:
+        Only one dynamic plugin host may be active in a process. Errors roll
+        back partial loads. The returned object must remain alive until agent
+        work is complete. This is the owned initialization path when dynamic
+        plugins are configured; use :func:`initialize` for static-only config.
+    """
+    normalized_plugins = [_normalize_object(spec) for spec in dynamic_plugins]
+    native = await _initialize_with_dynamic_plugins(_normalize_object(config), normalized_plugins)
+    return PluginHostActivation(native)
 
 
 def clear() -> None:
@@ -435,9 +559,13 @@ __all__ = [
     "ConfigDiagnostic",
     "ConfigPolicy",
     "ConfigReport",
+    "DynamicPluginActivationSpec",
+    "DynamicPluginKind",
     "PluginConfig",
     "PluginContext",
+    "PluginHostActivation",
     "Plugin",
+    "initialize_with_dynamic_plugins",
     "clear",
     "initialize",
     "deregister",

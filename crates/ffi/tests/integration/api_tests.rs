@@ -7,7 +7,7 @@ use super::*;
 use std::ffi::{CStr, CString};
 use std::fs;
 use std::ptr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nemo_relay::plugin::PluginRegistrationContext;
@@ -19,24 +19,24 @@ use nemo_relay_ffi::convert::nemo_relay_string_free;
 use nemo_relay_ffi::error::{NemoRelayStatus, nemo_relay_last_error, set_last_error};
 use nemo_relay_ffi::types::{
     FfiAtifExporter, FfiAtofExporter, FfiEvent, FfiLLMHandle, FfiLLMRequest,
-    FfiOpenTelemetrySubscriber, FfiScopeStack, FfiToolHandle, nemo_relay_atif_exporter_free,
-    nemo_relay_atof_exporter_free, nemo_relay_event_data, nemo_relay_event_input,
-    nemo_relay_event_metadata, nemo_relay_event_model_name, nemo_relay_event_name,
-    nemo_relay_event_output, nemo_relay_event_parent_uuid, nemo_relay_event_scope_type,
-    nemo_relay_event_timestamp, nemo_relay_event_tool_call_id, nemo_relay_event_uuid,
-    nemo_relay_llm_handle_attributes, nemo_relay_llm_handle_free, nemo_relay_llm_handle_name,
-    nemo_relay_llm_handle_parent_uuid, nemo_relay_llm_handle_uuid, nemo_relay_llm_request_content,
-    nemo_relay_llm_request_free, nemo_relay_llm_request_headers, nemo_relay_llm_request_new,
-    nemo_relay_otel_subscriber_free, nemo_relay_scope_handle_attributes,
-    nemo_relay_scope_handle_data, nemo_relay_scope_handle_free, nemo_relay_scope_handle_metadata,
-    nemo_relay_scope_handle_name, nemo_relay_scope_handle_parent_uuid,
-    nemo_relay_scope_handle_scope_type, nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free,
-    nemo_relay_tool_handle_attributes, nemo_relay_tool_handle_free, nemo_relay_tool_handle_name,
-    nemo_relay_tool_handle_parent_uuid, nemo_relay_tool_handle_uuid,
+    FfiOpenTelemetrySubscriber, FfiPluginActivation, FfiScopeStack, FfiToolHandle,
+    nemo_relay_atif_exporter_free, nemo_relay_atof_exporter_free, nemo_relay_event_data,
+    nemo_relay_event_input, nemo_relay_event_metadata, nemo_relay_event_model_name,
+    nemo_relay_event_name, nemo_relay_event_output, nemo_relay_event_parent_uuid,
+    nemo_relay_event_scope_type, nemo_relay_event_timestamp, nemo_relay_event_tool_call_id,
+    nemo_relay_event_uuid, nemo_relay_llm_handle_attributes, nemo_relay_llm_handle_free,
+    nemo_relay_llm_handle_name, nemo_relay_llm_handle_parent_uuid, nemo_relay_llm_handle_uuid,
+    nemo_relay_llm_request_content, nemo_relay_llm_request_free, nemo_relay_llm_request_headers,
+    nemo_relay_llm_request_new, nemo_relay_otel_subscriber_free,
+    nemo_relay_scope_handle_attributes, nemo_relay_scope_handle_data, nemo_relay_scope_handle_free,
+    nemo_relay_scope_handle_metadata, nemo_relay_scope_handle_name,
+    nemo_relay_scope_handle_parent_uuid, nemo_relay_scope_handle_scope_type,
+    nemo_relay_scope_handle_uuid, nemo_relay_scope_stack_free, nemo_relay_tool_handle_attributes,
+    nemo_relay_tool_handle_free, nemo_relay_tool_handle_name, nemo_relay_tool_handle_parent_uuid,
+    nemo_relay_tool_handle_uuid,
 };
 use nemo_relay_ffi::{api, callable, types};
 
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
 static EVENT_LOG: OnceLock<Mutex<Vec<Json>>> = OnceLock::new();
 static COLLECTED_CHUNKS: OnceLock<Mutex<Vec<Json>>> = OnceLock::new();
 static FINALIZER_CALLS: OnceLock<Mutex<usize>> = OnceLock::new();
@@ -808,11 +808,11 @@ fn atof_exporter_create_from_json_reports_string_statuses() {
         NemoRelayStatus::InvalidJson
     );
 
-    let invalid_endpoint =
-        cstring(r#"{"endpoints":[{"url":"http://localhost/events","transport":"websocket"}]}"#);
+    let invalid_sink =
+        cstring(r#"{"type":"stream","url":"http://localhost/events","transport":"websocket"}"#);
     assert_eq!(
         unsafe {
-            api::nemo_relay_atof_exporter_create_from_json(invalid_endpoint.as_ptr(), &mut exporter)
+            api::nemo_relay_atof_exporter_create_from_json(invalid_sink.as_ptr(), &mut exporter)
         },
         NemoRelayStatus::InvalidArg
     );

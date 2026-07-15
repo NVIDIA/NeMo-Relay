@@ -33,10 +33,10 @@ add the fifth requirement:
 4. Choose a trusted same-protocol target for each inbound protocol under
    `default_targets`. Relay uses these defaults for observe-only traffic and
    fail-open dispatch.
-5. For a profile that depends on ATOF history, including StageRouter, set
-   `context_mode = "atof_required"`, set `atof_endpoint_name`, and configure the
-   matching observability endpoint. Relay fails startup validation if the
-   named endpoint is missing or invalid.
+5. Configure profiles that depend on ATOF history, including StageRouter, with
+   `context_mode = "atof_required"` and `atof_endpoint_name`, then configure the
+   matching observability stream sink. Relay fails startup validation if the
+   named sink is missing or invalid.
 
 The following is a complete component configuration. The referenced
 environment variables must be set before Relay starts.
@@ -111,22 +111,25 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
 
-[[components.config.atof.endpoints]]
+[[components.config.atof.sinks]]
+type = "stream"
 name = "switchyard"
 url = "http://127.0.0.1:4000/v1/atof/events"
 transport = "http_post"
 field_name_policy = "preserve"
 
-[components.config.atof.endpoints.header_env]
+[components.config.atof.sinks.header_env]
 authorization = "SWITCHYARD_AUTHORIZATION"
 ```
 
 ## Decision API and Rollout Options
+
+The following table describes the Decision API and rollout settings:
 
 | Option | Default | Description and constraints |
 | --- | --- | --- |
@@ -164,13 +167,15 @@ express different configuration intent.
 
 ## Context, Retries, and Inbound Protocols
 
+The following table describes context, retry, and inbound protocol settings:
+
 | Option | Default | Description and constraints |
 | --- | --- | --- |
 | `context_mode` | Required | `payload_only` or `atof_required`. See below. |
 | `max_retries` | `3` | Provider retries after the initial attempt; maximum `10`. Each retry obtains a new Switchyard decision. |
 | `recent_message_count` | `8` | Message limit for `recent_message_window`; must be greater than zero. |
 | `enabled_inbound_profiles` | All three supported protocols | Non-empty list containing `openai_chat`, `openai_responses`, and/or `anthropic_messages`. |
-| `atof_endpoint_name` | Required for `atof_required` | Name of exactly one endpoint under the observability component's `atof.endpoints` list. |
+| `atof_endpoint_name` | Required for `atof_required` | Name of exactly one stream sink under the observability component's `atof.sinks` list. |
 
 `payload_only` supports request-aware routing without an ATOF dependency.
 Relay can create request-scoped synthetic identity when stable identity is not
@@ -178,13 +183,15 @@ available.
 
 `atof_required` is for profiles that classify from accumulated ATOF context. It
 requires stable session and request identity plus an enabled, authenticated
-Relay HTTP ATOF endpoint whose `name` matches `atof_endpoint_name`. The endpoint
+Relay HTTP ATOF stream sink whose `name` matches `atof_endpoint_name`. The sink
 specifies the Switchyard ingestion URL, must use `transport = "http_post"`, and
 must set `field_name_policy = "preserve"`. Relay rejects missing or duplicate
-named endpoints during startup validation. The ATOF exporter's local JSONL file
+named sinks during startup validation. A local ATOF file sink
 does not satisfy this delivery requirement by itself.
 
 ## Target Bindings and Trusted Defaults
+
+The following table describes target bindings and trusted defaults:
 
 | Option | Required fields | Purpose |
 | --- | --- | --- |
@@ -250,28 +257,35 @@ decision_profile_id = "stage-router"
 context_mode = "atof_required"
 request_materialization = "summary_only"
 atof_endpoint_name = "switchyard"
+```
 
+Configure the matching observability component with a named stream sink:
+
+```toml
 [[components]]
 kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
 
-[[components.config.atof.endpoints]]
+[[components.config.atof.sinks]]
+type = "stream"
 name = "switchyard"
 url = "http://127.0.0.1:4000/v1/atof/events"
 transport = "http_post"
 field_name_policy = "preserve"
 
-[components.config.atof.endpoints.header_env]
+[components.config.atof.sinks.header_env]
 authorization = "SWITCHYARD_AUTHORIZATION"
 ```
 
 ## Runtime and Fail-Open Behavior
+
+The integration handles routing and failures as follows:
 
 - Relay validates the decision's backend ID, model, protocol, and endpoint
   against its target binding before dispatch. Unknown backends, malformed
@@ -286,25 +300,30 @@ authorization = "SWITCHYARD_AUTHORIZATION"
 - A streaming request can retry only before receiving its first upstream item.
   After the stream commits, Relay propagates later failures without another
   dispatch.
-- Unsupported provider extensions and request translation failures before
-  provider dispatch fail open to the trusted same-protocol default. Buffered
-  response translation failures also fail open. After a streaming response
-  emits its first item, later provider or translation failures propagate
-  without another dispatch.
+- Relay forwards provider-specific extensions unchanged when every configured
+  target uses the inbound protocol. If any target uses another protocol,
+  nonportable extensions fail open to the trusted same-protocol default before
+  the Decision API call. Request translation failures before provider dispatch
+  and buffered response translation failures also fail open. After a streaming
+  response emits its first item, later provider or translation failures
+  propagate without another dispatch.
 - Routing-mark delivery is best-effort and does not change provider results.
 
 ## Experimental Limitations
 
-- The plugin is source-only, is not independently published, and is excluded
-  from default Relay builds. Build the CLI with
+Consider the following experimental limitations before adopting the plugin:
+
+- The plugin is published as `nemo-relay-switchyard` but is excluded from
+  default Relay CLI builds. Build the CLI with
   `cargo build -p nemo-relay-cli --features switchyard`.
 - The routing boundary is currently service-based. Relay calls Switchyard's
-  HTTP Decision API but does not start, supervise, or health-gate the service.
-  The service can be unavailable at Relay startup; requests fail open while it
-  remains unavailable.
+  HTTP Decision API but does not start or supervise the service. Relay derives
+  `/health` from `decision_api_url` and fails plugin activation unless the
+  service returns `{"status":"ok"}`. Decision API failures after activation fail
+  open to the trusted same-protocol default.
 - ATOF-backed profiles additionally depend on Switchyard's HTTP ingestion and
   accumulator runtime, stable request and session identity, and one named,
-  authenticated Relay ATOF HTTP endpoint. Local JSONL output does not populate
+  authenticated Relay ATOF HTTP stream sink. A local file sink does not populate
   the Switchyard accumulator.
 - Provider-protocol translation runs in Relay's process through the
   `switchyard-translation` Rust library. Routing decisions and ATOF accumulation
@@ -321,10 +340,11 @@ authorization = "SWITCHYARD_AUTHORIZATION"
   can expose contract drift.
 - The Decision API and service/library boundary are experimental and can change
   when Switchyard introduces an in-process Decision Provider.
-- Unsupported provider extensions, malformed decisions, service failures,
-  pre-dispatch translation failures, buffered-response translation failures,
-  and target drift fail open to Relay's trusted same-protocol default. Failures
-  after a streaming response commits propagate without another dispatch.
+- Nonportable provider extensions in configurations that can translate across
+  protocols, malformed decisions, service failures, pre-dispatch translation
+  failures, buffered-response translation failures, and target drift fail open
+  to Relay's trusted same-protocol default. Failures after a streaming response
+  commits propagate without another dispatch.
 - Secrets must remain environment-referenced. The examples generate ephemeral
   local credentials and are not credential-management guidance.
 

@@ -71,6 +71,8 @@ examples/switchyard/run-hermes-ollama-smoke.sh
 
 ## Configuration Files
 
+The directory includes the following configuration and support files:
+
 - `plugins.toml`: minimal plugin configuration example.
 - `real-e2e-plugins.toml` and `real-e2e-profiles.yaml`: deterministic fake-provider E2E.
 - `hermes-ollama-plugins.toml` and `hermes-ollama-profiles.yaml`: local Ollama trajectory.
@@ -84,11 +86,13 @@ requests to `/v1/routing/decision` and, for ATOF-backed profiles, sends events t
 `/v1/atof/events`. Relay owns provider credentials, target bindings, dispatch, retries, and
 fallback behavior. Relay executes provider-protocol translation in process through Switchyard's
 translation library; the Switchyard service owns ATOF accumulation and routing decisions. The
-Switchyard component selects its HTTP ingestion destination by the observability endpoint name,
-not by duplicating the endpoint URL.
+Switchyard component selects its HTTP ingestion destination by the observability stream sink name,
+not by duplicating the sink URL.
 
 The service is not started automatically by Relay outside these examples. A production deployment
-must provide a reachable Decision API and configure the Relay plugin with its URL.
+must start a compatible Switchyard service before Relay activates the plugin and configure the
+Relay plugin with its Decision API URL. Relay derives the service's root `/health` URL from that
+configuration and refuses activation unless it reports `{"status":"ok"}`.
 
 ## Artifacts and Troubleshooting
 
