@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+/// <reference lib="esnext.disposable" />
+
 import type { EventSanitizeFields, Json } from './index';
 
 /** Policy behavior for unsupported configuration. */
@@ -43,6 +45,33 @@ export interface PluginConfig {
     config?: Record<string, Json>;
   }>;
   policy?: ConfigPolicy;
+}
+
+/** Execution lane for a dynamically loaded Relay plugin. */
+export type DynamicPluginKind = 'rust_dynamic' | 'worker';
+
+/** Explicitly resolved dynamic plugin load and component configuration. */
+export interface DynamicPluginActivationSpec {
+  pluginId: string;
+  kind: DynamicPluginKind;
+  manifestRef: string;
+  environmentRef?: string | null;
+  config?: Record<string, Json>;
+}
+
+/** Owns one process-wide dynamic plugin host activation. */
+export interface DynamicPluginActivation extends AsyncDisposable {
+  /** Validation report produced by the successful activation. */
+  readonly report: ConfigReport;
+  /**
+   * Whether this activation handle has not begun teardown. `false` does not
+   * guarantee another process-wide activation can start after failed teardown.
+   */
+  readonly active: boolean;
+  /** Clear callbacks before unloading libraries and workers. Idempotent. */
+  close(): Promise<void>;
+  /** Delegate structured `await using` cleanup to `close()`. */
+  [Symbol.asyncDispose](): Promise<void>;
 }
 
 /** A mark Relay materializes under a managed lifecycle. */
@@ -297,6 +326,23 @@ export declare function validate(config: PluginConfig): ConfigReport;
  * the promise rejects with the underlying validation or setup error.
  */
 export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
+/**
+ * Initialize with explicitly resolved dynamic plugins.
+ *
+ * The returned object owns loaded libraries and worker processes. Keep it
+ * alive while plugin callbacks may run and call `close()` for deterministic
+ * teardown. Garbage collection is a defensive fallback only.
+ *
+ * @param config - Base configuration layered over discovered `plugins.toml` files.
+ * @param specs - Non-empty explicit manifest and component configuration for each plugin.
+ * @returns The owned activation and its validation report.
+ * @remarks File-configured static components initialize before dynamic
+ * components. Use `initialize()` for a static-only configuration.
+ */
+export declare function initializeWithDynamicPlugins(
+  config: PluginConfig,
+  specs: DynamicPluginActivationSpec[],
+): Promise<DynamicPluginActivation>;
 /**
  * Clear the active plugin configuration.
  *

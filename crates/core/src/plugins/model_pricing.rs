@@ -14,7 +14,7 @@ use crate::codec::response::{
 };
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistration,
-    PluginRegistrationContext, Result, register_plugin,
+    PluginRegistrationContext, Result, register_builtin_plugin,
 };
 
 /// Plugin kind used by the model pricing component.
@@ -22,15 +22,7 @@ pub const PRICING_PLUGIN_KIND: &str = "pricing";
 
 /// Registers the built-in model pricing component.
 pub fn register_pricing_component() -> Result<()> {
-    match register_plugin(Arc::new(PricingPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message))
-            if message.contains("plugin 'pricing' is already registered") =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    register_builtin_plugin(Arc::new(PricingPlugin))
 }
 
 struct PricingPlugin;

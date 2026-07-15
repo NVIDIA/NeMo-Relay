@@ -26,6 +26,10 @@ pub enum EditorFieldKind {
     StringMap,
     /// Arbitrary JSON value.
     Json,
+    /// A collection whose entries are edited recursively.
+    List,
+    /// A tagged object whose variant is selected from a discriminator field.
+    TaggedUnion,
     /// Nested configuration section.
     Section,
 }
@@ -47,7 +51,76 @@ pub struct EditorFieldSpec {
     pub nested_schema: Option<fn() -> &'static EditorSchema>,
     /// Default value for a nested section.
     pub nested_default: Option<fn() -> Json>,
+    /// Description of list entries, when [`EditorFieldKind::List`] is used.
+    pub list_item: Option<&'static EditorListItemSpec>,
+    /// Variant metadata, when [`EditorFieldKind::TaggedUnion`] is used.
+    pub tagged_union: Option<&'static EditorTaggedUnionSpec>,
 }
+
+/// Metadata used to edit a tagged union value.
+#[derive(Clone, Copy)]
+pub struct EditorTaggedUnionSpec {
+    /// Field that selects the active variant.
+    pub discriminator: &'static str,
+    /// Available tagged-union variants.
+    pub variants: &'static [EditorVariantSpec],
+}
+
+/// Recursive metadata for one list entry.
+#[derive(Clone, Copy)]
+pub struct EditorListItemSpec {
+    /// Shape of each list entry.
+    pub kind: EditorFieldKind,
+    /// Schema used for object entries.
+    pub schema: Option<fn() -> &'static EditorSchema>,
+    /// Default value used for non-union entries.
+    pub default: Option<fn() -> Json>,
+    /// Variant metadata when this list entry is a tagged union.
+    pub tagged_union: Option<&'static EditorTaggedUnionSpec>,
+    /// Nested list entry description when this item is itself a list.
+    pub list_item: Option<&'static EditorListItemSpec>,
+}
+
+/// One selectable variant of a tagged list entry.
+#[derive(Clone, Copy)]
+pub struct EditorVariantSpec {
+    /// Human-readable variant label.
+    pub label: &'static str,
+    /// Serialized discriminator value.
+    pub tag: &'static str,
+    /// Schema for the variant object.
+    pub schema: fn() -> &'static EditorSchema,
+    /// Initial object value for the variant.
+    pub default: fn() -> Json,
+}
+
+/// Default value for a newly added string list item.
+pub fn default_string_list_item_value() -> Json {
+    Json::String(String::new())
+}
+
+/// Default value for a newly added arbitrary JSON list item.
+pub fn default_json_list_item_value() -> Json {
+    Json::Null
+}
+
+/// Reusable metadata for a list of strings.
+pub static STRING_LIST_ITEM: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::String,
+    schema: None,
+    default: Some(default_string_list_item_value),
+    tagged_union: None,
+    list_item: None,
+};
+
+/// Reusable metadata for a list of arbitrary JSON values.
+pub static JSON_LIST_ITEM: EditorListItemSpec = EditorListItemSpec {
+    kind: EditorFieldKind::Json,
+    schema: None,
+    default: Some(default_json_list_item_value),
+    tagged_union: None,
+    list_item: None,
+};
 
 impl EditorFieldSpec {
     /// Returns the nested schema for this field, if it is a section.
@@ -98,6 +171,8 @@ macro_rules! editor_config {
                     $(, optional: $optional:literal)?
                     $(, nested: $nested:ty)?
                     $(, default: $default:ty)?
+                    $(, list: $list:expr)?
+                    $(, tagged_union: $tagged_union:expr)?
                     $(,)?
                 }
             ),* $(,)?
@@ -122,6 +197,8 @@ macro_rules! editor_config {
                                 optional: $crate::editor_config!(@optional $($optional)?),
                                 nested_schema: $crate::editor_config!(@nested $($nested)?),
                                 nested_default: $crate::editor_config!(@default $($default)?),
+                                list_item: $crate::editor_config!(@list $($list)?),
+                                tagged_union: $crate::editor_config!(@tagged_union $($tagged_union)?),
                             }
                         ),*
                     ],
@@ -138,6 +215,8 @@ macro_rules! editor_config {
     (@kind Enum) => { $crate::config_editor::EditorFieldKind::Enum };
     (@kind StringMap) => { $crate::config_editor::EditorFieldKind::StringMap };
     (@kind Json) => { $crate::config_editor::EditorFieldKind::Json };
+    (@kind List) => { $crate::config_editor::EditorFieldKind::List };
+    (@kind TaggedUnion) => { $crate::config_editor::EditorFieldKind::TaggedUnion };
     (@kind Section) => { $crate::config_editor::EditorFieldKind::Section };
 
     (@values) => { &[] };
@@ -158,4 +237,10 @@ macro_rules! editor_config {
                 .expect("editor default value should serialize")
         })
     };
+
+    (@list) => { None };
+    (@list $list:expr) => { Some($list) };
+
+    (@tagged_union) => { None };
+    (@tagged_union $tagged_union:expr) => { Some($tagged_union) };
 }

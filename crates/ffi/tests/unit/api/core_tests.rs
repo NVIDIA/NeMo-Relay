@@ -201,12 +201,15 @@ fn test_ffi_observability_plugin_file_sinks() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 1,
+                        "version": 2,
                         "atof": {
                             "enabled": true,
-                            "output_directory": dir_text,
-                            "filename": "events.jsonl",
-                            "mode": "overwrite"
+                            "sinks": [{
+                                "type": "file",
+                                "output_directory": dir_text,
+                                "filename": "events.jsonl",
+                                "mode": "overwrite"
+                            }]
                         },
                         "atif": {
                             "enabled": true,
@@ -235,7 +238,7 @@ fn test_ffi_observability_plugin_file_sinks() {
             nemo_relay_observability_default_config_json(&mut default_config_json),
             NemoRelayStatus::Ok
         );
-        assert_eq!(returned_json(default_config_json)["version"], json!(1));
+        assert_eq!(returned_json(default_config_json)["version"], json!(2));
         let mut component_json = ptr::null_mut();
         assert_eq!(
             nemo_relay_observability_component_spec_json(ptr::null(), true, &mut component_json),
@@ -326,7 +329,7 @@ fn test_ffi_observability_plugin_atif_splits_multiple_top_level_agents() {
                     "kind": "observability",
                     "enabled": true,
                     "config": {
-                        "version": 1,
+                        "version": 2,
                         "atif": {
                             "enabled": true,
                             "output_directory": dir_text,

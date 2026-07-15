@@ -15,7 +15,7 @@ use crate::codec::resolve::supported_codec_names;
 use crate::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
-    register_plugin,
+    register_builtin_plugin,
 };
 
 #[path = "local.rs"]
@@ -324,7 +324,7 @@ crate::editor_config! {
     impl RemoteBackendConfig {
         endpoint => { label: "endpoint", kind: String, optional: true },
         config_id => { label: "config_id", kind: String, optional: true },
-        config_ids => { label: "config_ids", kind: Json },
+        config_ids => { label: "config_ids", kind: List, list: &crate::config_editor::STRING_LIST_ITEM },
         headers => { label: "headers", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
     }
@@ -398,13 +398,7 @@ impl Plugin for NeMoGuardrailsPlugin {
 
 /// Registers the `nemo_guardrails` component kind in the plugin registry.
 pub fn register_nemo_guardrails_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(NeMoGuardrailsPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
-            Ok(())
-        }
-        Err(err) => Err(err),
-    }
+    register_builtin_plugin(Arc::new(NeMoGuardrailsPlugin))
 }
 
 /// Deregisters the `nemo_guardrails` component kind from the plugin registry.

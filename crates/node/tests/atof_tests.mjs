@@ -33,19 +33,42 @@ describe('AtofExporter', () => {
     assert.throws(
       () =>
         new AtofExporter({
-          outputDirectory: tempDir('node-atof-invalid-endpoint'),
-          endpoints: [{ url: 'http://localhost:8080/events', transport: 'bogus' }],
+          type: 'stream',
+          url: 'http://localhost:8080/events',
+          transport: 'bogus',
         }),
-      /endpoint transport/i,
+      /stream transport/i,
     );
     assert.throws(
       () =>
         new AtofExporter({
-          outputDirectory: tempDir('node-atof-invalid-field-policy'),
-          endpoints: [{ url: 'http://localhost:8080/events', fieldNamePolicy: 'bogus' }],
+          type: 'stream',
+          url: 'http://localhost:8080/events',
+          fieldNamePolicy: 'bogus',
         }),
       /field_name_policy/i,
     );
+    assert.throws(
+      () =>
+        new AtofExporter({
+          type: 'stream',
+          url: 'http://localhost:8080/events',
+          headerEnv: { authorization: '' },
+        }),
+      /environment variable/i,
+    );
+  });
+
+  it('returns null path for a stream sink', () => {
+    const exporter = new AtofExporter({
+      type: 'stream',
+      url: 'http://localhost:8080/events',
+    });
+    try {
+      assert.equal(exporter.path, null);
+    } finally {
+      exporter.shutdown();
+    }
   });
 
   it('writes raw ATOF JSONL events and supports lifecycle methods', () => {

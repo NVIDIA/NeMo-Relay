@@ -32,21 +32,58 @@ type ObservabilityConfig struct {
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
 type ObservabilityAtofConfig struct {
-	Enabled         bool                        `json:"enabled,omitempty"`
-	OutputDirectory string                      `json:"output_directory,omitempty"`
-	Filename        string                      `json:"filename,omitempty"`
-	Mode            string                      `json:"mode,omitempty"`
-	Endpoints       []ObservabilityAtofEndpoint `json:"endpoints,omitempty"`
+	Enabled bool                              `json:"enabled,omitempty"`
+	Sinks   []ObservabilityAtofSinkConfigurer `json:"sinks,omitempty"`
 }
 
-// ObservabilityAtofEndpoint configures one streaming destination for raw ATOF events.
-type ObservabilityAtofEndpoint struct {
+// ObservabilityAtofSinkConfigurer is one ATOF destination.
+type ObservabilityAtofSinkConfigurer interface {
+	atofSinkConfig()
+}
+
+// ObservabilityAtofFileSinkConfig configures one filesystem ATOF JSONL destination.
+type ObservabilityAtofFileSinkConfig struct {
+	OutputDirectory string `json:"output_directory,omitempty"`
+	Filename        string `json:"filename,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+}
+
+func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {}
+
+// MarshalJSON serializes the fixed file sink discriminator.
+func (config ObservabilityAtofFileSinkConfig) MarshalJSON() ([]byte, error) {
+	type alias ObservabilityAtofFileSinkConfig
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{Type: "file", alias: alias(config)})
+}
+
+// ObservabilityAtofStreamSinkConfig configures one remote ATOF destination.
+type ObservabilityAtofStreamSinkConfig struct {
 	URL             string            `json:"url"`
 	Transport       string            `json:"transport,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
+	HeaderEnv       map[string]string `json:"header_env,omitempty"`
 	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
 	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
+	Name            string            `json:"name,omitempty"`
 }
+
+func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {}
+
+// MarshalJSON serializes the fixed stream sink discriminator.
+func (config ObservabilityAtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
+	type alias ObservabilityAtofStreamSinkConfig
+	return json.Marshal(struct {
+		Type string `json:"type"`
+		alias
+	}{Type: "stream", alias: alias(config)})
+}
+
+// ObservabilityAtofEndpoint is the deprecated name for an ATOF stream sink.
+// Deprecated: Use ObservabilityAtofStreamSinkConfig.
+type ObservabilityAtofEndpoint = ObservabilityAtofStreamSinkConfig
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
 type ObservabilityAtifConfig struct {
@@ -143,6 +180,7 @@ type ObservabilityOtlpConfig struct {
 	Enabled              bool                        `json:"enabled,omitempty"`
 	MarkProjection       ObservabilityMarkProjection `json:"mark_projection,omitempty"`
 	MarkExcludeNames     []string                    `json:"mark_exclude_names,omitempty"`
+	AttributeMappings    []OtlpAttributeMapping      `json:"attribute_mappings,omitempty"`
 	Transport            string                      `json:"transport,omitempty"`
 	Endpoint             string                      `json:"endpoint,omitempty"`
 	Headers              map[string]string           `json:"headers,omitempty"`
@@ -184,16 +222,24 @@ type ObservabilityComponentSpec struct {
 	Config  ObservabilityConfig `json:"config"`
 }
 
-// NewObservabilityConfig returns a default observability config with version 1.
+// NewObservabilityConfig returns a default observability config with version 2.
 func NewObservabilityConfig() ObservabilityConfig {
-	return ObservabilityConfig{Version: 1}
+	return ObservabilityConfig{Version: 2}
 }
 
 // NewObservabilityAtofConfig returns disabled ATOF JSONL settings with native defaults.
 func NewObservabilityAtofConfig() ObservabilityAtofConfig {
-	return ObservabilityAtofConfig{
-		Mode: "append",
-	}
+	return ObservabilityAtofConfig{}
+}
+
+// NewObservabilityAtofFileSinkConfig returns one file ATOF sink with native defaults.
+func NewObservabilityAtofFileSinkConfig() ObservabilityAtofFileSinkConfig {
+	return ObservabilityAtofFileSinkConfig{Mode: "append"}
+}
+
+// NewObservabilityAtofStreamSinkConfig returns one stream ATOF sink.
+func NewObservabilityAtofStreamSinkConfig(url string) ObservabilityAtofStreamSinkConfig {
+	return ObservabilityAtofStreamSinkConfig{URL: url, Transport: "http_post", TimeoutMillis: 3000, FieldNamePolicy: "preserve"}
 }
 
 // NewObservabilityAtifConfig returns disabled ATIF settings with core defaults.

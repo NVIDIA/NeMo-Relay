@@ -25,6 +25,47 @@
 use crate::api::runtime::{LlmCollectorFn, LlmFinalizerFn};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
+use serde::{Deserialize, Serialize};
+
+/// Provider-neutral incremental stream item used by cross-protocol transcoders.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum NormalizedStreamEvent {
+    /// Assistant text delta.
+    TextDelta {
+        /// Newly generated text.
+        text: String,
+    },
+    /// Start of a function tool call.
+    ToolCallStart {
+        /// Stable tool-call identifier.
+        id: String,
+        /// Function name.
+        name: String,
+    },
+    /// Incremental JSON arguments for a function tool call.
+    ToolCallArgumentsDelta {
+        /// Stable tool-call identifier.
+        id: String,
+        /// Newly generated argument bytes.
+        delta: String,
+    },
+    /// Provider-reported terminal reason.
+    Finish {
+        /// Normalized or provider-native finish label.
+        reason: Option<String>,
+    },
+    /// Incremental or terminal usage object.
+    Usage {
+        /// Provider-neutral usage JSON.
+        usage: Json,
+    },
+    /// Provider stream error payload.
+    Error {
+        /// Structured provider error.
+        error: Json,
+    },
+}
 
 /// Per-provider streaming codec used with [`crate::api::llm::llm_stream_call_execute`].
 ///

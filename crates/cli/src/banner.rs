@@ -312,5 +312,5 @@ fn print_plain_header() {
 }
 
 #[cfg(test)]
-#[path = "../tests/coverage/banner_tests.rs"]
+#[path = "../tests/coverage/shared/banner_tests.rs"]
 mod tests;
