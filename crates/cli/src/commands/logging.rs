@@ -11,10 +11,6 @@ use nemo_relay::logging::{LogFormat, LogLevel, LoggingConfig};
 
 use crate::error::CliError;
 
-// TODO EE: Temporary live smoke-test switch for .vscode/launch.json. Remove with the
-// temporary logging launch configurations.
-const LOG_SMOKE_TEST_ENV: &str = "NEMO_RELAY_LOG_SMOKE_TEST";
-
 #[derive(Debug, Clone, Default, Args)]
 pub(super) struct LoggingArgs {
     /// Minimum operational log level.
@@ -69,43 +65,6 @@ impl LoggingArgs {
 
         crate::configuration::resolve_logging_config(explicit_config, user_only)
     }
-}
-
-pub(super) fn emit_smoke_events() {
-    if !matches!(std::env::var(LOG_SMOKE_TEST_ENV).as_deref(), Ok("1")) {
-        return;
-    }
-
-    log::error!(
-        target: "nemo_relay.smoke",
-        event = "smoke_error",
-        smoke = true;
-        "Temporary error-level logging smoke event"
-    );
-    log::warn!(
-        target: "nemo_relay.smoke",
-        event = "smoke_warn",
-        smoke = true;
-        "Temporary warn-level logging smoke event"
-    );
-    log::info!(
-        target: "nemo_relay.smoke",
-        event = "smoke_info",
-        smoke = true;
-        "Temporary info-level logging smoke event"
-    );
-    log::debug!(
-        target: "nemo_relay.smoke",
-        event = "smoke_debug",
-        smoke = true;
-        "Temporary debug-level logging smoke event"
-    );
-    log::trace!(
-        target: "nemo_relay.smoke",
-        event = "smoke_trace",
-        smoke = true;
-        "Temporary trace-level logging smoke event"
-    );
 }
 
 fn logging_config_error(error: FlowError) -> CliError {

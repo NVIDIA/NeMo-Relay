@@ -77,9 +77,6 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
         };
         let config = cli.logging.resolve(explicit_config, user_only)?;
         let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
-        // TODO EE: Temporary live logging smoke events. Disabled unless explicitly enabled by
-        // the local .vscode launch configurations.
-        logging::emit_smoke_events();
         Some(runtime)
     } else {
         None
