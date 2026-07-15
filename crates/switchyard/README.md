@@ -9,15 +9,15 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Switchyard Plugin
 
-`nemo-relay-switchyard` is NeMo Relay's experimental, source-only integration
+`nemo-relay-switchyard` is NeMo Relay's experimental integration
 with the [NVIDIA NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard)
 Decision API. It adds routing-aware LLM execution intercepts to the Relay
 runtime while preserving Relay ownership of provider credentials, target
 bindings, dispatch, retries, fallbacks, and observability.
 
-This crate is intentionally not published to crates.io yet. Build it from the
-NeMo Relay source checkout with the optional CLI feature while the Switchyard
-Decision API contract and service/library boundary are still evolving.
+Install it from crates.io, or build it from the NeMo Relay source checkout with
+the optional CLI feature while the Switchyard Decision API contract and
+service/library boundary are still evolving.
 
 ## Why use it?
 
@@ -40,12 +40,18 @@ Decision API contract and service/library boundary are still evolving.
 - ATOF-backed or payload-only routing context modes.
 - Routing marks and model-routing optimization contributions for Relay's
   cumulative accounting pipeline.
-- Switchyard-owned protocol translation through the pinned
+- Switchyard-owned protocol translation through the crates.io
   `switchyard-translation` dependency.
 
-## Source build
+## Installation and source build
 
-The crate is a private workspace member and must be built from source:
+Add the crate from crates.io:
+
+```bash
+cargo add nemo-relay-switchyard
+```
+
+To build the optional CLI integration from a NeMo Relay source checkout:
 
 ```bash
 cargo build -p nemo-relay-cli --features switchyard
