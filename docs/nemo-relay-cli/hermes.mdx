@@ -129,7 +129,8 @@ The generated Hermes hooks cover `on_session_start`, `on_session_end`,
 `post_tool_call`, `subagent_start`, and `subagent_stop`.
 
 Hermes `skill_view` pre-tool calls emit observed `skill.load` marks. The mark
-contains only the skill name and tool identity; it does not retain skill paths.
+stores the skill name in `data.skill_name` and the source and tool name in
+metadata. It does not retain skill paths.
 
 The API hooks are the main Hermes LLM lifecycle path for NeMo Relay. The legacy
 LLM hooks remain installed because they can still provide useful private hints,

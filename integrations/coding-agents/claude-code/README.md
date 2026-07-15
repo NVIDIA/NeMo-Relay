@@ -26,10 +26,9 @@ The bundle forwards `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
 `PreCompact`, and `PostCompact` as scope, tool, mark, or private LLM
 correlation events.
 
-The bundle requires Claude Code 2.1.116 or newer. Older versions do not have
-`UserPromptExpansion` in their hook-event whitelist and reject the entire
-plugin hook configuration, so no relay hooks load. `nemo-relay doctor` reports
-this condition.
+The bundle requires Claude Code 2.1.121 or newer. Older versions do not support
+every required hook event and can reject the entire plugin hook configuration,
+so no relay hooks load. `nemo-relay doctor` reports this condition.
 
 Claude Code observability is turn-oriented. A multi-turn session can produce one
 root `claude-code-turn` span or ATIF trajectory per user turn. That is expected
