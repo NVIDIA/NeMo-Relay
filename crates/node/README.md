@@ -25,6 +25,8 @@ should install it from npm rather than depend on the Rust crate directly.
 
 ## Why Use It?
 
+Use the Node.js binding for the following tasks:
+
 - **Own execution context in Node.js**: Group agent, tool, and LLM work into
   one scope tree from JavaScript or TypeScript.
 - **Put policy around callbacks**: Register guardrails and intercepts for
@@ -36,6 +38,8 @@ should install it from npm rather than depend on the Rust crate directly.
   typed, plugin, adaptive, and observability helpers from npm.
 
 ## What You Get
+
+The Node.js package provides the following capabilities:
 
 - **npm package for Node.js**: A Node.js 24 or newer package backed by a
   napi-rs native extension.

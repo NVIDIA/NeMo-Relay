@@ -26,6 +26,8 @@ runtime semantics as the Rust and Node.js surfaces.
 
 ## Why Use It?
 
+Use the Python binding for the following tasks:
+
 - **Own execution context in Python**: Group agent, tool, and LLM work into
   one scope tree from Python application code.
 - **Package policy around callbacks**: Use guardrails and intercepts to block
@@ -37,6 +39,8 @@ runtime semantics as the Rust and Node.js surfaces.
   callbacks while preserving the application’s orchestration model.
 
 ## What You Get
+
+The Python package provides the following capabilities:
 
 - **Scope, tool, and LLM helpers**: Managed boundaries that emit lifecycle
   events and run middleware in a consistent order.
