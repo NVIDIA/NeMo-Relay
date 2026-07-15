@@ -431,6 +431,30 @@ fn session_instances_are_unique_even_when_logical_session_ids_match() {
     assert_ne!(first_root, second_root);
 }
 
+#[test]
+fn scope_metadata_recovers_poisoned_scope_stack_for_instance_id() {
+    let session = Session::new(
+        "poisoned-session".to_string(),
+        AgentKind::Codex,
+        SessionConfig::default(),
+    );
+    let root_uuid = session.scope_stack.read().unwrap().root_uuid();
+    let scope_stack = session.scope_stack.clone();
+    std::thread::spawn(move || {
+        let _guard = scope_stack.write().unwrap();
+        panic!("poison session scope stack for recovery test");
+    })
+    .join()
+    .expect_err("fixture scope stack writer should panic");
+
+    let metadata = session.scope_metadata(Value::Null);
+
+    assert_eq!(
+        metadata["session_instance_id"],
+        json!(root_uuid.to_string())
+    );
+}
+
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
     let outcome = crate::agents::shared::adapters::codex::adapt(payload, headers);
     manager.apply_events(headers, outcome.events).await.unwrap();

@@ -1060,7 +1060,7 @@ impl Session {
         let session_instance_id = self
             .scope_stack
             .read()
-            .expect("session scope stack lock poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .root_uuid()
             .to_string();
         merge_metadata(
