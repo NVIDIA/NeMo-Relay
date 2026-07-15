@@ -26,11 +26,12 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
   `grpc` only when a Tokio runtime is active.
 - Scope, tool, and LLM start inputs become `input.value`.
 - Scope, tool, and LLM end outputs become `output.value`.
-- Annotated LLM input retains complete sanitized history while the agent session
-  is fresh (initially and after compaction). When stale, it retains system
-  instructions, the latest user message, and every following assistant or tool
-  message. With a request codec, the event's provider-shaped input uses the same
-  projection; provider execution remains unchanged.
+- Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
+  The annotated input for the first subsequent LLM start retains complete
+  history. Later starts retain system instructions, the latest user message,
+  and every following assistant or tool message. With a request codec, the
+  event's provider-shaped input uses the same projection. Provider execution
+  remains unchanged.
 - LLM usage metadata maps token counters when provider responses include usage.
 - Use explicit config fields for endpoint, headers, resource attributes, and
   service identity in application code.

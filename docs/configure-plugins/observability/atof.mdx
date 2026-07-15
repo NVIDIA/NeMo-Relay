@@ -101,11 +101,13 @@ JSON object per line. For event field semantics, refer to
 
 ATOF is the raw-event export path. It preserves the canonical event shape; it
 does not add semantic extraction, replay policy, scope-owner resolution, or
-exporter projection rules. LLM request annotations retain complete history
-while their agent is fresh. When stale, they retain system instructions, the
-latest user message, and every following assistant or tool message. With a
-request codec, the emitted event input uses the same projection. The request
-used for provider execution remains unchanged.
+exporter projection rules. Each owning agent scope starts fresh, and a
+`compaction` mark refreshes it. The first subsequent LLM start annotation
+retains complete history. Later starts retain system instructions, the latest
+user message, and every following assistant or tool message. With a request
+codec, the emitted event input uses the same projection. The request used for
+provider execution remains unchanged. Refer to
+[Events](/about-nemo-relay/concepts/events) for the complete freshness contract.
 
 Register the plugin before instrumented work starts and clear it during
 shutdown so file handles flush.
