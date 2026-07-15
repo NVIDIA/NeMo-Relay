@@ -285,38 +285,18 @@ fn install_host_locked(
     require_host_cli(host, options, runner)?;
     host::validate_host_version(host, options, runner)?;
     let layout = PluginLayout::new(host, &options.install_dir);
-    let (staged, mut force_snapshot, mut replacement_generation_lock) =
-        prepare_install_transaction(host, &relay, &layout, options, runner, setup_runner)?;
-    install_marketplace_content(
+    let context = InstallPhaseContext {
         host,
-        &relay,
-        &layout,
-        staged.as_ref(),
-        &mut force_snapshot,
-        &mut replacement_generation_lock,
         options,
         runner,
         setup_runner,
-    )?;
-    write_install_state(
-        host,
-        &layout,
-        &mut force_snapshot,
-        &mut replacement_generation_lock,
-        options,
-        runner,
-        setup_runner,
-    )?;
-    finish_install_registration(
-        host,
-        &layout,
-        &mut force_snapshot,
-        &mut replacement_generation_lock,
-        options,
-        runner,
-        setup_runner,
-    )?;
-    if let Some(snapshot) = force_snapshot {
+        layout: &layout,
+    };
+    let mut transaction = prepare_install_transaction(&context, &relay)?;
+    install_marketplace_content(&context, &relay, &mut transaction)?;
+    write_install_state(&context, &mut transaction)?;
+    finish_install_registration(&context, &mut transaction)?;
+    if let Some(snapshot) = transaction.force_snapshot {
         snapshot.commit(&layout.generation_lock);
     }
     println!(
@@ -327,20 +307,29 @@ fn install_host_locked(
     Ok(())
 }
 
-type PreparedInstall = (
-    Option<StagedPluginMarketplace>,
-    Option<ForceInstallSnapshot>,
-    Option<ReplacementGenerationLock>,
-);
+struct InstallPhaseContext<'a, H: MarketplaceHost> {
+    host: H,
+    layout: &'a PluginLayout,
+    options: &'a PluginInstallOptions,
+    runner: &'a dyn CommandRunner,
+    setup_runner: &'a dyn PluginSetupRunner,
+}
 
-fn prepare_install_transaction(
-    host: impl MarketplaceHost,
+struct InstallTransactionState {
+    staged: Option<StagedPluginMarketplace>,
+    force_snapshot: Option<ForceInstallSnapshot>,
+    replacement_generation_lock: Option<ReplacementGenerationLock>,
+}
+
+fn prepare_install_transaction<H: MarketplaceHost>(
+    context: &InstallPhaseContext<'_, H>,
     relay: &Path,
-    layout: &PluginLayout,
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-    setup_runner: &dyn PluginSetupRunner,
-) -> Result<PreparedInstall, String> {
+) -> Result<InstallTransactionState, String> {
+    let host = context.host;
+    let layout = context.layout;
+    let options = context.options;
+    let runner = context.runner;
+    let setup_runner = context.setup_runner;
     let plugin_preflight = if !options.dry_run {
         Some(prepare_plugin_install(host, layout, options, runner)?)
     } else {
@@ -405,21 +394,24 @@ fn prepare_install_transaction(
     } else {
         None
     };
-    Ok((staged, force_snapshot, replacement_generation_lock))
+    Ok(InstallTransactionState {
+        staged,
+        force_snapshot,
+        replacement_generation_lock,
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn install_marketplace_content(
-    host: impl MarketplaceHost,
+fn install_marketplace_content<H: MarketplaceHost>(
+    context: &InstallPhaseContext<'_, H>,
     relay: &Path,
-    layout: &PluginLayout,
-    staged: Option<&StagedPluginMarketplace>,
-    force_snapshot: &mut Option<ForceInstallSnapshot>,
-    replacement_generation_lock: &mut Option<ReplacementGenerationLock>,
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-    setup_runner: &dyn PluginSetupRunner,
+    transaction: &mut InstallTransactionState,
 ) -> Result<(), String> {
+    let host = context.host;
+    let layout = context.layout;
+    let options = context.options;
+    let runner = context.runner;
+    let setup_runner = context.setup_runner;
+    let staged = transaction.staged.as_ref();
     if options.force && staged.is_none() {
         force_cleanup_existing_install(host, layout, options, runner, setup_runner)?;
     }
@@ -429,25 +421,32 @@ fn install_marketplace_content(
             return restore_force_replacement_after_error(
                 host,
                 layout,
-                force_snapshot.as_mut().expect("force snapshot exists"),
+                transaction
+                    .force_snapshot
+                    .as_mut()
+                    .expect("force snapshot exists"),
                 options,
                 runner,
                 setup_runner,
                 error,
             );
         }
-        force_snapshot
+        transaction
+            .force_snapshot
             .as_mut()
             .expect("force snapshot exists")
             .replacement_promoted = true;
-        if let Some(lock) = replacement_generation_lock.as_mut()
+        if let Some(lock) = transaction.replacement_generation_lock.as_mut()
             && let Err(error) = lock.retarget_promoted_marker(&layout.generation_fence)
         {
             staged.cleanup();
             return restore_force_replacement_after_error(
                 host,
                 layout,
-                force_snapshot.as_mut().expect("force snapshot exists"),
+                transaction
+                    .force_snapshot
+                    .as_mut()
+                    .expect("force snapshot exists"),
                 options,
                 runner,
                 setup_runner,
@@ -473,7 +472,7 @@ fn install_marketplace_content(
             };
         }
         if !options.dry_run {
-            *replacement_generation_lock = match acquire_replacement_generation_lock(
+            transaction.replacement_generation_lock = match acquire_replacement_generation_lock(
                 host,
                 &layout.generation_fence,
                 &layout.generation_lock,
@@ -498,23 +497,24 @@ fn install_marketplace_content(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn write_install_state(
-    host: impl MarketplaceHost,
-    layout: &PluginLayout,
-    force_snapshot: &mut Option<ForceInstallSnapshot>,
-    replacement_generation_lock: &mut Option<ReplacementGenerationLock>,
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-    setup_runner: &dyn PluginSetupRunner,
+fn write_install_state<H: MarketplaceHost>(
+    context: &InstallPhaseContext<'_, H>,
+    transaction: &mut InstallTransactionState,
 ) -> Result<(), String> {
+    let host = context.host;
+    let layout = context.layout;
+    let options = context.options;
+    let runner = context.runner;
+    let setup_runner = context.setup_runner;
     if let Err(error) = write_state(layout, options) {
-        let _replacement_retirement = if force_snapshot.is_some() {
-            let existing_retirement = replacement_generation_lock
+        let _replacement_retirement = if transaction.force_snapshot.is_some() {
+            let existing_retirement = transaction
+                .replacement_generation_lock
                 .as_mut()
                 .map(ReplacementGenerationLock::retirement_mut)
                 .or_else(|| {
-                    force_snapshot
+                    transaction
+                        .force_snapshot
                         .as_mut()
                         .and_then(|snapshot| snapshot.generation_retirement.as_mut())
                 });
@@ -536,7 +536,7 @@ fn write_install_state(
             None
         };
         let cleanup_error = remove_path(&layout.marketplace_root, options).err();
-        let restore_error = force_snapshot.as_mut().and_then(|snapshot| {
+        let restore_error = transaction.force_snapshot.as_mut().and_then(|snapshot| {
             restore_force_replacement(host, layout, snapshot, options, runner, setup_runner).err()
         });
         let errors = [cleanup_error, restore_error]
@@ -551,25 +551,26 @@ fn write_install_state(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn finish_install_registration(
-    host: impl MarketplaceHost,
-    layout: &PluginLayout,
-    force_snapshot: &mut Option<ForceInstallSnapshot>,
-    replacement_generation_lock: &mut Option<ReplacementGenerationLock>,
-    options: &PluginInstallOptions,
-    runner: &dyn CommandRunner,
-    setup_runner: &dyn PluginSetupRunner,
+fn finish_install_registration<H: MarketplaceHost>(
+    context: &InstallPhaseContext<'_, H>,
+    transaction: &mut InstallTransactionState,
 ) -> Result<(), String> {
+    let host = context.host;
+    let layout = context.layout;
+    let options = context.options;
+    let runner = context.runner;
+    let setup_runner = context.setup_runner;
     let mut registration = HostRegistrationProgress::default();
     let mut registration_state_uncertain = false;
     let mut setup_installed = false;
     let result = (|| {
-        let generation_token = replacement_generation_lock
+        let generation_token = transaction
+            .replacement_generation_lock
             .as_ref()
             .map(ReplacementGenerationLock::retirement)
             .or_else(|| {
-                force_snapshot
+                transaction
+                    .force_snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.generation_retirement.as_ref())
             })
@@ -620,13 +621,16 @@ fn finish_install_registration(
             registration.host_plugin_added |= observed.host_plugin_registered;
             registration.host_marketplace_added |= observed.host_marketplace_registered;
         }
-        let replacement_may_be_live = force_snapshot.is_some() || registration.host_plugin_added;
+        let replacement_may_be_live =
+            transaction.force_snapshot.is_some() || registration.host_plugin_added;
         let _replacement_retirement = if replacement_may_be_live {
-            let existing_retirement = replacement_generation_lock
+            let existing_retirement = transaction
+                .replacement_generation_lock
                 .as_mut()
                 .map(ReplacementGenerationLock::retirement_mut)
                 .or_else(|| {
-                    force_snapshot
+                    transaction
+                        .force_snapshot
                         .as_mut()
                         .and_then(|snapshot| snapshot.generation_retirement.as_mut())
                 });
@@ -657,7 +661,7 @@ fn finish_install_registration(
             setup_runner,
         )
         .err();
-        let restore_error = force_snapshot.as_mut().and_then(|snapshot| {
+        let restore_error = transaction.force_snapshot.as_mut().and_then(|snapshot| {
             restore_force_replacement(host, layout, snapshot, options, runner, setup_runner).err()
         });
         let rollback_errors = [
