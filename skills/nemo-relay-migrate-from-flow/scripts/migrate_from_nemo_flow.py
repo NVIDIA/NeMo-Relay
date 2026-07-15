@@ -64,7 +64,6 @@ TEXT_SUFFIXES = {
     ".css",
     ".cu",
     ".cuh",
-    ".env",
     ".go",
     ".h",
     ".hpp",
@@ -131,6 +130,15 @@ def should_skip_dir(name: str, include_generated: bool) -> bool:
     return name in SKIP_DIRS
 
 
+def is_safe_entry(path: Path, root: Path) -> bool:
+    if path.is_symlink():
+        return False
+    try:
+        return path.resolve(strict=True).is_relative_to(root)
+    except OSError:
+        return False
+
+
 def should_scan_file(path: Path, include_lockfiles: bool) -> bool:
     if path.name in LOCKFILE_NAMES and not include_lockfiles:
         return False
@@ -139,15 +147,23 @@ def should_scan_file(path: Path, include_lockfiles: bool) -> bool:
 
 def iter_files(root: Path, include_lockfiles: bool, include_generated: bool):
     for current_root, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if not should_skip_dir(name, include_generated)]
         current = Path(current_root)
+        dirs[:] = [
+            name
+            for name in dirs
+            if not should_skip_dir(name, include_generated) and is_safe_entry(current / name, root)
+        ]
         for filename in files:
             path = current / filename
-            if should_scan_file(path, include_lockfiles):
+            if is_safe_entry(path, root) and path.is_file() and should_scan_file(path, include_lockfiles):
                 yield path
 
 
-def rewrite_file(path: Path, write: bool) -> FileChange | None:
+def rewrite_file(path: Path, root: Path, write: bool) -> FileChange | None:
+    if not is_safe_entry(path, root) or not path.is_file():
+        print(f"skip unsafe path: {path}")
+        return None
+
     try:
         raw = path.read_bytes()
     except OSError as error:
@@ -167,6 +183,9 @@ def rewrite_file(path: Path, write: bool) -> FileChange | None:
         return None
 
     if write:
+        if not is_safe_entry(path, root) or not path.is_file():
+            print(f"skip path changed during scan: {path}")
+            return None
         path.write_text(updated, encoding="utf-8")
 
     return FileChange(path=path, count=count)
@@ -181,9 +200,19 @@ def collect_path_changes(root: Path, include_generated: bool) -> list[PathChange
     changes: list[PathChange] = []
     paths: list[Path] = []
     for current_root, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if not should_skip_dir(name, include_generated)]
         current = Path(current_root)
-        paths.extend(current / name for name in [*files, *dirs])
+        dirs[:] = [
+            name
+            for name in dirs
+            if not should_skip_dir(name, include_generated) and is_safe_entry(current / name, root)
+        ]
+        for name in [*files, *dirs]:
+            path = current / name
+            if not is_safe_entry(path, root):
+                continue
+            if path.is_file() and not should_scan_file(path, include_lockfiles=False):
+                continue
+            paths.append(path)
 
     for old in sorted(paths, key=lambda path: len(path.parts), reverse=True):
         new_name = updated_name(old.name)
@@ -192,10 +221,24 @@ def collect_path_changes(root: Path, include_generated: bool) -> list[PathChange
     return changes
 
 
-def apply_path_changes(changes: list[PathChange], write: bool) -> list[PathChange]:
+def apply_path_changes(
+    changes: list[PathChange],
+    root: Path,
+    write: bool,
+) -> list[PathChange]:
     applied: list[PathChange] = []
     for change in changes:
-        if change.new.exists():
+        if not is_safe_entry(change.old, root):
+            print(f"skip unsafe rename source: {change.old}")
+            continue
+        try:
+            destination_is_safe = change.new.parent.resolve(strict=True).is_relative_to(root)
+        except OSError:
+            destination_is_safe = False
+        if not destination_is_safe:
+            print(f"skip unsafe rename destination: {change.old} -> {change.new}")
+            continue
+        if change.new.exists() or change.new.is_symlink():
             print(f"skip rename conflict: {change.old} -> {change.new}")
             continue
         if write:
@@ -242,6 +285,11 @@ def main() -> int:
         help="Apply changes. Without this flag, only report planned changes.",
     )
     parser.add_argument(
+        "--confirm-root",
+        metavar="PATH",
+        help="Required with --write; must resolve to the same root being changed.",
+    )
+    parser.add_argument(
         "--rename-paths",
         action="store_true",
         help="Also report or apply file and directory renames.",
@@ -269,17 +317,30 @@ def main() -> int:
         parser.error(f"root does not exist: {root}")
     if not root.is_dir():
         parser.error(f"root must be a directory: {root}")
+    if args.write:
+        if args.confirm_root is None:
+            parser.error("--write requires --confirm-root with the reviewed root")
+        try:
+            confirmed_root = Path(args.confirm_root).resolve(strict=True)
+        except OSError as error:
+            parser.error(f"confirmed root cannot be resolved: {error}")
+        if confirmed_root != root:
+            parser.error(f"confirmed root does not match scan root: {confirmed_root} != {root}")
+        filesystem_root = Path(root.anchor).resolve()
+        if root == filesystem_root or root == Path.home().resolve():
+            parser.error("refusing write mode for a filesystem root or home directory")
 
     file_changes = [
         change
         for path in iter_files(root, args.include_lockfiles, args.include_generated)
-        if (change := rewrite_file(path, args.write)) is not None
+        if (change := rewrite_file(path, root, args.write)) is not None
     ]
 
     path_changes: list[PathChange] = []
     if args.rename_paths:
         path_changes = apply_path_changes(
             collect_path_changes(root, args.include_generated),
+            root,
             args.write,
         )
 
