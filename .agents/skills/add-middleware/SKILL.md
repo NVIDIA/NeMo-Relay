@@ -34,7 +34,7 @@ Decide these before editing code:
 - What should subscribers and exporters observe in the event payload after this
   middleware runs?
 - If this is an event sanitizer, which of `data`, `category_profile`, and
-  `metadata` may change, and is the event used only as immutable context?
+  `metadata` can change, and is the event used only as immutable context?
 
 ## Pipeline Order
 
