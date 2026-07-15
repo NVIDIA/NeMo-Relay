@@ -32,6 +32,12 @@ Emitted when lifecycle work starts or ends. `scope_category` is `start` or
 Emitted for named runtime checkpoints that are not full start/end lifecycle
 pairs.
 
+The coding-agent CLI emits one `session.start` mark when a session lifecycle
+begins. Its metadata includes the logical harness `session_id`, the Relay-owned
+`session_instance_id`, and any configured session metadata such as `user_id`.
+The mark does not copy the native startup-hook payload or force a turn scope to
+open.
+
 ## Shared Envelope
 
 Every event carries a shared envelope:
@@ -123,11 +129,82 @@ exporters. Consumers should prefer typed event fields, binding helpers, and
 annotated request or response data before falling back to raw payload
 re-reading.
 
+Before that handoff, event sanitizers can replace `data`, `category_profile`,
+and `metadata`. The runtime keeps identity, lifecycle, category, timestamp,
+and parent fields immutable. Refer to
+[Event Sanitizers](/reference/event-sanitizers) for registration levels and
+ordering.
+
 Events preserve runtime facts. They do not decide which scope owns a call, how
 replay or cost policy is applied, how redaction policy is configured, how
 streams are blocked, or how exporter-specific semantic projection works. Those
 decisions stay in the session, codec, plugin, guardrail, or exporter layer that
 owns them.
+
+### Automatic Skill-Load Marks
+
+NeMo Relay automatically records an on-demand skill-load attempt when an
+instrumented tool explicitly names a skill or requests a complete `SKILL.md`
+read. The following payload excerpt shows the stable skill-load fields.
+Standard fields from the [shared envelope](#shared-envelope), such as
+`atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
+
+```json
+{
+  "kind": "mark",
+  "name": "skill.load",
+  "data": {"skill_name": "review"},
+  "metadata": {
+    "skill_load_source": "structured_read",
+    "tool_name": "read_file"
+  }
+}
+```
+
+Relay uses these `skill_load_source` values:
+
+| Source | Detected Request |
+| --- | --- |
+| `skill_tool` | A first-class skill tool, such as `Skill` or `skill_view` |
+| `structured_read` | A structured request for a whole-file read |
+| `shell_read` | A standalone, complete `cat`, `bat`, `batcat`, or PowerShell `Get-Content` command |
+
+For reader detections, the path must end in `SKILL.md`; the skill name is its
+immediate parent directory. A nonzero structured offset, any structured limit
+or range control, shell pipelines, redirections, compound commands, and
+range-limited shell readers do not count. An explicit structured `offset` of
+`0` still represents a complete read. Relay omits the full path and shell
+command from the mark.
+
+The mark has these lifecycle semantics:
+
+- Relay emits it immediately after the tool-start event and before execution,
+  with the tool span as its parent.
+- It records an eager load attempt and remains present if the tool later fails.
+- A blocked call that never starts does not emit the mark.
+- Relay emits each skill once per tool call. A later call that attempts the
+  same load emits another mark.
+
+Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
+tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,
+and Deep Agents paths use this observed contract. The existing Deep Agents
+`DeepAgents Skills Configured` mark remains a separate configuration summary;
+it does not mean that a skill body was loaded.
+
+Claude Code exposes slash-command expansion without saying whether the command
+came from a skill or a legacy command. For a nonempty slash-command expansion,
+Relay emits `skill.load.inferred` with `data.skill_name`,
+`metadata.skill_load_source = "prompt_expansion"`, and
+`metadata.inferred = true`. Relay also includes `metadata.command_source` when
+Claude Code provides it. Keep inferred and observed counts separate.
+
+Exporters handle the mark as follows:
+
+- ATOF preserves the canonical mark event.
+- ATIF omits marks because it models trajectory steps rather than independent
+  point-in-time events.
+- OpenTelemetry and OpenInference apply their configured `mark_projection` to
+  parented marks.
 
 ## How Events Are Produced
 

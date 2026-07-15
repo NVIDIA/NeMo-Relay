@@ -19,7 +19,7 @@ variables:
   NEMO_RELAY_CI_JUST_VERSION: "1.40.0"
   NEMO_RELAY_CI_NODE_VERSION: "24"
   NEMO_RELAY_CI_PYTHON_VERSION: "3.11"
-  NEMO_RELAY_CI_RUST_VERSION: "1.93.0"
+  NEMO_RELAY_CI_RUST_VERSION: "1.96.1"
   NEMO_RELAY_CI_UV_VERSION: "0.9.28"
   NEMO_RELAY_CI_GITHUB_REPOSITORY: "NVIDIA/NeMo-Relay"
   NEMO_RELAY_CI_GITHUB_WORKFLOW_FILE: "ci.yaml"
@@ -256,7 +256,7 @@ publish:artifactory:cargo:
       artifactory = { index = "sparse+${NEMO_RELAY_CI_ARTIFACTORY_CARGO_URL}" }
       EOF
       export CARGO_REGISTRIES_ARTIFACTORY_TOKEN="Bearer ${NEMO_RELAY_CI_ARTIFACTORY_KEY}"
-      export NEMO_RELAY_ARTIFACTORY_CRATE_DIRS="types plugin worker-proto worker core adaptive pii-redaction ffi cli"
+      export NEMO_RELAY_ARTIFACTORY_CRATE_DIRS="types plugin worker-proto worker core adaptive pii-redaction switchyard ffi cli"
 
       crates="$(
         uv run --no-project python - <<'PY'

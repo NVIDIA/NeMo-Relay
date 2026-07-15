@@ -237,9 +237,16 @@ jobs:
       - name: Install musl tools
         if: ${{ startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl') }}
         run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+          set -euo pipefail
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            for sources in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+              if [ -f "$sources" ]; then
+                sudo sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://ports.ubuntu.com/ubuntu-ports|g' "$sources"
+              fi
+            done
+          fi
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y musl-tools
 
       - name: Build CLI release binary
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}

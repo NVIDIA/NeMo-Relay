@@ -106,6 +106,16 @@ attributes. These values match ATIF `step.extra.ancestry.function_id` and
 the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
+Coding-agent trace roots also carry `session.id`, optional `user.id`, and
+`nemo_relay.session.instance_id`. The first value is the logical harness
+session ID, while the Relay instance ID is the existing root scope UUID shared
+by trace roots from one runtime session instance. These fields are root-only:
+filter matching roots first, then use the OpenInference backend's `trace_id` to
+select child rows. OpenInference and generic OpenTelemetry export generate
+independent trace and span IDs, but retain the same Relay instance ID and
+`nemo_relay.uuid` values. The `session.start` mark carries the same correlation
+fields whether represented as a span event or an orphan zero-duration span.
+
 LLM token counts appear as `llm.token_count.prompt`, `llm.token_count.completion`,
 `llm.token_count.total`, and `llm.token_count.prompt_details.cache_read`/`cache_write`.
 Cost appears as USD-denominated `llm.cost.total`. Refer to

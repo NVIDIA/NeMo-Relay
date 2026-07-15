@@ -749,6 +749,7 @@ pub(crate) fn install_codex_config(path: &Path, gateway_url: &str) -> Result<(),
     }
     doc["model_provider"] = value("nemo-relay-openai");
     ensure_table(&mut doc, "features")["hooks"] = value(true);
+    set_multi_agent_v2_enabled(&mut doc, false);
 
     let providers = ensure_table(&mut doc, "model_providers");
     let mut provider = Table::new();
@@ -932,6 +933,7 @@ fn sanitize_codex_backup_doc(
         restore_codex_client_proof_from_backup(&mut backup, &empty, challenge);
     }
     remove_table_item_if_bool(&mut backup, "features", "hooks", true);
+    remove_managed_multi_agent_v2_enabled(&mut backup);
     remove_empty_table(&mut backup, "model_providers");
     remove_empty_table(&mut backup, "features");
     backup
@@ -1192,6 +1194,7 @@ fn restore_codex_config_from_backup(
     if !preserve_hooks || feature_hooks_enabled(doc) != Some(true) {
         restore_table_item_if_bool(doc, backup_doc, "features", "hooks", true);
     }
+    restore_multi_agent_v2_enabled(doc, backup_doc);
 }
 
 fn remove_codex_config_without_backup(
@@ -1211,6 +1214,7 @@ fn remove_codex_config_without_backup(
     if !preserve_hooks {
         remove_table_item_if_bool(doc, "features", "hooks", true);
     }
+    remove_managed_multi_agent_v2_enabled(doc);
 }
 
 pub(crate) fn remove_legacy_codex_hooks(path: &Path) -> Result<(), String> {
@@ -1379,6 +1383,7 @@ pub(crate) fn codex_config_doc_has_managed_install(doc: &DocumentMut, gateway_ur
         == Some("nemo-relay-openai")
         && codex_provider_item_is_managed(doc, gateway_url)
         && feature_hooks_enabled(doc) == Some(true)
+        && feature_multi_agent_v2_enabled(doc) == Some(false)
 }
 
 #[cfg(test)]
@@ -1502,6 +1507,74 @@ pub(crate) fn feature_hooks_enabled(doc: &DocumentMut) -> Option<bool> {
         .and_then(|table| table.get("hooks"))
         .and_then(Item::as_value)
         .and_then(|value| value.as_bool())
+}
+
+fn feature_multi_agent_v2_enabled(doc: &DocumentMut) -> Option<bool> {
+    let item = doc
+        .get("features")
+        .and_then(Item::as_table)
+        .and_then(|features| features.get("multi_agent_v2"))?;
+    if let Some(table) = item.as_table() {
+        return table
+            .get("enabled")
+            .and_then(Item::as_value)
+            .and_then(TomlValue::as_bool);
+    }
+    item.as_inline_table()
+        .and_then(|table| table.get("enabled"))
+        .and_then(TomlValue::as_bool)
+}
+
+fn set_multi_agent_v2_enabled(doc: &mut DocumentMut, enabled: bool) {
+    let features = ensure_table(doc, "features");
+    if let Some(item) = features.get_mut("multi_agent_v2") {
+        if let Some(table) = item.as_table_mut() {
+            table["enabled"] = value(enabled);
+            return;
+        }
+        if let Some(table) = item.as_inline_table_mut() {
+            table.insert("enabled", TomlValue::from(enabled));
+            return;
+        }
+    }
+    let mut table = Table::new();
+    table["enabled"] = value(enabled);
+    features["multi_agent_v2"] = Item::Table(table);
+}
+
+fn restore_multi_agent_v2_enabled(doc: &mut DocumentMut, backup: &DocumentMut) {
+    if feature_multi_agent_v2_enabled(doc) != Some(false) {
+        return;
+    }
+    match feature_multi_agent_v2_enabled(backup) {
+        Some(enabled) => set_multi_agent_v2_enabled(doc, enabled),
+        None => remove_managed_multi_agent_v2_enabled(doc),
+    }
+}
+
+fn remove_managed_multi_agent_v2_enabled(doc: &mut DocumentMut) {
+    if feature_multi_agent_v2_enabled(doc) != Some(false) {
+        return;
+    }
+    let Some(features) = doc.get_mut("features").and_then(Item::as_table_mut) else {
+        return;
+    };
+    let remove_feature = if let Some(item) = features.get_mut("multi_agent_v2") {
+        if let Some(table) = item.as_table_mut() {
+            table.remove("enabled");
+            table.is_empty()
+        } else if let Some(table) = item.as_inline_table_mut() {
+            table.remove("enabled");
+            table.is_empty()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if remove_feature {
+        features.remove("multi_agent_v2");
+    }
 }
 
 pub(crate) fn remove_empty_table(doc: &mut DocumentMut, key: &str) {

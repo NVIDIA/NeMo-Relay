@@ -83,7 +83,9 @@ fallback behavior; Switchyard owns ATOF accumulation, routing decisions, and pro
 translation.
 
 The service is not started automatically by Relay outside these examples. A production deployment
-must provide a reachable Decision API and configure the Relay plugin with its URL.
+must start a compatible Switchyard service before Relay activates the plugin and configure the
+Relay plugin with its Decision API URL. Relay derives the service's root `/health` URL from that
+configuration and refuses activation unless it reports `{"status":"ok"}`.
 
 ## Artifacts and troubleshooting
 

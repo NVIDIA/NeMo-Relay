@@ -224,26 +224,7 @@ fn collect_config_names(value: &Value, names: &mut BTreeSet<String>, windows: bo
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                match key.as_str() {
-                    "header_env" => {
-                        if let Some(headers) = value.as_object() {
-                            for name in headers.values().filter_map(Value::as_str) {
-                                if !name.is_empty() && !blocked(name) {
-                                    insert_name(names, name.to_owned(), windows);
-                                }
-                            }
-                        }
-                    }
-                    "secret_access_key_var" | "session_token_var" => {
-                        if let Some(name) = value.as_str()
-                            && !name.is_empty()
-                            && !blocked(name)
-                        {
-                            insert_name(names, name.to_owned(), windows);
-                        }
-                    }
-                    _ => collect_config_names(value, names, windows),
-                }
+                collect_config_field(key, value, names, windows);
             }
         }
         Value::Array(values) => {
@@ -252,5 +233,31 @@ fn collect_config_names(value: &Value, names: &mut BTreeSet<String>, windows: bo
             }
         }
         _ => {}
+    }
+}
+
+fn collect_config_field(key: &str, value: &Value, names: &mut BTreeSet<String>, windows: bool) {
+    match key {
+        "header_env" => collect_header_env_names(value, names, windows),
+        "secret_access_key_var" | "session_token_var" => {
+            if let Some(name) = value.as_str() {
+                collect_config_name(name, names, windows);
+            }
+        }
+        _ => collect_config_names(value, names, windows),
+    }
+}
+
+fn collect_header_env_names(value: &Value, names: &mut BTreeSet<String>, windows: bool) {
+    if let Some(headers) = value.as_object() {
+        for name in headers.values().filter_map(Value::as_str) {
+            collect_config_name(name, names, windows);
+        }
+    }
+}
+
+fn collect_config_name(name: &str, names: &mut BTreeSet<String>, windows: bool) {
+    if !name.is_empty() && !blocked(name) {
+        insert_name(names, name.to_owned(), windows);
     }
 }

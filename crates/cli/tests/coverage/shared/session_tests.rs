@@ -265,6 +265,196 @@ fn register_filtered_session_subscriber(
     .unwrap();
 }
 
+#[tokio::test]
+async fn session_start_mark_carries_stable_non_overridable_identity_once() {
+    let subscriber_name = "cli-session-start-identity-test";
+    let session_id = "session-start-identity";
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_filtered_session_subscriber(
+        subscriber_name,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    );
+
+    let mut config = session_test_config();
+    config.metadata = Some(json!({
+        "user_id": "alice",
+        "session_instance_id": "untrusted"
+    }));
+    let manager = SessionManager::new(config);
+    let headers = HeaderMap::new();
+    let start = SessionEvent {
+        session_id: session_id.into(),
+        agent_kind: AgentKind::Hermes,
+        event_name: "on_session_start".into(),
+        payload: json!({"ignored": true}),
+        metadata: json!({}),
+    };
+    manager
+        .apply_events(
+            &headers,
+            vec![
+                NormalizedEvent::AgentStarted(start.clone()),
+                NormalizedEvent::AgentStarted(start),
+                NormalizedEvent::AgentEnded(SessionEvent {
+                    session_id: session_id.into(),
+                    agent_kind: AgentKind::Hermes,
+                    event_name: "on_session_end".into(),
+                    payload: json!({}),
+                    metadata: json!({}),
+                }),
+            ],
+        )
+        .await
+        .unwrap();
+    flush_subscribers().unwrap();
+
+    let events = captured_events.lock().unwrap();
+    let marks = events
+        .iter()
+        .filter(|event| event.scope_category().is_none() && event.name() == "session.start")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        marks.len(),
+        1,
+        "duplicate starts must not duplicate the mark"
+    );
+    let mark = marks[0];
+    assert!(
+        mark.data().is_none(),
+        "startup hook payload must not be copied"
+    );
+    let metadata = mark.metadata().unwrap();
+    assert_eq!(metadata["session_id"], json!(session_id));
+    assert_eq!(metadata["user_id"], json!("alice"));
+    let instance_id = metadata["session_instance_id"].as_str().unwrap();
+    let instance_uuid = uuid::Uuid::parse_str(instance_id).unwrap();
+    assert_eq!(instance_uuid.get_version(), Some(uuid::Version::SortRand));
+    assert_ne!(instance_id, "untrusted");
+
+    let agent_start = events
+        .iter()
+        .find(|event| {
+            event.scope_category() == Some(ScopeCategory::Start)
+                && event.scope_type() == Some(ScopeType::Agent)
+        })
+        .unwrap();
+    assert_eq!(mark.parent_uuid(), Some(agent_start.uuid()));
+    assert_eq!(
+        agent_start.metadata().unwrap()["session_instance_id"],
+        json!(instance_id)
+    );
+    drop(events);
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+}
+
+#[tokio::test]
+async fn turn_root_reuses_startup_mark_instance_without_opening_a_turn() {
+    let subscriber_name = "cli-turn-root-session-instance-test";
+    let session_id = "turn-root-session-instance";
+    let captured_events = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&captured_events);
+    register_filtered_session_subscriber(
+        subscriber_name,
+        tracked_sessions(&[session_id]),
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    );
+
+    let manager = SessionManager::new(session_test_config());
+    let headers = HeaderMap::new();
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::AgentStarted(codex_session_event(
+                session_id,
+                "sessionStart",
+                json!({"user_id": "alice"}),
+            ))],
+        )
+        .await
+        .unwrap();
+    {
+        let sessions = manager.inner.lock().await;
+        assert!(sessions.get(session_id).unwrap().turn_scope.is_none());
+    }
+    manager
+        .apply_events(
+            &headers,
+            vec![NormalizedEvent::PromptSubmitted(codex_session_event(
+                session_id,
+                "UserPromptSubmit",
+                json!({}),
+            ))],
+        )
+        .await
+        .unwrap();
+    flush_subscribers().unwrap();
+
+    let events = captured_events.lock().unwrap();
+    let mark = events
+        .iter()
+        .find(|event| event.name() == "session.start")
+        .unwrap();
+    let turn_start = events
+        .iter()
+        .find(|event| {
+            event.scope_category() == Some(ScopeCategory::Start) && event.name() == "codex-turn"
+        })
+        .unwrap();
+    let instance_id = mark.metadata().unwrap()["session_instance_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(mark.parent_uuid(), turn_start.parent_uuid());
+    assert_eq!(
+        turn_start.metadata().unwrap()["session_instance_id"],
+        json!(instance_id)
+    );
+    drop(events);
+    assert!(deregister_subscriber(subscriber_name).unwrap());
+}
+
+#[test]
+fn session_instances_are_unique_even_when_logical_session_ids_match() {
+    let first = Session::new(
+        "same-session".to_string(),
+        AgentKind::Codex,
+        SessionConfig::default(),
+    );
+    let second = Session::new(
+        "same-session".to_string(),
+        AgentKind::Codex,
+        SessionConfig::default(),
+    );
+    let first_root = first.scope_stack.read().unwrap().root_uuid();
+    let second_root = second.scope_stack.read().unwrap().root_uuid();
+    assert_ne!(first_root, second_root);
+}
+
+#[test]
+fn scope_metadata_recovers_poisoned_scope_stack_for_instance_id() {
+    let session = Session::new(
+        "poisoned-session".to_string(),
+        AgentKind::Codex,
+        SessionConfig::default(),
+    );
+    let root_uuid = session.scope_stack.read().unwrap().root_uuid();
+    let scope_stack = session.scope_stack.clone();
+    std::thread::spawn(move || {
+        let _guard = scope_stack.write().unwrap();
+        panic!("poison session scope stack for recovery test");
+    })
+    .join()
+    .expect_err("fixture scope stack writer should panic");
+
+    let metadata = session.scope_metadata(Value::Null);
+
+    assert_eq!(
+        metadata["session_instance_id"],
+        json!(root_uuid.to_string())
+    );
+}
+
 async fn apply_codex_payload(manager: &SessionManager, headers: &HeaderMap, payload: Value) {
     let outcome = crate::agents::shared::adapters::codex::adapt(payload, headers);
     manager.apply_events(headers, outcome.events).await.unwrap();
@@ -1984,7 +2174,7 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-nemo-relay-session-metadata",
-        r#"{"team":"coverage"}"#.parse().unwrap(),
+        r#"{"team":"coverage","user_id":"alice"}"#.parse().unwrap(),
     );
     headers.insert("x-nemo-relay-gateway-mode", "required".parse().unwrap());
 
@@ -2028,6 +2218,18 @@ async fn writes_atif_on_session_end_from_plugin_config() {
     assert_eq!(
         atif["extra"]["observed_events"][0]["name"],
         json!("codex-turn")
+    );
+    assert_eq!(
+        atif["extra"]["nemo_relay"]["session_id"],
+        json!("atif-session")
+    );
+    assert_eq!(atif["extra"]["nemo_relay"]["user_id"], json!("alice"));
+    let session_instance_id = atif["extra"]["nemo_relay"]["session_instance_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        atif["extra"]["observed_events"][0]["metadata"]["session_instance_id"],
+        json!(session_instance_id)
     );
 }
 

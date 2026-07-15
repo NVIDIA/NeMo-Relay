@@ -241,6 +241,18 @@ Plugin configuration controls process-level Observability exporters. Per-session
 configuration controls structured metadata on the top-level agent begin event
 and the plugin configuration metadata associated with the session.
 
+For example, attach a user identity to a transparent run:
+
+```bash
+nemo-relay run --session-metadata '{"user_id":"alice"}' -- codex
+```
+
+The CLI emits one `session.start` mark for the lifecycle and copies the merged
+metadata onto each top-level trace scope. It also adds a non-overridable
+`session_instance_id` derived from the session's existing root scope UUID.
+Keep `user_id` a top-level string when OTLP exporters should expose it as
+`user.id`.
+
 `hook-forward` can also pass per-session configuration through headers:
 
 - `x-nemo-relay-config-profile`
@@ -258,8 +270,9 @@ where provider traffic was expected to pass through the gateway.
 The gateway normalizes vendor hook payloads into private internal events before
 calling NeMo Relay APIs.
 
-- Agent start opens a top-level `ScopeType::Agent` scope on a dedicated
-  `ScopeStackHandle`.
+- Agent start emits a `session.start` mark on a dedicated `ScopeStackHandle`.
+  Harnesses with a reliable session boundary also open a top-level
+  `ScopeType::Agent` scope; Claude Code and Codex use bounded turn scopes.
 - Subagent start opens a child `ScopeType::Agent` scope. Subagent stop closes
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure

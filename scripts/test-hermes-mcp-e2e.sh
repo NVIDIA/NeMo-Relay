@@ -187,6 +187,7 @@ while time.monotonic() < deadline:
     time.sleep(0.1)
 raise SystemExit("Relay port 47632 did not become free")
 PY
+    return 0
 }
 
 run_hermes() {
@@ -204,6 +205,7 @@ from pathlib import Path
 output, stderr = map(Path, sys.argv[1:])
 assert output.read_text().strip().lower() == "pong", (output.read_text(), stderr.read_text())
 PY
+    return 0
 }
 
 wait_for_relay_port_release

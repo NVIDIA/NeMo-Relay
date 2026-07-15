@@ -46,8 +46,8 @@ the plugin contract.
 Use this matrix when deciding whether to use the built-in `pii_redaction`
 plugin or raw sanitize-guardrail middleware directly.
 
-| Area | `pii_redaction` plugin | Raw middleware |
-|---|---|---|
+| Area | `pii_redaction` Plugin | Raw Middleware |
+| --- | --- | --- |
 | Primary UX | Declarative config through `plugins.toml`, bindings helpers, and the CLI editor | Callback registration in application code |
 | Best fit | Reusable privacy policy shared across apps or teams | App-specific logic tied to runtime state or custom heuristics |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | You implement the behavior yourself |
@@ -63,14 +63,15 @@ plugin or raw sanitize-guardrail middleware directly.
 The top-level PII redaction object contains:
 
 | Field | Purpose |
-|---|---|
+| --- | --- |
 | `version` | PII redaction config schema version. Defaults to `1`. |
-| `mode` | Backend mode. Current values are `builtin` and `local_model`. |
-| `input` | Enables managed LLM request sanitization. |
-| `output` | Enables managed LLM response sanitization. |
-| `tool_input` | Enables sanitization of emitted tool-request observability payloads. |
-| `tool_output` | Enables sanitization of emitted tool-response observability payloads. |
-| `priority` | Guardrail priority. Lower values run earlier. |
+| `mode` | Backend mode. Current values are `builtin` and `local_model`. Defaults to `builtin`. |
+| `input` | Enables managed LLM request sanitization and non-tool, non-LLM scope-start field sanitization. Defaults to `true`. |
+| `output` | Enables managed LLM response sanitization and non-tool, non-LLM scope-end field sanitization. Defaults to `true`. |
+| `mark` | Enables mark `data`, `category_profile`, and `metadata` sanitization. Defaults to `true`. |
+| `tool_input` | Enables sanitization of emitted tool-request observability payloads. Defaults to `true`. |
+| `tool_output` | Enables sanitization of emitted tool-response observability payloads. Defaults to `true`. |
+| `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
 | `codec` | Managed LLM provider codec. Required when `input` or `output` is enabled. |
 | `builtin` | Built-in backend settings used when `mode = "builtin"`. |
 | `local` | Local-backend settings used when `mode = "local_model"`. |
@@ -83,10 +84,11 @@ At least one managed redaction surface must be enabled.
 The following table compares the available PII redaction backends:
 
 | Area | `builtin` | `local_model` |
-|---|---|---|
+| --- | --- | --- |
 | Built-in component kind and config validation | Supported | Supported |
 | Managed LLM `input` | Supported | Not implemented |
 | Managed LLM `output` | Supported | Not implemented |
+| Mark and generic scope event fields | Supported | Not implemented |
 | Managed `tool_input` | Supported | Not implemented |
 | Managed `tool_output` | Supported | Not implemented |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
@@ -131,6 +133,7 @@ mode = "builtin"
 codec = "openai_chat"
 input = true
 output = true
+mark = true
 tool_input = true
 tool_output = true
 
@@ -158,6 +161,12 @@ This example configures the built-in backend for:
 - LLM response redaction from the normalized response path `/message`
 - tool argument redaction at `/api_key`
 - tool result redaction at `/result/secret`
+- mark-event and non-tool, non-LLM scope-event redaction at matching target paths within
+  `data`, `category_profile`, and `metadata`
+
+`mark` is enabled when omitted. Set `mark = false` only when marks are known to
+contain no sensitive observability fields or another sanitizer owns that
+boundary.
 
 ### CLI Editor Support
 
@@ -168,6 +177,7 @@ Use the editor when you want to:
 
 - Toggle the component on or off
 - Choose `builtin` or `local_model`
+- Enable or opt out of mark sanitization
 - Set the LLM `codec`
 - Edit `builtin` action settings such as `action`, `target_paths`,
   `pattern`, `detector`, `replacement`, and masking fields
@@ -185,7 +195,7 @@ use raw middleware.
 The `builtin` section contains:
 
 | Field | Purpose |
-|---|---|
+| --- | --- |
 | `action` | Sanitization action. Current values are `remove`, `redact`, `regex_replace`, `hash`, and `mask`. |
 | `target_paths` | Exact JSON-pointer paths to sanitize. Empty means every matching string leaf. |
 | `pattern` | Regex pattern used when `action = "regex_replace"` or `action = "redact"`. |
@@ -277,6 +287,10 @@ The plugin uses different payload boundaries for tools and LLMs:
 - LLMs use the selected built-in codec. Prefer normalized Relay paths such as:
   - `/messages/0/content` for request message content
   - `/message` for the normalized assistant response text
+- Marks and non-tool, non-LLM scopes sanitize `data`, `category_profile`, and
+  `metadata` as separate JSON values. A target path is evaluated independently
+  inside each value; it does not start with `/data`, `/category_profile`, or
+  `/metadata`.
 
 The current implementation also preserves provider-shaped response-path
 compatibility for the supported codecs, but normalized LLM paths are the
@@ -327,14 +341,24 @@ string leaf in the selected payload boundary.
 
 ## Observability Semantics
 
-The built-in plugin uses sanitize guardrails.
+The built-in plugin uses sanitize guardrails and event sanitizers.
 
 That means:
 
-- The real provider response value remains unchanged.
-- The plugin sanitizes emitted NeMo Relay start and end event payloads.
-- The plugin populates `annotated_response` from the sanitized end-event payload
-  when a response codec is available.
+- The real provider request and response values are unchanged.
+- The emitted NeMo Relay start, end, or mark event observability fields are
+  sanitized.
+- `annotated_response` is regenerated from the sanitized end-event payload when
+  the configured response codec can decode that payload.
+- Subscribers and exporters consume only the sanitized canonical event stream.
+  Each exporter can omit or transform fields as part of its normal projection,
+  but raw values removed by the plugin do not bypass the sanitizer.
+
+For tool and LLM scope events, the PII redaction scope sanitizer leaves `data`,
+`category_profile`, and `metadata` unchanged because the specialized tool or
+LLM sanitizer already owns that lifecycle boundary. This prevents repeated
+hashing or masking. Other scope categories use `input` for starts and `output`
+for ends.
 
 ## Local Model Mode
 

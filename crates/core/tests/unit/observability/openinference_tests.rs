@@ -427,6 +427,26 @@ fn make_start_event(
     )
 }
 
+fn make_start_event_with_metadata(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    metadata: Json,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .name(name)
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ))
+}
+
 fn make_end_event(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
@@ -518,6 +538,18 @@ fn make_mark_event(parent_uuid: Option<Uuid>, name: &str, data: Option<Json>) ->
             .parent_uuid_opt(parent_uuid)
             .name(name)
             .data_opt(data)
+            .build(),
+        None,
+        None,
+    ))
+}
+
+fn make_mark_event_with_metadata(parent_uuid: Option<Uuid>, metadata: Json) -> Event {
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .name("session.start")
+            .metadata(metadata)
             .build(),
         None,
         None,
@@ -774,6 +806,136 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
 }
 
 #[test]
+fn session_identity_is_projected_on_trace_roots_and_marks_only() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenInferenceSubscriber::from_tracer_provider(provider, "session-identity");
+    let callback = subscriber.subscriber();
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let second_root_uuid = Uuid::now_v7();
+    let instance_id = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid()
+        .to_string();
+    let identity = json!({"session_id": "logical-session", "user_id": "alice"});
+
+    callback(&make_start_event_with_metadata(
+        root_uuid,
+        None,
+        "identity-root",
+        identity.clone(),
+    ));
+    callback(&make_start_event_with_metadata(
+        child_uuid,
+        Some(root_uuid),
+        "identity-child",
+        identity.clone(),
+    ));
+    callback(&make_mark_event_with_metadata(
+        Some(root_uuid),
+        identity.clone(),
+    ));
+    callback(&make_end_event(
+        child_uuid,
+        Some(root_uuid),
+        "identity-child",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_end_event(
+        root_uuid,
+        None,
+        "identity-root",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_start_event_with_metadata(
+        second_root_uuid,
+        None,
+        "identity-second-root",
+        json!({"session_id": "logical-session", "user_id": 42}),
+    ));
+    callback(&make_end_event(
+        second_root_uuid,
+        None,
+        "identity-second-root",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_mark_event_with_metadata(None, identity));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let root = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-root")
+        .unwrap();
+    let child = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-child")
+        .unwrap();
+    let second_root = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-second-root")
+        .unwrap();
+    let orphan_mark = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:session.start")
+        .unwrap();
+
+    let root_attributes = attr_map(&root.attributes);
+    assert_eq!(root_attributes["session.id"], "logical-session");
+    assert_eq!(root_attributes["user.id"], "alice");
+    assert_eq!(
+        root_attributes["nemo_relay.session.instance_id"],
+        instance_id
+    );
+    assert_eq!(
+        root.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "session.id")
+            .count(),
+        1
+    );
+    let child_attributes = attr_map(&child.attributes);
+    assert!(!child_attributes.contains_key("session.id"));
+    assert!(!child_attributes.contains_key("user.id"));
+    assert!(!child_attributes.contains_key("nemo_relay.session.instance_id"));
+    assert_eq!(child_attributes["openinference.metadata.user_id"], "alice");
+    let second_root_attributes = attr_map(&second_root.attributes);
+    assert_eq!(second_root_attributes["session.id"], "logical-session");
+    assert!(!second_root_attributes.contains_key("user.id"));
+    assert_eq!(
+        second_root_attributes["openinference.metadata.user_id"],
+        "42"
+    );
+    assert_eq!(
+        second_root_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+    assert_ne!(
+        root.span_context.trace_id(),
+        second_root.span_context.trace_id()
+    );
+
+    let mark_attributes = attr_map(&root.events.events[0].attributes);
+    assert_eq!(mark_attributes["session.id"], "logical-session");
+    assert_eq!(mark_attributes["user.id"], "alice");
+    assert_eq!(
+        mark_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+    let orphan_attributes = attr_map(&orphan_mark.attributes);
+    assert_eq!(orphan_attributes["session.id"], "logical-session");
+    assert_eq!(orphan_attributes["user.id"], "alice");
+    assert_eq!(
+        orphan_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+}
+
+#[test]
 fn mapped_orphan_mark_alias_cannot_replace_intrinsic_mark_fields() {
     let (provider, exporter) = make_provider();
     let subscriber = OpenInferenceSubscriber::from_tracer_provider_with_attribute_mappings(
@@ -899,6 +1061,11 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
         event_attributes.get("nemo_relay.mark.metadata.source"),
         Some(&"rust-test".to_string())
     );
+    assert!(!event_attributes.contains_key("tool.name"));
+    assert!(!event_attributes.contains_key("tool_call.function.name"));
+    assert!(!event_attributes.contains_key("output.value"));
+    assert!(!event_attributes.contains_key("output.mime_type"));
+    assert!(!event_attributes.contains_key("metadata"));
 }
 
 #[test]
@@ -2379,7 +2546,8 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         BaseEvent::builder()
             .parent_uuid(parent_uuid)
             .name("plugin.output_compacted")
-            .data(json!({"count": 3}))
+            .data(json!({"count": 3, "details": {"strategy": "compact"}}))
+            .metadata(json!({"producer": "example-plugin", "attempt": 1}))
             .build(),
         Some(EventCategory::custom()),
         Some(
@@ -2423,6 +2591,38 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         Some(&"3".to_string())
     );
     assert_eq!(
+        attributes.get("nemo_relay.mark.data.details"),
+        Some(&"{\"strategy\":\"compact\"}".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.mark.metadata.attempt"),
+        Some(&"1".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.mark.metadata.producer"),
+        Some(&"example-plugin".to_string())
+    );
+    assert_eq!(
+        attributes.get("tool.name"),
+        Some(&"plugin.output_compacted".to_string())
+    );
+    assert_eq!(
+        attributes.get("tool_call.function.name"),
+        Some(&"plugin.output_compacted".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"{\"count\":3,\"details\":{\"strategy\":\"compact\"}}".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        attributes.get("metadata"),
+        Some(&"{\"attempt\":1,\"producer\":\"example-plugin\"}".to_string())
+    );
+    assert_eq!(
         attributes.get("nemo_relay.mark.category"),
         Some(&"custom".to_string())
     );
@@ -2431,6 +2631,115 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         Some(&"example.compaction".to_string())
     );
     assert!(!attributes.contains_key("nemo_relay.mark.orphan"));
+}
+
+#[test]
+fn tool_projection_omits_standard_payload_attributes_when_mark_payload_is_absent() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OpenInferenceEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
+    processor.process(&make_mark_event(None, "plugin.checkpoint", None));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("tool.name"),
+        Some(&"plugin.checkpoint".to_string())
+    );
+    assert_eq!(
+        attributes.get("tool_call.function.name"),
+        Some(&"plugin.checkpoint".to_string())
+    );
+    assert!(!attributes.contains_key("output.value"));
+    assert!(!attributes.contains_key("output.mime_type"));
+    assert!(!attributes.contains_key("metadata"));
+    assert!(
+        !attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.data"))
+    );
+    assert!(
+        !attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.metadata"))
+    );
+}
+
+#[test]
+fn tool_projection_handles_data_and_metadata_independently() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OpenInferenceEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
+    processor.process(&make_mark_event(
+        None,
+        "plugin.data_only",
+        Some(json!({"count": 3})),
+    ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("plugin.metadata_only")
+            .metadata(json!({"attempt": 1}))
+            .build(),
+        None,
+        None,
+    )));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+
+    let data_only = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:plugin.data_only")
+        .unwrap();
+    let data_attributes = attr_map(&data_only.attributes);
+    assert_eq!(
+        data_attributes.get("output.value"),
+        Some(&"{\"count\":3}".to_string())
+    );
+    assert_eq!(
+        data_attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        data_attributes.get("nemo_relay.mark.data.count"),
+        Some(&"3".to_string())
+    );
+    assert!(!data_attributes.contains_key("metadata"));
+    assert!(
+        !data_attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.metadata"))
+    );
+
+    let metadata_only = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:plugin.metadata_only")
+        .unwrap();
+    let metadata_attributes = attr_map(&metadata_only.attributes);
+    assert!(!metadata_attributes.contains_key("output.value"));
+    assert!(!metadata_attributes.contains_key("output.mime_type"));
+    assert_eq!(
+        metadata_attributes.get("metadata"),
+        Some(&"{\"attempt\":1}".to_string())
+    );
+    assert_eq!(
+        metadata_attributes.get("nemo_relay.mark.metadata.attempt"),
+        Some(&"1".to_string())
+    );
+    assert!(
+        !metadata_attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.data"))
+    );
 }
 
 #[test]

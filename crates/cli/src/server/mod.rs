@@ -296,13 +296,36 @@ async fn serve_listener_with_dynamic_inner(
     if let Some(path) = ready_file {
         write_ready_file(path, local_address, &instance_id)?;
     }
-    let idle_shutdown = if matches!(&shutdown_mode, None | Some(ShutdownMode::ProcessSignal)) {
-        plugin_idle_timeout()?
-            .map(|timeout| idle_shutdown_future(last_activity, sessions.clone(), timeout))
-    } else {
-        None
+    let idle_shutdown: Option<ShutdownFuture> =
+        if matches!(&shutdown_mode, None | Some(ShutdownMode::ProcessSignal)) {
+            plugin_idle_timeout()?.map(|timeout| {
+                Box::pin(idle_shutdown_future(
+                    last_activity,
+                    sessions.clone(),
+                    timeout,
+                )) as ShutdownFuture
+            })
+        } else {
+            None
+        };
+    let shutdown = server_shutdown_future(shutdown_mode, idle_shutdown);
+    let shutdown = combine_shutdown_futures(shutdown, bootstrap_shutdown_rx);
+    let serve_result = match shutdown {
+        Some(shutdown) => {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown)
+                .await
+        }
+        None => axum::serve(listener, app).await,
     };
-    let shutdown: Option<ShutdownFuture> = match shutdown_mode {
+    finish_server_shutdown(serve_result, &sessions, plugin_activation).await
+}
+
+fn server_shutdown_future(
+    shutdown_mode: Option<ShutdownMode>,
+    idle_shutdown: Option<ShutdownFuture>,
+) -> Option<ShutdownFuture> {
+    match shutdown_mode {
         Some(ShutdownMode::Receiver(receiver)) => Some(Box::pin(async move {
             let _ = receiver.await;
         })),
@@ -316,9 +339,15 @@ async fn serve_listener_with_dynamic_inner(
                 shutdown_signal().await;
             }
         })),
-        None => idle_shutdown.map(|idle| Box::pin(idle) as ShutdownFuture),
-    };
-    let shutdown = match (shutdown, bootstrap_shutdown_rx) {
+        None => idle_shutdown,
+    }
+}
+
+fn combine_shutdown_futures(
+    shutdown: Option<ShutdownFuture>,
+    bootstrap_shutdown_rx: Option<oneshot::Receiver<()>>,
+) -> Option<ShutdownFuture> {
+    match (shutdown, bootstrap_shutdown_rx) {
         (Some(shutdown), Some(receiver)) => Some(Box::pin(async move {
             tokio::select! {
                 _ = shutdown => {}
@@ -329,15 +358,14 @@ async fn serve_listener_with_dynamic_inner(
             let _ = receiver.await;
         }) as ShutdownFuture),
         (shutdown, None) => shutdown,
-    };
-    let serve_result = match shutdown {
-        Some(shutdown) => {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown)
-                .await
-        }
-        None => axum::serve(listener, app).await,
-    };
+    }
+}
+
+async fn finish_server_shutdown(
+    serve_result: std::io::Result<()>,
+    sessions: &SessionManager,
+    plugin_activation: Option<ServerPluginActivation>,
+) -> Result<(), CliError> {
     let close_result = sessions.close_all("gateway_shutdown").await;
     let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
     let clear_result = plugin_activation

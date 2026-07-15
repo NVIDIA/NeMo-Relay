@@ -117,52 +117,88 @@ impl SecretPattern {
         }
         match &self.0[offset] {
             SecretSegment::Property(property) => {
-                if let Some(child) = value.get_mut(property) {
-                    self.visit_matching_values(child, offset + 1, visit);
-                }
+                self.visit_property(value, property, offset, visit)
             }
-            SecretSegment::Any => match value {
-                Value::Object(object) => {
-                    for child in object.values_mut() {
-                        self.visit_matching_values(child, offset + 1, visit);
-                    }
-                }
-                Value::Array(values) => {
-                    for child in values {
-                        self.visit_matching_values(child, offset + 1, visit);
-                    }
-                }
-                _ => {}
-            },
+            SecretSegment::Any => self.visit_any(value, offset, visit),
             SecretSegment::Pattern(pattern) => {
-                if let Value::Object(object) = value {
-                    for (key, child) in object {
-                        if pattern_matches(pattern, key) {
-                            self.visit_matching_values(child, offset + 1, visit);
-                        }
-                    }
-                }
+                self.visit_object_matches(value, offset, visit, |key| {
+                    pattern_matches(pattern, key)
+                });
             }
             SecretSegment::UnmatchedProperties(selector) => {
-                if let Value::Object(object) = value {
-                    for (key, child) in object {
-                        if selector.matches(key) {
-                            self.visit_matching_values(child, offset + 1, visit);
-                        }
-                    }
-                }
+                self.visit_object_matches(value, offset, visit, |key| selector.matches(key));
             }
-            SecretSegment::Index(index) => {
-                if let Some(child) = value.get_mut(*index) {
+            SecretSegment::Index(index) => self.visit_index(value, *index, offset, visit),
+            SecretSegment::Tail(start) => self.visit_tail(value, *start, offset, visit),
+        }
+    }
+
+    fn visit_property(
+        &self,
+        value: &mut Value,
+        property: &str,
+        offset: usize,
+        visit: &mut impl FnMut(&mut Value),
+    ) {
+        if let Some(child) = value.get_mut(property) {
+            self.visit_matching_values(child, offset + 1, visit);
+        }
+    }
+
+    fn visit_any(&self, value: &mut Value, offset: usize, visit: &mut impl FnMut(&mut Value)) {
+        match value {
+            Value::Object(object) => {
+                for child in object.values_mut() {
                     self.visit_matching_values(child, offset + 1, visit);
                 }
             }
-            SecretSegment::Tail(start) => {
-                if let Value::Array(values) = value {
-                    for child in values.iter_mut().skip(*start) {
-                        self.visit_matching_values(child, offset + 1, visit);
-                    }
+            Value::Array(values) => {
+                for child in values {
+                    self.visit_matching_values(child, offset + 1, visit);
                 }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_object_matches(
+        &self,
+        value: &mut Value,
+        offset: usize,
+        visit: &mut impl FnMut(&mut Value),
+        matches: impl Fn(&str) -> bool,
+    ) {
+        if let Value::Object(object) = value {
+            for (key, child) in object {
+                if matches(key) {
+                    self.visit_matching_values(child, offset + 1, visit);
+                }
+            }
+        }
+    }
+
+    fn visit_index(
+        &self,
+        value: &mut Value,
+        index: usize,
+        offset: usize,
+        visit: &mut impl FnMut(&mut Value),
+    ) {
+        if let Some(child) = value.get_mut(index) {
+            self.visit_matching_values(child, offset + 1, visit);
+        }
+    }
+
+    fn visit_tail(
+        &self,
+        value: &mut Value,
+        start: usize,
+        offset: usize,
+        visit: &mut impl FnMut(&mut Value),
+    ) {
+        if let Value::Array(values) = value {
+            for child in values.iter_mut().skip(start) {
+                self.visit_matching_values(child, offset + 1, visit);
             }
         }
     }

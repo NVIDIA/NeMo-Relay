@@ -37,6 +37,8 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
         "--config".to_string(),
         "features.hooks=true".to_string(),
         "--config".to_string(),
+        "features.multi_agent_v2.enabled=false".to_string(),
+        "--config".to_string(),
         "model_provider=\"nemo-relay-openai\"".to_string(),
         "--config".to_string(),
         gateway_provider_config(gateway_url),

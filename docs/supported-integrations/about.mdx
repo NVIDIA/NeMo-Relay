@@ -40,5 +40,9 @@ instructions.
   Agents extra and capturing Deep Agents-specific marks, skills, subagents, and
   human-in-the-loop lifecycle events.
 
+Across LangChain, LangGraph, and Deep Agents, instrumented tool lifecycles also
+inherit Relay's automatic `skill.load` detection when a tool requests a
+complete `SKILL.md` read.
+
 If you are building a new public-API framework integration,
 use [Integrate into Frameworks](/integrate-into-frameworks/about) instead.

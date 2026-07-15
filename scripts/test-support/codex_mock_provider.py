@@ -366,6 +366,8 @@ def main() -> None:
     args.log_file.parent.mkdir(parents=True, exist_ok=True)
     args.log_file.write_text("", encoding="utf-8")
     args.barrier_dir.mkdir(parents=True, exist_ok=True)
+    # This test-only HTTP provider is deliberately restricted to loopback and an ephemeral port;
+    # it never accepts remote traffic or production credentials.
     server = Provider(("127.0.0.1", 0), args.log_file, args.barrier_dir)
     temporary = args.ready_file.with_suffix(".tmp")
     temporary.write_text(
