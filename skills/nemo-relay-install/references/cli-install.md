@@ -27,26 +27,46 @@ Confirm these prerequisites before selecting an installation command:
 
 ## Install
 
+Prefer the published Cargo package when a Rust toolchain is available. This
+keeps package acquisition and execution separate:
+
+```bash
+cargo install nemo-relay-cli
+```
+
+For a prebuilt binary, resolve a specific stable tag from the NeMo Relay GitHub
+Releases page. Download the installer from that immutable tag, review it, and
+run it as a separate step. Do not execute a response directly from a mutable
+branch.
+
 For a supported Unix-like shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
+RELAY_VERSION="<release-version>"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  "https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/${RELAY_VERSION}/install.sh" \
+  --output nemo-relay-install.sh
+less nemo-relay-install.sh
+NEMO_RELAY_VERSION="${RELAY_VERSION}" sh nemo-relay-install.sh
 ```
 
 For Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.ps1 | iex
+$RelayVersion = "<release-version>"
+$Installer = "nemo-relay-install.ps1"
+Invoke-WebRequest `
+  -Uri "https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/$RelayVersion/install.ps1" `
+  -OutFile $Installer
+Get-Content -LiteralPath $Installer
+$env:NEMO_RELAY_VERSION = $RelayVersion
+& ".\$Installer"
 ```
 
-The published installer verifies the checksum before replacing an existing
-binary and does not invoke `sudo`.
-
-To compile and install the published Cargo package:
-
-```bash
-cargo install nemo-relay-cli
-```
+The reviewed installer downloads the selected release binary and its published
+SHA-256 checksum, verifies them before replacing an existing binary, and does
+not invoke `sudo`. Remove the downloaded installer only after verification if
+the user does not want to retain it for audit.
 
 ## Verify
 
@@ -111,8 +131,8 @@ The recovery file must include both supported exits:
   quitting Desktop and running `nemo-relay codex -- resume --all` or
   `nemo-relay codex -- resume <thread-id>`.
 
-Avoid `resume --last` when crossing providers. Never copy or rewrite
-`~/.codex/sessions` or Codex SQLite state as a migration workaround.
+Avoid `resume --last` when crossing providers. Never inspect, copy, or rewrite
+Codex session storage or SQLite state as a migration workaround.
 
 Use these references for the supported installation and host-integration paths:
 

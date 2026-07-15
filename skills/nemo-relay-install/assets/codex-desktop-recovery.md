@@ -24,8 +24,8 @@ Persistent NeMo Relay setup changes the active Codex provider to
 associated with another provider can disappear from the sidebar after restart.
 The thread data has not been deleted.
 
-Do not copy, delete, or edit `~/.codex/sessions` or Codex SQLite state to repair
-sidebar visibility.
+Do not inspect, copy, delete, or edit Codex session storage or SQLite state to
+repair sidebar visibility.
 
 ## Restore Normal Codex Desktop Visibility
 
@@ -74,10 +74,11 @@ Paste this into a new Codex task if you want an agent to perform the recovery:
 > I enabled persistent NeMo Relay integration for Codex and need to restore
 > normal Codex Desktop history visibility. Run `nemo-relay uninstall codex`,
 > verify that generated Relay provider and hook configuration was removed or
-> restored without deleting or rewriting `~/.codex/sessions` or Codex SQLite
-> state, then tell me when to restart Codex Desktop. If uninstall fails, inspect
-> `nemo-relay doctor --plugin codex`, `~/.codex/config.toml`, and
-> `~/.codex/hooks.json` without printing credentials or other secrets.
+> restored without inspecting or modifying Codex session storage, private
+> application configuration, or SQLite state, then tell me when to restart
+> Codex Desktop. If uninstall fails, run
+> `nemo-relay doctor --plugin codex --json`, redact secrets from its diagnostics,
+> and stop for review rather than opening Codex configuration files directly.
 
 ## References
 
