@@ -329,6 +329,26 @@ fn make_start_event(
     )
 }
 
+fn make_start_event_with_metadata(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    metadata: Json,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .name(name)
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ))
+}
+
 fn make_end_event(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
@@ -420,6 +440,18 @@ fn make_mark_event(parent_uuid: Option<Uuid>, name: &str, data: Option<Json>) ->
             .parent_uuid_opt(parent_uuid)
             .name(name)
             .data_opt(data)
+            .build(),
+        None,
+        None,
+    ))
+}
+
+fn make_mark_event_with_metadata(parent_uuid: Option<Uuid>, metadata: Json) -> Event {
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .name("session.start")
+            .metadata(metadata)
             .build(),
         None,
         None,
@@ -667,6 +699,139 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
             .attributes
             .iter()
             .any(|attribute| attribute.key.as_str() == "ignored.alias")
+    );
+}
+
+#[test]
+fn session_identity_is_projected_on_trace_roots_and_marks_only() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "session-identity");
+    let callback = subscriber.subscriber();
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let second_root_uuid = Uuid::now_v7();
+    let instance_id = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid()
+        .to_string();
+    let identity = json!({"session_id": "logical-session", "user_id": "alice"});
+
+    callback(&make_start_event_with_metadata(
+        root_uuid,
+        None,
+        "identity-root",
+        identity.clone(),
+    ));
+    callback(&make_start_event_with_metadata(
+        child_uuid,
+        Some(root_uuid),
+        "identity-child",
+        identity.clone(),
+    ));
+    callback(&make_mark_event_with_metadata(
+        Some(root_uuid),
+        identity.clone(),
+    ));
+    callback(&make_end_event(
+        child_uuid,
+        Some(root_uuid),
+        "identity-child",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_end_event(
+        root_uuid,
+        None,
+        "identity-root",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_start_event_with_metadata(
+        second_root_uuid,
+        None,
+        "identity-second-root",
+        json!({"session_id": "logical-session", "user_id": 42}),
+    ));
+    callback(&make_end_event(
+        second_root_uuid,
+        None,
+        "identity-second-root",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_mark_event_with_metadata(None, identity));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let root = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-root")
+        .unwrap();
+    let child = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-child")
+        .unwrap();
+    let second_root = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-second-root")
+        .unwrap();
+    let orphan_mark = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:session.start")
+        .unwrap();
+
+    let root_attributes = attr_map(&root.attributes);
+    assert_eq!(root_attributes["session.id"], "logical-session");
+    assert_eq!(root_attributes["user.id"], "alice");
+    assert_eq!(
+        root_attributes["nemo_relay.session.instance_id"],
+        instance_id
+    );
+    assert_eq!(
+        root.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "session.id")
+            .count(),
+        1
+    );
+    let child_attributes = attr_map(&child.attributes);
+    assert!(!child_attributes.contains_key("session.id"));
+    assert!(!child_attributes.contains_key("user.id"));
+    assert!(!child_attributes.contains_key("nemo_relay.session.instance_id"));
+    assert_eq!(
+        child_attributes["nemo_relay.start.metadata.user_id"],
+        "alice"
+    );
+    let second_root_attributes = attr_map(&second_root.attributes);
+    assert_eq!(second_root_attributes["session.id"], "logical-session");
+    assert!(!second_root_attributes.contains_key("user.id"));
+    assert_eq!(
+        second_root_attributes["nemo_relay.start.metadata.user_id"],
+        "42"
+    );
+    assert_eq!(
+        second_root_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+    assert_ne!(
+        root.span_context.trace_id(),
+        second_root.span_context.trace_id()
+    );
+
+    let mark_attributes = attr_map(&root.events.events[0].attributes);
+    assert_eq!(mark_attributes["session.id"], "logical-session");
+    assert_eq!(mark_attributes["user.id"], "alice");
+    assert_eq!(
+        mark_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+    let orphan_attributes = attr_map(&orphan_mark.attributes);
+    assert_eq!(orphan_attributes["session.id"], "logical-session");
+    assert_eq!(orphan_attributes["user.id"], "alice");
+    assert_eq!(
+        orphan_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
     );
 }
 

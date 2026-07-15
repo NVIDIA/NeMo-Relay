@@ -25,7 +25,7 @@ use super::{
     attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
     merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_top_level_json_attributes, validate_attribute_mappings,
+    push_session_identity_attributes, push_top_level_json_attributes, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
@@ -627,13 +627,18 @@ impl OpenInferenceEventProcessor {
 
     fn process_start(&mut self, event: &Event) {
         self.remove_completed_span_context(event.uuid());
+        let parent_context = self.parent_context(event);
+        let is_trace_root = !parent_context.span().span_context().is_valid();
         let mut span = self
             .tracer
             .span_builder(span_name(event))
             .with_kind(span_kind(event))
             .with_start_time(to_system_time(*event.timestamp()))
-            .start_with_context(&self.tracer, &self.parent_context(event));
-        let attributes = start_attributes(event);
+            .start_with_context(&self.tracer, &parent_context);
+        let mut attributes = start_attributes(event);
+        if is_trace_root {
+            push_session_identity_attributes(&mut attributes, event);
+        }
         let projected_attributes = attribute_mapping_inputs(&attributes, &self.attribute_mappings);
         span.set_attributes(attributes);
         let span_context = local_parent_span_context(span.span_context());
@@ -678,6 +683,9 @@ impl OpenInferenceEventProcessor {
         let mark_name = event.name().to_string();
         let timestamp = to_system_time(*event.timestamp());
         let mut attributes = mark_attributes(event);
+        if event.name() == "session.start" {
+            push_session_identity_attributes(&mut attributes, event);
+        }
 
         if self.find_parent_span(event).is_some() {
             apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
@@ -710,6 +718,9 @@ impl OpenInferenceEventProcessor {
         let timestamp = to_system_time(*event.timestamp());
         let orphan = self.find_parent_span(event).is_none();
         let mut attributes = mark_attributes(event);
+        if event.name() == "session.start" {
+            push_session_identity_attributes(&mut attributes, event);
+        }
         attributes.push(KeyValue::new("nemo_relay.mark.projection", "tool"));
         attributes.push(KeyValue::new(
             oi::OPENINFERENCE_SPAN_KIND,

@@ -1085,7 +1085,10 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .uuid(agent_uuid)
             .parent_uuid(root_uuid)
             .name("root-agent")
-            .metadata(json!({"session_id": "root-session"}))
+            .metadata(json!({
+                "session_id": "root-session",
+                "user_id": "alice"
+            }))
             .build(),
         ScopeCategory::Start,
         vec![],
@@ -1098,6 +1101,32 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .unwrap()
             .observe_global(
                 &start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let session_start_mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(agent_uuid)
+            .name("session.start")
+            .metadata(json!({
+                "session_id": "root-session",
+                "user_id": "alice",
+                "session_instance_id": root_uuid.to_string()
+            }))
+            .build(),
+        None,
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &session_start_mark,
                 "__test__",
                 Arc::clone(&manager),
                 Arc::clone(&empty_storage),
@@ -1190,6 +1219,27 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
 
     let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["extra"]["nemo_relay"]["session_id"], "root-session");
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_instance_id"],
+        root_uuid.to_string()
+    );
+    assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
+    assert_eq!(
+        value["extra"]["observed_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "session.start")
+            .count(),
+        1
+    );
+    assert!(
+        value["steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().all(|step| step["event"] != "session.start"))
+    );
     assert_eq!(
         value["subagent_trajectories"][0]["session_id"],
         "child-session"
@@ -1489,6 +1539,64 @@ fn atif_dispatcher_default_output_path_uses_current_directory() {
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
     );
+}
+
+#[test]
+fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
+    let agent_uuid = Uuid::now_v7();
+    let trajectory = crate::observability::atif::AtifTrajectory {
+        schema_version: "ATIF-v1.7".to_string(),
+        session_id: agent_uuid.to_string(),
+        trajectory_id: Some(agent_uuid.to_string()),
+        agent: AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+        steps: Vec::new(),
+        notes: None,
+        final_metrics: None,
+        continued_trajectory_ref: None,
+        subagent_trajectories: None,
+        extra: Some(json!({
+            "existing": "preserved",
+            "nemo_relay": {
+                "existing": "nested",
+                "session_id": "untrusted"
+            }
+        })),
+    };
+    let write = prepare_atif_payload(
+        agent_uuid,
+        format!("trajectory-{agent_uuid}.json"),
+        None,
+        trajectory,
+        Vec::new(),
+        AtifCorrelation {
+            session_id: Some("logical-session".to_string()),
+            session_instance_id: Some("instance-id".to_string()),
+            user_id: Some("alice".to_string()),
+        },
+    )
+    .unwrap();
+    let value: Json = serde_json::from_slice(&write.payload).unwrap();
+
+    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(value["extra"]["existing"], "preserved");
+    assert_eq!(value["extra"]["nemo_relay"]["existing"], "nested");
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_id"],
+        "logical-session"
+    );
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_instance_id"],
+        "instance-id"
+    );
+    assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
+    assert_eq!(value["extra"]["observed_events"], json!([]));
 }
 
 #[test]

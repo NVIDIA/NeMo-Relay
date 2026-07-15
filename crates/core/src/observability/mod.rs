@@ -117,6 +117,36 @@ pub(crate) fn push_top_level_json_attributes(
     }
 }
 
+/// Adds canonical session-correlation attributes from event metadata and the
+/// active scope-stack instance.
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn push_session_identity_attributes(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    event: &crate::api::event::Event,
+) {
+    use opentelemetry::KeyValue;
+
+    let metadata = event.metadata();
+    if let Some(session_id) = metadata
+        .and_then(|value| value.get("session_id"))
+        .and_then(crate::json::Json::as_str)
+    {
+        attributes.push(KeyValue::new("session.id", session_id.to_string()));
+    }
+    if let Some(user_id) = metadata
+        .and_then(|value| value.get("user_id"))
+        .and_then(crate::json::Json::as_str)
+    {
+        attributes.push(KeyValue::new("user.id", user_id.to_string()));
+    }
+    if let Ok(stack) = crate::api::runtime::current_scope_stack().read() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.session.instance_id",
+            stack.root_uuid().to_string(),
+        ));
+    }
+}
+
 #[cfg(any(feature = "otel", feature = "openinference"))]
 /// Serializes a value and projects its top-level JSON fields as OTLP attributes.
 pub(crate) fn push_serialized_top_level_attributes<T: Serialize + ?Sized>(

@@ -923,11 +923,22 @@ impl Session {
     // session-length span. Some session ids can outlive user-visible work, so those harnesses store
     // metadata here and wait for a bounded turn scope before emitting trace structure.
     fn start_agent(&mut self, event: SessionEvent) -> Result<(), CliError> {
+        let emit_start_mark = !self.session_started;
         self.agent_kind = event.agent_kind;
         self.session_started = true;
         self.session_metadata =
             merge_metadata(self.session_metadata.clone(), event.metadata.clone());
-        self.ensure_agent_started(event.metadata)
+        self.ensure_agent_started(event.metadata.clone())?;
+        if emit_start_mark {
+            emit_mark_event(
+                EmitMarkEventParams::builder()
+                    .name("session.start")
+                    .parent_opt(self.agent_scope.as_ref())
+                    .metadata(self.scope_metadata(event.metadata))
+                    .build(),
+            )?;
+        }
+        Ok(())
     }
 
     // Lazily opens the root agent scope for harnesses that have a meaningful session boundary.
@@ -1046,6 +1057,12 @@ impl Session {
     }
 
     fn scope_metadata(&self, event_metadata: Value) -> Value {
+        let session_instance_id = self
+            .scope_stack
+            .read()
+            .expect("session scope stack lock poisoned")
+            .root_uuid()
+            .to_string();
         merge_metadata(
             merge_metadata(
                 merge_metadata(
@@ -1056,6 +1073,7 @@ impl Session {
             ),
             json!({
                 "session_id": self.session_id,
+                "session_instance_id": session_instance_id,
                 "agent_kind": self.agent_kind.as_str(),
                 "gateway_config_profile": self.config.profile,
                 "plugin_config": self.config.plugin_config,
