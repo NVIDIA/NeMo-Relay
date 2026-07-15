@@ -182,9 +182,9 @@ traffic to pass through the gateway.
 Generated Codex hooks include `SessionStart`, `SubagentStart`, `SubagentStop`,
 `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, and `PostCompact`
 for scope, tool, and mark events. Complete standalone `cat`,
-`bat`, or PowerShell `Get-Content` reads of `SKILL.md` emit observed `skill.load`
-marks. `UserPromptSubmit` and `Stop` are retained as private LLM correlation
-hints and are not emitted as standalone NeMo Relay events.
+`bat`, `batcat`, or PowerShell `Get-Content` reads of `SKILL.md` emit observed
+`skill.load` marks. `UserPromptSubmit` and `Stop` are retained as private LLM
+correlation hints and are not emitted as standalone NeMo Relay events.
 
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. Persistent install writes
