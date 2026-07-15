@@ -35,7 +35,8 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if atof.Enabled || len(atof.Sinks) != 0 {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
-	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofStreamSinkConfig{
+	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofEndpoint{
+		Name:            "archive",
 		URL:             "http://localhost:8080/events",
 		Transport:       "http_post",
 		Headers:         map[string]string{"X-Test": "yes"},
@@ -77,6 +78,11 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
 	}
+	assertWrappedObservabilityConfig(t, wrapped)
+}
+
+func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec) {
+	t.Helper()
 	if _, ok := wrapped.Config["atof"].(map[string]any); !ok {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
 	}
@@ -85,17 +91,17 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected serialized ATOF sinks, got %#v", atofConfig)
 	}
-	firstEndpoint, ok := sinks[0].(map[string]any)
-	if !ok || firstEndpoint["field_name_policy"] != "replace_dots" ||
-		firstEndpoint["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" {
+	firstSink, ok := sinks[0].(map[string]any)
+	if !ok || firstSink["name"] != "archive" || firstSink["field_name_policy"] != "replace_dots" ||
+		firstSink["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" {
 		t.Fatalf("expected serialized ATOF stream sink settings, got %#v", sinks)
 	}
 	serialized, err := json.Marshal(wrapped)
 	if err != nil {
 		t.Fatalf("marshal observability component failed: %v", err)
 	}
-	if !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
-		t.Fatalf("expected field_name_policy in serialized component, got %s", serialized)
+	if !strings.Contains(string(serialized), `"name":"archive"`) || !strings.Contains(string(serialized), `"field_name_policy":"replace_dots"`) {
+		t.Fatalf("expected named ATOF endpoint in serialized component, got %s", serialized)
 	}
 	assertWrappedAtifStorageConfig(t, wrapped.Config["atif"].(map[string]any))
 	if wrapped.Config["opentelemetry"].(map[string]any)["mark_projection"] != "tool" {

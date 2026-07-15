@@ -6,22 +6,16 @@
 use std::path::{Path, PathBuf};
 
 use console::style;
-use nemo_relay::plugin::dynamic::DynamicPluginManifest;
 use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
-use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-#[cfg(feature = "switchyard")]
-use nemo_relay_switchyard::{
-    register_switchyard_component, validate_switchyard_atof_configuration,
-};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::config::{
-    PluginsScopeArgs, global_plugin_config_path, project_plugin_config_path,
-    user_plugin_config_path,
+use crate::configuration::{
+    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
 };
 use crate::error::CliError;
+use crate::plugins::ConfigurationScope;
+use crate::server::register_and_validate_plugin_components;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TargetScope {
@@ -274,22 +268,14 @@ fn json_to_toml(value: Value) -> Result<toml::Value, CliError> {
     })
 }
 
-pub(crate) fn target_scope(command: &PluginsScopeArgs) -> Result<TargetScope, CliError> {
-    let selected = [command.user, command.project, command.global]
-        .into_iter()
-        .filter(|selected| *selected)
-        .count();
-    if selected > 1 {
-        return Err(CliError::Config(
+pub(crate) fn target_scope(command: &ConfigurationScope) -> Result<TargetScope, CliError> {
+    match command {
+        ConfigurationScope::Default | ConfigurationScope::User => Ok(TargetScope::User),
+        ConfigurationScope::Project => Ok(TargetScope::Project),
+        ConfigurationScope::Global => Ok(TargetScope::Global),
+        ConfigurationScope::Invalid => Err(CliError::Config(
             "choose only one of --user, --project, or --global".into(),
-        ));
-    }
-    if command.project {
-        Ok(TargetScope::Project)
-    } else if command.global {
-        Ok(TargetScope::Global)
-    } else {
-        Ok(TargetScope::User)
+        )),
     }
 }
 
@@ -428,7 +414,7 @@ pub(crate) fn remove_dynamic_plugin_reference(
             target_manifest_ref
                 .as_ref()
                 .is_some_and(|target_manifest_ref| manifest_ref == target_manifest_ref)
-                || DynamicPluginManifest::load_from_path(manifest_ref)
+                || crate::configuration::load_bounded_dynamic_plugin_manifest(manifest_ref)
                     .map(|(manifest, _)| manifest.plugin.id.trim() == plugin_id)
                     .unwrap_or(false)
         });
@@ -716,19 +702,12 @@ fn print_rendered_preview(rendered: &str) -> Result<(), CliError> {
 }
 
 pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
-    register_adaptive_component().map_err(|error| {
-        CliError::Config(format!("adaptive plugin registration failed: {error}"))
-    })?;
-    register_pii_redaction_component().map_err(|error| {
-        CliError::Config(format!("PII redaction plugin registration failed: {error}"))
-    })?;
-    #[cfg(feature = "switchyard")]
-    register_switchyard_component().map_err(|error| {
-        CliError::Config(format!("Switchyard plugin registration failed: {error}"))
-    })?;
-    #[cfg(feature = "switchyard")]
-    validate_switchyard_atof_configuration(config)
-        .map_err(|error| CliError::Config(format!("Switchyard ATOF validation failed: {error}")))?;
+    if let Some(error) = register_and_validate_plugin_components(config)
+        .into_iter()
+        .next()
+    {
+        return Err(CliError::Config(error.to_string()));
+    }
     let report = validate_plugin_config(config);
     if report.has_errors() {
         let messages = report

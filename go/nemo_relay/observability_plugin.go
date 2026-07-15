@@ -48,7 +48,9 @@ type ObservabilityAtofFileSinkConfig struct {
 	Mode            string `json:"mode,omitempty"`
 }
 
-func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {}
+func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 // MarshalJSON serializes the fixed file sink discriminator.
 func (config ObservabilityAtofFileSinkConfig) MarshalJSON() ([]byte, error) {
@@ -67,9 +69,12 @@ type ObservabilityAtofStreamSinkConfig struct {
 	HeaderEnv       map[string]string `json:"header_env,omitempty"`
 	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
 	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
+	Name            string            `json:"name,omitempty"`
 }
 
-func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {}
+func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 // MarshalJSON serializes the fixed stream sink discriminator.
 func (config ObservabilityAtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
@@ -80,14 +85,9 @@ func (config ObservabilityAtofStreamSinkConfig) MarshalJSON() ([]byte, error) {
 	}{Type: "stream", alias: alias(config)})
 }
 
-// ObservabilityAtofEndpoint configures one streaming destination for raw ATOF events.
-type ObservabilityAtofEndpoint struct {
-	URL             string            `json:"url"`
-	Transport       string            `json:"transport,omitempty"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
-	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
-}
+// ObservabilityAtofEndpoint is the deprecated name for an ATOF stream sink.
+// Deprecated: Use ObservabilityAtofStreamSinkConfig.
+type ObservabilityAtofEndpoint = ObservabilityAtofStreamSinkConfig
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
 type ObservabilityAtifConfig struct {

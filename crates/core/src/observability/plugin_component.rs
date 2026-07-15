@@ -217,6 +217,9 @@ pub struct AtofStreamSinkSectionConfig {
     /// Field name policy applied before sending events: `preserve` or `replace_dots`.
     #[serde(default = "default_atof_endpoint_field_name_policy")]
     pub field_name_policy: String,
+    /// Optional stable name used by other components to reference this endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -509,6 +512,7 @@ crate::editor_config! {
         header_env => { label: "header_env", kind: StringMap },
         timeout_millis => { label: "timeout_millis", kind: Integer },
         field_name_policy => { label: "field_name_policy", kind: Enum, values: ["preserve", "replace_dots"] },
+        name => { label: "name", kind: String, optional: true },
     }
 }
 
@@ -1001,6 +1005,7 @@ struct ManagedAtifExporter {
     exporter: AtifExporter,
     filename: String,
     local_path: Option<PathBuf>,
+    correlation: AtifCorrelation,
     observed_events: Vec<Event>,
     observed_event_keys: HashSet<String>,
     written: bool,
@@ -1028,6 +1033,51 @@ struct PendingAtifExport {
     exporter: AtifExporter,
     filename: String,
     local_path: Option<PathBuf>,
+    correlation: AtifCorrelation,
+}
+
+#[derive(Clone)]
+struct AtifCorrelation {
+    session_id: Option<String>,
+    session_instance_id: Option<String>,
+    user_id: Option<String>,
+}
+
+impl AtifCorrelation {
+    fn from_event(event: &Event) -> Self {
+        let metadata = event.metadata();
+        Self {
+            session_id: metadata
+                .and_then(|value| value.get("session_id"))
+                .and_then(Json::as_str)
+                .map(ToString::to_string),
+            session_instance_id: current_scope_stack()
+                .read()
+                .ok()
+                .map(|stack| stack.root_uuid().to_string()),
+            user_id: metadata
+                .and_then(|value| value.get("user_id"))
+                .and_then(Json::as_str)
+                .map(ToString::to_string),
+        }
+    }
+
+    fn to_json(&self) -> Json {
+        let mut fields = Map::new();
+        if let Some(session_id) = &self.session_id {
+            fields.insert("session_id".to_string(), Json::String(session_id.clone()));
+        }
+        if let Some(session_instance_id) = &self.session_instance_id {
+            fields.insert(
+                "session_instance_id".to_string(),
+                Json::String(session_instance_id.clone()),
+            );
+        }
+        if let Some(user_id) = &self.user_id {
+            fields.insert("user_id".to_string(), Json::String(user_id.clone()));
+        }
+        Json::Object(fields)
+    }
 }
 
 /// Identifier for a single output sink. `Local` is used when `storage` is empty
@@ -1078,6 +1128,7 @@ impl AtifDispatcher {
         let exporter = AtifExporter::new(session_id.clone(), self.agent_info());
         (exporter.subscriber())(event);
         let (filename, local_path) = self.prepare_destination(&session_id);
+        let correlation = AtifCorrelation::from_event(event);
         self.scope_owners.insert(event.uuid(), event.uuid());
         self.agents.insert(
             event.uuid(),
@@ -1085,6 +1136,7 @@ impl AtifDispatcher {
                 exporter,
                 filename,
                 local_path,
+                correlation,
                 observed_events: vec![event.clone()],
                 observed_event_keys: HashSet::from([event_observation_key(event)]),
                 written: false,
@@ -1202,6 +1254,7 @@ impl AtifDispatcher {
                     exporter: agent.exporter.clone(),
                     filename: agent.filename.clone(),
                     local_path: agent.local_path.clone(),
+                    correlation: agent.correlation.clone(),
                 });
             }
         }
@@ -1345,6 +1398,7 @@ fn prepare_atif_file(
         agent.local_path.clone(),
         trajectory,
         observed_events,
+        agent.correlation.clone(),
     )
 }
 
@@ -1368,6 +1422,7 @@ fn prepare_atif_shutdown_file(
         export.local_path.clone(),
         trajectory,
         observed_events,
+        export.correlation.clone(),
     )
 }
 
@@ -1377,15 +1432,30 @@ fn prepare_atif_payload(
     local_path: Option<PathBuf>,
     trajectory: crate::observability::atif::AtifTrajectory,
     observed_events: Vec<Event>,
+    correlation: AtifCorrelation,
 ) -> std::io::Result<PendingAtifWrite> {
     let mut value = serde_json::to_value(trajectory)?;
     if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "extra".to_string(),
-            serde_json::json!({
-                "observed_events": observed_events,
-            }),
+        let existing_extra = object.remove("extra");
+        let mut extra = match existing_extra {
+            Some(Json::Object(fields)) => fields,
+            Some(value) => Map::from_iter([("trajectory_extra".to_string(), value)]),
+            None => Map::new(),
+        };
+        extra.insert(
+            "observed_events".to_string(),
+            serde_json::to_value(observed_events)?,
         );
+        let mut nemo_relay = match extra.remove("nemo_relay") {
+            Some(Json::Object(fields)) => fields,
+            Some(value) => Map::from_iter([("trajectory_extra".to_string(), value)]),
+            None => Map::new(),
+        };
+        if let Json::Object(correlation_fields) = correlation.to_json() {
+            nemo_relay.extend(correlation_fields);
+        }
+        extra.insert("nemo_relay".to_string(), Json::Object(nemo_relay));
+        object.insert("extra".to_string(), Json::Object(extra));
     }
     let payload = serde_json::to_vec_pretty(&value)?;
     Ok(PendingAtifWrite {
@@ -1938,24 +2008,70 @@ fn validate_atof_values(
             "ATOF requires at least one configured sink when enabled".to_string(),
         );
     }
+    let mut stream_sink_names = HashSet::new();
     for (index, sink) in section.sinks.iter().enumerate() {
-        match sink {
-            AtofSinkSectionConfig::File(file) => {
-                if AtofExporterMode::parse(&file.mode).is_none() {
-                    push_policy_diag(
-                        diagnostics,
-                        policy.unsupported_value,
-                        "observability.unsupported_value",
-                        Some("atof".to_string()),
-                        Some(format!("sinks[{index}].mode")),
-                        format!("ATOF sinks[{index}].mode must be 'append' or 'overwrite'"),
-                    );
-                }
-            }
-            AtofSinkSectionConfig::Stream(stream) => {
-                validate_atof_stream_sink_values(diagnostics, policy, index, stream);
+        validate_atof_sink(diagnostics, policy, index, sink, &mut stream_sink_names);
+    }
+}
+
+fn validate_atof_sink<'a>(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    sink: &'a AtofSinkSectionConfig,
+    stream_sink_names: &mut HashSet<&'a str>,
+) {
+    match sink {
+        AtofSinkSectionConfig::File(file) => {
+            if AtofExporterMode::parse(&file.mode).is_none() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atof".to_string()),
+                    Some(format!("sinks[{index}].mode")),
+                    format!("ATOF sinks[{index}].mode must be 'append' or 'overwrite'"),
+                );
             }
         }
+        AtofSinkSectionConfig::Stream(stream) => {
+            validate_atof_stream_sink_name(diagnostics, policy, index, stream, stream_sink_names);
+            validate_atof_stream_sink_values(diagnostics, policy, index, stream);
+        }
+    }
+}
+
+fn validate_atof_stream_sink_name<'a>(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    stream: &'a AtofStreamSinkSectionConfig,
+    stream_sink_names: &mut HashSet<&'a str>,
+) {
+    let Some(name) = stream.name.as_deref() else {
+        return;
+    };
+    let trimmed = name.trim();
+    let message = if trimmed.is_empty() {
+        Some(format!("ATOF sinks[{index}].name must be non-empty"))
+    } else if name != trimmed {
+        Some(format!(
+            "ATOF sinks[{index}].name must not have leading or trailing whitespace"
+        ))
+    } else if !stream_sink_names.insert(name) {
+        Some(format!("ATOF stream sink name {name:?} must be unique"))
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("sinks[{index}].name")),
+            message,
+        );
     }
 }
 
@@ -2496,11 +2612,11 @@ fn default_atof_mode() -> String {
 }
 
 fn default_atof_endpoint_transport() -> String {
-    "http_post".to_string()
+    AtofEndpointTransport::default().as_str().to_string()
 }
 
 fn default_atof_endpoint_field_name_policy() -> String {
-    "preserve".to_string()
+    AtofEndpointFieldNamePolicy::default().as_str().to_string()
 }
 
 fn default_agent_name() -> String {

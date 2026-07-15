@@ -32,6 +32,12 @@ Emitted when lifecycle work starts or ends. `scope_category` is `start` or
 Emitted for named runtime checkpoints that are not full start/end lifecycle
 pairs.
 
+The coding-agent CLI emits one `session.start` mark when a session lifecycle
+begins. Its metadata includes the logical harness `session_id`, the Relay-owned
+`session_instance_id`, and any configured session metadata such as `user_id`.
+The mark does not copy the native startup-hook payload or force a turn scope to
+open.
+
 ## Shared Envelope
 
 Every event carries a shared envelope:
