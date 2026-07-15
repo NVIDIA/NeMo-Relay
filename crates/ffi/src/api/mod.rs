@@ -41,7 +41,6 @@ use crate::types::{
 };
 pub use crate::types::{nemo_relay_openinference_subscriber_free, nemo_relay_otel_subscriber_free};
 use libc::c_char;
-use nemo_relay::api::event::PendingMarkSpec;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::registry as core_registry_api;
@@ -55,7 +54,6 @@ use nemo_relay::api::scope::ScopeAttributes;
 use nemo_relay::api::subscriber as core_subscriber_api;
 use nemo_relay::api::tool as core_tool_api;
 use nemo_relay::api::tool::ToolAttributes;
-use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{DynamicPluginActivationSpec, PluginHostActivation};
 use nemo_relay::plugin::{
@@ -315,50 +313,24 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new_v2(
         set_last_error("request must be non-null");
         return NemoRelayStatus::NullPointer;
     }
-    let annotated_request = if annotated_json.is_null() {
-        None
-    } else {
-        let value = match c_str_to_json(annotated_json) {
-            Some(value) => value,
-            None => return NemoRelayStatus::InvalidJson,
-        };
-        match serde_json::from_value(value) {
-            Ok(value) => Some(value),
-            Err(error) => {
-                set_last_error(&format!("invalid annotated request JSON: {error}"));
-                return NemoRelayStatus::InvalidJson;
-            }
-        }
-    };
-    let pending_marks = if pending_marks_json.is_null() {
-        Vec::new()
-    } else {
-        let value = match c_str_to_json(pending_marks_json) {
-            Some(value) => value,
-            None => return NemoRelayStatus::InvalidJson,
-        };
-        match serde_json::from_value::<Vec<PendingMarkSpec>>(value) {
+    let annotated_request =
+        match unsafe { parse_optional_intercept_json(annotated_json, "annotated request") } {
             Ok(value) => value,
-            Err(error) => {
-                set_last_error(&format!("invalid pending marks JSON: {error}"));
-                return NemoRelayStatus::InvalidJson;
-            }
-        }
-    };
-    let optimization_contributions = if optimization_contributions_json.is_null() {
-        Vec::new()
-    } else {
-        let value = match c_str_to_json(optimization_contributions_json) {
-            Some(value) => value,
-            None => return NemoRelayStatus::InvalidJson,
+            Err(status) => return status,
         };
-        match serde_json::from_value::<Vec<LlmOptimizationContribution>>(value) {
-            Ok(value) => value,
-            Err(error) => {
-                set_last_error(&format!("invalid optimization contributions JSON: {error}"));
-                return NemoRelayStatus::InvalidJson;
-            }
-        }
+    let pending_marks =
+        match unsafe { parse_optional_intercept_json(pending_marks_json, "pending marks") } {
+            Ok(value) => value.unwrap_or_default(),
+            Err(status) => return status,
+        };
+    let optimization_contributions = match unsafe {
+        parse_optional_intercept_json(
+            optimization_contributions_json,
+            "optimization contributions",
+        )
+    } {
+        Ok(value) => value.unwrap_or_default(),
+        Err(status) => return status,
     };
     let outcome = LlmRequestInterceptOutcome {
         request: unsafe { &*request }.0.clone(),
@@ -376,6 +348,20 @@ pub unsafe extern "C" fn nemo_relay_llm_request_intercept_outcome_json_new_v2(
             NemoRelayStatus::Internal
         }
     }
+}
+
+unsafe fn parse_optional_intercept_json<T: serde::de::DeserializeOwned>(
+    input: *const c_char,
+    description: &str,
+) -> std::result::Result<Option<T>, NemoRelayStatus> {
+    if input.is_null() {
+        return Ok(None);
+    }
+    let value = c_str_to_json(input).ok_or(NemoRelayStatus::InvalidJson)?;
+    serde_json::from_value(value).map(Some).map_err(|error| {
+        set_last_error(&format!("invalid {description} JSON: {error}"));
+        NemoRelayStatus::InvalidJson
+    })
 }
 
 /// Run the registered LLM conditional execution guardrail chain.
