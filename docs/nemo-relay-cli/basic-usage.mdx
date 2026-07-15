@@ -264,9 +264,10 @@ calling NeMo Relay APIs.
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure
   closes it.
-- Prompt, response, agent-thought, and legacy Hermes `pre_llm_call` /
-  `post_llm_call` hooks are retained as private correlation hints. They are not
-  emitted as NeMo Relay events.
+- Generated `UserPromptSubmit`, `Stop`, and Hermes `pre_llm_call` /
+  `post_llm_call` hooks are retained as private correlation hints. The adapters
+  do the same when a custom or older integration delivers a response or
+  agent-thought hook. These hints are not emitted as NeMo Relay events.
 - Compaction, notification, and unknown hook events become mark events under
   the active session scope.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
