@@ -12,6 +12,21 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 static LOGGING_TEST_LOCK: Mutex<()> = Mutex::new(());
+const FOREIGN_LOGGER_CHILD_ENV: &str = "NEMO_RELAY_TEST_FOREIGN_LOGGER_CHILD";
+
+struct ForeignLogger;
+
+impl log::Log for ForeignLogger {
+    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn log(&self, _record: &log::Record<'_>) {}
+
+    fn flush(&self) {}
+}
+
+static FOREIGN_LOGGER: ForeignLogger = ForeignLogger;
 
 fn lock_logging_tests() -> MutexGuard<'static, ()> {
     LOGGING_TEST_LOCK
@@ -887,5 +902,37 @@ fn dropping_stale_runtime_preserves_current_logger_and_final_drop_detaches() {
     assert!(
         spdlog::log_crate_proxy().swap_logger(None).is_none(),
         "proxy should be empty after the current runtime is dropped"
+    );
+}
+
+#[test]
+fn configure_rejects_preinstalled_foreign_logger() {
+    if std::env::var_os(FOREIGN_LOGGER_CHILD_ENV).is_some() {
+        log::set_logger(&FOREIGN_LOGGER).expect("foreign logger should install in child process");
+        let error = LoggingRuntime::configure(default_config())
+            .err()
+            .expect("Relay logging should reject a foreign global logger");
+        assert!(
+            error
+                .to_string()
+                .contains("process-global log facade is already initialized by another logger"),
+            "{error}"
+        );
+        return;
+    }
+
+    let current_thread = std::thread::current();
+    let test_name = current_thread.name().expect("test thread should be named");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test_name, "--nocapture"])
+        .env(FOREIGN_LOGGER_CHILD_ENV, "1")
+        .output()
+        .expect("foreign logger child test should start");
+
+    assert!(
+        output.status.success(),
+        "foreign logger child test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 }

@@ -18,7 +18,7 @@ use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
 use uuid::Uuid;
 
-use crate::error::Result;
+use crate::error::{FlowError, Result};
 
 pub use config::{
     DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogSinkConfig,
@@ -29,6 +29,21 @@ use sink::log_level_filter;
 
 #[cfg(test)]
 pub(crate) use format::format_event_for_test;
+
+fn log_crate_proxy_is_installed() -> bool {
+    std::ptr::addr_eq(log::logger(), spdlog::log_crate_proxy() as &dyn log::Log)
+}
+
+fn install_log_crate_proxy() -> Result<()> {
+    match spdlog::init_log_crate_proxy() {
+        Ok(()) => Ok(()),
+        Err(_) if log_crate_proxy_is_installed() => Ok(()),
+        Err(_) => Err(FlowError::AlreadyExists(
+            "process-global log facade is already initialized by another logger; Relay logging cannot install its log proxy"
+                .into(),
+        )),
+    }
+}
 
 /// Owns logging resources that must remain alive for the process / run lifetime.
 ///
@@ -54,8 +69,9 @@ impl LoggingRuntime {
         let (logger, thread_pools) = build_logger(&config, root_relay_id.clone())?;
 
         // Install once per process. Subsequent calls (tests / re-entry) reuse the proxy and swap
-        // the receiver logger.
-        let _ = spdlog::init_log_crate_proxy();
+        // the receiver logger. A different global logger would prevent Relay sinks from receiving
+        // `log` facade records, so fail instead of returning a nonfunctional runtime.
+        install_log_crate_proxy()?;
         spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
         spdlog::log_crate_proxy().set_filter(None);
         log::set_max_level(log_level_filter(config.level));
