@@ -12,7 +12,7 @@ mod sink;
 
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
@@ -29,6 +29,14 @@ use sink::log_level_filter;
 
 #[cfg(test)]
 pub(crate) use format::format_event_for_test;
+
+static LOGGER_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_logger_lifecycle() -> MutexGuard<'static, ()> {
+    LOGGER_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 fn log_crate_proxy_is_installed() -> bool {
     std::ptr::addr_eq(log::logger(), spdlog::log_crate_proxy() as &dyn log::Log)
@@ -71,6 +79,7 @@ impl LoggingRuntime {
         // Install once per process. Subsequent calls (tests / re-entry) reuse the proxy and swap
         // the receiver logger. A different global logger would prevent Relay sinks from receiving
         // `log` facade records, so fail instead of returning a nonfunctional runtime.
+        let _lifecycle = lock_logger_lifecycle();
         install_log_crate_proxy()?;
         spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
         spdlog::log_crate_proxy().set_filter(None);
@@ -124,7 +133,9 @@ impl Drop for LoggingRuntime {
         }
 
         // Detach only if we are still the installed receiver. A later configuration may have
-        // replaced us; do not clear that newer install.
+        // replaced us; do not clear that newer install. Installation and teardown are serialized
+        // because swap-and-restore is a multi-step operation.
+        let _lifecycle = lock_logger_lifecycle();
         let detached = spdlog::log_crate_proxy().swap_logger(None);
         if let Some(logger) = detached
             && !Arc::ptr_eq(&logger, &self.logger)

@@ -9,7 +9,7 @@ use serde_json::Value;
 use spdlog::Level;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Barrier, Mutex, MutexGuard};
 
 static LOGGING_TEST_LOCK: Mutex<()> = Mutex::new(());
 const FOREIGN_LOGGER_CHILD_ENV: &str = "NEMO_RELAY_TEST_FOREIGN_LOGGER_CHILD";
@@ -929,6 +929,46 @@ fn dropping_stale_runtime_preserves_current_logger_and_final_drop_detaches() {
         spdlog::log_crate_proxy().swap_logger(None).is_none(),
         "proxy should be empty after the current runtime is dropped"
     );
+}
+
+#[test]
+fn concurrent_stale_teardown_preserves_newest_logger() {
+    let _lock = lock_logging_tests();
+
+    for _ in 0..64 {
+        let stale = init_logging(&default_config()).unwrap();
+        let current = init_logging(&default_config()).unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+
+        let teardown_barrier = Arc::clone(&barrier);
+        let teardown = std::thread::spawn(move || {
+            teardown_barrier.wait();
+            drop(stale);
+        });
+
+        let configure_barrier = Arc::clone(&barrier);
+        let configure = std::thread::spawn(move || {
+            configure_barrier.wait();
+            init_logging(&default_config()).unwrap()
+        });
+
+        barrier.wait();
+        teardown.join().unwrap();
+        let newest = configure.join().unwrap();
+
+        let installed = spdlog::log_crate_proxy().swap_logger(None);
+        match &installed {
+            Some(logger) => assert!(
+                Arc::ptr_eq(logger, &newest.logger),
+                "concurrent stale teardown replaced the newest logger"
+            ),
+            None => panic!("concurrent stale teardown detached the newest logger"),
+        }
+        spdlog::log_crate_proxy().set_logger(installed);
+
+        drop(current);
+        drop(newest);
+    }
 }
 
 #[test]
