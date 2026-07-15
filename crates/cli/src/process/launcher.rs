@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use nemo_relay::logging::LoggingRuntime;
 use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
@@ -50,8 +49,6 @@ struct TransparentRun {
     gateway_url: String,
     dry_run: bool,
     print: bool,
-    /// Kept alive for the live-run lifetime so non-blocking file writers can flush on drop.
-    _logging: Option<LoggingRuntime>,
 }
 
 impl TransparentRun {
@@ -68,12 +65,6 @@ impl TransparentRun {
             .as_ref()
             .or_else(|| inherited.and_then(|args| args.config.as_ref()));
         let mut resolved = resolve_run_config(&command, inherited)?;
-        // Skip sink open on dry-run so inspection does not create log files.
-        let logging = if dry_run {
-            None
-        } else {
-            Some(nemo_relay::logging::init_logging(&resolved.logging)?)
-        };
         let dynamic_plugins = if dry_run {
             Vec::new()
         } else {
@@ -104,7 +95,6 @@ impl TransparentRun {
             gateway_url,
             dry_run,
             print,
-            _logging: logging,
         })
     }
 

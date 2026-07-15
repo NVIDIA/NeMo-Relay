@@ -1566,7 +1566,7 @@ async fn dry_run_does_not_spawn_agent() {
 }
 
 #[tokio::test]
-async fn dry_run_does_not_initialize_logging_sinks() {
+async fn transparent_launcher_does_not_initialize_logging_sinks_directly() {
     let temp = tempfile::tempdir().unwrap();
     let log_path = temp.path().join("should-not-create.log.jsonl");
     let config_path = temp.path().join("config.toml");
@@ -1596,7 +1596,7 @@ async fn dry_run_does_not_initialize_logging_sinks() {
     assert_eq!(code, ExitCode::SUCCESS);
     assert!(
         !log_path.exists(),
-        "dry-run must not open logging sinks / create log files"
+        "logging initialization belongs to command dispatch, not the transparent launcher"
     );
 }
 

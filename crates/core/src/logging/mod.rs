@@ -11,6 +11,7 @@ mod format;
 mod sink;
 
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::Arc;
 
 use spdlog::sink::Sink;
@@ -31,17 +32,53 @@ pub(crate) use format::format_event_for_test;
 
 /// Owns logging resources that must remain alive for the process / run lifetime.
 ///
-/// When created by [`init_logging`], dropping this value flushes sinks and detaches this
+/// When created by [`LoggingRuntime::configure`], dropping this value flushes sinks and detaches this
 /// logger from the process-global spdlog `log` proxy if it is still installed.
 pub struct LoggingRuntime {
     root_relay_id: String,
-    /// Underlying spdlog logger (also installed into the `log` facade by [`init_logging`]).
+    /// Underlying spdlog logger (also installed into the `log` facade by
+    /// [`LoggingRuntime::configure`]).
     pub(crate) logger: Arc<Logger>,
     /// Keeps per-sink async thread pools alive until shutdown.
     _thread_pools: Vec<Arc<ThreadPool>>,
 }
 
 impl LoggingRuntime {
+    /// Installs process-wide operational logging from resolved configuration.
+    ///
+    /// Stderr is always enabled. Explicit file sinks fail initialization if they cannot be
+    /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
+    /// process-global `log` proxy when it is still installed.
+    pub fn configure(config: LoggingConfig) -> Result<Self> {
+        let root_relay_id = Uuid::now_v7().to_string();
+        let (logger, thread_pools) = build_logger(&config, root_relay_id.clone())?;
+
+        // Install once per process. Subsequent calls (tests / re-entry) reuse the proxy and swap
+        // the receiver logger.
+        let _ = spdlog::init_log_crate_proxy();
+        spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
+        spdlog::log_crate_proxy().set_filter(None);
+        log::set_max_level(log_level_filter(config.level));
+
+        Ok(Self {
+            root_relay_id,
+            logger,
+            _thread_pools: thread_pools,
+        })
+    }
+
+    /// Loads logging configuration from an absolute TOML path and installs it process-wide.
+    pub fn configure_from_file_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::configure(LoggingConfig::from_file_path(path)?)
+    }
+
+    /// Resolves supported logging environment variables and installs the resulting configuration.
+    ///
+    /// Built-in defaults are used when no logging environment variables are present.
+    pub fn configure_from_environment() -> Result<Self> {
+        Self::configure(LoggingConfig::from_environment()?.unwrap_or_default())
+    }
+
     /// Returns the process root Relay ID attached to operational records after initialization.
     pub fn root_relay_id(&self) -> &str {
         &self.root_relay_id
@@ -70,7 +107,7 @@ impl Drop for LoggingRuntime {
             }
         }
 
-        // Detach only if we are still the installed receiver. A later `init_logging` may have
+        // Detach only if we are still the installed receiver. A later configuration may have
         // replaced us; do not clear that newer install.
         let detached = spdlog::log_crate_proxy().swap_logger(None);
         if let Some(logger) = detached
@@ -89,21 +126,7 @@ impl Drop for LoggingRuntime {
 /// Dropping the returned [`LoggingRuntime`] flushes sinks and detaches this logger from the
 /// process-global `log` proxy when it is still installed.
 pub fn init_logging(config: &LoggingConfig) -> Result<LoggingRuntime> {
-    let root_relay_id = Uuid::now_v7().to_string();
-    let (logger, thread_pools) = build_logger(config, root_relay_id.clone())?;
-
-    // Install once per process. Subsequent calls (tests / re-entry) reuse the proxy and swap
-    // the receiver logger.
-    let _ = spdlog::init_log_crate_proxy();
-    spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
-    spdlog::log_crate_proxy().set_filter(None);
-    log::set_max_level(log_level_filter(config.level));
-
-    Ok(LoggingRuntime {
-        root_relay_id,
-        logger,
-        _thread_pools: thread_pools,
-    })
+    LoggingRuntime::configure(config.clone())
 }
 
 #[cfg(test)]

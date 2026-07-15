@@ -1667,6 +1667,7 @@ dependencies = [
  "hyper-util",
  "jsonschema",
  "libc",
+ "log",
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",

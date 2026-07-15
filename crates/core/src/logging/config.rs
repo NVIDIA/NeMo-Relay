@@ -1,11 +1,18 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Resolved operational logging configuration types and string parsing.
+//! Resolved operational logging configuration types and source parsing.
 
-use std::path::PathBuf;
+use std::env::VarError;
+use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use crate::error::{FlowError, Result};
+use serde::Deserialize;
+
+const LOG_LEVEL_ENV: &str = "NEMO_RELAY_LOG";
+const LOG_STDERR_FORMAT_ENV: &str = "NEMO_RELAY_LOG_STDERR_FORMAT";
+const LOG_CONFIG_PATH_ENV: &str = "NEMO_RELAY_LOG_CONFIG_PATH";
 
 /// Default number of pending asynchronous queue entries per file sink when `queue_capacity` is
 /// omitted.
@@ -21,7 +28,7 @@ pub const DEFAULT_FILE_FLUSH_INTERVAL_MILLIS: u64 = 1000;
 /// configuration above this bound is rejected with a config error. It cannot be raised.
 pub const MAX_FILE_SINK_QUEUE_ENTRIES: usize = 8_192;
 
-/// Operational logging configuration for [`init_logging`](super::init_logging).
+/// Operational logging configuration for [`LoggingRuntime::configure`](super::LoggingRuntime::configure).
 ///
 /// `level` is the process-wide **minimum severity**: call sites may emit any level, but records
 /// less severe than this threshold are discarded. Per-file sinks may raise their own minimum.
@@ -46,6 +53,90 @@ impl Default for LoggingConfig {
             sinks: Vec::new(),
             flush_interval_millis: DEFAULT_FILE_FLUSH_INTERVAL_MILLIS,
         }
+    }
+}
+
+impl LoggingConfig {
+    /// Resolves logging configuration from the supported process environment.
+    ///
+    /// Returns `None` when no logging environment variables are present. Direct level and stderr
+    /// format settings may be combined. `NEMO_RELAY_LOG_CONFIG_PATH` selects an absolute TOML file
+    /// instead and is mutually exclusive with both direct settings.
+    pub fn from_environment() -> Result<Option<Self>> {
+        let level = environment_value(LOG_LEVEL_ENV)?;
+        let stderr_format = environment_value(LOG_STDERR_FORMAT_ENV)?;
+        let config_path = environment_value(LOG_CONFIG_PATH_ENV)?;
+
+        if config_path.is_some() && (level.is_some() || stderr_format.is_some()) {
+            return Err(FlowError::InvalidArgument(format!(
+                "{LOG_CONFIG_PATH_ENV} cannot be combined with {LOG_LEVEL_ENV} or \
+                 {LOG_STDERR_FORMAT_ENV}"
+            )));
+        }
+        if let Some(path) = config_path {
+            return Self::from_file_path(path).map(Some);
+        }
+        if level.is_none() && stderr_format.is_none() {
+            return Ok(None);
+        }
+
+        let mut config = Self::default();
+        if let Some(level) = level {
+            config.level = LogLevel::parse(&level)?;
+        }
+        if let Some(stderr_format) = stderr_format {
+            config.stderr_format = LogFormat::parse(&stderr_format)?;
+        }
+        Ok(Some(config))
+    }
+
+    /// Loads logging configuration from an absolute TOML file containing `[logging]`.
+    pub fn from_file_path(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.is_absolute() {
+            return Err(FlowError::InvalidArgument(format!(
+                "logging configuration path must be absolute: {}",
+                path.display()
+            )));
+        }
+        if path.extension().and_then(|extension| extension.to_str()) != Some("toml") {
+            return Err(FlowError::InvalidArgument(format!(
+                "logging configuration path must identify a .toml file: {}",
+                path.display()
+            )));
+        }
+
+        let contents = fs::read_to_string(path).map_err(|error| {
+            FlowError::InvalidArgument(format!(
+                "failed to read logging configuration {}: {error}",
+                path.display()
+            ))
+        })?;
+        Self::from_toml_document(&contents).map_err(|error| {
+            FlowError::InvalidArgument(format!(
+                "invalid logging configuration in {}: {error}",
+                path.display()
+            ))
+        })
+    }
+
+    /// Parses a TOML document containing Relay's existing `[logging]` schema.
+    ///
+    /// This is exposed for Relay frontends that already own TOML discovery and merging. Most
+    /// callers should use [`Self::from_file_path`] or construct [`LoggingConfig`] directly.
+    #[doc(hidden)]
+    pub fn from_toml_document(contents: &str) -> Result<Self> {
+        let document: LoggingDocument = toml::from_str(contents).map_err(|error| {
+            FlowError::InvalidArgument(format!("invalid logging TOML: {error}"))
+        })?;
+        document
+            .logging
+            .ok_or_else(|| {
+                FlowError::InvalidArgument(
+                    "logging configuration requires a [logging] section".into(),
+                )
+            })?
+            .resolve()
     }
 }
 
@@ -138,5 +229,111 @@ impl Default for FileLogSinkConfig {
             format: LogFormat::Jsonl,
             queue_capacity: DEFAULT_FILE_SINK_QUEUE_ENTRIES,
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LoggingDocument {
+    logging: Option<RawLoggingConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawLoggingConfig {
+    level: Option<String>,
+    stderr_format: Option<String>,
+    flush_interval_millis: Option<u64>,
+    #[serde(default)]
+    sinks: Vec<RawFileLogSinkConfig>,
+}
+
+impl RawLoggingConfig {
+    fn resolve(self) -> Result<LoggingConfig> {
+        let mut config = LoggingConfig::default();
+        if let Some(level) = self.level {
+            config.level = LogLevel::parse(&level)?;
+        }
+        if let Some(stderr_format) = self.stderr_format {
+            config.stderr_format = LogFormat::parse(&stderr_format)?;
+        }
+        if let Some(flush_interval_millis) = self.flush_interval_millis {
+            config.flush_interval_millis = flush_interval_millis;
+        }
+        if !self.sinks.is_empty() {
+            config.sinks = self
+                .sinks
+                .into_iter()
+                .map(|sink| sink.resolve(config.level))
+                .collect::<Result<Vec<_>>>()?;
+        }
+        Ok(config)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawFileLogSinkConfig {
+    path: Option<PathBuf>,
+    level: Option<String>,
+    format: Option<String>,
+    queue_capacity: Option<usize>,
+}
+
+impl RawFileLogSinkConfig {
+    fn resolve(self, default_level: LogLevel) -> Result<LogSinkConfig> {
+        let path = self
+            .path
+            .ok_or_else(|| FlowError::InvalidArgument("logging sink requires path".into()))?;
+        if path.as_os_str().is_empty() {
+            return Err(FlowError::InvalidArgument(
+                "logging sink path must not be empty".into(),
+            ));
+        }
+
+        let level = self
+            .level
+            .as_deref()
+            .map(LogLevel::parse)
+            .transpose()?
+            .unwrap_or(default_level);
+        let format = self
+            .format
+            .as_deref()
+            .map(LogFormat::parse)
+            .transpose()?
+            .unwrap_or(LogFormat::Jsonl);
+        let queue_capacity = match self.queue_capacity {
+            Some(0) => {
+                return Err(FlowError::InvalidArgument(
+                    "logging sink queue_capacity must be greater than 0".into(),
+                ));
+            }
+            Some(capacity) if capacity > MAX_FILE_SINK_QUEUE_ENTRIES => {
+                return Err(FlowError::InvalidArgument(format!(
+                    "logging sink queue_capacity {capacity} exceeds maximum \
+                     {MAX_FILE_SINK_QUEUE_ENTRIES} entries per file sink"
+                )));
+            }
+            Some(capacity) => capacity,
+            None => DEFAULT_FILE_SINK_QUEUE_ENTRIES,
+        };
+
+        Ok(LogSinkConfig::File(FileLogSinkConfig {
+            path,
+            level,
+            format,
+            queue_capacity,
+        }))
+    }
+}
+
+fn environment_value(name: &str) -> Result<Option<String>> {
+    match env::var(name) {
+        Ok(value) if value.is_empty() => Err(FlowError::InvalidArgument(format!(
+            "{name} must not be empty when set"
+        ))),
+        Ok(value) => Ok(Some(value)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(VarError::NotUnicode(_)) => Err(FlowError::InvalidArgument(format!(
+            "{name} must contain valid Unicode"
+        ))),
     }
 }

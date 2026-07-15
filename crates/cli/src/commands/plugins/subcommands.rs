@@ -11,6 +11,12 @@ pub(crate) struct PluginsCommand {
     pub(crate) command: PluginsSubcommand,
 }
 
+impl PluginsCommand {
+    pub(crate) fn is_edit(&self) -> bool {
+        matches!(self.command, PluginsSubcommand::Edit(_))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PluginJsonContext<'a> {
     pub(crate) command: &'static str,

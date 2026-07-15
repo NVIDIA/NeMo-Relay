@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::logging::{
-    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
+    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig, LoggingRuntime,
     MAX_FILE_SINK_QUEUE_ENTRIES, build_logger, format_event_for_test, init_logging,
 };
 use serde_json::Value;
 use spdlog::Level;
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
@@ -18,8 +19,171 @@ fn lock_logging_tests() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|error| error.into_inner())
 }
 
+struct LoggingEnvScope {
+    _guard: MutexGuard<'static, ()>,
+    previous: Vec<(&'static str, Option<OsString>)>,
+}
+
+impl LoggingEnvScope {
+    fn set(values: &[(&'static str, Option<&OsStr>)]) -> Self {
+        let guard = lock_logging_tests();
+        let mut previous = Vec::with_capacity(values.len());
+        for &(name, value) in values {
+            previous.push((name, std::env::var_os(name)));
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        Self {
+            _guard: guard,
+            previous,
+        }
+    }
+}
+
+impl Drop for LoggingEnvScope {
+    fn drop(&mut self) {
+        for (name, value) in self.previous.drain(..).rev() {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
+
 fn default_config() -> LoggingConfig {
     LoggingConfig::default()
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+#[test]
+fn configure_from_file_path_loads_toml_and_writes_file_sink() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("logging.toml");
+    let log_path = temp.path().join("relay.log.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[logging]
+level = "debug"
+stderr_format = "human"
+
+[[logging.sinks]]
+path = {}
+level = "debug"
+format = "jsonl"
+queue_capacity = 16
+"#,
+            toml_basic_string(log_path.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+
+    let runtime = LoggingRuntime::configure_from_file_path(&config_path).unwrap();
+    let root_relay_id = runtime.root_relay_id().to_owned();
+    log::debug!(
+        target: "nemo_relay.logging_test",
+        event = "configured_from_file",
+        source = "toml";
+        "Configured logging from a TOML file"
+    );
+    runtime.logger.flush();
+    let contents = wait_for_log_line(&log_path, |contents| {
+        contents.contains("configured_from_file")
+    });
+    runtime.shutdown();
+
+    let line = contents
+        .lines()
+        .find(|line| line.contains("configured_from_file"))
+        .expect("configured event should reach the file sink");
+    let record: Value = serde_json::from_str(line).unwrap();
+    assert_eq!(record["root_relay_id"], root_relay_id);
+    assert_eq!(record["level"], "debug");
+    assert_eq!(record["target"], "nemo_relay.logging_test");
+    assert_eq!(record["event"], "configured_from_file");
+    assert_eq!(record["fields"]["source"], "toml");
+}
+
+#[test]
+fn logging_config_from_environment_resolves_direct_settings() {
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", Some(OsStr::new("debug"))),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", Some(OsStr::new("jsonl"))),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+
+    let config = LoggingConfig::from_environment()
+        .unwrap()
+        .expect("direct environment settings should select a configuration");
+
+    assert_eq!(config.level, LogLevel::Debug);
+    assert_eq!(config.stderr_format, LogFormat::Jsonl);
+    assert!(config.sinks.is_empty());
+}
+
+#[test]
+fn logging_environment_rejects_mixed_sources() {
+    let unused_path = std::env::current_dir().unwrap().join("unused-logging.toml");
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", Some(OsStr::new("info"))),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", Some(unused_path.as_os_str())),
+    ]);
+
+    let error = LoggingConfig::from_environment().unwrap_err().to_string();
+
+    assert!(error.contains("cannot be combined"), "{error}");
+}
+
+#[test]
+fn logging_environment_rejects_empty_values() {
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", Some(OsStr::new(""))),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+
+    let error = LoggingConfig::from_environment().unwrap_err().to_string();
+
+    assert!(
+        error.contains("NEMO_RELAY_LOG must not be empty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn logging_config_path_must_be_absolute() {
+    let error = LoggingConfig::from_file_path("relative-logging.toml")
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("path must be absolute"), "{error}");
+}
+
+#[test]
+fn logging_config_file_requires_logging_section() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("logging.toml");
+    std::fs::write(&config_path, "title = \"not logging configuration\"\n").unwrap();
+
+    let error = LoggingConfig::from_file_path(&config_path)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("requires a [logging] section"), "{error}");
 }
 
 #[test]

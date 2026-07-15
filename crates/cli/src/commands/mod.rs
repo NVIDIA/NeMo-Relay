@@ -8,6 +8,7 @@ mod configure;
 mod diagnostics;
 mod hook_forward;
 mod install;
+mod logging;
 mod mcp;
 mod model_pricing;
 mod plugins;
@@ -54,6 +55,36 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
 // top-level server flags so transparent launch can share config parsing with daemon startup.
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
     let cli = Cli::parse();
+
+    let initialize_logging = match cli.command.as_ref() {
+        Some(command) => !command.skips_logging(),
+        None => {
+            cli.server.to_runtime().requested_daemon_mode()
+                || runtime_configuration::any_config_file_exists()
+        }
+    };
+    let _logging = if initialize_logging {
+        let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
+        let explicit_config = if user_only {
+            None
+        } else {
+            match cli.command.as_ref() {
+                Some(Command::Run(command)) => {
+                    command.config.as_deref().or(cli.server.config.as_deref())
+                }
+                _ => cli.server.config.as_deref(),
+            }
+        };
+        let config = cli.logging.resolve(explicit_config, user_only)?;
+        let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+        // TODO EE: Temporary live logging smoke events. Disabled unless explicitly enabled by
+        // the local .vscode launch configurations.
+        logging::emit_smoke_events();
+        Some(runtime)
+    } else {
+        None
+    };
+
     match cli.command {
         Some(command) => run_command(command, &cli.server).await,
         None => run_default(&cli.server, bootstrap_shutdown_token).await,
@@ -105,7 +136,6 @@ async fn run_default(
     //   `nemo-relay config` remains the reconfiguration path.
     if runtime_args.requested_daemon_mode() {
         let resolved = runtime_configuration::resolve_server_config(&runtime_args)?;
-        let _logging = nemo_relay::logging::init_logging(&resolved.logging)?;
         let dynamic_plugins = crate::plugins::lifecycle::active_dynamic_plugin_components(
             runtime_args.config.as_ref(),
             &resolved,
