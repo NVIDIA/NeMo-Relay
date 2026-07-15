@@ -20,6 +20,7 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, ScopeCategory,
     ScopeEvent,
 };
+use crate::api::runtime::{create_scope_stack, with_scope_stack};
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -819,6 +820,8 @@ fn test_manual_fallback_payload_parity() {
 
 #[test]
 fn session_instance_correlates_distinct_otel_and_openinference_traces() {
+    let scope_stack = create_scope_stack();
+    let expected_root_uuid = scope_stack.read().unwrap().root_uuid().to_string();
     let uuid = Uuid::now_v7();
     let metadata = json!({"session_id": "logical-session", "user_id": "alice"});
     let start = Event::Scope(ScopeEvent::new(
@@ -840,7 +843,7 @@ fn session_instance_correlates_distinct_otel_and_openinference_traces() {
         None,
         None,
     );
-    let exports = export_through_all_exporters(&[start, end]);
+    let exports = with_scope_stack(scope_stack, || export_through_all_exporters(&[start, end]));
     let otel = exports
         .otel_spans
         .iter()
@@ -865,7 +868,11 @@ fn session_instance_correlates_distinct_otel_and_openinference_traces() {
     assert_eq!(openinference_attributes["user.id"], "alice");
     assert_eq!(
         otel_attributes["nemo_relay.session.instance_id"],
-        openinference_attributes["nemo_relay.session.instance_id"]
+        expected_root_uuid
+    );
+    assert_eq!(
+        openinference_attributes["nemo_relay.session.instance_id"],
+        expected_root_uuid
     );
     assert_ne!(
         otel.span_context.trace_id(),
