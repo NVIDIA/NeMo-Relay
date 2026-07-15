@@ -20,11 +20,8 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::api::llm::LlmRequest;
 use crate::api::runtime::{LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, ToolExecutionFn};
-use crate::codec::anthropic::AnthropicMessagesCodec;
-use crate::codec::openai_chat::OpenAIChatCodec;
-use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
-use crate::codec::traits::{LlmCodec, LlmResponseCodec};
+use crate::codec::resolve::{ProviderSurface, request_codec, response_codec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::json::Json;
 use crate::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
@@ -815,12 +812,24 @@ enum LocalGuardrailsCodec {
 }
 
 impl LocalGuardrailsCodec {
-    fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+    fn provider_surface(self) -> ProviderSurface {
         match self {
-            Self::OpenAIChat => OpenAIChatCodec.decode(request),
-            Self::OpenAIResponses => OpenAIResponsesCodec.decode(request),
-            Self::AnthropicMessages => AnthropicMessagesCodec.decode(request),
+            Self::OpenAIChat => ProviderSurface::OpenAIChat,
+            Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
+            Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
         }
+    }
+
+    fn from_provider_surface(surface: ProviderSurface) -> Self {
+        match surface {
+            ProviderSurface::OpenAIChat => Self::OpenAIChat,
+            ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
+            ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+        }
+    }
+
+    fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
+        request_codec(self.provider_surface()).decode(request)
     }
 
     fn encode(
@@ -828,22 +837,14 @@ impl LocalGuardrailsCodec {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> FlowResult<LlmRequest> {
-        match self {
-            Self::OpenAIChat => OpenAIChatCodec.encode(annotated, original),
-            Self::OpenAIResponses => OpenAIResponsesCodec.encode(annotated, original),
-            Self::AnthropicMessages => AnthropicMessagesCodec.encode(annotated, original),
-        }
+        request_codec(self.provider_surface()).encode(annotated, original)
     }
 
     fn decode_response(
         &self,
         response: &Json,
     ) -> FlowResult<crate::codec::response::AnnotatedLlmResponse> {
-        match self {
-            Self::OpenAIChat => OpenAIChatCodec.decode_response(response),
-            Self::OpenAIResponses => OpenAIResponsesCodec.decode_response(response),
-            Self::AnthropicMessages => AnthropicMessagesCodec.decode_response(response),
-        }
+        response_codec(self.provider_surface()).decode_response(response)
     }
 }
 
@@ -853,12 +854,12 @@ fn resolve_codec(config: &NeMoGuardrailsConfig) -> PluginResult<Option<LocalGuar
     }
 
     match config.codec.as_deref() {
-        Some("openai_chat") => Ok(Some(LocalGuardrailsCodec::OpenAIChat)),
-        Some("openai_responses") => Ok(Some(LocalGuardrailsCodec::OpenAIResponses)),
-        Some("anthropic_messages") => Ok(Some(LocalGuardrailsCodec::AnthropicMessages)),
-        Some(other) => Err(PluginError::InvalidConfig(format!(
-            "unsupported local NeMo Guardrails codec '{other}'"
-        ))),
+        Some(name) => match ProviderSurface::from_codec_name(name) {
+            Some(surface) => Ok(Some(LocalGuardrailsCodec::from_provider_surface(surface))),
+            None => Err(PluginError::InvalidConfig(format!(
+                "unsupported local NeMo Guardrails codec '{name}'"
+            ))),
+        },
         None => Err(PluginError::InvalidConfig(
             "local NeMo Guardrails backend requires a supported codec".to_string(),
         )),

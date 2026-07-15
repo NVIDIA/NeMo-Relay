@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -16,7 +16,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -28,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -40,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -52,7 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -64,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -75,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -86,7 +97,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -97,7 +108,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -108,7 +119,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -119,7 +130,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -130,7 +141,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]
@@ -141,7 +152,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "nemo-relay plugin-shim hook claude",
+            "command": "nemo-relay hook-forward claude --gateway-url http://127.0.0.1:47632 --forward-only",
             "timeout": 30
           }
         ]

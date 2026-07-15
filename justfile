@@ -468,6 +468,7 @@ local_dependencies = (
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
+    "nemo-relay-switchyard",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -1056,6 +1057,18 @@ clean:
         examples/rust-native-plugin/target \
         target
 
+# Opt-in: requires a supported Codex installation and is intentionally outside test-rust/CI.
+test-codex-plugin-e2e:
+    ./scripts/test-codex-plugin-e2e.sh
+
+# Opt-in: requires a supported Claude Code installation and is intentionally outside test-rust/CI.
+test-claude-plugin-e2e:
+    ./scripts/test-claude-plugin-e2e.sh
+
+# Opt-in: requires a supported Hermes Agent installation and is intentionally outside test-rust/CI.
+test-hermes-mcp-e2e:
+    ./scripts/test-hermes-mcp-e2e.sh
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash
@@ -1111,7 +1124,8 @@ test-rust:
                 --output-path "$coverage_out"
         fi
     else
-        cargo test --workspace
+        cargo test --workspace --exclude nemo-relay-ffi
+        cargo test -p nemo-relay-ffi -- --test-threads=1
     fi
 
 # --set [output_dir=<path>] [ci=true|false]
@@ -1124,6 +1138,9 @@ test-python:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    test_config_home="$(mktemp -d)"
+    trap 'rm -rf "$test_config_home"' EXIT
+    export XDG_CONFIG_HOME="$test_config_home"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact python-coverage.xml)"
         junit_out="$(prepare_artifact python-junit.xml)"
@@ -1238,8 +1255,10 @@ test-python-plugin-e2e:
         'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
     "$cli" --config "$config" --bind "127.0.0.1:$port" >"$tmp/gateway.log" 2>&1 &
     gateway_pid=$!
+    gateway_ready_timeout_seconds=30
+    gateway_ready_deadline=$((SECONDS + gateway_ready_timeout_seconds))
     ready=false
-    for _ in $(seq 1 100); do
+    while ((SECONDS < gateway_ready_deadline)); do
         if "$python_executable" -c \
             'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=0.2).read()' \
             "http://127.0.0.1:$port/healthz" 2>/dev/null; then
@@ -1252,6 +1271,11 @@ test-python-plugin-e2e:
         sleep 0.1
     done
     if [[ "$ready" != true ]]; then
+        if kill -0 "$gateway_pid" 2>/dev/null; then
+            echo "gateway remained alive but did not become ready within ${gateway_ready_timeout_seconds}s" >&2
+        else
+            echo "gateway exited before becoming ready" >&2
+        fi
         cat "$tmp/gateway.log"
         exit 1
     fi
@@ -1363,6 +1387,9 @@ test-node:
     junit_out=""
     rust_coverage_out=""
     cd "$NEMO_RELAY_REPO_ROOT"
+    test_config_home="$(mktemp -d)"
+    trap 'rm -rf "$test_config_home"' EXIT
+    export XDG_CONFIG_HOME="$test_config_home"
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"

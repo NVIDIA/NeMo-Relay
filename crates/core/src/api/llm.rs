@@ -29,7 +29,7 @@ use crate::api::shared::{
     resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
     sanitize_event_with_scope_stack, snapshot_event_subscribers,
 };
-use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result};
@@ -298,6 +298,89 @@ fn create_llm_handle(params: CreateLlmHandleParams<'_>) -> Result<LlmHandle> {
     Ok(state.create_llm_handle(params))
 }
 
+fn request_turn_projection_needed<T>(
+    items: &[T],
+    is_user: &impl Fn(&T) -> bool,
+    is_instruction: &impl Fn(&T) -> bool,
+) -> bool {
+    let Some(last_index) = items.len().checked_sub(1) else {
+        return false;
+    };
+    match items.iter().rposition(is_user) {
+        Some(start) => items[..start].iter().any(|item| !is_instruction(item)),
+        None => items
+            .iter()
+            .enumerate()
+            .any(|(index, item)| index != last_index && !is_instruction(item)),
+    }
+}
+
+fn retain_current_request_turn<T>(
+    items: &mut Vec<T>,
+    is_user: impl Fn(&T) -> bool,
+    is_instruction: impl Fn(&T) -> bool,
+) -> bool {
+    if !request_turn_projection_needed(items, &is_user, &is_instruction) {
+        return false;
+    }
+    let last_index = items.len() - 1;
+    let Some(start) = items.iter().rposition(is_user) else {
+        let mut index = 0;
+        items.retain(|item| {
+            let retain = index == last_index || is_instruction(item);
+            index += 1;
+            retain
+        });
+        return true;
+    };
+    let mut current_turn = items.split_off(start);
+    items.retain(is_instruction);
+    items.append(&mut current_turn);
+    true
+}
+
+fn project_llm_request_to_current_user_turn(
+    request: &mut LlmRequest,
+    annotated_request: &mut Option<Arc<AnnotatedLlmRequest>>,
+    request_codec: Option<&dyn LlmCodec>,
+) {
+    let Some(annotation) = annotated_request.as_mut() else {
+        return;
+    };
+    if !request_turn_projection_needed(
+        &annotation.messages,
+        &|message| matches!(message, Message::User { .. }),
+        &|message| matches!(message, Message::System { .. }),
+    ) {
+        return;
+    }
+    let original_annotation = request_codec.map(|_| Arc::clone(annotation));
+    let projected = limit_annotated_request_history_to_current_user_turn(Arc::make_mut(annotation));
+    debug_assert!(projected);
+    if let Some(codec) = request_codec {
+        match codec.encode(annotation, request) {
+            Ok(encoded) => *request = encoded,
+            Err(error) => {
+                eprintln!(
+                    "nemo_relay: LLM request projection encode failed; preserving full event history: {error}"
+                );
+                *annotation = original_annotation
+                    .expect("codec-backed projection should preserve the original annotation")
+            }
+        }
+    }
+}
+
+fn limit_annotated_request_history_to_current_user_turn(
+    annotated_request: &mut AnnotatedLlmRequest,
+) -> bool {
+    retain_current_request_turn(
+        &mut annotated_request.messages,
+        |message| matches!(message, Message::User { .. }),
+        |message| matches!(message, Message::System { .. }),
+    )
+}
+
 fn emit_llm_start(
     handle: &LlmHandle,
     request: &LlmRequest,
@@ -339,9 +422,9 @@ fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.llm_sanitize_request_entries(&scope_locals)
     };
-    let sanitized_request =
+    let mut sanitized_request =
         NemoRelayContextState::llm_sanitize_request_snapshot_chain(request.clone(), &entries);
-    let annotated_request = match request_codec {
+    let mut annotated_request = match request_codec {
         Some(codec)
             if sanitized_request.headers != request.headers
                 || sanitized_request.content != request.content =>
@@ -350,6 +433,18 @@ fn emit_llm_start_with_subscribers(
         }
         _ => annotated_request,
     };
+    let scope_stack = handle.captured_scope_stack();
+    let agent_is_fresh = {
+        let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+        scope_guard.take_agent_freshness(handle.parent_uuid)
+    };
+    if !agent_is_fresh {
+        project_llm_request_to_current_user_turn(
+            &mut sanitized_request,
+            &mut annotated_request,
+            request_codec,
+        );
+    }
     let input = serde_json::to_value(&sanitized_request).unwrap_or(Json::Null);
     let event = {
         let context = global_context();
@@ -358,7 +453,7 @@ fn emit_llm_start_with_subscribers(
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         state.build_llm_start_event(handle, Some(input), annotated_request)
     };
-    if let Some(event) = sanitize_event_with_scope_stack(event, handle.captured_scope_stack()) {
+    if let Some(event) = sanitize_event_with_scope_stack(event, scope_stack) {
         NemoRelayContextState::emit_event(&event, subscribers);
     }
     Ok(())
@@ -486,7 +581,10 @@ fn emit_optimization_marks_with(
 ///
 /// # Notes
 /// Sanitize-request guardrails affect only the emitted start-event payload, not
-/// the caller-owned [`LlmRequest`].
+/// the caller-owned [`LlmRequest`]. When the owning agent is not fresh, the
+/// emitted request annotation is limited to the current user turn. Managed
+/// calls with a request codec also apply that projection to the event input,
+/// without changing the request used for provider execution.
 pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     let handle_params = CreateLlmHandleParams::builder()
         .name(params.name)

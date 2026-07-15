@@ -12,23 +12,83 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
+use crate::plugin::{PluginDeregistrationOutcome, deregister_plugin_registration_checked};
+
 /// Canonical identifier for one dynamic plugin record.
 pub type DynamicPluginId = String;
 
 /// Canonical filename for authored Relay plugin manifests.
 pub const DYNAMIC_PLUGIN_MANIFEST_FILENAME: &str = "relay-plugin.toml";
 
+mod host;
 mod manifest;
 mod native;
 mod registry;
 #[cfg(feature = "worker-grpc")]
 mod worker;
 
+pub use host::*;
 pub use manifest::*;
 pub use native::*;
 pub use registry::*;
 #[cfg(feature = "worker-grpc")]
 pub use worker::*;
+
+#[derive(Debug)]
+pub(crate) struct DynamicPluginTeardownOutcome {
+    pub(crate) errors: Vec<String>,
+    pub(crate) safe_to_unload: bool,
+}
+
+impl DynamicPluginTeardownOutcome {
+    pub(crate) fn success() -> Self {
+        Self {
+            errors: Vec::new(),
+            safe_to_unload: true,
+        }
+    }
+
+    pub(crate) fn record_error(&mut self, error: impl Into<String>, safe_to_unload: bool) {
+        self.errors.push(error.into());
+        self.safe_to_unload &= safe_to_unload;
+    }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.errors.extend(other.errors);
+        self.safe_to_unload &= other.safe_to_unload;
+    }
+}
+
+pub(super) fn deregister_tracked_registrations_checked(
+    registrations: &mut Vec<(String, u64)>,
+    plugin_type: &str,
+) -> DynamicPluginTeardownOutcome {
+    let mut outcome = DynamicPluginTeardownOutcome::success();
+    for (plugin_kind, registration_id) in std::mem::take(registrations).into_iter().rev() {
+        match deregister_plugin_registration_checked(&plugin_kind, registration_id) {
+            Ok(PluginDeregistrationOutcome::Removed) => {}
+            Ok(PluginDeregistrationOutcome::Missing) => outcome.record_error(
+                format!(
+                    "{plugin_type} plugin kind '{plugin_kind}' was not registered during teardown"
+                ),
+                true,
+            ),
+            Ok(PluginDeregistrationOutcome::Replaced) => outcome.record_error(
+                format!(
+                    "{plugin_type} plugin kind '{plugin_kind}' was replaced during teardown and was left registered"
+                ),
+                true,
+            ),
+            Err(error) => outcome.record_error(
+                format!(
+                    "failed to deregister {plugin_type} plugin kind '{plugin_kind}': {error}"
+                ),
+                false,
+            ),
+        }
+    }
+    outcome
+}
 
 /// Plugin execution lane.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Display)]

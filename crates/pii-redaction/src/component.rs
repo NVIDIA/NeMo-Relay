@@ -7,6 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use nemo_relay::codec::resolve::supported_codec_names;
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior, deregister_plugin,
@@ -243,7 +244,7 @@ nemo_relay::editor_config! {
             kind: Enum,
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
-        target_paths => { label: "target_paths", kind: Json },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -707,10 +708,7 @@ fn validate_codec_requirements(
         return;
     };
 
-    if !matches!(
-        codec,
-        "openai_chat" | "openai_responses" | "anthropic_messages"
-    ) {
+    if !supported_codec_names().contains(&codec) {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,

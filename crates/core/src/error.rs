@@ -7,7 +7,76 @@
 //! [`FlowError`] as the error type. Errors are categorized by cause
 //! (duplicate registration, missing entity, guardrail rejection, etc.).
 
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// Stable classification for an upstream provider failure captured by retry-aware dispatch.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpstreamFailureClass {
+    /// Provider connection could not be established or was interrupted.
+    Connection,
+    /// Provider request timed out.
+    Timeout,
+    /// Retryable HTTP status without a more specific provider classification.
+    RetryableStatus,
+    /// Provider rejected the request because its context window was exceeded.
+    ContextWindow,
+    /// Requested provider model is temporarily unavailable.
+    ModelUnavailable,
+    /// Provider authentication or authorization failed.
+    Authentication,
+    /// Provider rejected an invalid request.
+    InvalidRequest,
+    /// Other non-retryable provider failure.
+    Other,
+}
+
+/// Structured provider failure surfaced only for explicitly retry-aware dispatches.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct UpstreamFailure {
+    /// HTTP status when a provider response was received.
+    pub status: Option<u16>,
+    /// Bounded response body or transport error message.
+    pub body: String,
+    /// Safe response headers captured from the provider.
+    pub headers: BTreeMap<String, String>,
+    /// Retry classification.
+    pub class: UpstreamFailureClass,
+}
+
+impl UpstreamFailure {
+    /// Whether Switchyard may be consulted for another bounded provider attempt.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self.class,
+            UpstreamFailureClass::Connection
+                | UpstreamFailureClass::Timeout
+                | UpstreamFailureClass::RetryableStatus
+                | UpstreamFailureClass::ContextWindow
+                | UpstreamFailureClass::ModelUnavailable
+        )
+    }
+}
+
+impl std::fmt::Display for UpstreamFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.status {
+            Some(status) => write!(
+                formatter,
+                "upstream provider returned HTTP {status} ({:?}): {}",
+                self.class, self.body
+            ),
+            None => write!(
+                formatter,
+                "upstream provider transport failure ({:?}): {}",
+                self.class, self.body
+            ),
+        }
+    }
+}
 
 /// The error type for all NeMo Relay runtime operations.
 ///
@@ -52,6 +121,10 @@ pub enum FlowError {
     /// a conditional guardrail returns `Some(reason)`.
     #[error("guardrail rejected: {0}")]
     GuardrailRejected(String),
+
+    /// Structured upstream provider failure from retry-aware gateway dispatch.
+    #[error("{0}")]
+    Upstream(UpstreamFailure),
 
     /// An internal runtime error (e.g., lock poisoning).
     #[error("internal error: {0}")]

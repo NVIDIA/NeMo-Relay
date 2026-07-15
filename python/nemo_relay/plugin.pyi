@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections.abc import Callable
-from typing import AsyncContextManager, Literal, Protocol, TypedDict
+from types import TracebackType
+from typing import AsyncContextManager, Literal, Protocol, Self, TypedDict
 
 from nemo_relay import (
     Event,
@@ -21,6 +22,7 @@ from nemo_relay import (
 )
 
 UnsupportedBehavior = Literal["ignore", "warn", "error"]
+DynamicPluginKind = Literal["rust_dynamic", "worker"]
 
 class _ConfigDiagnosticRequired(TypedDict):
     level: Literal["warning", "error"]
@@ -116,8 +118,43 @@ class PluginConfig:
     ) -> None: ...
     def to_dict(self) -> JsonObject: ...
 
+class DynamicPluginActivationSpec:
+    plugin_id: str
+    kind: DynamicPluginKind
+    manifest_ref: str
+    environment_ref: str | None
+    config: JsonObject
+
+    def __init__(
+        self,
+        plugin_id: str,
+        kind: DynamicPluginKind,
+        manifest_ref: str,
+        environment_ref: str | None = None,
+        config: JsonObject = ...,
+    ) -> None: ...
+    def to_dict(self) -> JsonObject: ...
+
+class PluginHostActivation:
+    @property
+    def report(self) -> ConfigReport: ...
+    @property
+    def is_active(self) -> bool: ...
+    async def close(self) -> None: ...
+    async def __aenter__(self) -> Self: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
 def validate(config: PluginConfig | JsonObject) -> ConfigReport: ...
 async def initialize(config: PluginConfig | JsonObject) -> ConfigReport: ...
+async def initialize_with_dynamic_plugins(
+    config: PluginConfig | JsonObject,
+    dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject],
+) -> PluginHostActivation: ...
 def clear() -> None: ...
 def plugin(config: PluginConfig | JsonObject) -> AsyncContextManager[ConfigReport]: ...
 def report() -> ConfigReport | None: ...

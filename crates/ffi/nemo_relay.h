@@ -160,6 +160,14 @@ typedef struct FfiOpenInferenceSubscriber FfiOpenInferenceSubscriber;
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
 
 /**
+ * Opaque owned dynamic plugin host activation.
+ *
+ * The inner option allows explicit activation cleanup to be idempotent while
+ * retaining a stable allocation until the foreign caller frees the handle.
+ */
+typedef struct FfiPluginActivation FfiPluginActivation;
+
+/**
  * Opaque plugin registration context.
  *
  * This wrapper contains a borrowed raw pointer to an
@@ -1293,7 +1301,7 @@ NemoRelayStatus nemo_relay_atof_exporter_force_flush(const struct FfiAtofExporte
 NemoRelayStatus nemo_relay_atof_exporter_shutdown(const struct FfiAtofExporter *exporter);
 
 /**
- * Returns the ATOF exporter output path as a string.
+ * Returns the ATOF exporter output path as a string when its sink is a file.
  *
  * # Safety
  * `exporter` and `out` must be valid, non-null pointers.
@@ -1320,6 +1328,26 @@ NemoRelayStatus nemo_relay_otel_subscriber_create(const char *transport,
                                                   const char *instrumentation_scope,
                                                   uint64_t timeout_millis,
                                                   struct FfiOpenTelemetrySubscriber **out);
+
+/**
+ * Creates a new OpenTelemetry subscriber with typed attribute mappings.
+ *
+ * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const char *transport,
+                                                                          const char *endpoint,
+                                                                          const char *headers_json,
+                                                                          const char *resource_attributes_json,
+                                                                          const char *service_name,
+                                                                          const char *service_namespace,
+                                                                          const char *service_version,
+                                                                          const char *instrumentation_scope,
+                                                                          uint64_t timeout_millis,
+                                                                          const char *attribute_mappings_json,
+                                                                          struct FfiOpenTelemetrySubscriber **out);
 
 /**
  * Registers the OpenTelemetry subscriber as an event subscriber.
@@ -1376,6 +1404,26 @@ NemoRelayStatus nemo_relay_openinference_subscriber_create(const char *transport
                                                            struct FfiOpenInferenceSubscriber **out);
 
 /**
+ * Creates a new OpenInference subscriber with typed attribute mappings.
+ *
+ * `attribute_mappings_json` is a JSON array of `{ "key": string, "alias": string }` objects.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_openinference_subscriber_create_with_attribute_mappings(const char *transport,
+                                                                                   const char *endpoint,
+                                                                                   const char *headers_json,
+                                                                                   const char *resource_attributes_json,
+                                                                                   const char *service_name,
+                                                                                   const char *service_namespace,
+                                                                                   const char *service_version,
+                                                                                   const char *instrumentation_scope,
+                                                                                   uint64_t timeout_millis,
+                                                                                   const char *attribute_mappings_json,
+                                                                                   struct FfiOpenInferenceSubscriber **out);
+
+/**
  * Registers the OpenInference subscriber as an event subscriber.
  *
  * # Safety
@@ -1407,6 +1455,72 @@ NemoRelayStatus nemo_relay_openinference_subscriber_force_flush(const struct Ffi
  * `subscriber` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_openinference_subscriber_shutdown(const struct FfiOpenInferenceSubscriber *subscriber);
+
+/**
+ * Load and activate dynamic plugins as one owned transaction.
+ *
+ * **Experimental:** this API needs a production consumer before its lifecycle
+ * contract is considered stable.
+ *
+ * Relay discovers `plugins.toml` once during this startup call and layers
+ * `config_json` over the discovered configuration. Explicit values take
+ * precedence where both sources configure the same setting. Static components
+ * from the resolved configuration initialize before components appended by
+ * the dynamic plugins. Configuration files are not watched or reloaded.
+ * `dynamic_plugins_json` must contain at least one explicit dynamic-plugin
+ * activation specification; use `nemo_relay_initialize_plugins` for a
+ * static-only configuration.
+ *
+ * The explicit configuration uses this JSON shape:
+ *
+ * ```text
+ * {"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
+ * ```
+ *
+ * Dynamic plugin specifications use this JSON shape:
+ *
+ * ```text
+ * [{"plugin_id":"example","kind":"rust_dynamic","manifest_ref":"/absolute/path/relay-plugin.toml","config":{}}]
+ * ```
+ *
+ * `kind` must be `rust_dynamic` or `worker`. `environment_ref` is optional
+ * and applies only to worker plugins. `manifest_ref` is resolved by the
+ * embedding application; this API does not discover installed plugins.
+ *
+ * On success, the caller owns `out_activation` and
+ * must clear and free it with `nemo_relay_plugin_activation_clear` and
+ * `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C
+ * string and must be released with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * Both input pointers must reference valid, null-terminated C strings.
+ * `out_activation` and `out_report_json` must be valid, non-null, non-overlapping
+ * output pointers.
+ */
+NemoRelayStatus nemo_relay_initialize_with_dynamic_plugins(const char *config_json,
+                                                           const char *dynamic_plugins_json,
+                                                           struct FfiPluginActivation **out_activation,
+                                                           char **out_report_json);
+
+/**
+ * Clear one owned dynamic plugin activation.
+ *
+ * This operation is idempotent. A null handle is treated as already cleared.
+ * If teardown fails, the error is reported only by the call that performs the
+ * teardown. The activation is consumed regardless of the outcome, so a later
+ * clear returns success and does not report the earlier error again.
+ * Concurrent clear calls for the same handle are serialized, but they must not
+ * overlap with `nemo_relay_plugin_activation_free`.
+ * The handle allocation remains owned by the caller and must still be passed
+ * to `nemo_relay_plugin_activation_free`.
+ *
+ * # Safety
+ * `activation` must be a valid activation handle returned by
+ * `nemo_relay_initialize_with_dynamic_plugins`, or null. The caller must ensure the
+ * handle remains allocated for this call and that
+ * `nemo_relay_plugin_activation_free` does not run concurrently with it.
+ */
+NemoRelayStatus nemo_relay_plugin_activation_clear(struct FfiPluginActivation *activation);
 
 /**
  * Validate a generic plugin config document and return the diagnostics report as JSON.
@@ -2450,6 +2564,25 @@ void nemo_relay_openinference_subscriber_free(struct FfiOpenInferenceSubscriber 
  * `ptr` must be a valid pointer returned by `nemo_relay_adaptive_runtime_create`, or null.
  */
 void nemo_relay_adaptive_runtime_free(struct FfiAdaptiveRuntime *ptr);
+
+/**
+ * Free a dynamic plugin activation handle previously returned by
+ * `nemo_relay_initialize_with_dynamic_plugins`.
+ *
+ * Any activation that has not already been explicitly cleared is cleaned up
+ * best-effort by its Rust destructor before the allocation is released. The
+ * caller's handle is set to null before cleanup, making repeated calls through
+ * the same handle variable safe when they are sequential.
+ *
+ * # Safety
+ * `ptr` must be null or point to a writable activation-handle variable whose
+ * value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The
+ * caller must ensure that no operation, including
+ * `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
+ * with this call and that no operation can use the handle after this call
+ * begins.
+ */
+void nemo_relay_plugin_activation_free(struct FfiPluginActivation **ptr);
 
 /**
  * Free a codec handle previously returned by one of the codec constructor

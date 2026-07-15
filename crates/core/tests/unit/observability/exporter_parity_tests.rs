@@ -442,7 +442,10 @@ fn test_usage_facts_parity_for_openai_chat_payload() {
 
     let otel = exports.otel_attrs("model-call");
     assert_no_attribute_key_contains(&otel, "token_count");
-    assert!(otel.contains_key("nemo_relay.end.output_json"));
+    assert!(
+        otel.keys()
+            .any(|key| key.starts_with("nemo_relay.end.output."))
+    );
 }
 
 #[test]
@@ -616,6 +619,8 @@ fn test_tool_call_projection_parity() {
             .get("nemo_relay.tool_call_id"),
         Some(&"call_parity_1".to_string())
     );
+    // OpenTelemetry retains the raw response as JSON; it does not add
+    // OpenInference's semantic tool-call attributes.
     assert_no_attribute_key_contains(&exports.otel_attrs("model-call"), "tool_call");
 }
 
@@ -647,8 +652,20 @@ fn test_reasoning_projected_by_atif_only() {
         Some("I compared both options step by step.")
     );
 
-    assert_no_attribute_key_contains(&exports.otel_attrs("model-call"), "reasoning");
-    assert_no_attribute_key_contains(&exports.openinference_attrs("model-call"), "reasoning");
+    // The raw end data retains reasoning without adding exporter-specific
+    // reasoning semantic conventions.
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.end.data.reasoning"),
+        Some(&"I compared both options step by step.".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("nemo_relay.end.data.reasoning"),
+        Some(&"I compared both options step by step.".to_string())
+    );
 }
 
 // ===================================================================
@@ -677,27 +694,35 @@ fn test_replay_payload_preservation_across_exporters() {
         serde_json::from_value(exports.agent_step().extra.clone().unwrap()).unwrap();
     assert_eq!(agent_extra.llm_response, Some(output.clone()));
 
-    // OTel preserves the same payloads as serialized JSON attributes (the
-    // start input keeps the LlmRequest envelope).
+    // OTel projects the LLM request wrapper into typed top-level attributes,
+    // keeping the provider payload in its nested content field.
     let otel = exports.otel_attrs("model-call");
-    let otel_input: Json =
-        serde_json::from_str(otel.get("nemo_relay.start.input_json").unwrap()).unwrap();
+    let otel_input: Json = serde_json::from_str(
+        otel.get("nemo_relay.start.input.content")
+            .expect("projected request content"),
+    )
+    .unwrap();
+    assert_eq!(otel_input, request_content);
     assert_eq!(
-        otel_input,
-        json!({"headers": {}, "content": request_content})
+        otel.get("nemo_relay.start.input.headers"),
+        Some(&"{}".to_string())
     );
-    let otel_output: Json =
-        serde_json::from_str(otel.get("nemo_relay.end.output_json").unwrap()).unwrap();
-    assert_eq!(otel_output, output);
+    assert!(!otel.contains_key("nemo_relay.start.input_json"));
+    assert!(
+        otel.keys()
+            .any(|key| key.starts_with("nemo_relay.end.output."))
+    );
 
-    // OpenInference preserves the raw response payload but omits the raw
-    // LLM request JSON in favor of flattened message attributes plus a
+    // OpenInference preserves the raw response payload but omits raw
+    // LLM request attributes in favor of flattened message fields plus a
     // display input.value.
     let openinference = exports.openinference_attrs("model-call");
-    let openinference_output: Json =
-        serde_json::from_str(openinference.get("nemo_relay.end.output_json").unwrap()).unwrap();
-    assert_eq!(openinference_output, output);
-    assert!(!openinference.contains_key("nemo_relay.start.input_json"));
+    assert!(
+        openinference
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.end.output."))
+    );
+    assert!(!openinference.contains_key("nemo_relay.start.input.content"));
     assert!(openinference.contains_key("llm.input_messages.0.message.content"));
 }
 

@@ -52,6 +52,10 @@ func TestOpenInferenceSubscriberLifecycle(t *testing.T) {
 	config.Timeout = 1250 * time.Millisecond
 	config.Headers["authorization"] = "Bearer token"
 	config.ResourceAttributes["deployment.environment"] = "test"
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "openinference.metadata.tenant",
+		Alias: "tenant.id",
+	}}
 
 	subscriber, err := NewOpenInferenceSubscriber(config)
 	if err != nil {
@@ -87,14 +91,55 @@ func TestOpenInferenceSubscriberRejectsInvalidTransport(t *testing.T) {
 	}
 }
 
-func TestOpenInferenceSubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
+func TestOpenInferenceSubscriberRejectsInvalidAttributeMapping(t *testing.T) {
+	config := NewOpenInferenceConfig()
+	config.AttributeMappings = []OtlpAttributeMapping{{Key: "", Alias: "tenant.id"}}
+
+	if _, err := NewOpenInferenceSubscriber(config); err == nil {
+		t.Fatal("expected invalid attribute mapping error")
+	}
+}
+
+func TestOpenInferenceSubscriberExportsScopeLifecycleAndMappedAttributes(t *testing.T) {
 	requests := make(chan otelRequest, 4)
 	server := NewOtelTestServer(t, requests)
 	defer server.Close()
 
-	subscriber := NewRegisteredOpenInferenceSubscriber(t, server.URL+"/v1/traces")
+	config := NewOpenInferenceConfig()
+	config.Endpoint = server.URL + "/v1/traces"
+	config.ServiceName = "go-agent"
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "openinference.metadata.tenant",
+		Alias: "tenant.id",
+	}}
+	subscriber, err := NewOpenInferenceSubscriber(config)
+	if err != nil {
+		t.Fatalf("NewOpenInferenceSubscriber failed: %v", err)
+	}
 	defer subscriber.Close()
-	EmitOpenInferenceScopeLifecycle(t)
+	name := "go_openinference_e2e_" + time.Now().Format("150405.000000")
+	if err := subscriber.Register(name); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	defer func() { _ = subscriber.Deregister(name) }()
+
+	runWithTestScopeStack(t, func() {
+		handle, err := PushScope("openinference_scope", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		requireNoError(t, EmitEvent(
+			"openinference_mark",
+			WithEventParent(handle),
+			WithEventData(json.RawMessage(`{"step":1}`)),
+			WithEventMetadata(json.RawMessage(`{"source":"go"}`)),
+		), "EmitEvent failed")
+		requireNoError(
+			t,
+			PopScope(handle, WithScopeEndMetadata(json.RawMessage(`{"tenant":"go"}`))),
+			"PopScope failed",
+		)
+	})
 	if err := subscriber.ForceFlush(); err != nil {
 		t.Fatalf("ForceFlush failed: %v", err)
 	}
@@ -102,6 +147,7 @@ func TestOpenInferenceSubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	select {
 	case request := <-requests:
 		AssertOpenInferenceRequest(t, request)
+		assertOtlpStringAttribute(t, request.Body, "tenant.id", "go")
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
 	}

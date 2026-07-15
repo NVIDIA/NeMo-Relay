@@ -4,13 +4,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
+import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
 const { OpenTelemetrySubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
 
 function uniqueId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function assertBodyContains(body, text) {
+  assert.equal(body.includes(Buffer.from(text, 'utf8')), true, `expected OTLP payload to contain ${text}`);
 }
 
 describe('OpenTelemetrySubscriber', () => {
@@ -28,6 +32,7 @@ describe('OpenTelemetrySubscriber', () => {
       resourceAttributes: {
         'deployment.environment': 'test',
       },
+      attributeMappings: [{ key: 'nemo_relay.start.data.tenant', alias: 'tenant.id' }],
     });
 
     const name = uniqueId('node_otel');
@@ -64,6 +69,13 @@ describe('OpenTelemetrySubscriber', () => {
         }),
       /resourceAttributes must be an object of string values/i,
     );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          attributeMappings: [{ key: '', alias: 'tenant.id' }],
+        }),
+      /attribute mapping key must not be blank/i,
+    );
   });
 
   it('exports scope push/pop and mark events end to end', async () => {
@@ -71,21 +83,13 @@ describe('OpenTelemetrySubscriber', () => {
     const subscriber = new OpenTelemetrySubscriber({
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
+      attributeMappings: [{ key: 'nemo_relay.mark.metadata.source', alias: 'tenant.id' }],
     });
 
     const name = uniqueId('node_otel_e2e');
     subscriber.register(name);
     try {
-      const scope = pushScope(
-        'otel_scope',
-        ScopeType.Agent,
-        null,
-        null,
-        {
-          scope: true,
-        },
-        null,
-      );
+      const scope = pushScope('otel_scope', ScopeType.Agent, null, null, null, null);
       event(
         'otel_mark',
         scope,
@@ -103,6 +107,7 @@ describe('OpenTelemetrySubscriber', () => {
       assert.equal(request.url, '/v1/traces');
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
       assert.ok(request.body.length > 0);
+      assertOtlpStringAttribute(request.body, 'tenant.id', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();
