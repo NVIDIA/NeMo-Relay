@@ -242,8 +242,9 @@ printed output. In Node.js, also wait one event-loop tick after
   `compaction` mark refreshes it. The first subsequent LLM start retains
   complete annotation history. Later starts retain system instructions, the
   latest user message, and every following assistant or tool message. With a
-  request codec, the emitted event input uses the same projection. This
-  event-only projection does not change the request used for provider execution.
+  request codec, the emitted event input uses the same projection. If that
+  event-only encoding fails, Relay retains the complete event input and
+  annotation. The provider execution request remains unchanged in either case.
 - Freshness belongs to agent scopes, including the implicit root. Non-agent
   scopes, including function and custom scopes used to model requests, inherit
   their nearest agent's state and do not start a new freshness budget.
