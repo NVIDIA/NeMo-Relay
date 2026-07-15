@@ -717,6 +717,52 @@ fn persistent_user_scope_excludes_project_gateway_and_plugin_layers() {
 }
 
 #[test]
+fn logging_resolution_respects_environment_user_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    let project_config_dir = project.join(".nemo-relay");
+    let user_config_dir = xdg.join("nemo-relay");
+    let project_sink = temp.path().join("project.log.jsonl");
+    std::fs::create_dir_all(&project_config_dir).unwrap();
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        format!(
+            r#"
+[[logging.sinks]]
+path = {}
+"#,
+            toml_basic_string(project_sink.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        user_config_dir.join("config.toml"),
+        r#"
+[logging]
+level = "warn"
+"#,
+    )
+    .unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(&nested, &xdg);
+    let has_project_sink = |config: &LoggingConfig| {
+        config.sinks.iter().any(
+            |sink| matches!(sink, LogSinkConfig::File(file) if file.path == project_sink.as_path()),
+        )
+    };
+
+    let normal = resolve_logging_config(None, false).unwrap();
+    assert!(has_project_sink(&normal));
+
+    scope.enable_user_scope();
+    let user_only = resolve_logging_config(None, false).unwrap();
+    assert!(!has_project_sink(&user_only));
+}
+
+#[test]
 fn discovered_plugins_toml_upserts_components_by_kind() {
     let temp = tempfile::tempdir().unwrap();
     let project_plugin = temp.path().join("project-plugins.toml");

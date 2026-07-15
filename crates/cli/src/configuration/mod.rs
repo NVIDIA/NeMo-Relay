@@ -104,6 +104,7 @@ pub(crate) fn resolve_logging_config(
     user_only: bool,
 ) -> Result<LoggingConfig, CliError> {
     let explicit = explicit.map(Path::to_path_buf);
+    let user_only = user_only || user_config_scope();
     let mut merged = toml::Value::Table(toml::map::Map::new());
     for path in config_paths_scoped(explicit.as_ref(), user_only) {
         let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
