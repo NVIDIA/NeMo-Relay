@@ -903,7 +903,7 @@ impl SwitchyardRuntime {
         &self,
         inbound: WireProtocol,
         request: &LlmRequest,
-        annotated: &switchyard_translation::ConversationRequest,
+        annotated: &switchyard_translation::LlmRequest,
     ) -> Result<Option<Json>, String> {
         match self.config.request_materialization {
             RequestMaterialization::None | RequestMaterialization::SummaryOnly => Ok(None),
