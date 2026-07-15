@@ -4,7 +4,7 @@
 //! Managed, bounded LLM optimization accounting.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -36,6 +36,7 @@ struct AccumulatorState {
     recorded_at: Vec<DateTime<Utc>>,
     total_contribution_bytes: usize,
     attempted_contributions: usize,
+    in_flight_records: usize,
     emitted: usize,
     closed: bool,
     finished: bool,
@@ -44,13 +45,19 @@ struct AccumulatorState {
     invalid_payload_schema: bool,
 }
 
+#[derive(Debug, Default)]
+struct Accumulator {
+    state: Mutex<AccumulatorState>,
+    records_settled: Condvar,
+}
+
 /// Cloneable capability for adding evidence to the current managed LLM call.
 ///
 /// A streaming execution intercept may capture this value before returning its
 /// stream and use it when the route is committed by the first upstream item.
 #[derive(Debug, Clone, Default)]
 pub struct LlmOptimizationRecorder {
-    state: Arc<Mutex<AccumulatorState>>,
+    state: Arc<Accumulator>,
 }
 
 impl LlmOptimizationRecorder {
@@ -60,23 +67,33 @@ impl LlmOptimizationRecorder {
     /// invariant, a per-call bound, or because accounting has already closed.
     /// Rejection never affects LLM execution and does not consume a sequence.
     #[must_use]
-    pub fn record(&self, mut contribution: LlmOptimizationContribution) -> bool {
-        if !self.reserve_record_attempt() || !self.payload_schema_is_valid(&contribution) {
+    pub fn record(&self, contribution: LlmOptimizationContribution) -> bool {
+        let Some(_attempt) = self.reserve_record_attempt() else {
+            return false;
+        };
+        if !self.payload_schema_is_valid(&contribution) {
             return false;
         }
         // Relay always replaces producer-supplied identity. Serialization is
         // deliberately outside the accumulator lock; if another writer wins
         // the next sequence while we measure, retry with the new sequence.
-        contribution.id = Some(Uuid::now_v7());
+        let mut contribution = Some(contribution);
+        let Some(record) = contribution.as_mut() else {
+            return false;
+        };
+        record.id = Some(Uuid::now_v7());
         loop {
             let Some(sequence) = self.next_contribution_sequence() else {
                 return false;
             };
-            contribution.sequence = Some(sequence);
-            let Some(contribution_bytes) = self.serialized_contribution_size(&contribution) else {
+            let Some(record) = contribution.as_mut() else {
                 return false;
             };
-            match self.commit_contribution(contribution.clone(), contribution_bytes, sequence) {
+            record.sequence = Some(sequence);
+            let Some(contribution_bytes) = self.serialized_contribution_size(record) else {
+                return false;
+            };
+            match self.commit_contribution(&mut contribution, contribution_bytes, sequence) {
                 ContributionCommit::Committed => return true,
                 ContributionCommit::Retry => continue,
                 ContributionCommit::Rejected => return false,
@@ -84,19 +101,27 @@ impl LlmOptimizationRecorder {
         }
     }
 
-    fn reserve_record_attempt(&self) -> bool {
-        let Ok(mut state) = self.state.lock() else {
-            return false;
+    fn reserve_record_attempt(&self) -> Option<RecordAttempt> {
+        let Ok(mut state) = self.state.state.lock() else {
+            return None;
         };
         if state.closed {
-            return false;
+            return None;
         }
         if state.attempted_contributions >= MAX_LLM_OPTIMIZATION_CONTRIBUTION_ATTEMPTS {
             seal_for_contribution_limit(&mut state);
-            return false;
+            return None;
         }
         state.attempted_contributions += 1;
-        true
+        state.in_flight_records += 1;
+        Some(RecordAttempt {
+            state: Arc::clone(&self.state),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reserve_record_attempt_for_test(&self) -> Option<RecordAttempt> {
+        self.reserve_record_attempt()
     }
 
     fn payload_schema_is_valid(&self, contribution: &LlmOptimizationContribution) -> bool {
@@ -108,7 +133,7 @@ impl LlmOptimizationRecorder {
     }
 
     fn next_contribution_sequence(&self) -> Option<u64> {
-        let Ok(state) = self.state.lock() else {
+        let Ok(state) = self.state.state.lock() else {
             return None;
         };
         if state.closed {
@@ -141,11 +166,11 @@ impl LlmOptimizationRecorder {
 
     fn commit_contribution(
         &self,
-        contribution: LlmOptimizationContribution,
+        contribution: &mut Option<LlmOptimizationContribution>,
         contribution_bytes: usize,
         sequence: u64,
     ) -> ContributionCommit {
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut state) = self.state.state.lock() else {
             return ContributionCommit::Rejected;
         };
         if state.closed {
@@ -165,6 +190,9 @@ impl LlmOptimizationRecorder {
             seal_for_contribution_limit(&mut state);
             return ContributionCommit::Rejected;
         }
+        let Some(contribution) = contribution.take() else {
+            return ContributionCommit::Rejected;
+        };
         state.total_contribution_bytes = total_contribution_bytes;
         state.contributions.push(contribution);
         state.recorded_at.push(Utc::now());
@@ -172,16 +200,16 @@ impl LlmOptimizationRecorder {
     }
 
     fn note_invalid_payload_schema(&self) {
-        if let Ok(mut state) = self.state.lock()
-            && !state.closed
+        if let Ok(mut state) = self.state.state.lock()
+            && !state.finished
         {
             state.invalid_payload_schema = true;
         }
     }
 
     fn note_contribution_limit_exceeded(&self) {
-        if let Ok(mut state) = self.state.lock()
-            && !state.closed
+        if let Ok(mut state) = self.state.state.lock()
+            && !state.finished
         {
             seal_for_contribution_limit(&mut state);
         }
@@ -199,7 +227,16 @@ impl LlmOptimizationRecorder {
     }
 
     fn is_closed(&self) -> bool {
-        self.state.lock().map(|state| state.closed).unwrap_or(true)
+        self.state
+            .state
+            .lock()
+            .map(|state| state.closed)
+            .unwrap_or(true)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_closed_for_test(&self) -> bool {
+        self.is_closed()
     }
 
     /// Snapshot contributions not yet accepted by mark delivery.
@@ -222,7 +259,7 @@ impl LlmOptimizationRecorder {
     pub(crate) fn unemitted_with_timestamps(
         &self,
     ) -> Vec<(LlmOptimizationContribution, DateTime<Utc>)> {
-        let Ok(state) = self.state.lock() else {
+        let Ok(state) = self.state.state.lock() else {
             return Vec::new();
         };
         let start = state.emitted.min(state.contributions.len());
@@ -235,7 +272,7 @@ impl LlmOptimizationRecorder {
 
     /// Advance the delivery cursor for a bounded number of accepted marks.
     pub(crate) fn mark_emitted(&self, count: usize) {
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut state) = self.state.state.lock() else {
             return;
         };
         state.emitted = state
@@ -247,7 +284,7 @@ impl LlmOptimizationRecorder {
     /// Add a best-effort lifecycle limitation to the eventual summary.
     #[cfg(test)]
     pub(crate) fn note_limitation(&self, limitation: impl Into<String>) {
-        if let Ok(mut state) = self.state.lock()
+        if let Ok(mut state) = self.state.state.lock()
             && !state.closed
         {
             state.limitations.insert(limitation.into());
@@ -261,7 +298,7 @@ impl LlmOptimizationRecorder {
     /// an interrupted but otherwise unoptimized stream from manufacturing an
     /// optimization summary.
     pub(crate) fn close_for_finalization(&self, conditional_limitation: Option<&str>) -> bool {
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut state) = self.state.state.lock() else {
             return false;
         };
         if state.finished {
@@ -276,7 +313,7 @@ impl LlmOptimizationRecorder {
     }
 
     fn finish(&self) -> FinishedContributions {
-        let Ok(mut state) = self.state.lock() else {
+        let Ok(mut state) = self.state.state.lock() else {
             return FinishedContributions {
                 contributions: Vec::new(),
                 limitations: vec!["optimization_accumulator_unavailable".to_string()],
@@ -289,6 +326,21 @@ impl LlmOptimizationRecorder {
             };
         }
         state.closed = true;
+        while state.in_flight_records > 0 {
+            let Ok(waiting) = self.state.records_settled.wait(state) else {
+                return FinishedContributions {
+                    contributions: Vec::new(),
+                    limitations: vec!["optimization_accumulator_unavailable".to_string()],
+                };
+            };
+            state = waiting;
+            if state.finished {
+                return FinishedContributions {
+                    contributions: Vec::new(),
+                    limitations: Vec::new(),
+                };
+            }
+        }
         state.finished = true;
         let mut limitations = std::mem::take(&mut state.limitations)
             .into_iter()
@@ -313,6 +365,20 @@ enum ContributionCommit {
     Committed,
     Retry,
     Rejected,
+}
+
+pub(crate) struct RecordAttempt {
+    state: Arc<Accumulator>,
+}
+
+impl Drop for RecordAttempt {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.state.state.lock() else {
+            return;
+        };
+        state.in_flight_records = state.in_flight_records.saturating_sub(1);
+        self.state.records_settled.notify_all();
+    }
 }
 
 impl AccumulatorState {
