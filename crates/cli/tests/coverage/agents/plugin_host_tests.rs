@@ -1161,12 +1161,63 @@ fn repeated_codex_install_does_not_overwrite_original_backup() {
         .unwrap()
         .parse::<DocumentMut>()
         .unwrap();
+    assert_eq!(
+        doc["features"]["multi_agent_v2"]["enabled"].as_bool(),
+        Some(false)
+    );
     let token = codex_provider_client_token(&doc).unwrap();
     assert!(
         BootstrapChallengeKey::load()
             .unwrap()
             .verify_client_token(token)
     );
+}
+
+#[test]
+fn codex_uninstall_restores_multi_agent_v2_setting() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = r#"model_provider = "openai"
+
+[features.multi_agent_v2]
+enabled = true
+tool_namespace = "agents"
+"#;
+    fs::write(&path, original).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let installed = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        installed["features"]["multi_agent_v2"]["enabled"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        installed["features"]["multi_agent_v2"]["tool_namespace"].as_str(),
+        Some("agents")
+    );
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+
+    let restored = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(restored["model_provider"].as_str(), Some("openai"));
+    assert_eq!(
+        restored["features"]["multi_agent_v2"]["enabled"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        restored["features"]["multi_agent_v2"]["tool_namespace"].as_str(),
+        Some("agents")
+    );
+    assert!(restored.get("model_providers").is_none());
+    assert!(!backup_path(&path).exists());
 }
 
 #[test]
@@ -1992,6 +2043,9 @@ model_provider = "nemo-relay-openai"
 [features]
 hooks = true
 
+[features.multi_agent_v2]
+enabled = false
+
 [model_providers.nemo-relay-openai]
 name = "NeMo Relay"
 base_url = "http://127.0.0.1:47632"
@@ -2008,6 +2062,7 @@ supports_websockets = false
     assert!(!updated.contains("model_provider"));
     assert!(!updated.contains("nemo-relay-openai"));
     assert!(!updated.contains("hooks = true"));
+    assert!(!updated.contains("multi_agent_v2"));
 }
 
 #[test]

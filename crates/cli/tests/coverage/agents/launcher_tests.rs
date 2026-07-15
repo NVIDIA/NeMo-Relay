@@ -269,6 +269,11 @@ fn prepares_codex_config_overrides() {
     assert!(
         prepared
             .argv
+            .contains(&"features.multi_agent_v2.enabled=false".into())
+    );
+    assert!(
+        prepared
+            .argv
             .iter()
             .any(|arg| arg == "model_provider=\"nemo-relay-openai\"")
     );
