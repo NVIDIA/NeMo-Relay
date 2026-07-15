@@ -85,10 +85,10 @@ LLM start annotations use freshness state owned by the nearest agent scope:
 - **Fresh history:** An agent starts fresh when its scope opens and becomes
   fresh again after a `compaction` mark. The first subsequent LLM start retains
   the complete available request history and consumes the fresh state.
-- **Stale history:** Later LLM starts retain all system instructions, the latest
-  user message, and every following assistant or tool message. If the history
-  has no user message, the annotation retains system instructions and the final
-  non-system message.
+- **Stale history:** After that first start, later LLM starts retain all system
+  instructions, the latest user message, and every following assistant or tool
+  message. If the history has no user message, the annotation retains system
+  instructions and the final non-system message.
 - **Scope ownership:** Nested agents track freshness independently. The implicit
   root is the freshness owner for work outside an explicit agent. Non-agent
   scopes inherit their nearest agent's state instead of starting a new budget.
