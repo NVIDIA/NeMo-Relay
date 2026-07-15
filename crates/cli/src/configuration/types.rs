@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::http::HeaderMap;
+use nemo_relay::logging::LoggingConfig;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
@@ -14,8 +15,7 @@ use strum::{Display, IntoStaticStr};
 use crate::plugins::policy::DynamicPluginHostPolicy;
 
 use super::{
-    DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES, LoggingConfig, header_json,
-    header_string,
+    DEFAULT_MAX_HOOK_PAYLOAD_BYTES, DEFAULT_MAX_PASSTHROUGH_BODY_BYTES, header_json, header_string,
 };
 
 #[derive(Debug, Clone)]

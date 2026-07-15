@@ -4,10 +4,6 @@
 mod logging;
 mod types;
 
-pub(crate) use nemo_relay::logging::{
-    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogSinkConfig,
-    LogFormat, LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES,
-};
 pub(crate) use types::*;
 
 use std::collections::HashSet;
@@ -19,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
+use nemo_relay::logging::LoggingConfig;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
 };

@@ -9,6 +9,10 @@ use crate::filesystem::bounded::read_bounded_regular_file;
 use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;
+use nemo_relay::logging::{
+    DEFAULT_FILE_SINK_QUEUE_ENTRIES, LogFormat, LogLevel, LogSinkConfig,
+    MAX_FILE_SINK_QUEUE_ENTRIES,
+};
 use nemo_relay::plugin::dynamic::{
     DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginKind,
     DynamicPluginManifest, DynamicPluginStartupClass,

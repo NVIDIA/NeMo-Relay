@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 
 use nemo_relay::error::FlowError;
+use nemo_relay::logging::{
+    DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES, FileLogSinkConfig,
+    LogFormat, LogLevel, LogSinkConfig, LoggingConfig, MAX_FILE_SINK_QUEUE_ENTRIES,
+};
 use serde::Deserialize;
 
-use super::{
-    CliError, DEFAULT_FILE_FLUSH_INTERVAL_MILLIS, DEFAULT_FILE_SINK_QUEUE_ENTRIES,
-    FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
-    MAX_FILE_SINK_QUEUE_ENTRIES,
-};
+use super::CliError;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(super) struct FileLoggingConfig {
