@@ -48,7 +48,9 @@ type ObservabilityAtofFileSinkConfig struct {
 	Mode            string `json:"mode,omitempty"`
 }
 
-func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {}
+func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 // MarshalJSON serializes the fixed file sink discriminator.
 func (config ObservabilityAtofFileSinkConfig) MarshalJSON() ([]byte, error) {
@@ -70,7 +72,9 @@ type ObservabilityAtofStreamSinkConfig struct {
 	Name            string            `json:"name,omitempty"`
 }
 
-func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {}
+func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {
+	// This marker method intentionally has no runtime behavior.
+}
 
 // MarshalJSON serializes the fixed stream sink discriminator.
 func (config ObservabilityAtofStreamSinkConfig) MarshalJSON() ([]byte, error) {

@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+const (
+	duplicateEventSanitizer = "go-event-duplicate"
+	duplicateToolSanitizer  = "go-tool-duplicate"
+	invalidScopeUUID        = "not-a-uuid"
+)
+
+func registeredClosureCount() int {
+	closureRegistryMu.Lock()
+	defer closureRegistryMu.Unlock()
+	return len(closureRegistry)
+}
+
 func TestEventSanitizerRegistries(t *testing.T) {
 	runTestWithScopeStack(t, testEventSanitizerRegistries)
 }
@@ -16,15 +28,26 @@ func TestEventSanitizerRegistries(t *testing.T) {
 func testEventSanitizerRegistries(t *testing.T) {
 	var mu sync.Mutex
 	var events []Event
+	registerEventSanitizerSubscriber(t, &mu, &events)
+	registerEventSanitizerGuardrails(t)
+	emitSanitizerTestEvents(t)
+	assertSanitizedTestEvents(t, &mu, events)
+}
+
+func registerEventSanitizerSubscriber(t *testing.T, mu *sync.Mutex, events *[]Event) {
+	t.Helper()
 	if err := RegisterSubscriber("go-event-sanitize-sub", func(event Event) {
 		mu.Lock()
-		events = append(events, event)
+		*events = append(*events, event)
 		mu.Unlock()
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer DeregisterSubscriber("go-event-sanitize-sub")
+	t.Cleanup(func() { _ = DeregisterSubscriber("go-event-sanitize-sub") })
+}
 
+func registerEventSanitizerGuardrails(t *testing.T) {
+	t.Helper()
 	if err := RegisterMarkSanitizeGuardrail("go-mark-sanitize", 0, func(event Event, fields EventSanitizeFields) EventSanitizeFields {
 		if event.Name() != "checkpoint" {
 			t.Fatalf("unexpected event context: %s", event.Name())
@@ -36,21 +59,25 @@ func testEventSanitizerRegistries(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer DeregisterMarkSanitizeGuardrail("go-mark-sanitize")
+	t.Cleanup(func() { _ = DeregisterMarkSanitizeGuardrail("go-mark-sanitize") })
 	if err := RegisterScopeSanitizeStartGuardrail("go-scope-start", 0, func(_ Event, fields EventSanitizeFields) EventSanitizeFields {
 		fields.Metadata = json.RawMessage(`{"phase":"start"}`)
 		return fields
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer DeregisterScopeSanitizeStartGuardrail("go-scope-start")
+	t.Cleanup(func() { _ = DeregisterScopeSanitizeStartGuardrail("go-scope-start") })
 	if err := RegisterScopeSanitizeEndGuardrail("go-scope-end", 0, func(_ Event, fields EventSanitizeFields) EventSanitizeFields {
 		fields.Metadata = json.RawMessage(`{"phase":"end"}`)
 		return fields
 	}); err != nil {
 		t.Fatal(err)
 	}
-	defer DeregisterScopeSanitizeEndGuardrail("go-scope-end")
+	t.Cleanup(func() { _ = DeregisterScopeSanitizeEndGuardrail("go-scope-end") })
+}
+
+func emitSanitizerTestEvents(t *testing.T) {
+	t.Helper()
 	handle, err := PushScope("generic", ScopeTypeCustom)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +92,10 @@ func testEventSanitizerRegistries(t *testing.T) {
 	if err := FlushSubscribers(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func assertSanitizedTestEvents(t *testing.T, mu *sync.Mutex, events []Event) {
+	t.Helper()
 	mu.Lock()
 	mark := events[len(events)-1]
 	mu.Unlock()
@@ -152,61 +183,50 @@ func testScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {
 }
 
 func TestEventSanitizerRegistrationErrorsReleaseCallbacks(t *testing.T) {
-	closureRegistryMu.Lock()
-	baseline := len(closureRegistry)
-	closureRegistryMu.Unlock()
+	baseline := registeredClosureCount()
 	passThrough := func(_ Event, fields EventSanitizeFields) EventSanitizeFields { return fields }
 
-	if err := RegisterMarkSanitizeGuardrail("go-event-duplicate", 0, passThrough); err != nil {
+	if err := RegisterMarkSanitizeGuardrail(duplicateEventSanitizer, 0, passThrough); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterMarkSanitizeGuardrail("go-event-duplicate", 0, passThrough); err == nil {
+	if err := RegisterMarkSanitizeGuardrail(duplicateEventSanitizer, 0, passThrough); err == nil {
 		t.Fatal("expected duplicate event sanitizer registration to fail")
 	}
-	closureRegistryMu.Lock()
-	afterDuplicate := len(closureRegistry)
-	closureRegistryMu.Unlock()
-	if afterDuplicate != baseline+1 {
+	if afterDuplicate := registeredClosureCount(); afterDuplicate != baseline+1 {
 		t.Fatalf("duplicate registration leaked callback: baseline=%d current=%d", baseline, afterDuplicate)
 	}
-	if err := DeregisterMarkSanitizeGuardrail("go-event-duplicate"); err != nil {
+	if err := DeregisterMarkSanitizeGuardrail(duplicateEventSanitizer); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterToolSanitizeRequestGuardrail("go-tool-duplicate", 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err != nil {
+	if err := RegisterToolSanitizeRequestGuardrail(duplicateToolSanitizer, 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterToolSanitizeRequestGuardrail("go-tool-duplicate", 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err == nil {
+	if err := RegisterToolSanitizeRequestGuardrail(duplicateToolSanitizer, 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err == nil {
 		t.Fatal("expected duplicate tool sanitizer registration to fail")
 	}
-	closureRegistryMu.Lock()
-	afterToolDuplicate := len(closureRegistry)
-	closureRegistryMu.Unlock()
-	if afterToolDuplicate != baseline+1 {
+	if afterToolDuplicate := registeredClosureCount(); afterToolDuplicate != baseline+1 {
 		t.Fatalf("duplicate tool registration leaked callback: baseline=%d current=%d", baseline, afterToolDuplicate)
 	}
-	if err := DeregisterToolSanitizeRequestGuardrail("go-tool-duplicate"); err != nil {
+	if err := DeregisterToolSanitizeRequestGuardrail(duplicateToolSanitizer); err != nil {
 		t.Fatal(err)
 	}
 
 	for name, register := range map[string]func() error{
 		"mark": func() error {
-			return ScopeRegisterMarkSanitizeGuardrail("not-a-uuid", "go-invalid-mark", 0, passThrough)
+			return ScopeRegisterMarkSanitizeGuardrail(invalidScopeUUID, "go-invalid-mark", 0, passThrough)
 		},
 		"scope start": func() error {
-			return ScopeRegisterScopeSanitizeStartGuardrail("not-a-uuid", "go-invalid-start", 0, passThrough)
+			return ScopeRegisterScopeSanitizeStartGuardrail(invalidScopeUUID, "go-invalid-start", 0, passThrough)
 		},
 		"scope end": func() error {
-			return ScopeRegisterScopeSanitizeEndGuardrail("not-a-uuid", "go-invalid-end", 0, passThrough)
+			return ScopeRegisterScopeSanitizeEndGuardrail(invalidScopeUUID, "go-invalid-end", 0, passThrough)
 		},
 	} {
 		if err := register(); err == nil {
 			t.Fatalf("expected invalid UUID for %s registration", name)
 		}
 	}
-	closureRegistryMu.Lock()
-	afterErrors := len(closureRegistry)
-	closureRegistryMu.Unlock()
-	if afterErrors != baseline {
+	if afterErrors := registeredClosureCount(); afterErrors != baseline {
 		t.Fatalf("failed registration leaked callbacks: baseline=%d current=%d", baseline, afterErrors)
 	}
 }
