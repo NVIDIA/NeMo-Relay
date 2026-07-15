@@ -1221,6 +1221,28 @@ tool_namespace = "agents"
 }
 
 #[test]
+fn codex_uninstall_removes_multi_agent_v2_absent_from_backup() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "model_provider = \"openai\"\n").unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    assert!(backup_path(&path).exists());
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+
+    let restored = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(restored["model_provider"].as_str(), Some("openai"));
+    assert!(restored.get("features").is_none());
+    assert!(!backup_path(&path).exists());
+}
+
+#[test]
 fn codex_client_token_supports_regular_header_tables() {
     let document = r#"
 [model_providers.nemo-relay-openai]
