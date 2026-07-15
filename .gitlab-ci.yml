@@ -10,6 +10,7 @@ workflow:
     - when: never
 
 stages:
+  - analyze
   - check
   - collect
   - publish
@@ -26,10 +27,42 @@ variables:
   NEMO_RELAY_CI_GITHUB_RUN_WAIT_SECONDS: "7200"
   NEMO_RELAY_CI_GITHUB_RUN_POLL_SECONDS: "60"
 
+analyze:rust-clippy:
+  stage: analyze
+  image:
+    name: rust:${NEMO_RELAY_CI_RUST_VERSION}-${NEMO_RELAY_CI_DEBIAN_VERSION}
+    pull_policy: if-not-present
+  variables:
+    CARGO_HOME: "${CI_PROJECT_DIR}/.cargo"
+    CARGO_TARGET_DIR: "${CI_PROJECT_DIR}/target"
+  cache:
+    key:
+      files:
+        - Cargo.lock
+      prefix: "rust-${NEMO_RELAY_CI_RUST_VERSION}-clippy"
+    paths:
+      - .cargo/git
+      - .cargo/registry
+      - target
+  rules:
+    - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH
+    - when: never
+  before_script:
+    - rustup component add clippy
+    - rustc --version
+    - cargo clippy --version
+  script:
+    - cargo clippy --workspace --all-targets --message-format=json > clippy-report.json
+    - test -s clippy-report.json
+  artifacts:
+    expire_in: 7 days
+    paths:
+      - clippy-report.json
+
 check:sonar:
   stage: check
   image:
-    name: sonarsource/sonar-scanner-cli:latest
+    name: sonarsource/sonar-scanner-cli:12.1.0.3233_8.0.1@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9
     pull_policy: if-not-present
     entrypoint: [""]
   variables:
@@ -39,12 +72,14 @@ check:sonar:
     key: "${CI_JOB_NAME}"
     paths:
       - .sonar/cache
+  needs:
+    - job: analyze:rust-clippy
+      artifacts: true
   rules:
     - if: $CI_PIPELINE_SOURCE == 'push' && $CI_COMMIT_BRANCH
     - when: never
   script:
     - sonar-scanner
-  allow_failure: true
 
 collect:github-artifacts:
   stage: collect
