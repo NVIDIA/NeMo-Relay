@@ -45,6 +45,8 @@ use crate::translation::{
 /// Plugin kind used in Relay plugin configuration.
 pub const SWITCHYARD_PLUGIN_KIND: &str = "switchyard";
 
+const SWITCHYARD_HEALTH_PATH: &str = "/health";
+const SWITCHYARD_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
@@ -345,6 +347,10 @@ impl Plugin for SwitchyardPlugin {
                     .and_then(SwitchyardRuntime::new)
                     .map_err(PluginError::InvalidConfig)?,
             );
+            runtime
+                .require_healthy_sidecar()
+                .await
+                .map_err(PluginError::RegistrationFailed)?;
             let buffered = Arc::clone(&runtime);
             let buffered_intercept: LlmExecutionFn = Arc::new(move |name, request, next| {
                 let runtime = Arc::clone(&buffered);
@@ -505,6 +511,37 @@ impl SwitchyardRuntime {
             target_headers,
             translation: translation_engine(),
         })
+    }
+
+    async fn require_healthy_sidecar(&self) -> Result<(), String> {
+        let health_url = switchyard_health_url(&self.config.decision_api_url)?;
+        let response = reqwest::Client::builder()
+            .timeout(SWITCHYARD_HEALTH_TIMEOUT)
+            .build()
+            .map_err(|error| format!("failed to build Switchyard health client: {error}"))?
+            .get(health_url.clone())
+            .send()
+            .await
+            .map_err(|error| {
+                format!(
+                    "Switchyard service is required but health check {health_url} failed: {error}"
+                )
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(format!(
+                "Switchyard service is required but health check {health_url} returned HTTP {status}"
+            ));
+        }
+        let body = response.json::<Json>().await.map_err(|error| {
+            format!("Switchyard health check {health_url} returned invalid JSON: {error}")
+        })?;
+        if body.get("status").and_then(Json::as_str) != Some("ok") {
+            return Err(format!(
+                "Switchyard health check {health_url} did not report status=ok"
+            ));
+        }
+        Ok(())
     }
 
     async fn execute_buffered(
@@ -1224,6 +1261,15 @@ impl SwitchyardRuntime {
             identity_metadata_from_request(request),
         );
     }
+}
+
+fn switchyard_health_url(decision_api_url: &str) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(decision_api_url)
+        .map_err(|error| format!("decision_api_url is invalid: {error}"))?;
+    url.set_path(SWITCHYARD_HEALTH_PATH);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
 }
 
 fn validate_atof_endpoint_name(name: Option<&str>) -> Result<Option<&str>, String> {

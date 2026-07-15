@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
@@ -69,6 +69,10 @@ async fn decide(
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .unwrap()
+}
+
+async fn switchyard_health() -> Json<Value> {
+    Json(json!({"status": "ok"}))
 }
 
 #[derive(Clone, Default)]
@@ -152,6 +156,7 @@ async fn switchyard_plugin_routes_buffered_and_streaming_then_fails_open() {
     let (decision_url, decision_task) = start_server(
         Router::new()
             .route("/v1/routing/decision", post(decide))
+            .route("/health", get(switchyard_health))
             .with_state(decision_state),
     )
     .await;

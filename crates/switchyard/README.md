@@ -61,8 +61,10 @@ integration.
 The current integration calls Switchyard's HTTP Decision API at runtime. Relay
 does not start or supervise the Switchyard service. For ATOF-backed profiles,
 Switchyard also provides the `/v1/atof/events` ingestion and accumulator
-runtime. A reachable service must therefore be configured before routed traffic
-is sent.
+runtime. The service must therefore be running before Relay activates the
+plugin. Activation performs a bounded request to the service's `/health`
+endpoint and fails if it does not return `{"status":"ok"}`. This requirement
+applies to enforce and observe-only rollout modes.
 
 The current service setup is documented in
 [`examples/switchyard/README.md`](../../examples/switchyard/README.md), including
