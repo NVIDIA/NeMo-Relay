@@ -304,10 +304,10 @@ also add `llm_correlation_source`, `llm_correlation_subagent_id`,
 
 Generated hook bundles subscribe to the events needed for that mapping:
 
-| Agent | LLM Lifecycle and Correlation Hooks | Scope, Tool, and Mark Hooks |
+| Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
 | --- | --- | --- |
-| Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact`, `PostCompact` |
-| Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact`, `PostCompact` |
+| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
+| Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 
 Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks

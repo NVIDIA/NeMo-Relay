@@ -179,13 +179,13 @@ traffic to pass through the gateway.
 
 ## Captured Events
 
-Generated Codex hooks include `SessionStart`, `SessionEnd`, `SubagentStart`,
-`SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-`Notification`, `PreCompact`, and `PostCompact` for scope, tool, and mark
-events. Both compaction hooks emit canonical `compaction` marks.
-`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
-retained as private LLM correlation hints and are not emitted as standalone
-NeMo Relay events.
+Generated Codex hooks include `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+`PostToolUse`, `PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`,
+`PreCompact`, and `PostCompact`. Both compaction hooks emit canonical
+`compaction` marks. Relay normalizes the other delivered hooks as agent, turn,
+subagent, tool, mark, or private LLM correlation events. `SessionEnd`,
+`PostToolUseFailure`, and `Notification` are not part of the supported Codex
+0.143 plugin hook schema.
 
 The transparent wrapper passes hook entries as Codex CLI config overrides and
 sets `features.hooks=true` for that launched process. Persistent install writes

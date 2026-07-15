@@ -29,9 +29,9 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
 - Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
   The annotated input for the first subsequent LLM start retains complete
   history. Later starts retain system instructions, the latest user message,
-  and every following assistant or tool message. With a request codec, the
-  event's provider-shaped input uses the same projection. Provider execution
-  remains unchanged.
+  and every following assistant or tool message. When a request codec supplies
+  an annotation, the event's provider-shaped input uses the same projection.
+  Provider execution remains unchanged.
 - LLM usage metadata maps token counters when provider responses include usage.
 - Use explicit config fields for endpoint, headers, resource attributes, and
   service identity in application code.

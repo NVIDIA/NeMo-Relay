@@ -92,10 +92,10 @@ LLM start annotations use freshness state owned by the nearest agent scope:
 - **Scope ownership:** Nested agents track freshness independently. The implicit
   root is the freshness owner for work outside an explicit agent. Non-agent
   scopes inherit their nearest agent's state instead of starting a new budget.
-- **Codec projection:** When a request codec is active, Relay applies the same
-  history projection to the event's provider-shaped input. If that event-only
-  encode fails, Relay retains the complete event input and annotation. The
-  request used for provider execution remains unchanged.
+- **Codec projection:** When a request codec supplies an annotation, Relay
+  applies the same history projection to the event's provider-shaped input. If
+  that event-only encode fails, Relay retains the complete event input and
+  annotation. The request used for provider execution remains unchanged.
 - **Concurrency:** Concurrent starts have no guaranteed emission order, but
   exactly one consumes a fresh state. Events are independent observations, not
   a replayable history stream.

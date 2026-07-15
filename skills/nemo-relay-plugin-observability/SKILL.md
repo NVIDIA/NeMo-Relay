@@ -56,9 +56,9 @@ Use this model when explaining how capture and export relate:
 - Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
   The first subsequent LLM start retains complete annotation history. Later
   starts retain system instructions, the latest user message, and every
-  following assistant or tool message. A request codec applies the same
-  event-only projection to provider-shaped event input without changing
-  provider execution.
+  following assistant or tool message. When a request codec supplies an
+  annotation, Relay applies the same event-only projection to provider-shaped
+  event input without changing provider execution.
 - Event fields include semantic input/output through the ATOF `data` field,
   typed profile data such as `model_name` and `tool_call_id`, and codec-provided
   annotated LLM request/response data for in-process subscribers and exporters.
