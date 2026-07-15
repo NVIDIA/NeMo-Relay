@@ -40,6 +40,9 @@ navigation:
   - folder: ../pages-dev/configure-plugins/pii-redaction
     title: PII Redaction
     title-source: frontmatter
+  - folder: ../pages-dev/configure-plugins/switchyard
+    title: Switchyard (Experimental)
+    title-source: frontmatter
   - page: Model Pricing
     path: ../pages-dev/configure-plugins/model-pricing.mdx
     slug: model-pricing
