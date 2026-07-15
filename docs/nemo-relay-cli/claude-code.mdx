@@ -215,7 +215,7 @@ plugin, such as through `nemo-relay claude` or `nemo-relay run --agent claude`.
 The standalone gateway can still observe Anthropic LLM traffic, but it cannot
 invent missing tool, prompt, compaction, notification, or subagent hooks.
 
-`UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, and `Stop` are
-used as private correlation and turn-boundary hints. They are not exported as
-standalone user-visible mark events unless they also produce a scoped turn,
-tool, LLM, or lifecycle observation.
+`UserPromptSubmit` contributes prompt and LLM correlation data. `Stop` is a
+private correlation and turn-boundary hint rather than a standalone
+user-visible mark. The other generated hooks normalize to their corresponding
+scope, tool, mark, notification, compaction, or subagent semantics.
