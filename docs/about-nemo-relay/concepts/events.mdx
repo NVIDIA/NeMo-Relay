@@ -111,10 +111,11 @@ owns them.
 
 ### Automatic Skill-Load Marks
 
-NeMo Relay automatically records an on-demand skill load when an instrumented
-tool loads a complete `SKILL.md` file. The following payload excerpt shows the
-stable skill-load fields. Standard fields from the [shared envelope](#shared-envelope),
-such as `atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
+NeMo Relay automatically records an on-demand skill-load attempt when an
+instrumented tool explicitly names a skill or requests a complete `SKILL.md`
+read. The following payload excerpt shows the stable skill-load fields.
+Standard fields from the [shared envelope](#shared-envelope), such as
+`atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
 
 ```json
 {
@@ -130,25 +131,27 @@ such as `atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
 
 Relay uses these `skill_load_source` values:
 
-| Source | Detected Load |
+| Source | Detected request |
 | --- | --- |
 | `skill_tool` | A first-class skill tool, such as `Skill` or `skill_view` |
-| `structured_read` | A whole-file structured read |
-| `shell_read` | A standalone, complete `cat`, `bat`, `batcat`, or PowerShell `Get-Content` read |
+| `structured_read` | A structured request for a whole-file read |
+| `shell_read` | A standalone, complete `cat`, `bat`, `batcat`, or PowerShell `Get-Content` command |
 
-The path must end in `SKILL.md`; the skill name is its immediate parent
-directory. Structured offsets or limits and shell pipelines, redirections,
-compound commands, and range-limited readers do not count. Relay omits the full
-path and shell command from the mark.
+For reader detections, the path must end in `SKILL.md`; the skill name is its
+immediate parent directory. A nonzero structured offset, any structured limit
+or range control, shell pipelines, redirections, compound commands, and
+range-limited shell readers do not count. An explicit structured `offset` of
+`0` still represents a complete read. Relay omits the full path and shell
+command from the mark.
 
 The mark has these lifecycle semantics:
 
 - Relay emits it immediately after the tool-start event and before execution,
   with the tool span as its parent.
-- It records an eager load attempt and remains present if the read later fails.
+- It records an eager load attempt and remains present if the tool later fails.
 - A blocked call that never starts does not emit the mark.
-- Relay emits each skill once per tool call. A later call that loads the same
-  skill emits another mark.
+- Relay emits each skill once per tool call. A later call that attempts the
+  same load emits another mark.
 
 Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
 tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,
