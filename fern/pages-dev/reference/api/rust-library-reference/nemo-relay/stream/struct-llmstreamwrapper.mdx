@@ -28,7 +28,7 @@ This type is returned by [`crate::api::llm::llm_stream_call_execute`](/reference
 
 #### `new`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    inner: <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn Stream&lt;Item = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;&gt;,\n    handle: <a href=\"../api/llm/struct-llmhandle\">LlmHandle</a>,\n    collector: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnMut.html\">FnMut</a>(<a href=\"../json/type-json\">Json</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;,\n    finalizer: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"../json/type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;,\n    _data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;,\n    response_codec: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../codec/traits/trait-llmresponsecodec\">LlmResponseCodec</a>&gt;&gt;,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    inner: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn Stream&lt;Item = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a>&gt;&gt;,\n    handle: <a href=\"../api/llm/struct-llmhandle\">LlmHandle</a>,\n    collector: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnMut.html\">FnMut</a>(<a href=\"../json/type-json\">Json</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a>&gt;,\n    finalizer: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"../json/type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a>&gt;,\n    _data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../json/type-json\">Json</a>&gt;,\n    response_codec: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"../codec/traits/trait-llmresponsecodec\">LlmResponseCodec</a>&gt;&gt;,\n) -&gt; Self"}} /></pre>
 
 Create a new `LlmStreamWrapper` around the given raw stream.
 
@@ -64,11 +64,11 @@ A shared reference to the [`ScopeStackHandle`](/reference/api/rust-library-refer
 
 ### `impl Drop for LlmStreamWrapper`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>
 
 #### `drop`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
 
 ### `impl Stream for LlmStreamWrapper`
 
@@ -76,12 +76,12 @@ A shared reference to the [`ScopeStackHandle`](/reference/api/rust-library-refer
 
 #### `Item`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Item = <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"../error/enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Item = <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"../error/enum-flowerror\">FlowError</a>&gt;"}} /></pre>
 
 #### `poll_next`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_next(\n    self: <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n    cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self::Item&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_next(\n    self: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n    cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;Self::Item&gt;&gt;"}} /></pre>
 
 #### `size_hint`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn size_hint(&amp;self) -&gt; (<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>, <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>&gt;)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn size_hint(&amp;self) -&gt; (<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>&gt;)"}} /></pre>

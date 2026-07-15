@@ -26,7 +26,7 @@ pub struct PluginWorkerServer<T> { /* private fields */ }
 
 #### `from_arc`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_arc(inner: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;T&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_arc(inner: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;T&gt;) -&gt; Self"}} /></pre>
 
 #### `with_interceptor`
 
@@ -46,7 +46,7 @@ Compress responses with the given encoding, if the client supports it.
 
 #### `max_decoding_message_size`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_decoding_message_size(self, limit: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_decoding_message_size(self, limit: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
 
 Limits the maximum size of a decoded message.
 
@@ -54,7 +54,7 @@ Default: `4MB`
 
 #### `max_encoding_message_size`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_encoding_message_size(self, limit: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn max_encoding_message_size(self, limit: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
 
 Limits the maximum size of an encoded message.
 
@@ -64,23 +64,23 @@ Default: `usize::MAX`
 
 ### `impl<T> Clone for PluginWorkerServer<T>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt;"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; Self"}} /></pre>
 
 #### `clone_from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
 
 ### `impl<T: Debug> Debug for PluginWorkerServer<T>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a>&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T: <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a>&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt;"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl<T> NamedService for PluginWorkerServer<T>`
 
@@ -88,11 +88,11 @@ Default: `usize::MAX`
 
 #### `NAME`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const NAME: &amp;'static <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a> = SERVICE_NAME"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "const NAME: &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a> = SERVICE_NAME"}} /></pre>
 
 ### `impl<T, B> Service<Request<B>> for PluginWorkerServer<T>where T: PluginWorker, B: Body + Send + 'static, B::Error: Into<StdError> + Send + 'static,`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T, B&gt; Service&lt;Request&lt;B&gt;&gt; for <a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt;where\n    T: <a href=\"trait-pluginworker\">PluginWorker</a>,\n    B: Body + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'static,\n    B::Error: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;StdError&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;T, B&gt; Service&lt;Request&lt;B&gt;&gt; for <a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt;where\n    T: <a href=\"trait-pluginworker\">PluginWorker</a>,\n    B: Body + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,\n    B::Error: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;StdError&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
 
 #### `Response`
 
@@ -100,15 +100,15 @@ Default: `usize::MAX`
 
 #### `Error`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Error = <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/enum.Infallible.html\">Infallible</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Error = <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/enum.Infallible.html\">Infallible</a>"}} /></pre>
 
 #### `Future`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Future = <a href=\"https://doc.rust-lang.org/1.93.0/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;&lt;<a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt; as Service&lt;Request&lt;B&gt;&gt;&gt;::Response, &lt;<a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt; as Service&lt;Request&lt;B&gt;&gt;&gt;::Error&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a>&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Future = <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;<a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt; as Service&lt;Request&lt;B&gt;&gt;&gt;::Response, &lt;<a href=\"struct-pluginworkerserver\">PluginWorkerServer</a>&lt;T&gt; as Service&lt;Request&lt;B&gt;&gt;&gt;::Error&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a>&gt;&gt;"}} /></pre>
 
 #### `poll_ready`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_ready(&amp;mut self, _cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>, Self::Error&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_ready(&amp;mut self, _cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, Self::Error&gt;&gt;"}} /></pre>
 
 #### `call`
 

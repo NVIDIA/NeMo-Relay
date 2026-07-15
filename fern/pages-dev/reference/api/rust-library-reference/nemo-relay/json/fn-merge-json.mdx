@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn merge_json(a: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;, b: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn merge_json(a: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;, b: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;"}} /></pre>
 
 Shallow-merge two optional JSON values.
 
@@ -22,7 +22,7 @@ This is used throughout the runtime to combine optional `data` and `metadata` pa
 
 ## Returns
 
-An [`Option`](https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html) containing the merged JSON value. When both inputs are JSON objects, keys from `b` override keys from `a`. When only one input is present, that input is returned. When both inputs are present but at least one is not an object, `b` wins.
+An [`Option`](https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html) containing the merged JSON value. When both inputs are JSON objects, keys from `b` override keys from `a`. When only one input is present, that input is returned. When both inputs are present but at least one is not an object, `b` wins.
 
 ## Notes
 

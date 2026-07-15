@@ -41,25 +41,25 @@ Retrieves the current scope handle.
 
 #### `push_scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;&gt;"}} /></pre>
 
 Pushes a scope and emits its start event.
 
 #### `pop_scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn pop_scope(\n    &amp;self,\n    handle: &amp;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn pop_scope(\n    &amp;self,\n    handle: &amp;<a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Pops a scope and emits its end event.
 
 #### `scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;&gt;"}} /></pre>
 
 Opens a scope that is popped automatically when the guard is closed or dropped.
 
 #### `emit_mark`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Emits a mark event under the current scope.
 
@@ -77,7 +77,7 @@ Captures the current thread-local scope-stack binding.
 
 #### `scope_stack_active`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_stack_active(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn scope_stack_active(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 Returns whether the current context has an explicitly active scope stack.
 
@@ -91,12 +91,12 @@ Binds `stack` to the current OS thread until the returned guard is dropped.
 
 ### `impl Clone for PluginRuntime`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
 
 #### `clone_from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

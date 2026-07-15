@@ -23,25 +23,25 @@ Cloneable handle for calling the Relay host runtime from worker callbacks.
 
 #### `emit_mark`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn emit_mark(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Emits a mark event through the host runtime.
 
 #### `create_scope_stack`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn create_scope_stack(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn create_scope_stack(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
 
 Creates an isolated host-owned scope stack.
 
 #### `drop_scope_stack`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn drop_scope_stack(&amp;self, scope_stack_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn drop_scope_stack(&amp;self, scope_stack_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Drops an isolated host-owned scope stack.
 
 #### `with_scope_stack`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn with_scope_stack&lt;F, Fut, T&gt;(&amp;self, scope_stack_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>, f: F) -&gt; Twhere\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; Fut,\n    Fut: <a href=\"https://doc.rust-lang.org/1.93.0/core/future/future/trait.Future.html\">Future</a>&lt;Output = T&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn with_scope_stack&lt;F, Fut, T&gt;(&amp;self, scope_stack_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, f: F) -&gt; Twhere\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; Fut,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = T&gt;,"}} /></pre>
 
 Runs an async operation with runtime calls bound to a specific host-owned scope stack.
 
@@ -49,13 +49,13 @@ This is useful for isolated stacks created with [`Self::create_scope_stack`](/re
 
 #### `push_scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn push_scope(\n    &amp;self,\n    scope_stack_id: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>&gt;,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn push_scope(\n    &amp;self,\n    scope_stack_id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>&gt;,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    scope_type: <a href=\"enum-scopetype\">ScopeType</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    input: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
 
 Pushes a scope through the host runtime.
 
 #### `pop_scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn pop_scope(\n    &amp;self,\n    scope_handle_id: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n    output: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn pop_scope(\n    &amp;self,\n    scope_handle_id: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    output: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"type-json\">Json</a>&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Pops a scope through the host runtime.
 
@@ -63,12 +63,12 @@ Pops a scope through the host runtime.
 
 ### `impl Clone for PluginRuntime`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
 
 #### `clone_from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

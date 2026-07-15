@@ -35,7 +35,7 @@ A [`NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api
 
 #### `set_extension`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_extension&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;(\n    &amp;mut self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    value: T,\n)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn set_extension&lt;T: <a href=\"https://doc.rust-lang.org/1.96.1/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a>&gt;(\n    &amp;mut self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: T,\n)"}} /></pre>
 
 Store an arbitrary runtime extension under `key`.
 
@@ -48,7 +48,7 @@ Extensions let bindings or integrations attach shared state to the process-globa
 
 #### `get_extension`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_extension&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;(&amp;self, key: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;T</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_extension&lt;T: <a href=\"https://doc.rust-lang.org/1.96.1/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a>&gt;(&amp;self, key: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;T</a>&gt;"}} /></pre>
 
 Borrow a typed runtime extension by key.
 
@@ -62,7 +62,7 @@ Borrow a typed runtime extension by key.
 
 #### `get_extension_mut`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_extension_mut&lt;T: <a href=\"https://doc.rust-lang.org/1.93.0/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.Sync.html\">Sync</a>&gt;(\n    &amp;mut self,\n    key: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;mut T</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn get_extension_mut&lt;T: <a href=\"https://doc.rust-lang.org/1.96.1/core/any/trait.Any.html\">Any</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a>&gt;(\n    &amp;mut self,\n    key: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut T</a>&gt;"}} /></pre>
 
 Mutably borrow a typed runtime extension by key.
 
@@ -76,7 +76,7 @@ Mutably borrow a typed runtime extension by key.
 
 #### `remove_extension`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove_extension(&amp;mut self, key: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn remove_extension(&amp;mut self, key: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 Remove a runtime extension by key.
 
@@ -124,7 +124,7 @@ A new [`ScopeHandle`](/reference/api/rust-library-reference/nemo-relay/api/scope
 
 #### `build_scope_start_event`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_scope_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_scope_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build a scope-start event from a handle.
 
@@ -139,7 +139,7 @@ A scope-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/eve
 
 #### `end_scope_handle`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_scope_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_scope_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../scope/struct-scopehandle\">ScopeHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build a scope-end event from a handle.
 
@@ -191,7 +191,7 @@ A new [`ToolHandle`](/reference/api/rust-library-reference/nemo-relay/api/tool/s
 
 #### `build_tool_start_event`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_tool_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../tool/struct-toolhandle\">ToolHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_tool_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../tool/struct-toolhandle\">ToolHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build a tool-start event from a handle.
 
@@ -206,7 +206,7 @@ A tool-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/even
 
 #### `end_tool_handle`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_tool_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../tool/struct-toolhandle\">ToolHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_tool_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../tool/struct-toolhandle\">ToolHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build a tool-end event from a handle and optional overrides.
 
@@ -258,7 +258,7 @@ A new [`LlmHandle`](/reference/api/rust-library-reference/nemo-relay/api/llm/str
 
 #### `build_llm_start_event`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_llm_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../llm/struct-llmhandle\">LlmHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    annotated_request: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn build_llm_start_event(\n    &amp;self,\n    handle: &amp;<a href=\"../../llm/struct-llmhandle\">LlmHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    annotated_request: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build an LLM-start event from a handle.
 
@@ -274,7 +274,7 @@ An LLM-start [`Event`](/reference/api/rust-library-reference/nemo-relay/api/even
 
 #### `end_llm_handle`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_llm_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../llm/struct-llmhandle\">LlmHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    annotated_response: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn end_llm_handle(\n    &amp;self,\n    handle: &amp;<a href=\"../../llm/struct-llmhandle\">LlmHandle</a>,\n    data: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    metadata: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;,\n    annotated_response: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"../../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;,\n) -&gt; <a href=\"../../event/enum-event\">Event</a>"}} /></pre>
 
 Build an LLM-end event from a handle and optional overrides.
 
@@ -309,8 +309,8 @@ An LLM-end [`Event`](/reference/api/rust-library-reference/nemo-relay/api/event/
 
 ### `impl Default for NemoRelayContextState`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-nemorelaycontextstate\">NemoRelayContextState</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-nemorelaycontextstate\">NemoRelayContextState</a>"}} /></pre>
 
 #### `default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

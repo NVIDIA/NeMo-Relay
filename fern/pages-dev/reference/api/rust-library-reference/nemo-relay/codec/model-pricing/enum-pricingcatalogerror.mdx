@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum PricingCatalogError &#123;\n    Json(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>),\n    DuplicateModelAlias &#123;\n        model: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    UnsupportedVersion &#123;\n        version: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u32.html\">u32</a>,\n    &#125;,\n    EmptyField &#123;\n        entry_index: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n        field: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidRate &#123;\n        entry_index: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.usize.html\">usize</a>,\n        field: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n        value: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    &#125;,\n    FileRead &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.93.0/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.93.0/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    LockPoisoned(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum PricingCatalogError &#123;\n    Json(<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>),\n    DuplicateModelAlias &#123;\n        model: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    UnsupportedVersion &#123;\n        version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    &#125;,\n    EmptyField &#123;\n        entry_index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n        field: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    InvalidRate &#123;\n        entry_index: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n        field: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    &#125;,\n    FileRead &#123;\n        path: <a href=\"https://doc.rust-lang.org/1.96.1/std/path/struct.PathBuf.html\">PathBuf</a>,\n        source: <a href=\"https://doc.rust-lang.org/1.96.1/std/io/error/struct.Error.html\">Error</a>,\n    &#125;,\n    LockPoisoned(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
 
 Errors produced while parsing or validating a model pricing catalog.
 
@@ -100,7 +100,7 @@ Underlying I/O error.
 
 ### `LockPoisoned(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LockPoisoned(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "LockPoisoned(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 The active model pricing resolver lock was poisoned.
 
@@ -108,44 +108,44 @@ The active model pricing resolver lock was poisoned.
 
 ### `impl Debug for PricingCatalogError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl Display for PricingCatalogError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl Error for PricingCatalogError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
 
 #### `source`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
 
 #### `description`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
 
 #### `cause`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
 
 #### `provide`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
 
 ### `impl From< Error> for PricingCatalogError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt; for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>&gt; for <a href=\"enum-pricingcatalogerror\">PricingCatalogError</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/error/struct.Error.html\">Error</a>) -&gt; Self"}} /></pre>

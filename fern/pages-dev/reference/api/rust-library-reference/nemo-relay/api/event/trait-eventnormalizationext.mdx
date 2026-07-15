@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait EventNormalizationExt &#123;\n    // Required methods\n    fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;;\n    fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;;\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait EventNormalizationExt &#123;\n    // Required methods\n    fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;;\n    fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;;\n&#125;"}} /></pre>
 
 Core-only normalized LLM accessors for ATOF events.
 
@@ -19,7 +19,7 @@ These helpers use built-in codec resolution, so they live in the runtime crate r
 
 #### `normalized_llm_request`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalized_llm_request(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;&gt;"}} /></pre>
 
 Normalized LLM request: the codec annotation when present, otherwise a best-effort decode of the start-event input payload.
 
@@ -27,7 +27,7 @@ The fallback decode requires the start-event input to be the serialized [`LlmReq
 
 #### `normalized_llm_response`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn normalized_llm_response(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/borrow/enum.Cow.html\">Cow</a>&lt;'_, <a href=\"../../codec/response/struct-annotatedllmresponse\">AnnotatedLlmResponse</a>&gt;&gt;"}} /></pre>
 
 Normalized LLM response: the codec annotation when present, otherwise a best-effort decode of the end-event output payload.
 

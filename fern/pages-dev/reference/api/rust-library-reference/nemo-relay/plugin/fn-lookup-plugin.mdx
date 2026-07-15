@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn lookup_plugin(plugin_kind: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"trait-plugin\">Plugin</a>&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn lookup_plugin(plugin_kind: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"trait-plugin\">Plugin</a>&gt;&gt;"}} /></pre>
 
 Looks up a registered plugin by kind.
 
@@ -23,4 +23,4 @@ The registered plugin implementation for `plugin_kind`, or `None` when the kind 
 
 ## Notes
 
-The returned plugin is shared by [`Arc`](https://doc.rust-lang.org/1.93.0/alloc/sync/struct.Arc.html), so callers receive a cheap clone.
+The returned plugin is shared by [`Arc`](https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html), so callers receive a cheap clone.

@@ -33,7 +33,7 @@ Creates a new decoder with an empty buffer.
 
 #### `push_bytes`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_bytes(&amp;mut self, bytes: &amp;[<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u8.html\">u8</a>]) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn push_bytes(&amp;mut self, bytes: &amp;[<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>]) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
 
 Appends `bytes` to the internal buffer and returns every now-complete SSE event.
 
@@ -43,7 +43,7 @@ Returns `Ok(events)` containing zero or more events whose `data:` payloads parse
 
 #### `finish`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn finish(self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn finish(self) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-sseevent\">SseEvent</a>&gt;&gt;"}} /></pre>
 
 Drains any remaining buffered frame at end of stream.
 
@@ -53,8 +53,8 @@ Most well-formed SSE streams end with a terminating blank line, in which case th
 
 ### `impl Default for SseEventDecoder`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>
 
 #### `default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"struct-sseeventdecoder\">SseEventDecoder</a>"}} /></pre>

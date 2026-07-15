@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CacheTelemetryEvent &#123;\n    pub request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    pub agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub cache_creation_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub total_prompt_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>,\n    pub hit_rate: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>,\n    pub miss_reason: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-cachemissreason\">CacheMissReason</a>&gt;,\n    pub miss_diagnosis: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-cachemissdiagnosis\">CacheMissDiagnosis</a>&gt;,\n    pub provider: <a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>,\n    pub timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct CacheTelemetryEvent &#123;\n    pub request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    pub agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    pub cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub cache_creation_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub total_prompt_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>,\n    pub hit_rate: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>,\n    pub miss_reason: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-cachemissreason\">CacheMissReason</a>&gt;,\n    pub miss_diagnosis: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-cachemissdiagnosis\">CacheMissDiagnosis</a>&gt;,\n    pub provider: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n&#125;"}} /></pre>
 
 Per-call cache telemetry event.
 
@@ -65,13 +65,13 @@ When this telemetry was recorded.
 
 #### `compute_hit_rate`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn compute_hit_rate(cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>, total_prompt_tokens: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.u64.html\">u64</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.f64.html\">f64</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn compute_hit_rate(cache_read_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>, total_prompt_tokens: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u64.html\">u64</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.f64.html\">f64</a>"}} /></pre>
 
 Computes hit rate from token counts. Returns `0.0` if `total_prompt_tokens` is zero to avoid division by zero.
 
 #### `from_usage`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_usage(\n    request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    provider: <a href=\"enum-cachetelemetryprovider\">CacheTelemetryProvider</a>,\n    usage: &amp;<a href=\"../../../nemo-relay-types/codec/response/struct-usage\">Usage</a>,\n    timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n    request_facts: <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-cacherequestfacts\">CacheRequestFacts</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_usage(\n    request_id: <a href=\"https://docs.rs/uuid/1.18.1/uuid/struct.Uuid.html\">Uuid</a>,\n    agent_identity: <a href=\"../types/struct-agentidentity\">AgentIdentity</a>,\n    provider: <a href=\"enum-cachetelemetryprovider\">CacheTelemetryProvider</a>,\n    usage: &amp;<a href=\"../../../nemo-relay-types/codec/response/struct-usage\">Usage</a>,\n    timestamp: <a href=\"https://docs.rs/chrono/latest/chrono/datetime/struct.DateTime.html\">DateTime</a>&lt;<a href=\"https://docs.rs/chrono/latest/chrono/offset/utc/struct.Utc.html\">Utc</a>&gt;,\n    request_facts: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"struct-cacherequestfacts\">CacheRequestFacts</a>&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
 
 Builds a canonical cache telemetry event from normalized usage fields.
 
@@ -81,23 +81,23 @@ Returns `None` when the normalized usage payload does not contain `prompt_tokens
 
 ### `impl Clone for CacheTelemetryEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
 
 #### `clone_from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
 
 ### `impl Debug for CacheTelemetryEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl<'de> Deserialize<'de> for CacheTelemetryEvent`
 
@@ -105,19 +105,19 @@ Returns `None` when the normalized usage payload does not contain `prompt_tokens
 
 #### `deserialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
 
 ### `impl PartialEq for CacheTelemetryEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
 
 #### `eq`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 #### `ne`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
 
 ### `impl Serialize for CacheTelemetryEvent`
 
@@ -125,8 +125,8 @@ Returns `None` when the normalized usage payload does not contain `prompt_tokens
 
 #### `serialize`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
 
 ### `impl StructuralPartialEq for CacheTelemetryEvent`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"struct-cachetelemetryevent\">CacheTelemetryEvent</a>"}} /></pre>

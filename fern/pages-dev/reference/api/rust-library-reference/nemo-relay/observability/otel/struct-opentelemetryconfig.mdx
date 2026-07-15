@@ -23,55 +23,55 @@ Configuration for the OpenTelemetry subscriber.
 
 #### `http_binary`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn http_binary(service_name: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn http_binary(service_name: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
 
 Creates an HTTP OTLP config for the given service name.
 
 #### `grpc`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn grpc(service_name: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn grpc(service_name: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
 
 Creates a gRPC OTLP config for the given service name.
 
 #### `with_endpoint`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_endpoint(self, endpoint: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_endpoint(self, endpoint: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
 
 Overrides the OTLP endpoint. If unset, exporter defaults and OTEL_* env vars apply.
 
 #### `with_header`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_header(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_header(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
 
 Adds a header/metadata entry for the exporter.
 
 #### `with_resource_attribute`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_resource_attribute(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_resource_attribute(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
 
 Adds a resource attribute as a string key/value pair.
 
 #### `with_timeout`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_timeout(self, timeout: <a href=\"https://doc.rust-lang.org/1.93.0/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_timeout(self, timeout: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>
 
 Sets the OTLP request timeout.
 
 #### `with_service_namespace`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_namespace(self, namespace: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_namespace(self, namespace: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
 
 Sets the service namespace resource attribute.
 
 #### `with_service_version`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_version(self, version: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_version(self, version: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
 
 Sets the service version resource attribute.
 
 #### `with_instrumentation_scope`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_instrumentation_scope(self, scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_instrumentation_scope(self, scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
 
 Sets the instrumentation scope name used for emitted spans.
 
@@ -83,19 +83,19 @@ Selects how point-in-time marks are represented in exported traces.
 
 #### `with_mark_exclude_names`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_mark_exclude_names&lt;I, S&gt;(self, names: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_mark_exclude_names&lt;I, S&gt;(self, names: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
 
 Excludes named marks from tool projection while preserving their native event representation. The default excludes high-volume `llm.chunk` marks.
 
 #### `with_attribute_mapping`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mapping(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    alias: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mapping(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    alias: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
 
 Adds a typed attribute copy after event payload projection.
 
 #### `with_attribute_mappings`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mappings&lt;I&gt;(self, mappings: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_attribute_mappings&lt;I&gt;(self, mappings: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
 
 Replaces the configured typed attribute copies.
 
@@ -103,28 +103,28 @@ Replaces the configured typed attribute copies.
 
 ### `impl Clone for OpenTelemetryConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
 
 #### `clone_from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
 
 ### `impl Debug for OpenTelemetryConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl Default for OpenTelemetryConfig`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\">Default</a> for <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-opentelemetryconfig\">OpenTelemetryConfig</a>"}} /></pre>
 
 #### `default`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

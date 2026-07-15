@@ -23,13 +23,13 @@ Host-owned isolated scope stack returned by native scope-stack APIs.
 
 #### `as_ptr`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_ptr(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_ptr(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>"}} /></pre>
 
 Returns the raw ABI pointer.
 
 #### `with_current`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_current&lt;F&gt;(&amp;self, f: F) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_current&lt;F&gt;(&amp;self, f: F) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.FnOnce.html\">FnOnce</a>() -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;,"}} /></pre>
 
 Executes `f` while this stack is visible to host runtime APIs.
 
@@ -37,8 +37,8 @@ Executes `f` while this stack is visible to host runtime APIs.
 
 ### `impl Drop for ScopeStack<'_>`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-scopestack\">ScopeStack</a>&lt;'_&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-scopestack\">ScopeStack</a>&lt;'_&gt;"}} /></pre>
 
 #### `drop`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

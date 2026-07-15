@@ -29,31 +29,31 @@ Builds a subscriber backed by a new OTLP tracer provider.
 
 #### `from_tracer_provider`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
 
 Builds a subscriber from an already-configured tracer provider.
 
 #### `from_tracer_provider_with_mark_projection`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n) -&gt; Self"}} /></pre>
 
 Builds a subscriber from a tracer provider with an explicit mark projection.
 
 #### `from_tracer_provider_with_mark_projection_and_exclusions`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection_and_exclusions&lt;I, S&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n    mark_exclude_names: I,\n) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_mark_projection_and_exclusions&lt;I, S&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    mark_projection: <a href=\"../enum-markprojection\">MarkProjection</a>,\n    mark_exclude_names: I,\n) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
 
 Builds a subscriber with explicit mark projection and exclusion names.
 
 #### `from_tracer_provider_with_attribute_mappings`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_attribute_mappings&lt;I&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    attribute_mappings: I,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;where\n    I: <a href=\"https://doc.rust-lang.org/1.93.0/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_attribute_mappings&lt;I&gt;(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    attribute_mappings: I,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;where\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = <a href=\"../struct-otlpattributemapping\">OtlpAttributeMapping</a>&gt;,"}} /></pre>
 
 Builds a subscriber from a tracer provider with typed attribute copies.
 
 #### `from_tracer_provider_with_options`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_options(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>&gt;,\n    options: <a href=\"struct-opentelemetrysubscriberoptions\">OpenTelemetrySubscriberOptions</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_tracer_provider_with_options(\n    provider: SdkTracerProvider,\n    instrumentation_scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    options: <a href=\"struct-opentelemetrysubscriberoptions\">OpenTelemetrySubscriberOptions</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;Self&gt;"}} /></pre>
 
 Builds a subscriber from a tracer provider with composable projection options.
 
@@ -65,25 +65,25 @@ Returns the raw NeMo Relay subscriber callback for custom registration flows.
 
 #### `register`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Registers this subscriber globally with the NeMo Relay runtime.
 
 #### `deregister`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister(&amp;self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
 
 Deregisters a previously-registered global subscriber by name.
 
 #### `force_flush`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn force_flush(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn force_flush(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Flushes finished spans through the underlying tracer provider.
 
 #### `shutdown`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn shutdown(&amp;self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
 
 Shuts down the underlying tracer provider.
 
@@ -93,12 +93,12 @@ Call `deregister(...)` first if the subscriber is still registered with NeMo Rel
 
 ### `impl Clone for OpenTelemetrySubscriber`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetrysubscriber\">OpenTelemetrySubscriber</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetrysubscriber\">OpenTelemetrySubscriber</a>"}} /></pre>
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetrysubscriber\">OpenTelemetrySubscriber</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetrysubscriber\">OpenTelemetrySubscriber</a>"}} /></pre>
 
 #### `clone_from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

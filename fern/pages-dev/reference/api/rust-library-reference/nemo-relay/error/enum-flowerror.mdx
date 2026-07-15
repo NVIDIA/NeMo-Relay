@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum FlowError &#123;\n    AlreadyExists(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    NotFound(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    InvalidArgument(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    ScopeStackEmpty,\n    GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n    Upstream(<a href=\"struct-upstreamfailure\">UpstreamFailure</a>),\n    Internal(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum FlowError &#123;\n    AlreadyExists(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    NotFound(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    InvalidArgument(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    ScopeStackEmpty,\n    GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n    Upstream(<a href=\"struct-upstreamfailure\">UpstreamFailure</a>),\n    Internal(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>),\n&#125;"}} /></pre>
 
 The error type for all NeMo Relay runtime operations.
 
@@ -19,7 +19,7 @@ Each variant represents a distinct failure mode that callers can match on to det
 
 ### `AlreadyExists(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AlreadyExists(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AlreadyExists(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 A resource with the given name is already registered.
 
@@ -27,7 +27,7 @@ Returned when attempting to register a guardrail, intercept, or subscriber with 
 
 ### `NotFound(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "NotFound(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "NotFound(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 The requested resource was not found.
 
@@ -35,7 +35,7 @@ Returned when attempting to remove a scope handle by UUID that does not exist in
 
 ### `InvalidArgument(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidArgument(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "InvalidArgument(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 A function argument was invalid for the requested operation.
 
@@ -51,7 +51,7 @@ This should not occur under normal operation because the root scope is always pr
 
 ### `GuardrailRejected(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "GuardrailRejected(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 A conditional execution guardrail rejected the operation.
 
@@ -65,7 +65,7 @@ Structured upstream provider failure from retry-aware gateway dispatch.
 
 ### `Internal(String)`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Internal(<a href=\"https://doc.rust-lang.org/1.93.0/alloc/string/struct.String.html\">String</a>)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Internal(<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>)"}} /></pre>
 
 An internal runtime error (e.g., lock poisoning).
 
@@ -73,60 +73,60 @@ An internal runtime error (e.g., lock poisoning).
 
 ### `impl Debug for FlowError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-flowerror\">FlowError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-flowerror\">FlowError</a>"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl Display for FlowError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-flowerror\">FlowError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html\">Display</a> for <a href=\"enum-flowerror\">FlowError</a>"}} /></pre>
 
 #### `fmt`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Display.html#tymethod.fmt\">fmt</a>(&amp;self, __formatter: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
 
 ### `impl Error for FlowError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a> for <a href=\"enum-flowerror\">FlowError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> for <a href=\"enum-flowerror\">FlowError</a>"}} /></pre>
 
 #### `source`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.source\">source</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;(dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a> + 'static)&gt;"}} /></pre>
 
 #### `description`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.93.0/std/primitive.str.html\">str</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.description\">description</a>(&amp;self) -&gt; &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
 
 #### `cause`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.93.0/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.cause\">cause</a>(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html\">Error</a>&gt;"}} /></pre>
 
 #### `provide`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.93.0/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/error/trait.Error.html#method.provide\">provide</a>&lt;'a&gt;(&amp;'a self, request: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/error/struct.Request.html\">Request</a>&lt;'a&gt;)"}} /></pre>
 
 ### `impl From<FlowError> for AtofExporterError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-flowerror\">FlowError</a>&gt; for <a href=\"../observability/atof/enum-atofexportererror\">AtofExporterError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-flowerror\">FlowError</a>&gt; for <a href=\"../observability/atof/enum-atofexportererror\">AtofExporterError</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
 
 ### `impl From<FlowError> for OpenInferenceError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-flowerror\">FlowError</a>&gt; for <a href=\"../observability/openinference/enum-openinferenceerror\">OpenInferenceError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-flowerror\">FlowError</a>&gt; for <a href=\"../observability/openinference/enum-openinferenceerror\">OpenInferenceError</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
 
 ### `impl From<FlowError> for OpenTelemetryError`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-flowerror\">FlowError</a>&gt; for <a href=\"../observability/otel/enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-flowerror\">FlowError</a>&gt; for <a href=\"../observability/otel/enum-opentelemetryerror\">OpenTelemetryError</a>"}} /></pre>
 
 #### `from`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.93.0/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(source: <a href=\"enum-flowerror\">FlowError</a>) -&gt; Self"}} /></pre>
