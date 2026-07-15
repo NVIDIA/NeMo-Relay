@@ -47,6 +47,8 @@ pub const SWITCHYARD_PLUGIN_KIND: &str = "switchyard";
 
 const SWITCHYARD_HEALTH_PATH: &str = "/health";
 const SWITCHYARD_HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
+const SWITCHYARD_HEALTH_MAX_ATTEMPTS: usize = 3;
+const SWITCHYARD_HEALTH_INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const INTERNAL_DISPATCH_URL_HEADER: &str = "x-nemo-relay-internal-dispatch-url";
 const INTERNAL_DISPATCH_ROUTE_HEADER: &str = "x-nemo-relay-internal-dispatch-route";
 const INTERNAL_RETRY_AWARE_HEADER: &str = "x-nemo-relay-internal-retry-aware";
@@ -515,33 +517,23 @@ impl SwitchyardRuntime {
 
     async fn require_healthy_sidecar(&self) -> Result<(), String> {
         let health_url = switchyard_health_url(&self.config.decision_api_url)?;
-        let response = reqwest::Client::builder()
+        let client = reqwest::Client::builder()
             .timeout(SWITCHYARD_HEALTH_TIMEOUT)
             .build()
-            .map_err(|error| format!("failed to build Switchyard health client: {error}"))?
-            .get(health_url.clone())
-            .send()
-            .await
-            .map_err(|error| {
-                format!(
-                    "Switchyard service is required but health check {health_url} failed: {error}"
-                )
-            })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!(
-                "Switchyard service is required but health check {health_url} returned HTTP {status}"
-            ));
+            .map_err(|error| format!("failed to build Switchyard health client: {error}"))?;
+        let mut backoff = SWITCHYARD_HEALTH_INITIAL_BACKOFF;
+        let mut final_error = None;
+        for attempt in 1..=SWITCHYARD_HEALTH_MAX_ATTEMPTS {
+            match check_switchyard_health(&client, &health_url).await {
+                Ok(()) => return Ok(()),
+                Err(error) => final_error = Some(error),
+            }
+            if attempt < SWITCHYARD_HEALTH_MAX_ATTEMPTS {
+                tokio::time::sleep(backoff).await;
+                backoff *= 2;
+            }
         }
-        let body = response.json::<Json>().await.map_err(|error| {
-            format!("Switchyard health check {health_url} returned invalid JSON: {error}")
-        })?;
-        if body.get("status").and_then(Json::as_str) != Some("ok") {
-            return Err(format!(
-                "Switchyard health check {health_url} did not report status=ok"
-            ));
-        }
-        Ok(())
+        Err(final_error.expect("at least one Switchyard health attempt is configured"))
     }
 
     async fn execute_buffered(
@@ -1261,6 +1253,34 @@ impl SwitchyardRuntime {
             identity_metadata_from_request(request),
         );
     }
+}
+
+async fn check_switchyard_health(
+    client: &reqwest::Client,
+    health_url: &reqwest::Url,
+) -> Result<(), String> {
+    let response = client
+        .get(health_url.clone())
+        .send()
+        .await
+        .map_err(|error| {
+            format!("Switchyard service is required but health check {health_url} failed: {error}")
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Switchyard service is required but health check {health_url} returned HTTP {status}"
+        ));
+    }
+    let body = response.json::<Json>().await.map_err(|error| {
+        format!("Switchyard health check {health_url} returned invalid JSON: {error}")
+    })?;
+    if body.get("status").and_then(Json::as_str) != Some("ok") {
+        return Err(format!(
+            "Switchyard health check {health_url} did not report status=ok"
+        ));
+    }
+    Ok(())
 }
 
 fn switchyard_health_url(decision_api_url: &str) -> Result<reqwest::Url, String> {

@@ -246,6 +246,47 @@ async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts()
 }
 
 #[tokio::test]
+async fn plugin_registration_retries_transient_sidecar_health_failures() {
+    let (decision_api_url, attempts) = recovering_health_server(2).await;
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec = config(decision_api_url).into();
+    let mut context =
+        PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
+
+    plugin
+        .register(&component.config, &mut context)
+        .await
+        .unwrap();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    let mut registrations = context.into_registrations();
+    assert_eq!(registrations.len(), 2);
+    rollback_registrations(&mut registrations);
+}
+
+#[tokio::test]
+async fn plugin_registration_returns_the_final_health_failure_after_retry_exhaustion() {
+    let (decision_api_url, attempts) = recovering_health_server(usize::MAX).await;
+    let plugin = SwitchyardPlugin;
+    let component: PluginComponentSpec = config(decision_api_url).into();
+    let mut context =
+        PluginRegistrationContext::with_namespace(format!("switchyard-test-{}-", Uuid::now_v7()));
+
+    let error = plugin
+        .register(&component.config, &mut context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    assert!(
+        error
+            .to_string()
+            .contains("returned HTTP 503 Service Unavailable")
+    );
+    assert!(context.into_registrations().is_empty());
+}
+
+#[tokio::test]
 async fn plugin_registration_rejects_unhealthy_or_invalid_sidecars() {
     for (status, body, expected) in [
         (
@@ -1017,6 +1058,37 @@ async fn health_server(status: StatusCode, body: &'static str) -> String {
         .unwrap();
     });
     format!("http://{address}/nested/v1/routing/decision?source=test#ignored")
+}
+
+async fn recovering_health_server(failures_before_ready: usize) -> (String, Arc<AtomicUsize>) {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&attempts);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/health",
+                get(move || {
+                    let attempts = Arc::clone(&captured);
+                    async move {
+                        if attempts.fetch_add(1, Ordering::SeqCst) < failures_before_ready {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                AxumJson(json!({"status": "starting"})),
+                            )
+                        } else {
+                            (StatusCode::OK, AxumJson(json!({"status": "ok"})))
+                        }
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    (format!("http://{address}/v1/routing/decision"), attempts)
 }
 
 async fn managed_buffered_events(
