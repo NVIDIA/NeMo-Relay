@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Agent skill contents are managed independently and must not trigger repository checks.
-exclude: '^skills/[^/]+/'
+# Generated agent-skill artifacts are managed independently and must not trigger repository checks.
+exclude: '^skills/[^/]+/(?:BENCHMARK\.md|skill-card\.md|skill\.oms\.sig)$'
 
 repos:
   # SPDX copyright header check
