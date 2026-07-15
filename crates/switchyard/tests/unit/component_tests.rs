@@ -1665,3 +1665,75 @@ async fn streaming_never_retries_after_first_item() {
     assert_eq!(dispatches.load(Ordering::SeqCst), 1);
     assert_eq!(decisions.lock().unwrap().len(), 1);
 }
+
+fn responses_config(decision_api_url: String) -> SwitchyardConfig {
+    let targets = BTreeMap::from([
+        (
+            "resp-a".into(),
+            binding(WireProtocol::OpenaiResponses, "model-a"),
+        ),
+        (
+            "resp-b".into(),
+            binding(WireProtocol::OpenaiResponses, "model-b"),
+        ),
+    ]);
+    SwitchyardConfig {
+        decision_api_url,
+        decision_profile_id: "stage_router".into(),
+        request_materialization: RequestMaterialization::SummaryOnly,
+        context_mode: ContextMode::PayloadOnly,
+        decision_timeout_millis: 1_000,
+        targets,
+        default_targets: ProtocolDefaults {
+            openai_chat: String::new(),
+            openai_responses: "resp-a".into(),
+            anthropic_messages: String::new(),
+        },
+        enabled_inbound_profiles: BTreeSet::from([WireProtocol::OpenaiResponses]),
+        ..SwitchyardConfig::default()
+    }
+}
+
+fn responses_decision() -> RoutingDecision {
+    RoutingDecision {
+        route: crate::contract::RoutingTarget {
+            tier: "efficient".into(),
+            target_model: "model-b".into(),
+            backend_id: "resp-b".into(),
+            target_protocol_profile: "openai_responses".into(),
+            target_endpoint: "/v1/responses".into(),
+        },
+        baseline_route: None,
+        ..decision()
+    }
+}
+
+// When every configured target shares the inbound protocol, no cross-protocol translation can
+// occur, so the portability guard is skipped: a non-portable Responses request (real Codex
+// extensions) is routed through the Decision API with its provider-specific fields preserved.
+#[tokio::test]
+async fn same_protocol_targets_route_nonportable_streaming_requests() {
+    let (url, decisions) = decision_server_for(responses_decision()).await;
+    let runtime = SwitchyardRuntime::new(responses_config(url)).unwrap();
+    let mut nonportable = request(WireProtocol::OpenaiResponses);
+    nonportable.content["reasoning"] = json!({"effort": "high"});
+    nonportable.content["store"] = json!(true);
+    let next: LlmStreamExecutionNextFn = Arc::new(|request| {
+        Box::pin(async move {
+            assert_eq!(request.content["model"], "model-b");
+            assert_eq!(request.content["store"], true);
+            assert_eq!(request.content["reasoning"]["effort"], "high");
+            Ok(Box::pin(futures_stream::iter(vec![Ok(
+                json!({"type": "response.output_text.delta", "delta": "ok"}),
+            )])) as LlmJsonStream)
+        })
+    });
+    let output = runtime
+        .execute_stream("openai.responses", nonportable, next)
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+    assert_eq!(output.len(), 1);
+    assert_eq!(decisions.lock().unwrap().len(), 1);
+}
