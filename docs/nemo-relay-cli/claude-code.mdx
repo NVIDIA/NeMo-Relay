@@ -131,6 +131,10 @@ slash-command expansions as `skill.load.inferred`; Claude Code does not
 identify whether an expansion came from a skill or a legacy custom command.
 The normal `Skill` pre-tool hook emits an observed `skill.load` mark.
 
+The wrapper requires Claude Code 2.1.121 or newer. Earlier versions do not
+support every required hook event, and `nemo-relay doctor` reports the version
+mismatch.
+
 Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
 `agent_id` as the subagent identifier and preserve `agent_type` in metadata.
