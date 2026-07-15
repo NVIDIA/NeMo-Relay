@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers building multi-tenant or concurrent applications that use NeMo Relay instrumentation and need to ensure independent scope stacks per request, task, or agent to prevent event cross-contamination and middleware leakage. <br>
+Developers and engineers building concurrent or multi-tenant applications that use NeMo Relay instrumentation and need isolated scope stacks to prevent observability cross-contamination across requests, agents, or workers. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -26,7 +26,6 @@ Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
 - [NeMo Relay GitHub Repository](https://github.com/NVIDIA/NeMo-Relay/) <br>
-- [NeMo Relay License](https://github.com/NVIDIA/NeMo-Relay/blob/main/LICENSE) <br>
 
 
 ## Skill Output: <br>
@@ -42,7 +41,7 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Evaluation Tasks: <br>
-Evaluated against 4 evaluation tasks (3 positive skill-activation, 1 negative) via NVSkills-Eval external profile in astra-sandbox environment. <br>
+Evaluated against 4 evaluation tasks (3 positive skill-activation, 1 negative). <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
@@ -67,13 +66,13 @@ Underlying evaluation signals used in this run: <br>
 | Dimension | Num | `claude-code` | `codex` |
 |---|---:|---:|---:|
 | Security | 4 | 100% (+0%) | 100% (+0%) |
-| Correctness | 4 | 100% (+62%) | 95% (+22%) |
-| Discoverability | 4 | 100% (+75%) | 91% (+39%) |
-| Effectiveness | 4 | 97% (+48%) | 96% (+30%) |
-| Efficiency | 4 | 95% (+51%) | 90% (+33%) |
+| Correctness | 4 | 100% (+65%) | 91% (+23%) |
+| Discoverability | 4 | 100% (+75%) | 84% (+31%) |
+| Effectiveness | 4 | 100% (+52%) | 98% (+34%) |
+| Efficiency | 4 | 95% (+51%) | 82% (+26%) |
 
 ## Skill Version(s): <br>
-0.6.0-alpha.20260714 (source: git tag) <br>
+e05cfbb8 (source: git SHA, committed 2026-07-15) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>

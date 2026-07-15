@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers integrating NeMo Relay who want stronger domain types than raw JSON for tool or LLM calls while preserving middleware semantics and caller-visible behavior. <br>
+Developers and engineers adding typed wrappers, domain types, or provider codecs to NeMo Relay tool and LLM integrations while preserving JSON middleware interoperability. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -29,19 +29,19 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Skill Output: <br>
-**Output Type(s):** [Analysis, Configuration instructions, Code] <br>
+**Output Type(s):** [Configuration instructions, Code] <br>
 **Output Format:** [Markdown with inline code blocks] <br>
 **Output Parameters:** [1D] <br>
 **Other Properties Related to Output:** [None] <br>
 
 ## Evaluation Agents Used: <br>
-- `claude-code` <br>
-- `codex` <br>
+- claude-code <br>
+- codex <br>
 
 
 
 ## Evaluation Tasks: <br>
-Evaluated against 4 evaluation tasks (3 positive skill-activation, 1 negative activation) from NVSkills-Eval external profile in astra-sandbox environment. <br>
+Evaluated against 4 evaluation tasks (3 positive activation, 1 negative activation) in the astra-sandbox environment using the NVSkills-Eval external profile. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
@@ -66,13 +66,13 @@ Underlying evaluation signals used in this run: <br>
 | Dimension | Num | `claude-code` | `codex` |
 |---|---:|---:|---:|
 | Security | 4 | 100% (+0%) | 100% (+0%) |
-| Correctness | 4 | 100% (+55%) | 93% (+35%) |
-| Discoverability | 4 | 100% (+75%) | 87% (+44%) |
-| Effectiveness | 4 | 97% (+42%) | 94% (+34%) |
-| Efficiency | 4 | 95% (+50%) | 85% (+32%) |
+| Correctness | 4 | 100% (+60%) | 89% (+16%) |
+| Discoverability | 4 | 100% (+75%) | 81% (+32%) |
+| Effectiveness | 4 | 97% (+44%) | 94% (+18%) |
+| Efficiency | 4 | 95% (+50%) | 84% (+31%) |
 
 ## Skill Version(s): <br>
-dd517ddd (source: git SHA, committed 2026-07-14) <br>
+e05cfbb8 (source: git SHA, committed 2026-07-15) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>

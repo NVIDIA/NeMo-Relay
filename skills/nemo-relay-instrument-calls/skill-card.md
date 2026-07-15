@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers who need to instrument existing tool functions or LLM/provider calls with NeMo Relay managed execution for lifecycle events, middleware, and guardrails. <br>
+Developers and engineers who need to instrument existing tool functions or LLM/provider calls with NeMo Relay managed execution for lifecycle events, middleware, guardrails, and observability. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -35,13 +35,13 @@ Mitigation: Review and scan skill before deployment. <br>
 **Other Properties Related to Output:** [None] <br>
 
 ## Evaluation Agents Used: <br>
-- claude-code <br>
-- codex <br>
+- `claude-code` <br>
+- `codex` <br>
 
 
 
 ## Evaluation Tasks: <br>
-Evaluated against 4 evaluation tasks (3 positive skill-activation, 1 negative) using NVSkills-Eval external profile in astra-sandbox environment. <br>
+Evaluated against 4 evaluation tasks (3 positive skill-activation, 1 negative activation) via NVSkills-Eval external profile in astra-sandbox environment. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
@@ -66,13 +66,13 @@ Underlying evaluation signals used in this run: <br>
 | Dimension | Num | `claude-code` | `codex` |
 |---|---:|---:|---:|
 | Security | 4 | 100% (+0%) | 100% (+0%) |
-| Correctness | 4 | 100% (+68%) | 91% (+37%) |
-| Discoverability | 4 | 91% (+49%) | 78% (+24%) |
-| Effectiveness | 4 | 94% (+75%) | 93% (+39%) |
-| Efficiency | 4 | 80% (+32%) | 76% (+17%) |
+| Correctness | 4 | 100% (+62%) | 84% (+26%) |
+| Discoverability | 4 | 92% (+49%) | 75% (+25%) |
+| Effectiveness | 4 | 94% (+70%) | 80% (+26%) |
+| Efficiency | 4 | 81% (+33%) | 73% (+22%) |
 
 ## Skill Version(s): <br>
-0.6.0-alpha.20260714 (source: git tag) <br>
+e05cfbb8 (source: git SHA, committed 2026-07-15) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>
