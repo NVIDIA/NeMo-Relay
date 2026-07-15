@@ -15,6 +15,7 @@ use serde::Deserialize;
 use super::CliError;
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct FileLoggingConfig {
     level: Option<String>,
     stderr_format: Option<String>,
@@ -26,6 +27,7 @@ pub(super) struct FileLoggingConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawFileLogSinkConfig {
     /// Required. Every `[[logging.sinks]]` entry is a file sink.
     path: Option<PathBuf>,

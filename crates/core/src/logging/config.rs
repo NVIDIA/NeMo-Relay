@@ -238,6 +238,7 @@ struct LoggingDocument {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawLoggingConfig {
     level: Option<String>,
     stderr_format: Option<String>,
@@ -270,6 +271,7 @@ impl RawLoggingConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawFileLogSinkConfig {
     path: Option<PathBuf>,
     level: Option<String>,

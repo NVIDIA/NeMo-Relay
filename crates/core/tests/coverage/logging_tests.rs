@@ -806,6 +806,32 @@ fn log_format_parse_maps_valid_inputs_and_rejects_unknown() {
 }
 
 #[test]
+fn toml_logging_configuration_rejects_unknown_fields() {
+    let unknown_logging_field = LoggingConfig::from_toml_document(
+        r#"
+[logging]
+levle = "debug"
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(unknown_logging_field.contains("unknown field `levle`"));
+
+    let unknown_sink_field = LoggingConfig::from_toml_document(
+        r#"
+[logging]
+
+[[logging.sinks]]
+path = "relay.log.jsonl"
+queue_capcity = 32
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(unknown_sink_field.contains("unknown field `queue_capcity`"));
+}
+
+#[test]
 fn non_string_fields_are_coerced_to_json_strings() {
     let _lock = lock_logging_tests();
     let temp = tempfile::tempdir().unwrap();

@@ -3121,6 +3121,46 @@ format = "yaml"
 }
 
 #[test]
+fn logging_rejects_unknown_section_and_sink_fields() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let unknown_logging_field = temp.path().join("unknown-logging-field.toml");
+    std::fs::write(
+        &unknown_logging_field,
+        r#"
+[logging]
+levle = "debug"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(unknown_logging_field),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("unknown field `levle`"));
+
+    let unknown_sink_field = temp.path().join("unknown-sink-field.toml");
+    std::fs::write(
+        &unknown_sink_field,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+queue_capcity = 32
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(unknown_sink_field),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("unknown field `queue_capcity`"));
+}
+
+#[test]
 fn logging_rejects_empty_sink_path() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = isolated_config_path(&temp);
