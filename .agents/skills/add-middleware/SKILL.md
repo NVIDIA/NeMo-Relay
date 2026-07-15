@@ -31,14 +31,14 @@ Decide these before editing code:
   final response output?
 - Is the callback fallible, and how should callback failures propagate?
 - Does it need both global and scope-local registration?
-- What should subscribers observe in `event.input` and `event.output` after this
+- What should subscribers and exporters observe in the event payload after this
   middleware runs?
 - If this is an event sanitizer, which of `data`, `category_profile`, and
   `metadata` may change, and is the event used only as immutable context?
 
 ## Pipeline Order
 
-See `docs/about/concepts/middleware.md` for the full diagrams.
+See `docs/about-nemo-relay/concepts/middleware.mdx` for the full diagrams.
 
 - **Tool execute**:
   conditional guardrails -> request intercepts -> sanitize request (for events)
@@ -47,8 +47,8 @@ See `docs/about/concepts/middleware.md` for the full diagrams.
   conditional guardrails -> request intercepts -> sanitize request (for events)
   | execution intercept chain(callable) -> sanitize response
 - **Mark and scope events**:
-  specialized tool/LLM sanitizer (when applicable) -> mark or scope event
-  sanitizer -> subscriber dispatch
+  specialized tool or LLM sanitizer (when applicable) -> mark or scope event
+  sanitizer -> subscriber and exporter dispatch
 
 ## Core Steps
 
@@ -78,8 +78,11 @@ Follow the pattern of `tool_sanitize_request_chain` or `tool_request_intercepts_
 
 5. Wire the chain into the execute path.
 
-Update `crates/core/src/api/tool.rs` or `crates/core/src/api/llm.rs` to call
-the new chain method at the appropriate pipeline stage.
+Update the relevant lifecycle owner to call the new chain method at the
+appropriate pipeline stage. Tool and LLM paths live in
+`crates/core/src/api/tool.rs` and `crates/core/src/api/llm.rs`; shared mark and
+scope event sanitization lives in `crates/core/src/api/shared.rs` and is called
+from `crates/core/src/api/scope.rs`.
 
 6. Expose the new middleware surface in every affected binding.
 
@@ -92,7 +95,7 @@ Follow the `add-binding-feature` skill for the cross-binding implementation chec
 - [ ] Ordering by priority
 - [ ] Callback error propagation
 - [ ] Scope-local registration, inheritance, and cleanup on pop
-- [ ] Event input/output semantics after middleware mutation
+- [ ] Event payload semantics after middleware mutation
 - [ ] Mark and scope event field semantics, including immutable identity fields
 - [ ] Parity coverage in every affected binding
 
@@ -103,7 +106,7 @@ Follow the `add-binding-feature` skill for the cross-binding implementation chec
 - Runtime state and chain builders: `crates/core/src/api/runtime/state.rs`
 - Scope-local registry merging: `crates/core/src/context/registries.rs`
 - Registry: `crates/core/src/registry.rs`
-- Pipeline docs: `docs/about/concepts/middleware.md`
-- Architecture docs: `docs/about/architecture.md`
-- Registration examples: `docs/instrument-applications/advanced-guide.md`
+- Pipeline docs: `docs/about-nemo-relay/concepts/middleware.mdx`
+- Architecture docs: `docs/about-nemo-relay/architecture.mdx`
+- Registration examples: `docs/instrument-applications/advanced-guide.mdx`
 - Validation: `validate-change`

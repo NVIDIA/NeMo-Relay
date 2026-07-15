@@ -15,7 +15,7 @@ covered by the tool and LLM request or response sanitizer APIs.
 NeMo Relay provides three registries:
 
 | Registry | Events |
-|---|---|
+| --- | --- |
 | Mark sanitizer | Every mark, including explicit, pending, plugin-runtime, and streaming marks |
 | Scope-start sanitizer | Every scope category with `scope_category = "start"` |
 | Scope-end sanitizer | Every scope category with `scope_category = "end"` |
@@ -35,14 +35,14 @@ The callback receives:
 
 Return the three observability fields that should be applied. Event identity,
 parentage, timestamps, kind, scope category, semantic category, attributes,
-input/output lifecycle meaning, and schemas cannot be changed through this
-API. Set a field to `null` or `None` to remove it. Preserve fields that your
-policy does not change.
+semantic input and output meaning, and schemas cannot be changed through this
+API. Set a field to `None` in Rust or Python, or `null` in Node.js, to remove
+it. Preserve fields that your policy does not change.
 
 Registries are priority ordered. Lower priorities run first, and each callback
-receives the fields returned by the preceding callback. Invalid callback
-results fail open and preserve the current fields. Binding-specific callback
-error inspection remains available where the binding exposes it.
+receives the fields returned by the preceding callback. Invalid binding
+callback results fail open and preserve the current fields. Node.js records
+these failures for inspection through `getLastCallbackError()`.
 
 ## Registration Lifetimes
 
@@ -129,7 +129,7 @@ Use the matching start and end APIs when the policy applies to duration-bearing
 scope events.
 
 | Level | Python | Node.js | Rust |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Global mark | `guardrails.register_mark_sanitize` | `registerMarkSanitizeGuardrail` | `register_mark_sanitize_guardrail` |
 | Global start | `guardrails.register_scope_sanitize_start` | `registerScopeSanitizeStartGuardrail` | `register_scope_sanitize_start_guardrail` |
 | Global end | `guardrails.register_scope_sanitize_end` | `registerScopeSanitizeEndGuardrail` | `register_scope_sanitize_end_guardrail` |
