@@ -81,6 +81,9 @@ helper:
 - skips symbolic links and credential-bearing dotenv files
 - requires the reviewed target root to be repeated with `--confirm-root` before
   writing, and refuses filesystem-root or home-directory writes
+- anchors writes and renames to verified directory handles without following
+  symbolic links, and refuses write mode on platforms that cannot provide those
+  guarantees
 - can report or perform path renames with `--rename-paths`
 - rewrites only explicit NeMo Flow identifiers, package names, repository names,
   config paths, headers, environment variables, and FFI type prefixes

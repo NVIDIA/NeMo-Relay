@@ -4,10 +4,11 @@
     "question": "I want to use the nemo-relay-plugin-adaptive-tuning skill to reduce latency in my agent's tool calls. My baseline instrumentation is already working with scopes and LLM call tracing. How should I proceed?",
     "expected_skill": "nemo-relay-plugin-adaptive-tuning",
     "expected_script": null,
-    "ground_truth": "The agent used nemo-relay-plugin-adaptive-tuning to guide the user through enabling adaptive telemetry with in-memory state, running representative traffic, selecting tool parallelism as the tuning surface, and comparing results against the captured baseline while maintaining a rollback path.",
+    "ground_truth": "The agent used nemo-relay-plugin-adaptive-tuning to verify that the workflow emits the tool lifecycle events required for tool-parallelism tuning rather than treating LLM tracing alone as sufficient. If those events are present, the agent enables adaptive telemetry with in-memory state, runs representative traffic, and compares the smallest behavior change against the baseline; otherwise it stops active rollout and returns instrumentation diagnostics.",
     "expected_behavior": [
       "The agent read the nemo-relay-plugin-adaptive-tuning SKILL.md before providing guidance",
       "The agent confirmed the user has baseline instrumentation working before proceeding with tuning steps",
+      "The agent separately confirmed that the target workflow emits the managed tool events needed for tool-parallelism tuning and stopped active rollout if they were absent",
       "The agent recommended enabling adaptive telemetry with in-memory state and choosing one tuning surface at a time",
       "The agent advised capturing a baseline and comparing results after enabling the smallest behavior change",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
@@ -24,6 +25,7 @@
       "The agent recommended starting with observe_only tool-parallelism mode before enabling scheduling",
       "The agent warned against enabling scheduling before tool idempotency and race behavior are known",
       "The agent outlined a step-by-step approach: baseline capture, enable adaptive telemetry, run representative traffic, then enable the smallest parallelism behavior change",
+      "The agent restored the last known working configuration if latency, correctness, or failure rate regressed",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
     ]
   },
@@ -65,6 +67,7 @@
       "The agent loaded references/config.md for adaptive plugin configuration guidance",
       "The agent provided Python code using nemo_relay.adaptive.AdaptiveConfig with state.backend set to in_memory",
       "The agent included validation of the plugin config before initialization",
+      "The agent returned validation diagnostics and did not initialize the plugin when validation failed",
       "The agent recommended enabling telemetry first before adding other active sections",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
     ]
@@ -80,6 +83,7 @@
       "The agent loaded references/config.md for adaptive plugin configuration guidance",
       "The agent showed how to use require('nemo-relay-node/adaptive') with toolParallelismConfig set to observe_only mode",
       "The agent included config validation before calling the plugin initialization step",
+      "The agent stopped before initialization and preserved the last working configuration when validation returned errors",
       "The agent advised starting with telemetry or observe-only behavior as the initial rollout",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
     ]

@@ -36,8 +36,9 @@ Do not use this skill when the application is not instrumented yet. Start with
 
 - Adaptive behavior is configured through the first-party plugin component with
   kind `adaptive`.
-- Adaptive requires existing NeMo Relay scopes, managed tool or LLM calls, and
-  lifecycle events because it learns from runtime signals.
+- Adaptive requires existing NeMo Relay scopes and at least one relevant
+  managed tool or LLM lifecycle event stream because it learns from runtime
+  signals.
 - Main configuration areas are state, telemetry, adaptive hints, tool
   parallelism, Adaptive Cache Governor (ACG), and rollout policy.
 - State backends are `in_memory` and `redis`.
@@ -50,15 +51,23 @@ Do not use this skill when the application is not instrumented yet. Start with
 
 ## Default Path
 
-1. Confirm the app already emits expected scope, tool, and LLM events.
+1. Confirm the app emits scope events and the managed tool or LLM events needed
+   for the behavior being evaluated. Do not require both call types when the
+   workflow uses only one.
 2. Capture a baseline for the workflow you want to improve.
 3. Enable adaptive telemetry with in-memory state.
 4. Read `references/config.md` when exact plugin configuration fields are needed.
 5. Run representative traffic and inspect reports or runtime events.
-6. Enable the smallest behavior change in config.
-7. Read `references/hints.md` when application logic consumes adaptive hints,
+6. If configuration validation fails or expected events are absent, return the
+   diagnostics and stop. Keep the last known working configuration active.
+7. Before enabling scheduling, verify tool idempotency and race behavior. Before
+   enabling ACG, verify that provider request payloads are stable.
+8. Enable the smallest behavior change in config.
+9. Read `references/hints.md` when application logic consumes adaptive hints,
    tool-parallelism guidance, or ACG diagnostics.
-8. Compare results against the baseline and keep a rollback path.
+10. Compare results against the baseline. If latency, correctness, or failure
+    rate regresses, restore the last known working configuration and retain the
+    sanitized diagnostics for review.
 
 ## Failure Modes To Avoid
 
@@ -68,6 +77,9 @@ Do not use this skill when the application is not instrumented yet. Start with
   path explicitly defines that contract.
 - Do not use environment variables as the primary adaptive configuration model.
 - Do not tune from a single run or unrepresentative traffic.
+- Preserve original tool and model errors. Do not add retries unless the call
+  owner defines their safety; revert adaptive behavior when it increases the
+  failure rate.
 
 ## Load A Reference When
 

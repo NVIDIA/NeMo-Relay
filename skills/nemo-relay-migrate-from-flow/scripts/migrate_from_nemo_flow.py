@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
+import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -145,6 +149,97 @@ def should_scan_file(path: Path, include_lockfiles: bool) -> bool:
     return path.name in TEXT_FILENAMES or path.suffix in TEXT_SUFFIXES
 
 
+def supports_secure_mutation() -> bool:
+    """Return whether this platform can anchor mutations to directory handles."""
+    return (
+        hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
+        and hasattr(os, "fchmod")
+        and os.open in os.supports_dir_fd
+        and os.stat in os.supports_dir_fd
+        and os.stat in os.supports_follow_symlinks
+        and os.rename in os.supports_dir_fd
+        and os.unlink in os.supports_dir_fd
+    )
+
+
+def directory_open_flags() -> int:
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def open_root_fd(root: Path) -> int:
+    """Open an absolute root one component at a time without following links."""
+    anchor = Path(root.anchor)
+    directory_fd = os.open(anchor, directory_open_flags())
+    try:
+        for part in root.relative_to(anchor).parts:
+            next_fd = os.open(part, directory_open_flags(), dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+    except Exception:
+        os.close(directory_fd)
+        raise
+    return directory_fd
+
+
+@contextmanager
+def open_relative_directory(root_fd: int, relative_path: Path) -> Iterator[int]:
+    """Open a directory below root_fd without resolving path components."""
+    directory_fd = os.dup(root_fd)
+    try:
+        for part in relative_path.parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                raise ValueError("relative path escapes the confirmed root")
+            next_fd = os.open(part, directory_open_flags(), dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+        yield directory_fd
+    finally:
+        os.close(directory_fd)
+
+
+def same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def replace_file_at(parent_fd: int, name: str, data: bytes, source_stat: os.stat_result) -> None:
+    """Atomically replace name inside parent_fd if the scanned file is unchanged."""
+    current_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISREG(current_stat.st_mode) or not same_file(source_stat, current_stat):
+        raise RuntimeError("path changed during scan")
+
+    temp_name = f".{name}.nemo-relay-{secrets.token_hex(8)}.tmp"
+    temp_fd: int | None = None
+    try:
+        temp_fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            stat.S_IMODE(source_stat.st_mode),
+            dir_fd=parent_fd,
+        )
+        os.fchmod(temp_fd, stat.S_IMODE(source_stat.st_mode))
+        with os.fdopen(temp_fd, "wb", closefd=False) as temp_file:
+            temp_file.write(data)
+            temp_file.flush()
+            os.fsync(temp_fd)
+        os.close(temp_fd)
+        temp_fd = None
+
+        current_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISREG(current_stat.st_mode) or not same_file(source_stat, current_stat):
+            raise RuntimeError("path changed during scan")
+        os.rename(temp_name, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    finally:
+        if temp_fd is not None:
+            os.close(temp_fd)
+        try:
+            os.unlink(temp_name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+
+
 def iter_files(root: Path, include_lockfiles: bool, include_generated: bool):
     for current_root, dirs, files in os.walk(root):
         current = Path(current_root)
@@ -159,7 +254,45 @@ def iter_files(root: Path, include_lockfiles: bool, include_generated: bool):
                 yield path
 
 
-def rewrite_file(path: Path, root: Path, write: bool) -> FileChange | None:
+def rewrite_file_secure(path: Path, root: Path, root_fd: int) -> FileChange | None:
+    try:
+        relative_path = path.relative_to(root)
+        with open_relative_directory(root_fd, relative_path.parent) as parent_fd:
+            file_fd = os.open(relative_path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            try:
+                source_stat = os.fstat(file_fd)
+                if not stat.S_ISREG(source_stat.st_mode):
+                    print(f"skip unsafe path: {path}")
+                    return None
+                with os.fdopen(file_fd, "rb", closefd=False) as source_file:
+                    raw = source_file.read()
+            finally:
+                os.close(file_fd)
+
+            if b"\0" in raw:
+                return None
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+
+            updated, count = apply_replacements(text)
+            if count == 0:
+                return None
+            replace_file_at(parent_fd, relative_path.name, updated.encode("utf-8"), source_stat)
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"skip path changed during scan: {path}: {error}")
+        return None
+
+    return FileChange(path=path, count=count)
+
+
+def rewrite_file(path: Path, root: Path, write: bool, root_fd: int | None = None) -> FileChange | None:
+    if write:
+        if root_fd is None:
+            raise RuntimeError("write mode requires a confirmed root directory handle")
+        return rewrite_file_secure(path, root, root_fd)
+
     if not is_safe_entry(path, root) or not path.is_file():
         print(f"skip unsafe path: {path}")
         return None
@@ -181,12 +314,6 @@ def rewrite_file(path: Path, root: Path, write: bool) -> FileChange | None:
     updated, count = apply_replacements(text)
     if count == 0:
         return None
-
-    if write:
-        if not is_safe_entry(path, root) or not path.is_file():
-            print(f"skip path changed during scan: {path}")
-            return None
-        path.write_text(updated, encoding="utf-8")
 
     return FileChange(path=path, count=count)
 
@@ -225,9 +352,40 @@ def apply_path_changes(
     changes: list[PathChange],
     root: Path,
     write: bool,
+    root_fd: int | None = None,
 ) -> list[PathChange]:
     applied: list[PathChange] = []
     for change in changes:
+        if write:
+            if root_fd is None:
+                raise RuntimeError("write mode requires a confirmed root directory handle")
+            try:
+                old_relative = change.old.relative_to(root)
+                new_relative = change.new.relative_to(root)
+                if old_relative.parent != new_relative.parent:
+                    raise ValueError("rename destination must use the source directory")
+                with open_relative_directory(root_fd, old_relative.parent) as parent_fd:
+                    source_stat = os.stat(old_relative.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if not (stat.S_ISREG(source_stat.st_mode) or stat.S_ISDIR(source_stat.st_mode)):
+                        raise ValueError("rename source is not a regular file or directory")
+                    try:
+                        os.stat(new_relative.name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise FileExistsError("rename destination already exists")
+                    os.rename(
+                        old_relative.name,
+                        new_relative.name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"skip unsafe rename: {change.old} -> {change.new}: {error}")
+                continue
+            applied.append(change)
+            continue
+
         if not is_safe_entry(change.old, root):
             print(f"skip unsafe rename source: {change.old}")
             continue
@@ -241,8 +399,6 @@ def apply_path_changes(
         if change.new.exists() or change.new.is_symlink():
             print(f"skip rename conflict: {change.old} -> {change.new}")
             continue
-        if write:
-            change.old.rename(change.new)
         applied.append(change)
     return applied
 
@@ -329,20 +485,34 @@ def main() -> int:
         filesystem_root = Path(root.anchor).resolve()
         if root == filesystem_root or root == Path.home().resolve():
             parser.error("refusing write mode for a filesystem root or home directory")
+        if not supports_secure_mutation():
+            parser.error("--write requires directory-fd and no-follow support on this platform")
 
-    file_changes = [
-        change
-        for path in iter_files(root, args.include_lockfiles, args.include_generated)
-        if (change := rewrite_file(path, root, args.write)) is not None
-    ]
+    root_fd: int | None = None
+    try:
+        if args.write:
+            try:
+                root_fd = open_root_fd(root)
+            except OSError as error:
+                parser.error(f"confirmed root cannot be opened safely: {error}")
 
-    path_changes: list[PathChange] = []
-    if args.rename_paths:
-        path_changes = apply_path_changes(
-            collect_path_changes(root, args.include_generated),
-            root,
-            args.write,
-        )
+        file_changes = [
+            change
+            for path in iter_files(root, args.include_lockfiles, args.include_generated)
+            if (change := rewrite_file(path, root, args.write, root_fd)) is not None
+        ]
+
+        path_changes: list[PathChange] = []
+        if args.rename_paths:
+            path_changes = apply_path_changes(
+                collect_path_changes(root, args.include_generated),
+                root,
+                args.write,
+                root_fd,
+            )
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
 
     print_report(file_changes, path_changes, args.write, args.max_report)
     if not args.write:
