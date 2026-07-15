@@ -702,8 +702,12 @@ fn print_rendered_preview(rendered: &str) -> Result<(), CliError> {
 }
 
 pub(crate) fn validate_config(config: &PluginConfig) -> Result<(), CliError> {
-    register_and_validate_plugin_components(config)
-        .map_err(|error| CliError::Config(error.to_string()))?;
+    if let Some(error) = register_and_validate_plugin_components(config)
+        .into_iter()
+        .next()
+    {
+        return Err(CliError::Config(error.to_string()));
+    }
     let report = validate_plugin_config(config);
     if report.has_errors() {
         let messages = report

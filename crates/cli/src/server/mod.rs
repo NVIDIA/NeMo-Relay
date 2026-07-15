@@ -798,18 +798,23 @@ impl std::fmt::Display for PluginComponentSetupError {
 
 pub(crate) fn register_and_validate_plugin_components(
     _plugin_config: &PluginConfig,
-) -> Result<(), PluginComponentSetupError> {
-    register_adaptive_component()
-        .map_err(|error| PluginComponentSetupError::Adaptive(error.to_string()))?;
-    register_pii_redaction_component()
-        .map_err(|error| PluginComponentSetupError::PiiRedaction(error.to_string()))?;
+) -> Vec<PluginComponentSetupError> {
+    let mut errors = Vec::new();
+    if let Err(error) = register_adaptive_component() {
+        errors.push(PluginComponentSetupError::Adaptive(error.to_string()));
+    }
+    if let Err(error) = register_pii_redaction_component() {
+        errors.push(PluginComponentSetupError::PiiRedaction(error.to_string()));
+    }
     #[cfg(feature = "switchyard")]
-    register_switchyard_component()
-        .map_err(|error| PluginComponentSetupError::Switchyard(error.to_string()))?;
+    if let Err(error) = register_switchyard_component() {
+        errors.push(PluginComponentSetupError::Switchyard(error.to_string()));
+    }
     #[cfg(feature = "switchyard")]
-    validate_switchyard_atof_configuration(_plugin_config)
-        .map_err(PluginComponentSetupError::SwitchyardAtof)?;
-    Ok(())
+    if let Err(error) = validate_switchyard_atof_configuration(_plugin_config) {
+        errors.push(PluginComponentSetupError::SwitchyardAtof(error));
+    }
+    errors
 }
 
 async fn initialize_plugin_host(
@@ -825,8 +830,12 @@ async fn initialize_plugin_host(
             .transpose()
             .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?
             .unwrap_or_default();
-        register_and_validate_plugin_components(&plugin_config)
-            .map_err(|error| CliError::Config(error.to_string()))?;
+        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
+            .into_iter()
+            .next()
+        {
+            return Err(CliError::Config(error.to_string()));
+        }
         initialize_plugins_exact(plugin_config)
             .await
             .map_err(|error| CliError::Config(format!("plugin activation failed: {error}")))?;
@@ -871,8 +880,12 @@ impl PluginActivation {
                 enabled: true,
                 config: plugin.config.clone(),
             }));
-        register_and_validate_plugin_components(&plugin_config)
-            .map_err(|error| CliError::Config(error.to_string()))?;
+        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
+            .into_iter()
+            .next()
+        {
+            return Err(CliError::Config(error.to_string()));
+        }
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
                 snapshot.verify_current()?;

@@ -473,12 +473,13 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
             return checks;
         }
     };
-    if let Err(error) = register_and_validate_plugin_components(&plugin_config) {
-        checks.push(Check {
+    let component_errors = register_and_validate_plugin_components(&plugin_config);
+    if !component_errors.is_empty() {
+        checks.extend(component_errors.into_iter().map(|error| Check {
             name: error.check_name(),
             status: Status::Fail,
             details: error.diagnostic_details(),
-        });
+        }));
         return checks;
     }
     let report = validate_plugin_config(&plugin_config);
