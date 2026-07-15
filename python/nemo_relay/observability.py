@@ -64,12 +64,14 @@ class AtofStreamSinkConfig:
     header_env: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
     field_name_policy: Literal["preserve", "replace_dots"] = "preserve"
+    name: str | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF stream sink to the canonical JSON object shape."""
         return _normalize_object(
             {
                 "type": "stream",
+                "name": self.name,
                 "url": self.url,
                 "transport": self.transport,
                 "headers": self.headers,
@@ -85,7 +87,7 @@ class AtofConfig:
     """Multi-sink raw ATOF export settings."""
 
     enabled: bool = False
-    sinks: list["AtofFileSinkConfig | AtofStreamSinkConfig"] | None = None
+    sinks: list[AtofFileSinkConfig | AtofStreamSinkConfig] | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF config to the canonical JSON object shape."""

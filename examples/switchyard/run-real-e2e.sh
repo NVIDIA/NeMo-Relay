@@ -38,6 +38,8 @@ e2e_add_pid "$!"
 ) >"$work_dir/switchyard.log" 2>&1 &
 e2e_add_pid "$!"
 
+e2e_wait_for http://127.0.0.1:4000/health
+
 (
   cd "$work_dir"
   SWITCHYARD_AUTHORIZATION="Bearer $token" cargo run \
@@ -47,7 +49,6 @@ e2e_add_pid "$!"
 ) >"$work_dir/relay.log" 2>&1 &
 e2e_add_pid "$!"
 
-e2e_wait_for http://127.0.0.1:4000/health
 e2e_wait_for http://127.0.0.1:4041/healthz
 
 request() {

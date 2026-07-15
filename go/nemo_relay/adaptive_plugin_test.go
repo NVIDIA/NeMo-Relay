@@ -320,7 +320,18 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 		_ = DeregisterPlugin(pluginKind)
 		_ = DeregisterPlugin(streamPluginKind)
 	}()
+	validateLifecyclePluginConfig(t, pluginKind)
+	initializeLifecyclePlugins(t, pluginKind, streamPluginKind, &registerCalls)
+	assertToolPluginPayload(t, pluginKind)
+	assertLlmPluginPayload(t, pluginKind)
+	assertGuardrailError(t, ToolConditionalExecution("blocked-tool", json.RawMessage(`{}`)), "guardrail rejected: blocked tool")
+	assertGuardrailError(t, LlmConditionalExecution(json.RawMessage(`{"headers":{"blocked":true},"content":{"messages":[]}}`)), "guardrail rejected: blocked llm")
+	assertStreamPluginPayload(t, streamPluginKind)
+	exercisePluginEventSanitizers(t)
+}
 
+func validateLifecyclePluginConfig(t *testing.T, pluginKind string) {
+	t.Helper()
 	report, err := ValidatePluginConfig(PluginConfig{
 		Version: 1,
 		Components: []PluginComponentSpec{
@@ -340,7 +351,10 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	if report.Diagnostics[0].Code != "plugin.go_validate" {
 		t.Fatalf("unexpected diagnostic code: %#v", report.Diagnostics)
 	}
+}
 
+func initializeLifecyclePlugins(t *testing.T, pluginKind, streamPluginKind string, registerCalls *int) {
+	t.Helper()
 	config := NewAdaptiveConfig()
 	config.AdaptiveHints = &AdaptiveHintsConfig{
 		Priority:       100,
@@ -348,7 +362,7 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 		InjectBodyPath: "nvext.agent_hints",
 	}
 
-	_, err = InitializePlugins(PluginConfig{
+	_, err := InitializePlugins(PluginConfig{
 		Version: 1,
 		Components: []PluginComponentSpec{
 			AdaptiveComponent(config),
@@ -366,16 +380,13 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitializePlugins failed: %v", err)
 	}
-	if registerCalls != 1 {
-		t.Fatalf("expected plugin register to be called once, got %d", registerCalls)
+	if *registerCalls != 1 {
+		t.Fatalf("expected plugin register to be called once, got %d", *registerCalls)
 	}
+}
 
-	assertToolPluginPayload(t, pluginKind)
-	assertLlmPluginPayload(t, pluginKind)
-	assertGuardrailError(t, ToolConditionalExecution("blocked-tool", json.RawMessage(`{}`)), "guardrail rejected: blocked tool")
-	assertGuardrailError(t, LlmConditionalExecution(json.RawMessage(`{"headers":{"blocked":true},"content":{"messages":[]}}`)), "guardrail rejected: blocked llm")
-	assertStreamPluginPayload(t, streamPluginKind)
-
+func exercisePluginEventSanitizers(t *testing.T) {
+	t.Helper()
 	var mu sync.Mutex
 	var pluginEvents []Event
 	if err := RegisterSubscriber("go-plugin-event-sanitize-test", func(event Event) {
@@ -407,6 +418,11 @@ func testTopLevelPluginValidationAndLifecycle(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	assertPluginSanitizerEvents(t, pluginEvents)
+}
+
+func assertPluginSanitizerEvents(t *testing.T, pluginEvents []Event) {
+	t.Helper()
 	var phases []string
 	for _, event := range pluginEvents {
 		switch event.Name() {

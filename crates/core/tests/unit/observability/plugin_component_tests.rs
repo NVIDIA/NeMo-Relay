@@ -278,12 +278,13 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(atof.sinks.is_empty());
 
     let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "sinks": [{"type": "stream", "url": "http://localhost/events"}]
+        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
     }))
     .unwrap();
     let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
         panic!("expected stream sink");
     };
+    assert_eq!(stream.name.as_deref(), Some("switchyard"));
     assert_eq!(stream.transport, "http_post");
     assert_eq!(stream.field_name_policy, "preserve");
 
@@ -427,6 +428,7 @@ fn schema_contains_every_supported_observability_option() {
         "output_directory",
         "filename",
         "mode",
+        "name",
         "sinks",
         "type",
         "url",
@@ -699,7 +701,10 @@ fn atof_endpoint_validation_rejects_bad_values() {
                 {"type": "stream", "url": "not a url", "transport": "http_post"},
                 {"type": "stream", "url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"},
                 {"type": "stream", "url": "http://localhost/events", "transport": "websocket"},
-                {"type": "stream", "url": "http://localhost/events", "headers": {"invalid header": "value", "x-api-key": "value"}, "header_env": {"X-Api-Key": "NEMO_RELAY_TEST_MISSING_ATOF_HEADER_ENV"}}
+                {"type": "stream", "url": "http://localhost/events", "headers": {"invalid header": "value", "x-api-key": "value"}, "header_env": {"X-Api-Key": "NEMO_RELAY_TEST_MISSING_ATOF_HEADER_ENV"}},
+                {"type": "stream", "name": "switchyard", "url": "http://localhost/first"},
+                {"type": "stream", "name": "switchyard", "url": "http://localhost/second"},
+                {"type": "stream", "name": " ", "url": "http://localhost/blank"}
             ]
         }
     })));
@@ -755,6 +760,77 @@ fn atof_endpoint_validation_rejects_bad_values() {
             .iter()
             .any(|diag| { diag.field.as_deref() == Some("sinks[6].headers.invalid header") })
     );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[8].name") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[9].name") })
+    );
+}
+
+#[test]
+fn atof_stream_sink_name_validation_reports_each_invalid_name() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "sinks": [
+                {"type": "stream", "url": "http://localhost/missing"},
+                {"type": "stream", "name": "", "url": "http://localhost/empty"},
+                {"type": "stream", "name": " leading", "url": "http://localhost/leading"},
+                {"type": "stream", "name": "trailing ", "url": "http://localhost/trailing"},
+                {"type": "stream", "name": "duplicate", "url": "http://localhost/first"},
+                {"type": "stream", "name": "duplicate", "url": "http://localhost/second"},
+                {"type": "stream", "name": "valid", "url": "http://localhost/valid"}
+            ]
+        }
+    })));
+
+    let name_diagnostics = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .field
+                .as_deref()
+                .is_some_and(|field| field.ends_with(".name"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(name_diagnostics.len(), 4);
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[1].name")
+            && diagnostic.message.contains("must be non-empty")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[2].name")
+            && diagnostic
+                .message
+                .contains("leading or trailing whitespace")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[3].name")
+            && diagnostic
+                .message
+                .contains("leading or trailing whitespace")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[5].name")
+            && diagnostic.message.contains("must be unique")
+    }));
+    assert!(!name_diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.field.as_deref(),
+            Some("sinks[0].name" | "sinks[4].name" | "sinks[6].name")
+        )
+    }));
 }
 
 #[test]
@@ -764,6 +840,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let config = build_atof_sink_config(
         2,
         AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: Some("switchyard".into()),
             url: "ws://127.0.0.1:47632/events".into(),
             transport: "websocket".into(),
             headers: headers.clone(),
@@ -799,6 +876,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let error = build_atof_sink_config(
         3,
         AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
@@ -813,6 +891,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let error = build_atof_sink_config(
         4,
         AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "http_post".into(),
             headers: std::collections::HashMap::new(),
@@ -1065,7 +1144,10 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .uuid(agent_uuid)
             .parent_uuid(root_uuid)
             .name("root-agent")
-            .metadata(json!({"session_id": "root-session"}))
+            .metadata(json!({
+                "session_id": "root-session",
+                "user_id": "alice"
+            }))
             .build(),
         ScopeCategory::Start,
         vec![],
@@ -1078,6 +1160,32 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .unwrap()
             .observe_global(
                 &start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let session_start_mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(agent_uuid)
+            .name("session.start")
+            .metadata(json!({
+                "session_id": "root-session",
+                "user_id": "alice",
+                "session_instance_id": root_uuid.to_string()
+            }))
+            .build(),
+        None,
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &session_start_mark,
                 "__test__",
                 Arc::clone(&manager),
                 Arc::clone(&empty_storage),
@@ -1170,6 +1278,27 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
 
     let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["extra"]["nemo_relay"]["session_id"], "root-session");
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_instance_id"],
+        root_uuid.to_string()
+    );
+    assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
+    assert_eq!(
+        value["extra"]["observed_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "session.start")
+            .count(),
+        1
+    );
+    assert!(
+        value["steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().all(|step| step["event"] != "session.start"))
+    );
     assert_eq!(
         value["subagent_trajectories"][0]["session_id"],
         "child-session"
@@ -1469,6 +1598,64 @@ fn atif_dispatcher_default_output_path_uses_current_directory() {
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
     );
+}
+
+#[test]
+fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
+    let agent_uuid = Uuid::now_v7();
+    let trajectory = crate::observability::atif::AtifTrajectory {
+        schema_version: "ATIF-v1.7".to_string(),
+        session_id: agent_uuid.to_string(),
+        trajectory_id: Some(agent_uuid.to_string()),
+        agent: AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+        steps: Vec::new(),
+        notes: None,
+        final_metrics: None,
+        continued_trajectory_ref: None,
+        subagent_trajectories: None,
+        extra: Some(json!({
+            "existing": "preserved",
+            "nemo_relay": {
+                "existing": "nested",
+                "session_id": "untrusted"
+            }
+        })),
+    };
+    let write = prepare_atif_payload(
+        agent_uuid,
+        format!("trajectory-{agent_uuid}.json"),
+        None,
+        trajectory,
+        Vec::new(),
+        AtifCorrelation {
+            session_id: Some("logical-session".to_string()),
+            session_instance_id: Some("instance-id".to_string()),
+            user_id: Some("alice".to_string()),
+        },
+    )
+    .unwrap();
+    let value: Json = serde_json::from_slice(&write.payload).unwrap();
+
+    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(value["extra"]["existing"], "preserved");
+    assert_eq!(value["extra"]["nemo_relay"]["existing"], "nested");
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_id"],
+        "logical-session"
+    );
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_instance_id"],
+        "instance-id"
+    );
+    assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
+    assert_eq!(value["extra"]["observed_events"], json!([]));
 }
 
 #[test]

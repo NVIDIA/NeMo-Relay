@@ -688,25 +688,13 @@ fn llm_call_end_with_behavior(
     } else {
         Some(sanitized_response)
     };
-    let mut decode_error = None;
-    let mut annotated_response = match annotated_response {
-        Some(annotated_response) => Some((*annotated_response).clone()),
-        None => match (response_codec.as_ref(), data.as_ref()) {
-            (Some(codec), Some(response)) => match codec.decode_response(response) {
-                Ok(mut decoded) => {
-                    if behavior.attach_estimated_cost {
-                        attach_estimated_cost_for_provider(&mut decoded, Some(&handle.name));
-                    }
-                    Some(decoded)
-                }
-                Err(error) => {
-                    decode_error = Some(error);
-                    None
-                }
-            },
-            _ => None,
-        },
-    };
+    let (mut annotated_response, decode_error) = resolve_llm_end_annotation(
+        annotated_response,
+        response_codec,
+        data.as_ref(),
+        &behavior,
+        &handle.name,
+    );
     handle.optimization_recorder.close_for_finalization(None);
     emit_optimization_marks(handle, &subscribers);
     let pricing = crate::codec::response::active_pricing_resolver();
@@ -750,6 +738,30 @@ fn llm_call_end_with_behavior(
         Err(error)
     } else {
         Ok(())
+    }
+}
+
+fn resolve_llm_end_annotation(
+    annotated_response: Option<Arc<AnnotatedLlmResponse>>,
+    response_codec: Option<Arc<dyn LlmResponseCodec>>,
+    data: Option<&Json>,
+    behavior: &LlmCallEndBehavior,
+    provider_name: &str,
+) -> (Option<AnnotatedLlmResponse>, Option<FlowError>) {
+    if let Some(annotated_response) = annotated_response {
+        return (Some((*annotated_response).clone()), None);
+    }
+    let (Some(codec), Some(response)) = (response_codec, data) else {
+        return (None, None);
+    };
+    match codec.decode_response(response) {
+        Ok(mut decoded) => {
+            if behavior.attach_estimated_cost {
+                attach_estimated_cost_for_provider(&mut decoded, Some(provider_name));
+            }
+            (Some(decoded), None)
+        }
+        Err(error) => (None, Some(error)),
     }
 }
 

@@ -1,0 +1,1206 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+//! `nemo-relay doctor` — environment + config + agent + observability health check.
+//!
+//! Split into three layers so the data path can be unit-tested without real I/O:
+//!
+//! - `collect_report()` does the I/O (env probes, $PATH scans, network checks, fs writability).
+//! - `DoctorReport` is the resulting pure data shape.
+//! - `format_human(&report)` / `format_json(&report)` render the report.
+
+mod environment;
+mod model;
+mod probes;
+mod render;
+
+use environment::collect_environment;
+pub(crate) use model::*;
+use probes::*;
+use render::*;
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use futures_util::SinkExt;
+use nemo_relay::api::event::{BaseEvent, Event, MarkEvent};
+use nemo_relay::codec::model_pricing::{PricingCatalog, PricingConfig, PricingSourceConfig};
+use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
+use nemo_relay::plugin::{DiagnosticLevel, PluginConfig, validate_plugin_config};
+use serde_json::{Value, json};
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use uuid::Uuid;
+
+use crate::agents::CodingAgent;
+use crate::configuration::{
+    AgentConfigs, DynamicPluginHostConfigStatus, GatewayConfig, ResolvedConfig,
+    default_plugin_config_paths, effective_plugin_toml_sources, resolve_server_config,
+};
+use crate::error::CliError;
+use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
+
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
+const PRICING_PLUGIN_KIND: &str = "pricing";
+
+struct PluginConfigurationDiagnostics {
+    sources: Vec<PathBuf>,
+    error: Option<String>,
+    resolution: Check,
+}
+
+/// Drives all checks and produces a single `DoctorReport`. Network probes are bounded by a
+/// short timeout so the command always returns quickly. Filesystem checks short-circuit on
+/// the first missing directory.
+pub(crate) async fn collect_report(
+    target_agent: Option<CodingAgent>,
+) -> Result<DoctorReport, CliError> {
+    let (resolved, resolution) = match resolve_server_config(&GatewayOverrides::default()) {
+        Ok(resolved) => (
+            resolved,
+            Check {
+                name: "Resolution",
+                status: Status::Pass,
+                details: "valid".into(),
+            },
+        ),
+        Err(err) => (
+            ResolvedConfig::default(),
+            Check {
+                name: "Resolution",
+                status: Status::Fail,
+                details: format!("could not resolve merged config: {err}"),
+            },
+        ),
+    };
+    let cwd = std::env::current_dir().ok();
+    let home = home_dir();
+    let configured_agents = configured_agent_names(&resolved.agents);
+    let (plugin_sources, plugin_error) = match effective_plugin_toml_sources() {
+        Ok(sources) => (sources, None),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    let plugin_resolution =
+        plugin_resolution_check(&resolved, &resolution, plugin_error.as_deref());
+    let plugin_diagnostics = PluginConfigurationDiagnostics {
+        sources: plugin_sources,
+        error: plugin_error,
+        resolution: plugin_resolution,
+    };
+
+    Ok(DoctorReport {
+        schema_version: 1,
+        binary_version: env!("CARGO_PKG_VERSION"),
+        target_agent: target_agent.map(|agent| agent.as_arg().to_string()),
+        environment: collect_environment(),
+        configuration: collect_configuration(
+            cwd.as_deref(),
+            home.as_deref(),
+            resolution,
+            configured_agents,
+            &resolved.dynamic_plugins,
+            &plugin_diagnostics,
+        ),
+        agents: collect_agents(target_agent, &resolved).await,
+        host_plugins: crate::agents::collect_default_integration_readiness(),
+        observability: collect_observability(&resolved.gateway).await,
+        completions: collect_completions(home.as_deref()),
+    })
+}
+
+fn collect_configuration(
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+    resolution: Check,
+    configured_agents: Vec<String>,
+    dynamic_plugins: &[crate::configuration::ResolvedDynamicPluginConfig],
+    plugin_diagnostics: &PluginConfigurationDiagnostics,
+) -> ConfigurationInfo {
+    let workspace_path = cwd
+        .map(|p| p.join(".nemo-relay").join("config.toml"))
+        .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
+    // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
+    // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
+    let global_path = crate::configuration::user_config_dir()
+        .map(|dir| dir.join("config.toml"))
+        .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
+        .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
+    let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
+
+    ConfigurationInfo {
+        workspace: layer_status(&workspace_path),
+        global: layer_status(&global_path),
+        system: layer_status(&system_path),
+        plugin_configs: default_plugin_config_paths()
+            .iter()
+            .map(|path| {
+                plugin_layer_status(
+                    path,
+                    &plugin_diagnostics.sources,
+                    plugin_diagnostics.error.as_deref(),
+                )
+            })
+            .collect(),
+        plugin_resolution: plugin_diagnostics.resolution.clone(),
+        resolution,
+        // `default_agent` is reserved in the design for Phase 2 dispatch; not currently parsed
+        // out of FileConfig. Doctor reports `None` until that lands.
+        default_agent: None,
+        configured_agents,
+        dynamic_plugins: dynamic_plugins
+            .iter()
+            .map(|plugin| DynamicPluginReferenceInfo {
+                plugin_id: plugin.plugin_id.clone(),
+                manifest_ref: plugin.manifest_ref.clone(),
+                source: plugin.source.clone(),
+                host_config_status: plugin.host_config_status(),
+            })
+            .collect(),
+    }
+}
+
+fn plugin_resolution_check(
+    resolved: &ResolvedConfig,
+    resolution: &Check,
+    plugin_error: Option<&str>,
+) -> Check {
+    if let Some(error) = plugin_error {
+        return Check {
+            name: "Plugin resolution",
+            status: Status::Fail,
+            details: format!(
+                "could not resolve plugins.toml: {error}; update the named source and run `nemo-relay plugins edit`"
+            ),
+        };
+    }
+    if matches!(resolution.status, Status::Fail) {
+        return Check {
+            name: "Plugin resolution",
+            status: Status::Fail,
+            details: resolution.details.clone(),
+        };
+    }
+    if resolved.gateway.plugin_config.is_some() {
+        Check {
+            name: "Plugin resolution",
+            status: Status::Info,
+            details: "effective plugin configuration loaded; see Plugin validation below".into(),
+        }
+    } else if !resolved.dynamic_plugins.is_empty() {
+        Check {
+            name: "Plugin resolution",
+            status: Status::Info,
+            details: "dynamic plugin configuration loaded; see Dynamic plugin checks below".into(),
+        }
+    } else {
+        Check {
+            name: "Plugin resolution",
+            status: Status::Info,
+            details:
+                "plugins.toml not configured; run `nemo-relay plugins edit` to configure plugins"
+                    .into(),
+        }
+    }
+}
+
+fn dynamic_plugin_reference_check(plugin: &DynamicPluginReferenceInfo) -> Check {
+    Check {
+        name: "Dynamic plugin",
+        status: Status::Pass,
+        details: format!("{} resolved from {}", plugin.plugin_id, plugin.manifest_ref),
+    }
+}
+
+fn dynamic_plugin_host_config_check(plugin: &DynamicPluginReferenceInfo) -> Check {
+    let details = match plugin.host_config_status {
+        DynamicPluginHostConfigStatus::Absent => {
+            format!(
+                "{} discovered via host config only; not enabled by config alone",
+                plugin.plugin_id
+            )
+        }
+        DynamicPluginHostConfigStatus::Present => format!(
+            "{} discovered via host config; host-owned config present; not enabled by config alone",
+            plugin.plugin_id
+        ),
+    };
+    Check {
+        name: "Dynamic plugin",
+        status: Status::Info,
+        details,
+    }
+}
+
+fn layer_status(path: &Path) -> ConfigLayer {
+    if !path.exists() {
+        return ConfigLayer {
+            path: path.to_path_buf(),
+            status: Status::Info,
+            active: false,
+            details: "not present".into(),
+        };
+    }
+    match std::fs::read_to_string(path) {
+        // Parse as `toml::Table` to match the rest of the loader (config.rs::load_shared_config).
+        // `toml::Value` parsing in `toml = 0.9` treats multi-section docs as a single Value and
+        // chokes on the second section header, so `Table` is the right top-level shape.
+        Ok(text) => match text.parse::<toml::Table>() {
+            Ok(_) => ConfigLayer {
+                path: path.to_path_buf(),
+                status: Status::Pass,
+                active: true,
+                details: "valid".into(),
+            },
+            Err(err) => ConfigLayer {
+                path: path.to_path_buf(),
+                status: Status::Fail,
+                active: false,
+                details: format!("invalid TOML: {err}"),
+            },
+        },
+        Err(err) => ConfigLayer {
+            path: path.to_path_buf(),
+            status: Status::Fail,
+            active: false,
+            details: format!("unreadable: {err}"),
+        },
+    }
+}
+
+fn plugin_layer_status(
+    path: &Path,
+    contributing_paths: &[PathBuf],
+    plugin_error: Option<&str>,
+) -> ConfigLayer {
+    let mut layer = layer_status(path);
+    if let Some(error) = plugin_error.filter(|error| error.contains(&path.display().to_string()))
+        && matches!(layer.status, Status::Pass)
+    {
+        layer.status = Status::Fail;
+        layer.active = false;
+        layer.details = format!("invalid plugin configuration: {error}");
+        return layer;
+    }
+    if layer.active && contributing_paths.iter().any(|source| source == path) {
+        layer.details = "discovered and contributes to plugin resolution".into();
+    } else if layer.active {
+        layer.active = false;
+        layer.details = "valid but does not contribute effective plugin configuration".into();
+    }
+    layer
+}
+
+async fn collect_agents(
+    target_agent: Option<CodingAgent>,
+    resolved: &ResolvedConfig,
+) -> Vec<AgentInfo> {
+    let mut out = Vec::with_capacity(CodingAgent::ALL.len());
+    for agent in CodingAgent::ALL {
+        if target_agent.is_some_and(|target| target != agent) {
+            continue;
+        }
+        out.push(collect_agent(agent, target_agent == Some(agent), resolved).await);
+    }
+    out
+}
+
+async fn collect_agent(
+    agent: CodingAgent,
+    target_requested: bool,
+    resolved: &ResolvedConfig,
+) -> AgentInfo {
+    let configured = agent_configured(agent, &resolved.agents);
+    let command = agent_command(agent, &resolved.agents);
+    let argv = crate::process::command_argv(&command);
+    let exec = argv.first().map(String::as_str).unwrap_or_default();
+    let path = crate::process::resolve_executable(exec);
+    let version = if path.is_some() {
+        probe_version(&crate::process::version_probe_argv(agent, &argv)).await
+    } else {
+        None
+    };
+    let mut status = agent_command_status(path.as_deref(), configured, target_requested);
+    let (hook_status, hook_details) = hook_status(agent, &resolved.agents);
+    status = combine_status(status, hook_status, configured || target_requested);
+    let mut details = agent_details(
+        configured,
+        target_requested,
+        path.as_deref(),
+        exec,
+        hook_details,
+    );
+    apply_agent_version_status(
+        agent,
+        version.as_deref(),
+        path.is_some(),
+        configured || target_requested,
+        &mut status,
+        &mut details,
+    );
+    AgentInfo {
+        name: agent.as_arg(),
+        status,
+        configured,
+        command,
+        path,
+        version,
+        annotation: details.join("; "),
+    }
+}
+
+fn agent_details(
+    configured: bool,
+    target_requested: bool,
+    path: Option<&Path>,
+    exec: &str,
+    hook_details: String,
+) -> Vec<String> {
+    let mut details = vec![if configured {
+        "configured".to_string()
+    } else if target_requested {
+        "not configured; first run will launch setup".to_string()
+    } else {
+        "not configured".to_string()
+    }];
+    if path.is_none() {
+        details.push(format!("command `{exec}` not found"));
+    }
+    if !hook_details.is_empty() {
+        details.push(hook_details);
+    }
+    details
+}
+
+fn apply_agent_version_status(
+    agent: CodingAgent,
+    version: Option<&str>,
+    executable_found: bool,
+    version_required: bool,
+    status: &mut Status,
+    details: &mut Vec<String>,
+) {
+    let problem = match version {
+        Some(version) => agent.validate_version_output(version).err(),
+        None if executable_found => Some(format!(
+            "could not determine version; NeMo Relay requires {}",
+            agent.version_requirement()
+        )),
+        None => None,
+    };
+    if let Some(problem) = problem {
+        *status = combine_status(
+            *status,
+            if version_required {
+                Status::Fail
+            } else {
+                Status::Warn
+            },
+            true,
+        );
+        details.push(problem);
+    }
+}
+
+fn agent_command(agent: CodingAgent, agents: &AgentConfigs) -> String {
+    configured_agent_command(agent, agents)
+        .cloned()
+        .unwrap_or_else(|| agent.executable().to_string())
+}
+
+fn configured_agent_command(agent: CodingAgent, agents: &AgentConfigs) -> Option<&String> {
+    crate::agents::config(agent, agents).command.as_ref()
+}
+
+fn agent_configured(agent: CodingAgent, agents: &AgentConfigs) -> bool {
+    crate::agents::configured(agent, agents)
+}
+
+fn configured_agent_names(agents: &AgentConfigs) -> Vec<String> {
+    CodingAgent::ALL
+        .into_iter()
+        .filter_map(|agent| agent_configured(agent, agents).then_some(agent.as_arg().to_string()))
+        .collect()
+}
+
+fn agent_command_status(path: Option<&Path>, configured: bool, target_requested: bool) -> Status {
+    match (path.is_some(), configured, target_requested) {
+        (true, false, true) => Status::Warn,
+        (true, _, _) => Status::Pass,
+        (false, true, _) | (false, _, true) => Status::Fail,
+        (false, false, false) => Status::Info,
+    }
+}
+
+fn combine_status(base: Status, hook: Status, readiness_required: bool) -> Status {
+    if matches!(base, Status::Fail) || matches!(hook, Status::Fail) {
+        return Status::Fail;
+    }
+    if matches!(base, Status::Warn) || (readiness_required && matches!(hook, Status::Warn)) {
+        return Status::Warn;
+    }
+    base
+}
+
+fn hook_status(agent: CodingAgent, agents: &AgentConfigs) -> (Status, String) {
+    match crate::agents::hook_status(agent, agents) {
+        Ok(details) => (Status::Pass, details),
+        Err(details) => (Status::Fail, details),
+    }
+}
+
+async fn probe_version(argv: &[String]) -> Option<String> {
+    // Run the shared wrapper-preserving probe and read the first line of stdout. Bounded by the network
+    // timeout (re-used as a generic short timeout) so a misbehaving binary doesn't hang doctor.
+    let mut cmd = crate::process::tokio_command(argv);
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        // Ensure the child gets killed if our future is dropped on timeout. Without this a
+        // misbehaving agent binary that exceeds NETWORK_TIMEOUT would leak as an orphan
+        // process for the lifetime of the doctor invocation (and beyond).
+        .kill_on_drop(true);
+    let child = cmd.spawn().ok()?;
+    let output = timeout(NETWORK_TIMEOUT, child.wait_with_output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_line = stdout.lines().next()?.trim();
+    if first_line.is_empty() {
+        None
+    } else {
+        Some(first_line.to_string())
+    }
+}
+
+async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
+    let mut checks = Vec::new();
+
+    let Some(plugin_value) = &gateway.plugin_config else {
+        checks.push(Check {
+            name: "Plugin validation",
+            status: Status::Info,
+            details: "plugins.toml not configured".into(),
+        });
+        return checks;
+    };
+
+    let plugin_config = match serde_json::from_value::<PluginConfig>(plugin_value.clone()) {
+        Ok(config) => config,
+        Err(err) => {
+            checks.push(Check {
+                name: "Plugin validation",
+                status: Status::Fail,
+                details: format!("invalid plugin config: {err}"),
+            });
+            return checks;
+        }
+    };
+    let component_errors = register_and_validate_plugin_components(&plugin_config);
+    if !component_errors.is_empty() {
+        checks.extend(component_errors.into_iter().map(|error| Check {
+            name: error.check_name(),
+            status: Status::Fail,
+            details: error.diagnostic_details(),
+        }));
+        return checks;
+    }
+    let report = validate_plugin_config(&plugin_config);
+    if report.diagnostics.is_empty() {
+        checks.push(Check {
+            name: "Plugin validation",
+            status: Status::Pass,
+            details: "validation passed".into(),
+        });
+    } else {
+        for diagnostic in report.diagnostics {
+            checks.push(Check {
+                name: "Plugin diagnostic",
+                status: if diagnostic.level == DiagnosticLevel::Error {
+                    Status::Fail
+                } else {
+                    Status::Warn
+                },
+                details: format!("{}: {}", diagnostic.code, diagnostic.message),
+            });
+        }
+    }
+
+    if let Some(config) = observability_component_config(plugin_value) {
+        collect_observability_component_checks(&mut checks, config).await;
+    } else {
+        checks.push(Check {
+            name: "Observability plugin",
+            status: Status::Info,
+            details: "component not configured".into(),
+        });
+    }
+    collect_pricing_component_checks(&mut checks, &plugin_config);
+
+    checks
+}
+
+async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {
+    checks.extend(observability_atof_file_checks(config));
+    if let Some(check) = observability_file_exporter_check(config, "atif") {
+        checks.push(check);
+    }
+    for section in ["opentelemetry", "openinference"] {
+        if let Some(check) = observability_http_exporter_check(config, section).await {
+            checks.push(check);
+        }
+    }
+    if section_enabled(config, "atof") && !atof_stream_sinks(config).is_empty() {
+        if atof_streaming_supported() {
+            checks.extend(observability_atof_stream_checks(config).await);
+        } else {
+            checks.push(Check {
+                name: "ATOF stream sink",
+                status: Status::Fail,
+                details: "ATOF stream sinks are not available in this binary".into(),
+            });
+        }
+    }
+}
+
+fn observability_atof_file_checks(config: &Value) -> Vec<Check> {
+    if !section_enabled(config, "atof") {
+        return Vec::new();
+    }
+    let sinks = config
+        .get("atof")
+        .and_then(|section| section.get("sinks"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter(|(_, sink)| sink.get("type").and_then(Value::as_str) == Some("file"));
+    let checks = sinks
+        .map(
+            |(index, sink)| match sink.get("output_directory").and_then(Value::as_str) {
+                Some(path) => {
+                    let mut check = check_directory("ATOF file sink", Path::new(path));
+                    check.details = format!("sinks[{index}]: {}", check.details);
+                    check
+                }
+                None => Check {
+                    name: "ATOF file sink",
+                    status: Status::Info,
+                    details: format!("sinks[{index}] uses the runtime default output directory"),
+                },
+            },
+        )
+        .collect::<Vec<_>>();
+    if checks.is_empty() {
+        vec![Check {
+            name: "ATOF file sink",
+            status: Status::Info,
+            details: "no file sinks configured".into(),
+        }]
+    } else {
+        checks
+    }
+}
+
+fn observability_file_exporter_check(config: &Value, section: &str) -> Option<Check> {
+    if !section_enabled(config, section) {
+        return None;
+    }
+    let label = if section == "atof" {
+        "ATOF dir"
+    } else {
+        "ATIF dir"
+    };
+    Some(match section_output_directory(config, section) {
+        Some(path) => check_directory(label, &path),
+        None => Check {
+            name: label,
+            status: Status::Info,
+            details: "enabled; using runtime default output directory".into(),
+        },
+    })
+}
+
+async fn observability_http_exporter_check(config: &Value, section: &str) -> Option<Check> {
+    if !section_enabled(config, section) {
+        return None;
+    }
+    let label = if section == "opentelemetry" {
+        "OpenTelemetry endpoint"
+    } else {
+        "OpenInference endpoint"
+    };
+    Some(match section_endpoint(config, section) {
+        Some(endpoint) => probe_http_named(label, &endpoint).await,
+        None => Check {
+            name: label,
+            status: Status::Info,
+            details: "enabled; using exporter default endpoint".into(),
+        },
+    })
+}
+
+fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
+    plugin_value
+        .get("components")
+        .and_then(Value::as_array)
+        .and_then(|components| {
+            components.iter().find(|component| {
+                component
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind == OBSERVABILITY_PLUGIN_KIND)
+            })
+        })
+        .and_then(|component| component.get("config"))
+}
+
+fn collect_pricing_component_checks(checks: &mut Vec<Check>, plugin_config: &PluginConfig) {
+    let Some(component) = plugin_config
+        .components
+        .iter()
+        .find(|component| component.kind == PRICING_PLUGIN_KIND)
+    else {
+        checks.push(Check {
+            name: "Model pricing",
+            status: Status::Info,
+            details: "component not configured".into(),
+        });
+        return;
+    };
+
+    if !component.enabled {
+        checks.push(Check {
+            name: "Model pricing",
+            status: Status::Info,
+            details: "component disabled".into(),
+        });
+        return;
+    }
+
+    let config =
+        match serde_json::from_value::<PricingConfig>(Value::Object(component.config.clone())) {
+            Ok(config) => config,
+            Err(error) => {
+                checks.push(Check {
+                    name: "Model pricing",
+                    status: Status::Fail,
+                    details: format!("invalid config: {error}"),
+                });
+                return;
+            }
+        };
+
+    if config.sources.is_empty() {
+        checks.push(Check {
+            name: "Model pricing",
+            status: Status::Info,
+            details: "component configured with no sources".into(),
+        });
+        return;
+    }
+
+    for (index, source) in config.sources.iter().enumerate() {
+        checks.push(pricing_source_check(index, source));
+    }
+}
+
+fn pricing_source_check(index: usize, source: &PricingSourceConfig) -> Check {
+    match source {
+        PricingSourceConfig::Inline { catalog } => Check {
+            name: "Model pricing source",
+            status: Status::Pass,
+            details: format!("inline:{index} valid ({} entries)", catalog.entries.len()),
+        },
+        PricingSourceConfig::File { path } => match std::fs::read_to_string(path) {
+            Ok(raw) => match PricingCatalog::from_json_str(&raw) {
+                Ok(catalog) => Check {
+                    name: "Model pricing source",
+                    status: Status::Pass,
+                    details: format!(
+                        "file:{} valid ({} entries)",
+                        path.display(),
+                        catalog.entries.len()
+                    ),
+                },
+                Err(error) => Check {
+                    name: "Model pricing source",
+                    status: Status::Fail,
+                    details: format!("file:{} invalid catalog: {error}", path.display()),
+                },
+            },
+            Err(error) => Check {
+                name: "Model pricing source",
+                status: Status::Fail,
+                details: format!("file:{} unreadable: {error}", path.display()),
+            },
+        },
+    }
+}
+
+fn section_enabled(config: &Value, section: &str) -> bool {
+    config
+        .get(section)
+        .and_then(|section| section.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn section_output_directory(config: &Value, section: &str) -> Option<PathBuf> {
+    config
+        .get(section)
+        .and_then(|section| section.get("output_directory"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+}
+
+fn section_endpoint(config: &Value, section: &str) -> Option<String> {
+    config
+        .get(section)
+        .and_then(|section| section.get("endpoint"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn atof_stream_sinks(config: &Value) -> Vec<(usize, &Value)> {
+    config
+        .get("atof")
+        .and_then(|section| section.get("sinks"))
+        .and_then(Value::as_array)
+        .map(|sinks| {
+            sinks
+                .iter()
+                .enumerate()
+                .filter(|(_, sink)| sink.get("type").and_then(Value::as_str) == Some("stream"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn atof_streaming_supported() -> bool {
+    cfg!(feature = "atof-streaming")
+}
+
+async fn observability_atof_stream_checks(config: &Value) -> Vec<Check> {
+    let streams = atof_stream_sinks(config);
+    let mut checks = Vec::with_capacity(streams.len());
+    for (index, sink) in streams {
+        checks.push(probe_atof_stream_sink(index, sink).await);
+    }
+    checks
+}
+
+async fn probe_atof_stream_sink(index: usize, endpoint: &Value) -> Check {
+    let name = "ATOF stream sink";
+    let Some(url) = endpoint.get("url").and_then(Value::as_str) else {
+        return Check {
+            name,
+            status: Status::Fail,
+            details: format!("sinks[{index}]: missing url"),
+        };
+    };
+    let transport = endpoint
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or("http_post");
+    let timeout_millis = endpoint
+        .get("timeout_millis")
+        .and_then(Value::as_u64)
+        .unwrap_or(3_000);
+    if timeout_millis == 0 {
+        return Check {
+            name,
+            status: Status::Fail,
+            details: format!("sinks[{index}] {transport} {url}: timeout_millis must be > 0"),
+        };
+    }
+    let headers = match endpoint_headers(endpoint) {
+        Ok(headers) => headers,
+        Err(err) => {
+            return Check {
+                name,
+                status: Status::Fail,
+                details: format!("sinks[{index}] {transport} {url}: {err}"),
+            };
+        }
+    };
+    let payload = match doctor_atof_probe_payload() {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Check {
+                name,
+                status: Status::Fail,
+                details: format!("sinks[{index}] {transport} {url}: {err}"),
+            };
+        }
+    };
+    let timeout_duration = Duration::from_millis(timeout_millis);
+    match transport {
+        "http_post" => probe_atof_http_post(url, headers, payload, timeout_duration, index).await,
+        "websocket" => probe_atof_websocket(url, headers, payload, timeout_duration, index).await,
+        "ndjson" => probe_atof_ndjson(url, headers, payload, timeout_duration, index).await,
+        _ => Check {
+            name,
+            status: Status::Fail,
+            details: format!("sinks[{index}] {transport} {url}: unsupported transport"),
+        },
+    }
+}
+
+#[cfg(test)]
+async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
+    probe_atof_stream_sink(index, endpoint).await
+}
+
+fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    let mut names = std::collections::HashSet::new();
+    if let Some(headers) = endpoint.get("headers") {
+        let Some(object) = headers.as_object() else {
+            return Err("headers must be an object of string values".into());
+        };
+        for (key, value) in object {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
+            let Some(value) = value.as_str() else {
+                return Err(format!("headers.{key} must be a string"));
+            };
+            names.insert(name);
+            out.push((key.clone(), value.to_string()));
+        }
+    }
+    if let Some(header_env) = endpoint.get("header_env") {
+        let Some(object) = header_env.as_object() else {
+            return Err("header_env must be an object of string values".into());
+        };
+        for (key, variable) in object {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| error.to_string())?;
+            if names.contains(&name) {
+                return Err(format!(
+                    "header {key:?} cannot appear in both headers and header_env"
+                ));
+            }
+            let Some(variable) = variable.as_str() else {
+                return Err(format!("header_env.{key} must be a string"));
+            };
+            let value = std::env::var(variable)
+                .map_err(|_| format!("environment variable {variable:?} is not set"))?;
+            if value.trim().is_empty() {
+                return Err(format!("environment variable {variable:?} is blank"));
+            }
+            names.insert(name);
+            out.push((key.clone(), value));
+        }
+    }
+    Ok(out)
+}
+
+fn doctor_atof_probe_payload() -> Result<String, String> {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("nemo_relay.doctor.atof_probe")
+            .data(json!({"doctor": true}))
+            .metadata(json!({"source": "nemo-relay doctor"}))
+            .build(),
+        None,
+        None,
+    ));
+    event
+        .try_to_json_value()
+        .and_then(|value| serde_json::to_string(&value))
+        .map_err(|error| error.to_string())
+}
+
+async fn probe_atof_http_post(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+) -> Check {
+    probe_atof_http_upload(url, headers, payload, timeout_duration, index, "http_post").await
+}
+
+async fn probe_atof_ndjson(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+) -> Check {
+    probe_atof_http_upload(url, headers, payload, timeout_duration, index, "ndjson").await
+}
+
+async fn probe_atof_http_upload(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+    transport: &str,
+) -> Check {
+    let client = match reqwest::Client::builder().timeout(timeout_duration).build() {
+        Ok(client) => client,
+        Err(err) => {
+            return Check {
+                name: "ATOF stream sink",
+                status: Status::Fail,
+                details: format!("sinks[{index}] {transport} {url}: could not build client: {err}"),
+            };
+        }
+    };
+    let mut request = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+        .body(format!("{payload}\n"));
+    for (key, value) in headers {
+        request = request.header(key, value);
+    }
+    match request.send().await {
+        Ok(response) if response.status().is_success() => Check {
+            name: "ATOF stream sink",
+            status: Status::Pass,
+            details: format!(
+                "sinks[{index}] {transport} {url} (HTTP {})",
+                response.status()
+            ),
+        },
+        Ok(response) => Check {
+            name: "ATOF stream sink",
+            status: Status::Fail,
+            details: format!(
+                "sinks[{index}] {transport} {url} (HTTP {})",
+                response.status()
+            ),
+        },
+        Err(err) => Check {
+            name: "ATOF stream sink",
+            status: Status::Fail,
+            details: format!("sinks[{index}] {transport} {url}: {err}"),
+        },
+    }
+}
+
+async fn probe_atof_websocket(
+    url: &str,
+    headers: Vec<(String, String)>,
+    payload: String,
+    timeout_duration: Duration,
+    index: usize,
+) -> Check {
+    match reqwest::Url::parse(url) {
+        Ok(parsed) if matches!(parsed.scheme(), "ws" | "wss") => {}
+        Ok(_) => {
+            return Check {
+                name: "ATOF stream sink",
+                status: Status::Fail,
+                details: format!(
+                    "sinks[{index}] websocket {url}: invalid scheme (must be ws or wss)"
+                ),
+            };
+        }
+        Err(err) => {
+            return Check {
+                name: "ATOF stream sink",
+                status: Status::Fail,
+                details: format!("sinks[{index}] websocket {url}: {err}"),
+            };
+        }
+    }
+    let mut request = match url.into_client_request() {
+        Ok(request) => request,
+        Err(err) => {
+            return Check {
+                name: "ATOF stream sink",
+                status: Status::Fail,
+                details: format!("sinks[{index}] websocket {url}: {err}"),
+            };
+        }
+    };
+    for (key, value) in headers {
+        let name = match tokio_tungstenite::tungstenite::http::header::HeaderName::from_bytes(
+            key.as_bytes(),
+        ) {
+            Ok(name) => name,
+            Err(err) => {
+                return Check {
+                    name: "ATOF stream sink",
+                    status: Status::Fail,
+                    details: format!("sinks[{index}] websocket {url}: {err}"),
+                };
+            }
+        };
+        let value =
+            match tokio_tungstenite::tungstenite::http::header::HeaderValue::from_str(&value) {
+                Ok(value) => value,
+                Err(err) => {
+                    return Check {
+                        name: "ATOF stream sink",
+                        status: Status::Fail,
+                        details: format!("sinks[{index}] websocket {url}: {err}"),
+                    };
+                }
+            };
+        request.headers_mut().insert(name, value);
+    }
+    match timeout(timeout_duration, tokio_tungstenite::connect_async(request)).await {
+        Ok(Ok((mut socket, _))) => {
+            let send = timeout(
+                timeout_duration,
+                socket.send(tokio_tungstenite::tungstenite::Message::Text(
+                    payload.into(),
+                )),
+            )
+            .await;
+            let _ = timeout(timeout_duration, socket.close(None)).await;
+            match send {
+                Ok(Ok(())) => Check {
+                    name: "ATOF stream sink",
+                    status: Status::Pass,
+                    details: format!("sinks[{index}] websocket {url}"),
+                },
+                Ok(Err(err)) => Check {
+                    name: "ATOF stream sink",
+                    status: Status::Fail,
+                    details: format!("sinks[{index}] websocket {url}: {err}"),
+                },
+                Err(_) => Check {
+                    name: "ATOF stream sink",
+                    status: Status::Fail,
+                    details: format!(
+                        "sinks[{index}] websocket {url}: timed out sending probe payload"
+                    ),
+                },
+            }
+        }
+        Ok(Err(err)) => Check {
+            name: "ATOF stream sink",
+            status: Status::Fail,
+            details: format!("sinks[{index}] websocket {url}: {err}"),
+        },
+        Err(_) => Check {
+            name: "ATOF stream sink",
+            status: Status::Fail,
+            details: format!("sinks[{index}] websocket {url}: timed out"),
+        },
+    }
+}
+
+fn collect_completions(home: Option<&std::path::Path>) -> Vec<Check> {
+    let mut checks = Vec::new();
+    let shell = std::env::var("SHELL").ok().and_then(|s| {
+        std::path::Path::new(&s)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
+    let Some(shell_name) = shell else {
+        checks.push(Check {
+            name: "Completions",
+            status: Status::Info,
+            details: "no $SHELL set; cannot infer install location".into(),
+        });
+        return checks;
+    };
+    let Some(home) = home else {
+        checks.push(Check {
+            name: "Completions",
+            status: Status::Info,
+            details: format!("$SHELL={shell_name}; could not resolve home dir"),
+        });
+        return checks;
+    };
+    let likely_path = match shell_name.as_str() {
+        "zsh" => Some(home.join(".zfunc").join("_nemo-relay")),
+        "bash" => Some(home.join(".bash_completion.d").join("nemo-relay")),
+        "fish" => Some(
+            home.join(".config")
+                .join("fish")
+                .join("completions")
+                .join("nemo-relay.fish"),
+        ),
+        _ => None,
+    };
+    match likely_path {
+        Some(path) if path.exists() => checks.push(Check {
+            name: "Completions",
+            status: Status::Pass,
+            details: format!("{shell_name}: {}", path.display()),
+        }),
+        Some(path) => checks.push(Check {
+            name: "Completions",
+            status: Status::Info,
+            details: format!(
+                "{shell_name}: not installed (run `nemo-relay completions {shell_name} > {}`)",
+                path.display()
+            ),
+        }),
+        None => checks.push(Check {
+            name: "Completions",
+            status: Status::Info,
+            details: format!("{shell_name}: no known completion path; run `nemo-relay completions <shell>` to generate"),
+        }),
+    }
+    checks
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+/// Aggregate exit code: 1 if any check is Fail, 0 otherwise. Warnings do not fail.
+pub(crate) fn format_agents_json(agents: &[AgentInfo]) -> Result<String, CliError> {
+    serde_json::to_string_pretty(agents)
+        .map_err(|err| CliError::Config(format!("could not serialize agents report: {err}")))
+}
+
+/// Top-level entry point invoked by `nemo-relay doctor`. Emits to stdout and returns the
+/// appropriate process exit code (0 on pass-or-warn, 1 on any failure).
+pub(crate) async fn run_doctor(
+    target_agent: Option<CodingAgent>,
+    json: bool,
+) -> Result<std::process::ExitCode, CliError> {
+    let report = collect_report(target_agent).await?;
+    if json {
+        print!("{}", format_json(&report)?);
+    } else {
+        // Banner first, then the static report. JSON mode skips both so callers parsing the
+        // output don't have to strip ANSI/decorations.
+        crate::banner::print_doctor_header();
+        print!("{}", format_human(&report));
+    }
+    match exit_code(&report) {
+        0 => Ok(std::process::ExitCode::SUCCESS),
+        _ => Ok(std::process::ExitCode::FAILURE),
+    }
+}
+
+/// Top-level entry point invoked by `nemo-relay agents`. Always exits 0; the data drives caller
+/// decisions (e.g., CI gating on JSON output).
+pub(crate) async fn run_agents(json: bool) -> Result<std::process::ExitCode, CliError> {
+    let agents = agents_report().await?;
+    let output = if json {
+        format_agents_json(&agents)?
+    } else {
+        format_agents_human(&agents)
+    };
+    print!("{output}");
+    Ok(std::process::ExitCode::SUCCESS)
+}
+
+// `ResolvedConfig` defaults to "no settings" when no config file is present. Trait kept here
+// so `unwrap_or_default()` works on the resolved config without leaking optionality into the
+// rest of the doctor surface. The Default impl on `ResolvedConfig` is provided by its derive.
+const _: fn() = || {
+    let _: ResolvedConfig = ResolvedConfig::default();
+};
+
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/doctor_tests.rs"]
+mod tests;

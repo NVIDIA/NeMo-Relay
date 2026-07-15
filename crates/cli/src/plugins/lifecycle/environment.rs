@@ -4,13 +4,29 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay::plugin::dynamic::{
     DynamicPluginCheckState, DynamicPluginManifest, DynamicPluginManifestLoad, WorkerRuntime,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";
+pub(super) const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";
+pub(super) const ENVIRONMENT_ATTESTATION_FILE: &str = ".nemo-relay-environment.sha256";
+const MAX_ENVIRONMENT_FILES: usize = 100_000;
+pub(super) const MAX_ENVIRONMENT_DEPTH: usize = 128;
+#[cfg(test)]
+static ENVIRONMENT_TREE_DIGEST_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Deserialize, Serialize)]
+struct EnvironmentAttestation {
+    version: u8,
+    source_artifact_sha256: String,
+    environment_sha256: String,
+    authentication: String,
+}
 
 pub(super) trait PythonEnvironmentCommandRunner {
     fn run(&self, program: &OsStr, args: &[OsString]) -> Result<(), String>;
@@ -42,6 +58,106 @@ pub(super) fn is_python_worker(manifest: &DynamicPluginManifest) -> bool {
     )
 }
 
+pub(super) fn validate_python_entrypoint_artifact(
+    manifest: &DynamicPluginManifest,
+    manifest_ref: &str,
+) -> Result<(), String> {
+    let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
+        return Ok(());
+    };
+    if load.runtime != Some(WorkerRuntime::Python) {
+        return Ok(());
+    }
+
+    let source = manifest.source.as_ref().ok_or_else(|| {
+        "Python worker plugins must declare source.manifest_root and source.artifact".to_string()
+    })?;
+    let manifest_root = source
+        .manifest_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+        .ok_or_else(|| {
+            "Python worker plugins added through the CLI must declare source.manifest_root"
+                .to_string()
+        })?;
+    let artifact = source
+        .artifact
+        .as_deref()
+        .map(str::trim)
+        .filter(|artifact| !artifact.is_empty())
+        .ok_or_else(|| "Python worker plugins must declare source.artifact".to_string())?;
+    let entrypoint = load
+        .entrypoint
+        .as_deref()
+        .map(str::trim)
+        .filter(|entrypoint| !entrypoint.is_empty())
+        .ok_or_else(|| "Python worker plugins must declare load.entrypoint".to_string())?;
+    let (module, callable) = entrypoint.split_once(':').ok_or_else(|| {
+        format!(
+            "Python worker load.entrypoint '{entrypoint}' must use the unambiguous module:function form"
+        )
+    })?;
+    if callable.is_empty()
+        || callable.contains(':')
+        || module.is_empty()
+        || module
+            .split('.')
+            .any(|segment| segment.is_empty() || segment.contains(['/', '\\', ':']))
+    {
+        return Err(format!(
+            "Python worker load.entrypoint '{entrypoint}' must use the unambiguous module:function form"
+        ));
+    }
+
+    let manifest_path = Path::new(manifest_ref);
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let unresolved_manifest_root = resolve_relative_path(manifest_dir, manifest_root);
+    let manifest_root = unresolved_manifest_root.canonicalize().map_err(|error| {
+        format!(
+            "could not resolve Python plugin source.manifest_root {}: {error}",
+            unresolved_manifest_root.display()
+        )
+    })?;
+    let artifact = resolve_relative_path(manifest_dir, artifact)
+        .canonicalize()
+        .map_err(|error| format!("could not resolve Python source.artifact: {error}"))?;
+    let module_path = module
+        .split('.')
+        .fold(manifest_root.clone(), |path, segment| path.join(segment));
+    let module_file = module_path.with_extension("py");
+    let package_file = module_path.join("__init__.py");
+    let mut candidates = [module_file, package_file]
+        .into_iter()
+        .filter(|path| path.is_file())
+        .map(|path| {
+            path.canonicalize().map_err(|error| {
+                format!(
+                    "could not resolve Python entrypoint module file {}: {error}",
+                    path.display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    candidates.sort();
+    candidates.dedup();
+    let [entrypoint_artifact] = candidates.as_slice() else {
+        return Err(format!(
+            "Python worker load.entrypoint '{entrypoint}' must resolve to exactly one source module under source.manifest_root; expected {} or {}",
+            module_path.with_extension("py").display(),
+            module_path.join("__init__.py").display()
+        ));
+    };
+    if entrypoint_artifact != &artifact {
+        return Err(format!(
+            "Python worker load.entrypoint '{entrypoint}' resolves to {}, but integrity-checked source.artifact resolves to {}; the executed entrypoint module must be the integrity-checked artifact",
+            entrypoint_artifact.display(),
+            artifact.display()
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn provision_python_environment(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
@@ -51,6 +167,7 @@ pub(super) fn provision_python_environment(
     if !is_python_worker(manifest) {
         return Ok(None);
     }
+    validate_python_entrypoint_artifact(manifest, manifest_ref)?;
 
     let manifest_root = manifest
         .source
@@ -132,7 +249,289 @@ pub(super) fn provision_python_environment(
         ));
     }
 
+    let source_artifact_sha256 = manifest
+        .integrity
+        .as_ref()
+        .and_then(|integrity| integrity.sha256.as_deref())
+        .map(str::trim)
+        .filter(|digest| !digest.is_empty())
+        .ok_or_else(|| {
+            "Python worker plugins require integrity.sha256 to bind the installed environment to the trusted source artifact"
+                .to_string()
+        })?;
+    write_environment_attestation(&environment, source_artifact_sha256)?;
+
     Ok(Some(environment))
+}
+
+pub(super) fn read_environment_attestation(
+    environment: &Path,
+    expected_source_artifact_sha256: &str,
+) -> Result<String, String> {
+    let attestation_path = environment.join(ENVIRONMENT_ATTESTATION_FILE);
+    let raw = std::fs::read_to_string(&attestation_path)
+        .map_err(|error| format!("failed to read {}: {error}", attestation_path.display()))?;
+    let attestation = serde_json::from_str::<EnvironmentAttestation>(&raw).map_err(|error| {
+        format!(
+            "managed Python environment attestation {} is invalid: {error}",
+            attestation_path.display()
+        )
+    })?;
+    if attestation.version != 1
+        || attestation.source_artifact_sha256 != expected_source_artifact_sha256.trim()
+        || attestation.environment_sha256.len() != 64
+        || !attestation
+            .environment_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "managed Python environment attestation {} does not match the trusted source artifact",
+            attestation_path.display()
+        ));
+    }
+    if !crate::configuration::verify_python_environment_attestation(
+        &attestation.source_artifact_sha256,
+        &attestation.environment_sha256,
+        &attestation.authentication,
+    )
+    .map_err(|error| error.to_string())?
+    {
+        return Err(format!(
+            "managed Python environment attestation {} failed authentication",
+            attestation_path.display()
+        ));
+    }
+    Ok(attestation.environment_sha256)
+}
+
+pub(super) fn verify_environment_attestation(
+    environment: &Path,
+    expected_source_artifact_sha256: &str,
+) -> Result<String, String> {
+    let expected = read_environment_attestation(environment, expected_source_artifact_sha256)?;
+    let actual = environment_tree_digest(environment)?;
+    if actual != expected {
+        return Err(format!(
+            "managed Python environment {} changed after provisioning",
+            environment.display()
+        ));
+    }
+    Ok(actual)
+}
+
+pub(super) fn write_environment_attestation(
+    environment: &Path,
+    source_artifact_sha256: &str,
+) -> Result<(), String> {
+    let digest = environment_tree_digest(environment)?;
+    let path = environment.join(ENVIRONMENT_ATTESTATION_FILE);
+    let authentication =
+        crate::configuration::sign_python_environment_attestation(source_artifact_sha256, &digest)
+            .map_err(|error| error.to_string())?;
+    let mut bytes = serde_json::to_vec_pretty(&EnvironmentAttestation {
+        version: 1,
+        source_artifact_sha256: source_artifact_sha256.trim().to_owned(),
+        environment_sha256: digest,
+        authentication,
+    })
+    .map_err(|error| format!("failed to encode {}: {error}", path.display()))?;
+    bytes.push(b'\n');
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+pub(super) fn environment_tree_digest(environment: &Path) -> Result<String, String> {
+    #[cfg(test)]
+    ENVIRONMENT_TREE_DIGEST_CALLS.fetch_add(1, Ordering::Relaxed);
+    environment_tree_digest_with_limit(environment, MAX_ENVIRONMENT_FILES)
+}
+
+fn environment_tree_digest_with_limit(
+    environment: &Path,
+    max_entries: usize,
+) -> Result<String, String> {
+    let mut digest = Sha256::new();
+    let mut total = 0_u64;
+    let mut entries = 0_usize;
+    digest_environment_directory(
+        environment,
+        Path::new(""),
+        &mut Vec::new(),
+        &mut digest,
+        &mut total,
+        &mut entries,
+        max_entries,
+    )?;
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+#[cfg(test)]
+pub(super) fn test_environment_tree_digest_with_entry_limit(
+    environment: &Path,
+    max_entries: usize,
+) -> Result<String, String> {
+    environment_tree_digest_with_limit(environment, max_entries)
+}
+
+#[cfg(test)]
+pub(super) fn reset_environment_tree_digest_calls() {
+    ENVIRONMENT_TREE_DIGEST_CALLS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(super) fn environment_tree_digest_calls() -> usize {
+    ENVIRONMENT_TREE_DIGEST_CALLS.load(Ordering::Relaxed)
+}
+
+fn digest_environment_directory(
+    directory: &Path,
+    relative_directory: &Path,
+    ancestors: &mut Vec<PathBuf>,
+    digest: &mut Sha256,
+    total: &mut u64,
+    entries: &mut usize,
+    max_entries: usize,
+) -> Result<(), String> {
+    if ancestors.len() >= MAX_ENVIRONMENT_DEPTH {
+        return Err(format!(
+            "managed Python environment exceeds the {MAX_ENVIRONMENT_DEPTH}-directory traversal depth at {}",
+            directory.display()
+        ));
+    }
+    let canonical_directory = std::fs::canonicalize(directory)
+        .map_err(|error| format!("failed to normalize {}: {error}", directory.display()))?;
+    if ancestors.contains(&canonical_directory) {
+        return Err(format!(
+            "managed Python environment contains a directory symlink cycle at {}",
+            directory.display()
+        ));
+    }
+    ancestors.push(canonical_directory.clone());
+    let mut children = Vec::new();
+    for child in std::fs::read_dir(directory)
+        .map_err(|error| format!("failed to read {}: {error}", directory.display()))?
+    {
+        *entries = entries.saturating_add(1);
+        if *entries > max_entries {
+            return Err(format!(
+                "managed Python environment exceeds the {max_entries}-entry attestation budget at {}",
+                directory.display()
+            ));
+        }
+        children.push(
+            child.map_err(|error| format!("failed to read {}: {error}", directory.display()))?,
+        );
+    }
+    children.sort_by_key(std::fs::DirEntry::file_name);
+    for child in children {
+        digest_environment_entry(
+            child,
+            relative_directory,
+            ancestors,
+            digest,
+            total,
+            entries,
+            max_entries,
+        )?;
+    }
+    ancestors.pop();
+    Ok(())
+}
+
+fn digest_environment_entry(
+    child: std::fs::DirEntry,
+    relative_directory: &Path,
+    ancestors: &mut Vec<PathBuf>,
+    digest: &mut Sha256,
+    total: &mut u64,
+    entries: &mut usize,
+    max_entries: usize,
+) -> Result<(), String> {
+    let path = child.path();
+    let relative = relative_directory.join(child.file_name());
+    if environment_entry_is_ignored(&path, &relative) {
+        return Ok(());
+    }
+    let source = resolve_environment_entry(&path)?;
+    let metadata = std::fs::metadata(&source)
+        .map_err(|error| format!("failed to inspect {}: {error}", source.display()))?;
+    if metadata.is_dir() {
+        update_tree_digest(digest, b'd', &relative, &[]);
+        return digest_environment_directory(
+            &source,
+            &relative,
+            ancestors,
+            digest,
+            total,
+            entries,
+            max_entries,
+        );
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "managed Python environment entry {} must resolve to a regular file or directory",
+            path.display()
+        ));
+    }
+    let bytes = crate::filesystem::bounded::read_bounded_regular_file(
+        &source,
+        "managed Python environment file",
+    )?;
+    *total = total.saturating_add(bytes.len() as u64);
+    if *total > crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES {
+        return Err(format!(
+            "managed Python environment exceeds the {}-byte attestation budget",
+            crate::filesystem::bounded::MAX_BOUNDED_FILE_BYTES
+        ));
+    }
+    update_tree_digest(digest, b'f', &relative, &bytes);
+    Ok(())
+}
+
+fn environment_entry_is_ignored(path: &Path, relative: &Path) -> bool {
+    relative == Path::new(ENVIRONMENT_ATTESTATION_FILE)
+        || path.file_name().and_then(|name| name.to_str()) == Some("__pycache__")
+        || path.extension().and_then(|extension| extension.to_str()) == Some("pyc")
+}
+
+fn resolve_environment_entry(path: &Path) -> Result<PathBuf, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        std::fs::canonicalize(path)
+            .map_err(|error| format!("failed to resolve {}: {error}", path.display()))
+    } else {
+        Ok(path.to_path_buf())
+    }
+}
+
+fn update_tree_digest(digest: &mut Sha256, entry_type: u8, path: &Path, payload: &[u8]) {
+    let path = raw_path_bytes(path);
+    digest.update([entry_type]);
+    digest.update((path.len() as u64).to_le_bytes());
+    digest.update(&path);
+    digest.update((payload.len() as u64).to_le_bytes());
+    digest.update(payload);
+}
+
+#[cfg(unix)]
+fn raw_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
+}
+
+#[cfg(windows)]
+fn raw_path_bytes(path: &Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
 }
 
 pub(super) fn remove_managed_environment(
@@ -174,6 +573,11 @@ pub(super) fn environment_state(
             .map(|metadata| !metadata.file_type().is_dir())
             .unwrap_or(true)
         || !environment_python_path(&configured).is_file()
+        || manifest
+            .integrity
+            .as_ref()
+            .and_then(|integrity| integrity.sha256.as_deref())
+            .is_none_or(|digest| verify_environment_attestation(&configured, digest).is_err())
     {
         return DynamicPluginCheckState::Invalid;
     }
