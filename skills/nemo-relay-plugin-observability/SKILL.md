@@ -56,7 +56,7 @@ Use this model when explaining how capture and export relate:
 - Event fields include semantic input/output through the ATOF `data` field,
   typed profile data such as `model_name` and `tool_call_id`, and codec-provided
   annotated LLM request/response data for in-process subscribers and exporters.
-- First-class skill tools and requests to read a complete `SKILL.md`
+- First-class skill tools and the requests to read a complete `SKILL.md`
   automatically emit `skill.load` marks under the tool span. The payload
   contains only `skill_name`; metadata records the load source and tool name.
   Partial reads do not count, and ambiguous slash-command expansions use the

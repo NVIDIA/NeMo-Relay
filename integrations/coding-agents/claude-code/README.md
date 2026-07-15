@@ -26,7 +26,7 @@ The bundle forwards `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
 `PreCompact`, and `PostCompact` as scope, tool, mark, or private LLM
 correlation events.
 
-The bundle requires Claude Code 2.1.121 or newer. That version provides the
+The bundle requires Claude Code 2.1.121 or newer. These versions provides the
 `alwaysLoad` MCP startup barrier used to make Relay ready before session hooks
 and accepts the complete generated hook schema. Installation fails before
 changing host state when the version is too old, and `nemo-relay doctor`
