@@ -126,7 +126,10 @@ Generated Claude Code hooks include `SessionStart`, `SessionEnd`,
 `Notification`, `Stop`, `PreCompact`, and `PostCompact`. Both compaction hooks
 emit canonical `compaction` marks. Relay normalizes the other hooks as scope,
 prompt, tool, notification, subagent, or private LLM correlation events
-according to the hook payload.
+according to the hook payload. `UserPromptExpansion` records nonempty
+slash-command expansions as `skill.load.inferred`; Claude Code does not
+identify whether an expansion came from a skill or a legacy custom command.
+The normal `Skill` pre-tool hook emits an observed `skill.load` mark.
 
 Tool hooks preserve canonical fields such as `tool_use_id`, `tool_name`,
 `tool_input`, `error`, `duration_ms`, and `is_interrupt`. Subagent hooks use
