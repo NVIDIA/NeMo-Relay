@@ -38,7 +38,7 @@ Decide these before editing code:
 
 ## Pipeline Order
 
-See `docs/about-nemo-relay/concepts/middleware.mdx` for the full diagrams.
+Refer to `docs/about-nemo-relay/concepts/middleware.mdx` for the full diagrams.
 
 - **Tool execute**:
   conditional guardrails -> request intercepts -> sanitize request (for events)
