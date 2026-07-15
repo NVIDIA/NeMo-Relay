@@ -2010,47 +2010,68 @@ fn validate_atof_values(
     }
     let mut stream_sink_names = HashSet::new();
     for (index, sink) in section.sinks.iter().enumerate() {
-        match sink {
-            AtofSinkSectionConfig::File(file) => {
-                if AtofExporterMode::parse(&file.mode).is_none() {
-                    push_policy_diag(
-                        diagnostics,
-                        policy.unsupported_value,
-                        "observability.unsupported_value",
-                        Some("atof".to_string()),
-                        Some(format!("sinks[{index}].mode")),
-                        format!("ATOF sinks[{index}].mode must be 'append' or 'overwrite'"),
-                    );
-                }
-            }
-            AtofSinkSectionConfig::Stream(stream) => {
-                if let Some(name) = stream.name.as_deref() {
-                    let trimmed = name.trim();
-                    let message = if trimmed.is_empty() {
-                        Some(format!("ATOF sinks[{index}].name must be non-empty"))
-                    } else if name != trimmed {
-                        Some(format!(
-                            "ATOF sinks[{index}].name must not have leading or trailing whitespace"
-                        ))
-                    } else if !stream_sink_names.insert(name) {
-                        Some(format!("ATOF stream sink name {name:?} must be unique"))
-                    } else {
-                        None
-                    };
-                    if let Some(message) = message {
-                        push_policy_diag(
-                            diagnostics,
-                            policy.unsupported_value,
-                            "observability.unsupported_value",
-                            Some("atof".to_string()),
-                            Some(format!("sinks[{index}].name")),
-                            message,
-                        );
-                    }
-                }
-                validate_atof_stream_sink_values(diagnostics, policy, index, stream);
+        validate_atof_sink(diagnostics, policy, index, sink, &mut stream_sink_names);
+    }
+}
+
+fn validate_atof_sink<'a>(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    sink: &'a AtofSinkSectionConfig,
+    stream_sink_names: &mut HashSet<&'a str>,
+) {
+    match sink {
+        AtofSinkSectionConfig::File(file) => {
+            if AtofExporterMode::parse(&file.mode).is_none() {
+                push_policy_diag(
+                    diagnostics,
+                    policy.unsupported_value,
+                    "observability.unsupported_value",
+                    Some("atof".to_string()),
+                    Some(format!("sinks[{index}].mode")),
+                    format!("ATOF sinks[{index}].mode must be 'append' or 'overwrite'"),
+                );
             }
         }
+        AtofSinkSectionConfig::Stream(stream) => {
+            validate_atof_stream_sink_name(diagnostics, policy, index, stream, stream_sink_names);
+            validate_atof_stream_sink_values(diagnostics, policy, index, stream);
+        }
+    }
+}
+
+fn validate_atof_stream_sink_name<'a>(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    stream: &'a AtofStreamSinkSectionConfig,
+    stream_sink_names: &mut HashSet<&'a str>,
+) {
+    let Some(name) = stream.name.as_deref() else {
+        return;
+    };
+    let trimmed = name.trim();
+    let message = if trimmed.is_empty() {
+        Some(format!("ATOF sinks[{index}].name must be non-empty"))
+    } else if name != trimmed {
+        Some(format!(
+            "ATOF sinks[{index}].name must not have leading or trailing whitespace"
+        ))
+    } else if !stream_sink_names.insert(name) {
+        Some(format!("ATOF stream sink name {name:?} must be unique"))
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("atof".to_string()),
+            Some(format!("sinks[{index}].name")),
+            message,
+        );
     }
 }
 

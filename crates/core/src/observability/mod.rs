@@ -72,6 +72,154 @@ pub(crate) fn default_mark_exclude_names() -> Vec<String> {
     vec!["llm.chunk".to_string()]
 }
 
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn push_common_optimization_attributes(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    push_optimization_models_and_tokens(attributes, summary);
+    push_optimization_cost(attributes, "baseline", summary.baseline_cost.as_ref());
+    push_optimization_cost(attributes, "actual", summary.actual_cost.as_ref());
+    push_optimization_savings_and_status(attributes, summary);
+    push_optimization_pricing_provenance(attributes, summary);
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_models_and_tokens(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    if let Some(model) = summary.baseline_model.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.baseline_model",
+            model.model.clone(),
+        ));
+    }
+    if let Some(model) = summary.effective_model.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.effective_model",
+            model.model.clone(),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.prompt_tokens {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.prompt_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.total_tokens {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.total_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_cost(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    label: &str,
+    cost: Option<&crate::codec::response::CostEstimate>,
+) {
+    let Some(cost) = cost else {
+        return;
+    };
+    if let Some(total) = cost.total_or_component_sum() {
+        attributes.push(opentelemetry::KeyValue::new(
+            format!("nemo_relay.llm.optimization.{label}_cost"),
+            total,
+        ));
+    }
+    attributes.push(opentelemetry::KeyValue::new(
+        format!("nemo_relay.llm.optimization.{label}_cost_currency"),
+        cost.currency.clone(),
+    ));
+    if let Some(source) = cost.pricing_source.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            format!("nemo_relay.llm.optimization.{label}_pricing_source"),
+            source.clone(),
+        ));
+    }
+    if let Some(as_of) = cost.pricing_as_of.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            format!("nemo_relay.llm.optimization.{label}_pricing_as_of"),
+            as_of.clone(),
+        ));
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_savings_and_status(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    if let Some(saved) = summary.estimated_cost_saved {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.estimated_cost_saved",
+            saved,
+        ));
+        if let Some(currency) = summary.currency.as_ref() {
+            attributes.push(opentelemetry::KeyValue::new(
+                "nemo_relay.llm.optimization.estimated_cost_saved_currency",
+                currency.clone(),
+            ));
+        }
+    }
+    if let Some(currency) = summary.currency.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.currency",
+            currency.clone(),
+        ));
+    }
+    let status = match summary.status {
+        crate::codec::optimization::LlmOptimizationSummaryStatus::Complete => "complete",
+        crate::codec::optimization::LlmOptimizationSummaryStatus::Partial => "partial",
+    };
+    attributes.push(opentelemetry::KeyValue::new(
+        "nemo_relay.llm.optimization.status",
+        status,
+    ));
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_pricing_provenance(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    let source = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_source.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_source.as_ref())
+        });
+    if let Some(source) = source {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_source",
+            source.clone(),
+        ));
+    }
+    let as_of = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_as_of.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_as_of.as_ref())
+        });
+    if let Some(as_of) = as_of {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_as_of",
+            as_of.clone(),
+        ));
+    }
+}
+
 /// Validates OTLP attribute mappings shared by exporter configuration surfaces.
 pub fn validate_attribute_mappings(
     mappings: &[OtlpAttributeMapping],
