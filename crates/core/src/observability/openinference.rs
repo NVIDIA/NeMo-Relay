@@ -25,7 +25,8 @@ use super::{
     attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
     merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_session_identity_attributes, push_top_level_json_attributes, validate_attribute_mappings,
+    push_session_identity_attributes, push_top_level_json_attributes, relay_span_id,
+    relay_trace_id, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
@@ -634,6 +635,8 @@ impl OpenInferenceEventProcessor {
             .span_builder(span_name(event))
             .with_kind(span_kind(event))
             .with_start_time(to_system_time(*event.timestamp()))
+            .with_trace_id(relay_trace_id(event.uuid()))
+            .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &parent_context);
         let mut attributes = start_attributes(event);
         if is_trace_root {
@@ -703,6 +706,8 @@ impl OpenInferenceEventProcessor {
             .span_builder(format!("mark:{mark_name}"))
             .with_kind(SpanKind::Internal)
             .with_start_time(timestamp)
+            .with_trace_id(relay_trace_id(event.uuid()))
+            .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         attributes.push(KeyValue::new(
             oi::OPENINFERENCE_SPAN_KIND,
@@ -737,6 +742,8 @@ impl OpenInferenceEventProcessor {
             .span_builder(format!("mark:{}", event.name()))
             .with_kind(SpanKind::Internal)
             .with_start_time(timestamp)
+            .with_trace_id(relay_trace_id(event.uuid()))
+            .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         span.set_attributes(attributes);
         span.end_with_timestamp(timestamp);
