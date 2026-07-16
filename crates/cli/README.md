@@ -26,18 +26,22 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 ## Why Use It?
 
+The CLI is designed for these tasks:
+
 - **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
   Agent through a local NeMo Relay gateway without changing the agent
   itself.
-- **Configure hooks interactively**: Use the setup wizard to write project or
-  user config and install the hook files needed by supported agents.
+- **Configure transparent runs interactively**: Use the setup wizard to write
+  project or user configuration for supported agents.
 - **Export local sessions**: Write ATIF trajectory files, ATOF event JSONL
   streams, or OpenInference spans from one shared config model.
 - **Diagnose setup readiness**: Check config layers, `plugins.toml` discovery,
-  agent binaries, persistent host-plugin installs, hook status, observability
-  outputs, and shell completions with `nemo-relay doctor`.
+  agent binaries, persistent coding-agent integrations, hook status,
+  observability outputs, and shell completions with `nemo-relay doctor`.
 
 ## What You Get
+
+The CLI provides these capabilities:
 
 - **`nemo-relay` binary**: The executable installed by the `nemo-relay-cli`
   Cargo package.
@@ -49,6 +53,12 @@ with the installed `nemo-relay` command rather than link against the crate.
   CLI overrides for deterministic non-interactive use.
 - **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
+- **Persistent agent integration**: `nemo-relay install` configures Codex,
+  Claude Code, or Hermes Agent with one generated MCP bootstrap and the host's
+  canonical lifecycle hooks.
+- **Shared gateway lifecycle**: Every persistent integration launches the same
+  host-neutral `nemo-relay mcp` client. Concurrent clients share one native
+  gateway on `127.0.0.1:47632`.
 
 ## Installation Options
 
@@ -99,6 +109,12 @@ Run a supported agent through the gateway:
 ```bash
 nemo-relay codex
 nemo-relay claude -- "summarize this repository"
+```
+
+Install persistent integrations for the supported agent CLIs on `PATH`:
+
+```bash
+nemo-relay install all
 ```
 
 Use `run --dry-run` to inspect resolved config without spawning the agent:
