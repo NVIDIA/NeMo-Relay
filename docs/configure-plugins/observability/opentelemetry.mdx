@@ -97,12 +97,12 @@ Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
 NeMo Relay projects top-level lifecycle payload fields to typed OTLP attributes
 with dotted names. For example, `metadata = { tenant = "acme" }` becomes
-`nemo_relay.start.metadata.tenant = "acme"`. 
+`nemo_relay.start.metadata.tenant = "acme"`.
 - Start events use the
 `nemo_relay.start.data`, `nemo_relay.start.metadata`, and
-`nemo_relay.start.input` prefixes. 
+`nemo_relay.start.input` prefixes.
 - End events use `nemo_relay.end.data`,
-`nemo_relay.end.metadata`, and `nemo_relay.end.output`. 
+`nemo_relay.end.metadata`, and `nemo_relay.end.output`.
 - Handle attributes use
 `nemo_relay.handle_attributes`. Mark data, metadata, attributes, and
 category-profile fields use the corresponding `nemo_relay.mark.*` prefixes.
