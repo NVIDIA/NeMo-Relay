@@ -10,6 +10,7 @@ metadata:
 
 Use this skill when an application runs concurrent requests, worker pools, async
 tasks, goroutines, or multiple agents in the same process.
+Treat scope-stack ownership as part of the request boundary.
 
 ## Core Rule
 

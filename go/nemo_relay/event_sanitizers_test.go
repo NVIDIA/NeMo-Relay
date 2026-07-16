@@ -189,7 +189,8 @@ func TestEventSanitizerRegistrationErrorsReleaseCallbacks(t *testing.T) {
 	if err := RegisterMarkSanitizeGuardrail(duplicateEventSanitizer, 0, passThrough); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterMarkSanitizeGuardrail(duplicateEventSanitizer, 0, passThrough); err == nil {
+	err := RegisterMarkSanitizeGuardrail(duplicateEventSanitizer, 0, passThrough)
+	if err == nil {
 		t.Fatal("expected duplicate event sanitizer registration to fail")
 	}
 	if afterDuplicate := registeredClosureCount(); afterDuplicate != baseline+1 {
@@ -201,7 +202,8 @@ func TestEventSanitizerRegistrationErrorsReleaseCallbacks(t *testing.T) {
 	if err := RegisterToolSanitizeRequestGuardrail(duplicateToolSanitizer, 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterToolSanitizeRequestGuardrail(duplicateToolSanitizer, 0, func(_ string, args json.RawMessage) json.RawMessage { return args }); err == nil {
+	err = RegisterToolSanitizeRequestGuardrail(duplicateToolSanitizer, 0, func(_ string, args json.RawMessage) json.RawMessage { return args })
+	if err == nil {
 		t.Fatal("expected duplicate tool sanitizer registration to fail")
 	}
 	if afterToolDuplicate := registeredClosureCount(); afterToolDuplicate != baseline+1 {
@@ -222,7 +224,8 @@ func TestEventSanitizerRegistrationErrorsReleaseCallbacks(t *testing.T) {
 			return ScopeRegisterScopeSanitizeEndGuardrail(invalidScopeUUID, "go-invalid-end", 0, passThrough)
 		},
 	} {
-		if err := register(); err == nil {
+		err = register()
+		if err == nil {
 			t.Fatalf("expected invalid UUID for %s registration", name)
 		}
 	}

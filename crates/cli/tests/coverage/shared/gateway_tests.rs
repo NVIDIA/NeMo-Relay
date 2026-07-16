@@ -9,6 +9,7 @@ use crate::sessions::{LlmGatewayStart, SessionManager};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
+use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use reqwest::Client;
 use serde_json::Map;
@@ -91,16 +92,163 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
         .body(Body::from(r#"{"model":"gpt-test"}"#))
         .unwrap();
 
-    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
-        .await
-        .unwrap();
+    let prepared = prepare_gateway_request(
+        &GatewayConfig::default(),
+        request,
+        crate::provider_auth::ProviderRequestAuthorization {
+            source_credential:
+                crate::provider_auth::SourceCredentialDisposition::ProviderCredential,
+            allow_environment_provider_auth: true,
+        },
+    )
+    .await
+    .unwrap();
 
-    assert!(prepared.allow_environment_provider_auth);
+    assert!(prepared.authorization.allow_environment_provider_auth);
     assert!(
         !prepared
             .headers
             .contains_key(crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER)
     );
+}
+
+#[tokio::test]
+async fn prepared_gateway_request_decodes_zstd_for_observability() {
+    let body = br#"{"model":"gpt-test","stream":true}"#;
+    let compressed = zstd::stream::encode_all(body.as_slice(), 0).unwrap();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd")
+        .body(Body::from(compressed.clone()))
+        .unwrap();
+
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+
+    assert_eq!(prepared.body_bytes.as_ref(), compressed);
+    assert_eq!(
+        prepared.request_json,
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+        })
+    );
+    assert!(prepared.streaming);
+    assert_eq!(
+        prepared.headers.get(header::CONTENT_ENCODING).unwrap(),
+        "zstd"
+    );
+}
+
+#[tokio::test]
+async fn prepared_gateway_request_decodes_chained_zstd_for_observability() {
+    let body = br#"{"model":"gpt-test","stream":true}"#;
+    let compressed_once = zstd::stream::encode_all(body.as_slice(), 0).unwrap();
+    let compressed_twice = zstd::stream::encode_all(compressed_once.as_slice(), 0).unwrap();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd, zstd")
+        .body(Body::from(compressed_twice.clone()))
+        .unwrap();
+
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+
+    assert_eq!(prepared.body_bytes.as_ref(), compressed_twice);
+    assert_eq!(
+        prepared.request_json,
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+        })
+    );
+    assert_eq!(
+        prepared.headers.get(header::CONTENT_ENCODING).unwrap(),
+        "zstd, zstd"
+    );
+}
+
+#[test]
+fn zstd_decoder_window_tracks_the_managed_body_limit() {
+    assert_eq!(zstd_window_log_max(0), 10);
+    assert_eq!(zstd_window_log_max(1 << 10), 10);
+    assert_eq!(zstd_window_log_max((1 << 10) + 1), 11);
+    assert_eq!(
+        zstd_window_log_max(usize::MAX),
+        if usize::BITS == 32 { 30 } else { 31 }
+    );
+}
+
+#[tokio::test]
+async fn request_observability_decode_is_bounded_and_encoding_aware() {
+    let oversized = vec![b'x'; 256];
+    let compressed = zstd::stream::encode_all(oversized.as_slice(), 0).unwrap();
+    let config = GatewayConfig {
+        max_passthrough_body_bytes: 32,
+        ..GatewayConfig::default()
+    };
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd")
+        .body(Body::from(compressed))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, true)
+        .await
+        .unwrap();
+    assert!(prepared.request_json.is_null());
+
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "gzip")
+        .body(Body::from(r#"{"model":"opaque"}"#))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, true)
+        .await
+        .unwrap();
+    assert!(prepared.request_json.is_null());
+
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "identity")
+        .body(Body::from(r#"{"model":"gpt-test"}"#))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.request_json,
+        json!({
+            "model": "gpt-test",
+        })
+    );
+}
+
+#[tokio::test]
+async fn malformed_encoded_request_remains_a_raw_passthrough() {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd")
+        .body(Body::from("not-a-zstd-frame"))
+        .unwrap();
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+    let managed = build_llm_gateway_start(&prepared).request;
+
+    let (body, headers) =
+        effective_upstream_request(&prepared.body_bytes, &prepared.headers, Some(&managed));
+
+    assert!(managed.content.is_null());
+    assert_eq!(body, prepared.body_bytes);
+    assert_eq!(headers.get(header::CONTENT_ENCODING).unwrap(), "zstd");
 }
 
 #[test]
@@ -297,6 +445,26 @@ fn effective_upstream_request_overlays_runtime_body_and_headers() {
 }
 
 #[test]
+fn effective_upstream_request_removes_content_encoding_after_reencoding() {
+    let original_body = Bytes::from_static(b"compressed bytes");
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+    let request = LlmRequest {
+        headers: Map::from_iter([("content-encoding".to_string(), json!("zstd"))]),
+        content: json!({ "model": "rewritten" }),
+    };
+
+    let (body, headers) =
+        effective_upstream_request(&original_body, &original_headers, Some(&request));
+
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({ "model": "rewritten" })
+    );
+    assert!(!headers.contains_key(header::CONTENT_ENCODING));
+}
+
+#[test]
 fn effective_upstream_request_returns_original_without_runtime_request() {
     let original_body = Bytes::from_static(br#"{"model":"original"}"#);
     let mut original_headers = HeaderMap::new();
@@ -395,7 +563,7 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
         ProviderRoute::OpenAiChatCompletions,
     );
     assert_eq!(effective.url, "http://127.0.0.1:9000/v1/responses");
-    assert_eq!(effective.route, ProviderRoute::OpenAiResponses);
+    assert_eq!(effective.target_route, ProviderRoute::OpenAiResponses);
     assert_eq!(effective.headers.get("x-backend").unwrap(), "selected");
     assert!(
         effective
@@ -411,6 +579,128 @@ fn internal_dispatch_controls_are_consumed_and_never_forwarded() {
     );
     assert!(effective.headers.get(INTERNAL_RETRY_AWARE_HEADER).is_none());
     assert!(retry_aware_dispatch(&request));
+}
+
+#[test]
+fn explicit_keyless_target_drops_source_credentials() {
+    let mut source_headers = HeaderMap::new();
+    source_headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer source-provider-key"),
+    );
+    source_headers.insert("x-api-key", HeaderValue::from_static("source-api-key"));
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            (
+                INTERNAL_DISPATCH_URL_HEADER.to_string(),
+                json!("http://keyless.invalid/v1/chat/completions"),
+            ),
+            (
+                INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
+                json!("openai_chat"),
+            ),
+        ]),
+        content: Value::Null,
+    };
+
+    let effective = effective_dispatch_request(
+        &Bytes::from_static(br#"{"model":"source"}"#),
+        &source_headers,
+        Some(&request),
+        "http://source.invalid/v1/responses",
+        ProviderRoute::OpenAiResponses,
+    );
+
+    assert_eq!(
+        effective.credential_policy,
+        TargetCredentialPolicy::ExplicitTarget
+    );
+    assert!(!crate::provider_auth::has_provider_credential(
+        &effective.headers
+    ));
+}
+
+#[test]
+fn cross_protocol_target_uses_only_binding_owned_authentication() {
+    let mut source_headers = HeaderMap::new();
+    source_headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer openai-source-key"),
+    );
+    let request = LlmRequest {
+        headers: Map::from_iter([
+            (
+                INTERNAL_DISPATCH_URL_HEADER.to_string(),
+                json!("http://anthropic-target.invalid/v1/messages"),
+            ),
+            (
+                INTERNAL_DISPATCH_ROUTE_HEADER.to_string(),
+                json!("anthropic_messages"),
+            ),
+            ("x-api-key".to_string(), json!("anthropic-binding-key")),
+        ]),
+        content: Value::Null,
+    };
+
+    let effective = effective_dispatch_request(
+        &Bytes::from_static(br#"{"model":"source"}"#),
+        &source_headers,
+        Some(&request),
+        "http://source.invalid/v1/responses",
+        ProviderRoute::OpenAiResponses,
+    );
+
+    assert_eq!(effective.target_route, ProviderRoute::AnthropicMessages);
+    assert_eq!(
+        effective.credential_policy,
+        TargetCredentialPolicy::ExplicitTarget
+    );
+    assert!(effective.headers.get(header::AUTHORIZATION).is_none());
+    assert_eq!(
+        effective.headers.get("x-api-key").unwrap(),
+        "anthropic-binding-key"
+    );
+
+    let built = inject_provider_auth_with_env(
+        test_http_client().post("http://anthropic-target.invalid/v1/messages"),
+        effective.target_route,
+        &effective.headers,
+        false,
+        |_: &str| Some("ambient-key-must-not-win".into()),
+    )
+    .build()
+    .unwrap();
+    assert!(built.headers().get(header::AUTHORIZATION).is_none());
+}
+
+#[test]
+fn same_route_rewrite_without_explicit_dispatch_preserves_source_auth_policy() {
+    let mut source_headers = HeaderMap::new();
+    source_headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer source-provider-key"),
+    );
+    let request = LlmRequest {
+        headers: Map::from_iter([("x-plugin-metadata".to_string(), json!("present"))]),
+        content: json!({"model": "rewritten"}),
+    };
+
+    let effective = effective_dispatch_request(
+        &Bytes::from_static(br#"{"model":"source"}"#),
+        &source_headers,
+        Some(&request),
+        "http://source.invalid/v1/responses",
+        ProviderRoute::OpenAiResponses,
+    );
+
+    assert_eq!(
+        effective.credential_policy,
+        TargetCredentialPolicy::SourceOrEnvironment
+    );
+    assert_eq!(
+        effective.headers.get(header::AUTHORIZATION).unwrap(),
+        "Bearer source-provider-key"
+    );
 }
 
 #[test]
@@ -439,7 +729,7 @@ fn malformed_dispatch_route_discards_the_override_url() {
     );
 
     assert_eq!(effective.url, "http://default.invalid/v1/chat/completions");
-    assert_eq!(effective.route, ProviderRoute::OpenAiChatCompletions);
+    assert_eq!(effective.target_route, ProviderRoute::OpenAiChatCompletions);
     assert!(
         effective
             .headers
@@ -474,7 +764,7 @@ fn dispatch_url_without_a_route_remains_supported() {
     );
 
     assert_eq!(effective.url, "http://127.0.0.1:9000/v1/chat/completions");
-    assert_eq!(effective.route, ProviderRoute::OpenAiChatCompletions);
+    assert_eq!(effective.target_route, ProviderRoute::OpenAiChatCompletions);
 }
 
 #[test]
@@ -587,7 +877,10 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
         body_bytes: Bytes::from_static(b"{}"),
         request_json: json!({}),
         streaming: false,
-        allow_environment_provider_auth: false,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
     };
     let upstream_info = Arc::new(Mutex::new(None));
     let upstream_error = Arc::new(Mutex::new(None));
@@ -778,7 +1071,10 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
         body_bytes: axum::body::Bytes::new(),
         request_json: request_json.clone(),
         streaming: true,
-        allow_environment_provider_auth: true,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: true,
+        },
     };
 
     let start = build_llm_gateway_start(&prepared);
@@ -809,6 +1105,10 @@ fn observable_headers_omit_secrets_and_transport_headers() {
     let mut headers = HeaderMap::new();
     headers.insert("authorization", HeaderValue::from_static("Bearer secret"));
     headers.insert("x-api-key", HeaderValue::from_static("secret"));
+    headers.insert(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+        HeaderValue::from_static("proxy-secret"),
+    );
     headers.insert("connection", HeaderValue::from_static("close"));
     headers.insert("x-request-id", HeaderValue::from_static("req-1"));
 
@@ -817,6 +1117,7 @@ fn observable_headers_omit_secrets_and_transport_headers() {
     assert_eq!(observed.get("x-request-id"), Some(&json!("req-1")));
     assert!(!observed.contains_key("authorization"));
     assert!(!observed.contains_key("x-api-key"));
+    assert!(!observed.contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER));
     assert!(!observed.contains_key("connection"));
 }
 
@@ -892,6 +1193,123 @@ fn preserves_jwt_when_no_replacement_key_available() {
         false,
     );
     assert!(sanitized.get("authorization").is_some());
+}
+
+#[test]
+fn foreground_gateway_does_not_interpret_agent_specific_placeholder_credentials() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer no-key-required"),
+    );
+    let sanitized = strip_replaceable_agent_auth_headers_with_openai_key_state(
+        &inbound,
+        ProviderRoute::OpenAiChatCompletions,
+        true,
+    );
+    assert_eq!(
+        sanitized.get("authorization").unwrap(),
+        "Bearer no-key-required"
+    );
+}
+
+#[test]
+fn generated_transparent_proxy_credentials_are_random_and_high_entropy() {
+    let first = crate::provider_auth::TransparentProxyCredential::generate().unwrap();
+    let second = crate::provider_auth::TransparentProxyCredential::generate().unwrap();
+
+    assert!(first.expose().starts_with("nrp_"));
+    assert_eq!(first.expose().len(), 68);
+    assert_ne!(first.expose(), second.expose());
+}
+
+#[test]
+fn transparent_proxy_dedicated_header_is_consumed_before_plugins() {
+    let credential =
+        crate::provider_auth::TransparentProxyCredential::from_static("test-proxy-token");
+    let mut inbound = HeaderMap::new();
+    inbound.insert(
+        "authorization",
+        HeaderValue::from_static("Bearer real-provider-key"),
+    );
+    inbound.insert(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+        HeaderValue::from_static("test-proxy-token"),
+    );
+
+    let disposition = credential.consume(&mut inbound).unwrap();
+
+    assert_eq!(
+        disposition,
+        crate::provider_auth::SourceCredentialDisposition::RelayProxyCredential {
+            provider_credential_present: true
+        }
+    );
+    assert_eq!(
+        inbound.get("authorization").unwrap(),
+        "Bearer real-provider-key"
+    );
+    assert!(
+        inbound
+            .get(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+            .is_none()
+    );
+}
+
+#[test]
+fn transparent_proxy_accepts_standard_openai_and_anthropic_auth_shapes() {
+    let credential =
+        crate::provider_auth::TransparentProxyCredential::from_static("test-proxy-token");
+    for (name, value) in [
+        ("authorization", "Bearer test-proxy-token"),
+        ("x-api-key", "test-proxy-token"),
+        ("api-key", "test-proxy-token"),
+        ("anthropic-api-key", "test-proxy-token"),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            HeaderValue::from_str(value).unwrap(),
+        );
+
+        let disposition = credential.consume(&mut headers).unwrap();
+
+        assert_eq!(
+            disposition,
+            crate::provider_auth::SourceCredentialDisposition::RelayProxyCredential {
+                provider_credential_present: false
+            },
+            "header={name}"
+        );
+        assert!(headers.is_empty(), "header={name}");
+    }
+}
+
+#[test]
+fn transparent_proxy_rejects_missing_or_foreign_credentials() {
+    let credential =
+        crate::provider_auth::TransparentProxyCredential::from_static("test-proxy-token");
+    let missing = credential.consume(&mut HeaderMap::new()).unwrap_err();
+    assert!(matches!(&missing, CliError::Unauthorized(_)));
+    assert_eq!(missing.into_response().status(), StatusCode::UNAUTHORIZED);
+
+    let mut foreign = HeaderMap::new();
+    foreign.insert(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+        HeaderValue::from_static("different-run-token"),
+    );
+    let foreign_error = credential.consume(&mut foreign).unwrap_err();
+    assert!(matches!(&foreign_error, CliError::Unauthorized(_)));
+    assert_eq!(
+        foreign_error.into_response().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        foreign
+            .get(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+            .unwrap(),
+        "different-run-token"
+    );
 }
 
 #[test]
@@ -1120,6 +1538,7 @@ async fn passthrough_rejects_unsupported_provider_path_directly() {
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
         require_provider_client_token: false,
+        transparent_proxy_credential: None,
         http: test_http_client(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
@@ -1156,6 +1575,7 @@ async fn models_rejects_non_get_requests_directly() {
         bootstrap_fingerprint: None,
         bootstrap_challenge_key: None,
         require_provider_client_token: false,
+        transparent_proxy_credential: None,
         http: test_http_client(),
         sessions: SessionManager::new(config),
         last_activity: std::sync::Arc::new(std::sync::Mutex::new(std::time::Instant::now())),

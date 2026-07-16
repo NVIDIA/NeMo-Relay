@@ -11,6 +11,7 @@ metadata:
 Use this skill when a user has existing NeMo Flow code or documentation and
 wants it converted to NeMo Relay. Treat the migration as a mechanical rename
 plus language-specific validation, not a behavior rewrite.
+Keep compatibility exceptions explicit before applying broad renames.
 
 ## Default Workflow
 
@@ -20,8 +21,9 @@ plus language-specific validation, not a behavior rewrite.
    `TARGET_PATH` to the source repository or target project. Run the bundled
    helper in dry-run mode before editing:
    `python3 "$SKILL_DIR/scripts/migrate_from_nemo_flow.py" "$TARGET_PATH" --rename-paths`
-3. Review the reported text edits and path renames. If the scope is correct,
-   rerun with `--write --rename-paths`.
+3. Review the reported text edits and path renames with the user. Obtain explicit
+   confirmation for the resolved target root, then rerun with `--write`,
+   `--rename-paths`, and `--confirm-root "$TARGET_PATH"`.
 4. Apply language-specific cleanup for package manager lockfiles, generated
    artifacts, and public API examples.
 5. Search for remaining Flow names and verify the affected language surfaces.
@@ -76,9 +78,23 @@ helper:
 - runs as a dry run unless `--write` is passed
 - skips common vendor, build, cache, and generated directories
 - skips lockfiles unless `--include-lockfiles` is passed
+- skips symbolic links and credential-bearing dotenv files
+- requires the reviewed target root to be repeated with `--confirm-root` before
+  writing, and refuses filesystem-root or home-directory writes
+- anchors writes and renames to verified directory handles without following
+  symbolic links, and refuses write mode on platforms that cannot provide those
+  guarantees
+- uses atomic no-replace path renames and exits nonzero when any requested
+  mutation fails
 - can report or perform path renames with `--rename-paths`
 - rewrites only explicit NeMo Flow identifiers, package names, repository names,
   config paths, headers, environment variables, and FFI type prefixes
+
+The helper does not classify arbitrary JSON, YAML, TOML, or INI files as secret.
+Review every configuration file in the dry-run report. If any reported file is
+unreviewed or credential-bearing, do not use `--write` on that root. Apply the
+reviewed changes manually and leave secret-bearing files untouched without
+reading or displaying their values.
 
 Set shell-safe absolute paths before invoking the helper. Replace the example
 values with the resolved skill directory and either the source repository or the
@@ -89,7 +105,8 @@ SKILL_DIR="/resolved/absolute/path/to/nemo-relay-migrate-from-flow"
 TARGET_PATH="/resolved/absolute/path/to/target-project"
 
 python3 "$SKILL_DIR/scripts/migrate_from_nemo_flow.py" "$TARGET_PATH" --rename-paths
-python3 "$SKILL_DIR/scripts/migrate_from_nemo_flow.py" "$TARGET_PATH" --write --rename-paths
+python3 "$SKILL_DIR/scripts/migrate_from_nemo_flow.py" "$TARGET_PATH" \
+  --write --rename-paths --confirm-root "$TARGET_PATH"
 ```
 
 Use `--include-lockfiles` only when the user wants lockfiles edited directly;

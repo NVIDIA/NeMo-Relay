@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+mod logging;
 mod types;
 
 pub(crate) use types::*;
@@ -14,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
+use nemo_relay::logging::LoggingConfig;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
 };
@@ -51,6 +53,7 @@ struct FileConfig {
     gateway: Option<FileGatewayConfig>,
     upstream: Option<FileUpstreamConfig>,
     agents: Option<FileAgentsConfig>,
+    logging: Option<logging::FileLoggingConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -90,6 +93,42 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
     apply_server_overrides(&mut resolved.gateway, args)?;
     enforce_required_dynamic_plugin_startup(args.config.as_ref(), &resolved)?;
     Ok(resolved)
+}
+
+/// Resolves only operational logging from the normal config discovery scope.
+///
+/// This intentionally avoids plugin discovery and activation so logging can be initialized before
+/// operational command dispatch. Missing `[logging]` configuration resolves to built-in defaults.
+pub(crate) fn resolve_logging_config(
+    explicit: Option<&Path>,
+    user_only: bool,
+) -> Result<LoggingConfig, CliError> {
+    let explicit = explicit.map(Path::to_path_buf);
+    let user_only = user_only || user_config_scope();
+    let mut merged = toml::Value::Table(toml::map::Map::new());
+    for path in config_paths_scoped(explicit.as_ref(), user_only) {
+        let Some(raw) = read_config_file(&path, explicit.is_some(), "configuration")? else {
+            continue;
+        };
+        let parsed = raw
+            .parse::<toml::Table>()
+            .map(toml::Value::Table)
+            .map_err(|error| {
+                CliError::Config(format!("invalid TOML in {}: {error}", path.display()))
+            })?;
+        merge_toml(&mut merged, parsed);
+    }
+
+    if merged.get("logging").is_none() {
+        return Ok(LoggingConfig::default());
+    }
+    let document = toml::to_string(&merged).map_err(|error| {
+        CliError::Config(format!("failed to resolve logging configuration: {error}"))
+    })?;
+    LoggingConfig::from_toml_document(&document).map_err(|error| match error {
+        nemo_relay::error::FlowError::InvalidArgument(message) => CliError::Config(message),
+        other => CliError::Flow(other),
+    })
 }
 
 /// Resolves the shared plugin MCP gateway from system and user layers only.
@@ -1119,6 +1158,7 @@ fn apply_file_config(resolved: &mut ResolvedConfig, value: toml::Value) -> Resul
     apply_file_gateway_config(&mut resolved.gateway, config.gateway)?;
     apply_file_upstream_config(&mut resolved.gateway, config.upstream);
     apply_file_agents_config(&mut resolved.agents, config.agents);
+    logging::apply_file_logging_config(&mut resolved.logging, config.logging)?;
     Ok(())
 }
 

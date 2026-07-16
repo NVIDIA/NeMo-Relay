@@ -9,6 +9,10 @@ use crate::filesystem::bounded::read_bounded_regular_file;
 use crate::hooks::GatewayMode;
 use axum::http::HeaderValue;
 use base64::Engine;
+use nemo_relay::logging::{
+    DEFAULT_FILE_SINK_QUEUE_ENTRIES, LogFormat, LogLevel, LogSinkConfig,
+    MAX_FILE_SINK_QUEUE_ENTRIES,
+};
 use nemo_relay::plugin::dynamic::{
     DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginKind,
     DynamicPluginManifest, DynamicPluginStartupClass,
@@ -165,6 +169,12 @@ fn effective_plugin_toml_sources_reports_empty_and_sorted_contributors() {
 
 fn isolated_config_path(temp: &tempfile::TempDir) -> std::path::PathBuf {
     temp.path().join("config.toml")
+}
+
+// Escapes a path for embedding in a TOML basic string (Windows `\U` sequences are invalid otherwise).
+fn toml_basic_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 fn write_attested_python_environment(path: &std::path::Path, manifest_path: &std::path::Path) {
@@ -704,6 +714,52 @@ fn persistent_user_scope_excludes_project_gateway_and_plugin_layers() {
             xdg.join("nemo-relay/plugins.toml"),
         ]
     );
+}
+
+#[test]
+fn logging_resolution_respects_environment_user_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    let project_config_dir = project.join(".nemo-relay");
+    let user_config_dir = xdg.join("nemo-relay");
+    let project_sink = temp.path().join("project.log.jsonl");
+    std::fs::create_dir_all(&project_config_dir).unwrap();
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        project_config_dir.join("config.toml"),
+        format!(
+            r#"
+[[logging.sinks]]
+path = {}
+"#,
+            toml_basic_string(project_sink.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        user_config_dir.join("config.toml"),
+        r#"
+[logging]
+level = "warn"
+"#,
+    )
+    .unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(&nested, &xdg);
+    let has_project_sink = |config: &LoggingConfig| {
+        config.sinks.iter().any(
+            |sink| matches!(sink, LogSinkConfig::File(file) if file.path == project_sink.as_path()),
+        )
+    };
+
+    let normal = resolve_logging_config(None, false).unwrap();
+    assert!(has_project_sink(&normal));
+
+    scope.enable_user_scope();
+    let user_only = resolve_logging_config(None, false).unwrap();
+    assert!(!has_project_sink(&user_only));
 }
 
 #[test]
@@ -2849,4 +2905,315 @@ fn set_test_windows_dacl(path: &std::path::Path, sddl: &str) {
     // SAFETY: The descriptor was allocated by ConvertStringSecurityDescriptor... above.
     unsafe { LocalFree(descriptor.cast()) };
     assert_ne!(result, 0, "{}", std::io::Error::last_os_error());
+}
+
+#[test]
+fn logging_defaults_when_section_absent() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(&config_path, "").unwrap();
+    let args = GatewayOverrides {
+        config: Some(config_path),
+        ..GatewayOverrides::default()
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(resolved.logging, LoggingConfig::default());
+    assert_eq!(resolved.logging.level, LogLevel::Info);
+    assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
+    assert!(resolved.logging.sinks.is_empty());
+}
+
+#[test]
+fn logging_parses_global_settings_and_file_sinks() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    let log_a = temp.path().join("a.log.jsonl");
+    let log_b = temp.path().join("b.log.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[logging]
+level = "debug"
+stderr_format = "human"
+flush_interval_millis = 250
+
+[[logging.sinks]]
+path = {}
+level = "trace"
+format = "jsonl"
+queue_capacity = 32
+
+[[logging.sinks]]
+path = {}
+format = "human"
+"#,
+            toml_basic_string(log_a.to_string_lossy().as_ref()),
+            toml_basic_string(log_b.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    let args = GatewayOverrides {
+        config: Some(config_path),
+        ..GatewayOverrides::default()
+    };
+
+    let resolved = resolve_server_config(&args).unwrap();
+
+    assert_eq!(resolved.logging.level, LogLevel::Debug);
+    assert_eq!(resolved.logging.stderr_format, LogFormat::Human);
+    assert_eq!(resolved.logging.flush_interval_millis, 250);
+    assert_eq!(resolved.logging.sinks.len(), 2);
+    match &resolved.logging.sinks[0] {
+        LogSinkConfig::File(sink) => {
+            assert_eq!(sink.path, log_a);
+            assert_eq!(sink.level, LogLevel::Trace);
+            assert_eq!(sink.format, LogFormat::Jsonl);
+            assert_eq!(sink.queue_capacity, 32);
+        }
+    }
+    match &resolved.logging.sinks[1] {
+        LogSinkConfig::File(sink) => {
+            assert_eq!(sink.path, log_b);
+            assert_eq!(sink.level, LogLevel::Debug);
+            assert_eq!(sink.format, LogFormat::Human);
+            assert_eq!(sink.queue_capacity, DEFAULT_FILE_SINK_QUEUE_ENTRIES);
+        }
+    }
+}
+
+#[test]
+fn logging_rejects_invalid_level_format_missing_path_and_zero_queue() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let bad_level = temp.path().join("bad-level.toml");
+    std::fs::write(
+        &bad_level,
+        r#"
+[logging]
+level = "verbose"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(bad_level),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging level"));
+
+    let bad_format = temp.path().join("bad-format.toml");
+    std::fs::write(
+        &bad_format,
+        r#"
+[logging]
+stderr_format = "yaml"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(bad_format),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging format"));
+
+    let missing_path = temp.path().join("missing-path.toml");
+    std::fs::write(
+        &missing_path,
+        r#"
+[[logging.sinks]]
+format = "jsonl"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(missing_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("requires path"));
+
+    let zero_queue = temp.path().join("zero-queue.toml");
+    std::fs::write(
+        &zero_queue,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+queue_capacity = 0
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(zero_queue),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("queue_capacity must be greater than 0"));
+
+    let over_max = temp.path().join("over-max.toml");
+    std::fs::write(
+        &over_max,
+        format!(
+            r#"
+[[logging.sinks]]
+path = "relay.log"
+queue_capacity = {}
+"#,
+            MAX_FILE_SINK_QUEUE_ENTRIES + 1
+        ),
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(over_max),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("exceeds maximum"));
+}
+
+#[test]
+fn logging_rejects_invalid_sink_level_and_format() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let bad_sink_level = temp.path().join("bad-sink-level.toml");
+    std::fs::write(
+        &bad_sink_level,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+level = "verbose"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(bad_sink_level),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging level"));
+
+    let bad_sink_format = temp.path().join("bad-sink-format.toml");
+    std::fs::write(
+        &bad_sink_format,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+format = "yaml"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(bad_sink_format),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("invalid logging format"));
+}
+
+#[test]
+fn logging_rejects_unknown_section_and_sink_fields() {
+    let temp = tempfile::tempdir().unwrap();
+
+    let unknown_logging_field = temp.path().join("unknown-logging-field.toml");
+    std::fs::write(
+        &unknown_logging_field,
+        r#"
+[logging]
+levle = "debug"
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(unknown_logging_field),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("unknown field `levle`"));
+
+    let unknown_sink_field = temp.path().join("unknown-sink-field.toml");
+    std::fs::write(
+        &unknown_sink_field,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+queue_capcity = 32
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(unknown_sink_field),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("unknown field `queue_capcity`"));
+}
+
+#[test]
+fn logging_rejects_empty_sink_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(
+        &config_path,
+        r#"
+[[logging.sinks]]
+path = ""
+"#,
+    )
+    .unwrap();
+    let error = resolve_server_config(&GatewayOverrides {
+        config: Some(config_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("path must not be empty"));
+}
+
+#[test]
+fn logging_config_does_not_read_rust_log() {
+    let _env = crate::test_support::ENV_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let previous = std::env::var_os("RUST_LOG");
+    unsafe {
+        std::env::set_var("RUST_LOG", "trace");
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = isolated_config_path(&temp);
+    std::fs::write(
+        &config_path,
+        r#"
+[logging]
+level = "error"
+"#,
+    )
+    .unwrap();
+    let resolved = resolve_server_config(&GatewayOverrides {
+        config: Some(config_path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap();
+
+    assert_eq!(resolved.logging.level, LogLevel::Error);
+    assert!(resolved.logging.sinks.is_empty());
+
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var("RUST_LOG", value),
+            None => std::env::remove_var("RUST_LOG"),
+        }
+    }
 }

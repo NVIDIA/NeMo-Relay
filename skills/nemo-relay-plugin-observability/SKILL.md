@@ -11,6 +11,7 @@ metadata:
 Start with one exporter managed by the built-in Observability plugin. This is
 the default for reusable process configuration and the best first plugin for
 most users because it makes Relay's captured activity visible.
+Choose one proof output before layering additional telemetry destinations.
 
 Use manual subscriber or exporter APIs only when a test, script, or application
 needs direct control over registration names, collection windows, or flush
@@ -33,7 +34,9 @@ Select the output that best matches the user's immediate inspection target:
 
 Choose one output first and verify it before adding another. ATOF is the
 default local proof because it preserves the raw event stream with the least
-translation. Add sanitization before exporters receive sensitive payloads.
+translation. Use synthetic, non-sensitive payloads for the first proof. Add and
+verify sanitization before exporters receive production payloads, and never
+display complete event records while validating an exporter.
 
 ## Embedded Event And Subscriber Model
 

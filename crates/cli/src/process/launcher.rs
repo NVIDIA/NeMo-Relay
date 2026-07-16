@@ -145,11 +145,13 @@ async fn execute_live_run_with_dynamic(
     prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
     let bootstrap_fingerprint = crate::configuration::transparent_gateway_fingerprint(gateway_url);
+    let proxy_credential = prepared.proxy_credential.clone();
     let running_server = RunningGateway::start(
         listener,
         gateway_config,
         dynamic_plugins,
         bootstrap_fingerprint.clone(),
+        proxy_credential,
     );
     if let Err(error) = wait_for_health(gateway_url, &bootstrap_fingerprint).await {
         let restore = prepared.restore();
@@ -321,6 +323,7 @@ impl RunningGateway {
         config: crate::configuration::GatewayConfig,
         dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
         bootstrap_fingerprint: String,
+        proxy_credential: crate::provider_auth::TransparentProxyCredential,
     ) -> Self {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
@@ -329,6 +332,7 @@ impl RunningGateway {
                 config,
                 dynamic_plugins,
                 bootstrap_fingerprint,
+                proxy_credential,
                 Some(shutdown_rx),
             )
             .await
@@ -399,6 +403,7 @@ impl PreparedAgentLaunch {
         resolved: &ResolvedConfig,
         dry_run: bool,
     ) -> Result<Self, CliError> {
+        let proxy_credential = crate::provider_auth::TransparentProxyCredential::generate()?;
         let mut run = Self {
             argv,
             host_index,
@@ -411,11 +416,21 @@ impl PreparedAgentLaunch {
             ],
             temp_dirs: Vec::new(),
             notes: Vec::new(),
+            proxy_credential,
+            secret_env_names: Vec::new(),
         };
         if let Some(path) = path_with_transparent_hook_dir() {
             run.env.push(("PATH".into(), path));
         }
-        crate::agents::prepare_launch(agent, &mut run, gateway_url, resolved, dry_run)?;
+        let proxy_credential = run.proxy_credential.clone();
+        crate::agents::prepare_launch(
+            agent,
+            &mut run,
+            gateway_url,
+            resolved,
+            &proxy_credential,
+            dry_run,
+        )?;
         Ok(run)
     }
 
@@ -529,7 +544,14 @@ impl PreparedAgentLaunch {
         }
         println!("argv = {}", self.argv.join(" "));
         for (name, value) in &self.env {
-            println!("env.{name} = {value}");
+            println!(
+                "env.{name} = {}",
+                if self.secret_env_names.contains(name) {
+                    "<redacted>"
+                } else {
+                    value
+                }
+            );
         }
         for note in &self.notes {
             println!("note = {note}");

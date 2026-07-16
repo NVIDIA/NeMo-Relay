@@ -62,6 +62,7 @@ pub(super) fn should_forward_request_header(name: &HeaderName, headers: &HeaderM
         && name != http::header::HOST
         && name != http::header::CONTENT_LENGTH
         && name.as_str() != BOOTSTRAP_CLIENT_TOKEN_HEADER
+        && name.as_str() != crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER
         // Strip Accept-Encoding so upstreams return identity-encoded bodies; otherwise the
         // observability capture (`output.value` on LLM spans, ATIF trajectory bodies) records
         // gzip/br/zstd bytes that downstream consumers can't read. Bandwidth cost is paid only

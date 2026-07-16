@@ -113,6 +113,101 @@ fn cli_parses_native_mcp_subcommand_and_bind_override() {
 }
 
 #[test]
+fn cli_logging_options_override_environment_source() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        (
+            "NEMO_RELAY_LOG",
+            Some(std::ffi::OsStr::new("intentionally-invalid")),
+        ),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "--log-level",
+        "trace",
+        "--log-stderr-format",
+        "jsonl",
+        "agents",
+    ])
+    .unwrap();
+
+    let config = cli.logging.resolve(None, false).unwrap();
+
+    assert_eq!(config.level, nemo_relay::logging::LogLevel::Trace);
+    assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
+    assert!(config.sinks.is_empty());
+}
+
+#[test]
+fn cli_logging_resolves_explicit_relay_config() {
+    let _environment = crate::test_support::EnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[logging]
+level = "warn"
+stderr_format = "jsonl"
+"#,
+    )
+    .unwrap();
+    let cli = Cli::try_parse_from(vec![
+        OsString::from("nemo-relay"),
+        OsString::from("--config"),
+        config_path.into_os_string(),
+        OsString::from("agents"),
+    ])
+    .unwrap();
+
+    let config = cli
+        .logging
+        .resolve(cli.server.config.as_deref(), false)
+        .unwrap();
+
+    assert_eq!(config.level, nemo_relay::logging::LogLevel::Warn);
+    assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
+    assert!(config.sinks.is_empty());
+}
+
+#[test]
+fn cli_rejects_mixed_direct_and_file_logging_options() {
+    let config_path = std::env::current_dir().unwrap().join("logging.toml");
+    let error = Cli::try_parse_from(vec![
+        OsString::from("nemo-relay"),
+        OsString::from("--log-level"),
+        OsString::from("info"),
+        OsString::from("--log-config-path"),
+        config_path.into_os_string(),
+        OsString::from("agents"),
+    ])
+    .unwrap_err();
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    assert!(error.to_string().contains("cannot be used with"));
+}
+
+#[test]
+fn command_logging_policy_excludes_only_configuration_editors() {
+    let config = Cli::try_parse_from(["nemo-relay", "config"]).unwrap();
+    assert!(config.command.as_ref().unwrap().skips_logging());
+
+    let plugins_edit = Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--project"]).unwrap();
+    assert!(plugins_edit.command.as_ref().unwrap().skips_logging());
+
+    let plugins_list = Cli::try_parse_from(["nemo-relay", "plugins", "list"]).unwrap();
+    assert!(!plugins_list.command.as_ref().unwrap().skips_logging());
+
+    let agents = Cli::try_parse_from(["nemo-relay", "agents"]).unwrap();
+    assert!(!agents.command.as_ref().unwrap().skips_logging());
+}
+
+#[test]
 fn doctor_rejects_conflicting_agent_and_plugin_targets() {
     let error =
         Cli::try_parse_from(["nemo-relay", "doctor", "codex", "--plugin", "all"]).unwrap_err();

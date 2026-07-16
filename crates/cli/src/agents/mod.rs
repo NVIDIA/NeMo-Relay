@@ -383,11 +383,18 @@ pub(crate) fn prepare_launch(
     launch: &mut crate::process::PreparedAgentLaunch,
     gateway_url: &str,
     resolved: &crate::configuration::ResolvedConfig,
+    proxy_credential: &crate::provider_auth::TransparentProxyCredential,
     dry_run: bool,
 ) -> Result<(), crate::error::CliError> {
+    launch.set_secret_env(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV,
+        proxy_credential.expose(),
+    );
     match agent {
         CodingAgent::Codex => codex::launch::prepare(launch, gateway_url),
-        CodingAgent::ClaudeCode => claude::launch::prepare(launch, gateway_url, dry_run),
+        CodingAgent::ClaudeCode => {
+            claude::launch::prepare(launch, gateway_url, proxy_credential, dry_run)
+        }
         CodingAgent::Hermes => hermes::launch::prepare(
             launch,
             resolved.agents.hermes.hooks_path.as_deref(),

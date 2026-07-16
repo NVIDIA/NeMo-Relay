@@ -177,18 +177,18 @@ confirmation before the live run.
 
 Use this smoke prompt:
 
-> List the names of up to three files in the current directory, then describe
-> what one file appears to contain. Do not create, edit, delete, or execute any
-> files.
+> Use a shell tool to print exactly `relay-smoke-test`, then reply that the tool
+> call completed. Do not inspect files, environment variables, processes,
+> credentials, network resources, or system configuration.
 
 Launch the selected transparent wrapper:
 
 ```bash
-nemo-relay codex -- exec "List the names of up to three files in the current directory, then describe what one file appears to contain. Do not create, edit, delete, or execute any files."
+nemo-relay codex -- exec "Use a shell tool to print exactly relay-smoke-test, then reply that the tool call completed. Do not inspect files, environment variables, processes, credentials, network resources, or system configuration."
 ```
 
 ```bash
-nemo-relay claude -- "List the names of up to three files in the current directory, then describe what one file appears to contain. Do not create, edit, delete, or execute any files."
+nemo-relay claude -- "Use a shell tool to print exactly relay-smoke-test, then reply that the tool call completed. Do not inspect files, environment variables, processes, credentials, network resources, or system configuration."
 ```
 
 For Hermes, launch `nemo-relay hermes` and enter the same prompt in the agent

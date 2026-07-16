@@ -34,6 +34,8 @@ pub(crate) enum CliError {
     InvalidPayload(String),
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
+    #[error("unauthorized gateway client: {0}")]
+    Unauthorized(String),
     #[error("gateway upstream error: {0}")]
     Upstream(#[from] reqwest::Error),
     #[error("{0}")]
@@ -98,6 +100,7 @@ impl IntoResponse for CliError {
         let status = match (guardrail_reason.is_some(), &self) {
             (true, _) => StatusCode::FORBIDDEN,
             (false, Self::PayloadTooLarge(_)) => StatusCode::PAYLOAD_TOO_LARGE,
+            (false, Self::Unauthorized(_)) => StatusCode::UNAUTHORIZED,
             (false, Self::InvalidPayload(_)) => StatusCode::BAD_REQUEST,
             (false, Self::Upstream(_)) => StatusCode::BAD_GATEWAY,
             (false, Self::ProviderFailure(failure)) => failure

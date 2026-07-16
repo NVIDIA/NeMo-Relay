@@ -62,6 +62,7 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         config,
         Vec::new(),
         fingerprint.clone(),
+        crate::provider_auth::TransparentProxyCredential::generate().unwrap(),
         Some(shutdown_rx),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {

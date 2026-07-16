@@ -546,8 +546,7 @@ pub(crate) fn gateway_upstream_url_override(
 
 /// Remove or preserve agent-native auth before generic provider auth injection.
 ///
-/// Codex strips ChatGPT auth tokens only when an OpenAI API key is available to
-/// replace them.
+/// Codex strips ChatGPT auth tokens only when an OpenAI API key is available to replace them.
 pub(crate) fn gateway_forward_headers(
     headers: &HeaderMap,
     route: GatewayRouteKind,

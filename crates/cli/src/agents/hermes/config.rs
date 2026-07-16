@@ -64,6 +64,13 @@ pub(crate) fn transparent_config(
         "base_url".into(),
         Value::String(format!("{}/v1", gateway_url.trim_end_matches('/'))),
     );
+    model.insert(
+        "api_key".into(),
+        Value::String(format!(
+            "${{{}}}",
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV
+        )),
+    );
     object.insert("model".into(), Value::Object(model));
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }

@@ -8,6 +8,7 @@ use super::configure::ConfigCommand;
 use super::diagnostics::{AgentsCommand, DoctorCommand};
 use super::hook_forward::HookForwardCommand;
 use super::install::{InstallCommand, UninstallCommand};
+use super::logging::LoggingArgs;
 use super::model_pricing::PricingCommand;
 use super::plugins::PluginsCommand;
 use super::run::{EasyPathCommand, RunCommand};
@@ -40,6 +41,8 @@ impl From<AgentArg> for CodingAgent {
 pub(crate) struct Cli {
     #[command(flatten)]
     pub(crate) server: ServerArgs,
+    #[command(flatten)]
+    pub(super) logging: LoggingArgs,
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 }
@@ -120,4 +123,13 @@ pub(crate) enum Command {
     /// Internal: subprocess used by installed hooks to forward events. Not typed by humans.
     #[command(hide = true)]
     HookForward(HookForwardCommand),
+}
+
+impl Command {
+    /// Configuration-editing commands remain available even when operational logging settings are
+    /// invalid, so users can repair their configuration.
+    pub(crate) fn skips_logging(&self) -> bool {
+        matches!(self, Self::Config(_))
+            || matches!(self, Self::Plugins(command) if command.is_edit())
+    }
 }
