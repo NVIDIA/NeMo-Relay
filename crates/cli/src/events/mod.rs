@@ -51,6 +51,10 @@ pub(crate) enum NormalizedEvent {
     HookMark(SessionEvent),
 }
 
+#[cfg(test)]
+#[path = "../../tests/coverage/shared/events_tests.rs"]
+mod tests;
+
 impl NormalizedEvent {
     // Extracts the routing session id regardless of normalized event kind. Keeping this on the
     // enum lets the session manager group events before it needs to inspect lifecycle semantics.

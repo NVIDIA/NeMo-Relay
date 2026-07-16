@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(clippy::await_holding_lock)] // Runtime isolation requires serial async plugin tests.
+
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
@@ -16,6 +18,17 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::*;
+use crate::api::llm::{LlmAttributes, LlmCallExecuteParams, LlmRequest, llm_call_execute};
+use crate::api::runtime::{
+    LlmExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
+    set_thread_scope_stack,
+};
+use crate::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use crate::codec::openai_chat::OpenAIChatCodec;
+use crate::codec::traits::LlmResponseCodec;
+use crate::plugin::{
+    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+};
 use crate::plugins::nemo_guardrails::component::LocalBackendConfig;
 
 #[cfg(unix)]
@@ -488,5 +501,165 @@ fn stream_text_extraction_handles_supported_codecs() {
             &json!({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hello"}})
         ),
         Some("hello".to_string())
+    );
+}
+
+#[cfg(unix)]
+async fn install_local_plugin(config: &NeMoGuardrailsConfig) {
+    let component_config = serde_json::to_value(config)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+    initialize_plugins(PluginConfig {
+        version: 1,
+        components: vec![PluginComponentSpec {
+            kind: crate::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND
+                .to_string(),
+            enabled: true,
+            config: component_config,
+        }],
+        policy: Default::default(),
+    })
+    .await
+    .unwrap();
+}
+
+#[cfg(unix)]
+fn reset_plugin_runtime() {
+    let _ = clear_plugin_configuration();
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    *global_context().write().unwrap() = NemoRelayContextState::new();
+    set_thread_scope_stack(create_scope_stack());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn registered_local_backend_rewrites_llm_requests_and_tool_payloads() {
+    if !python3_available() {
+        return;
+    }
+
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_plugin_runtime();
+
+    let fixture = FakeGuardrails::new("0.22.0");
+    let mut config = fixture.config();
+    config.input = true;
+    config.output = true;
+    config.tool_input = true;
+    config.tool_output = true;
+    install_local_plugin(&config).await;
+
+    let observed_request = Arc::new(Mutex::new(None));
+    let observed_callback_request = Arc::clone(&observed_request);
+    let callback: LlmExecutionNextFn = Arc::new(move |request| {
+        *observed_callback_request.lock().unwrap() = Some(request);
+        Box::pin(async move {
+            Ok(json!({
+                "choices": [{"message": {"role": "assistant", "content": "provider answer"}}]
+            }))
+        })
+    });
+    let request = LlmRequest {
+        headers: Default::default(),
+        content: json!({
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "modify this request"}]
+        }),
+    };
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(request)
+            .func(callback)
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        observed_request.lock().unwrap().as_ref().unwrap().content["messages"][0]["content"],
+        json!("rewritten")
+    );
+    assert_eq!(
+        response["choices"][0]["message"]["content"],
+        json!("provider answer")
+    );
+
+    let tool_result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("lookup")
+            .args(json!({"modify-tool": true}))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    assert_eq!(args, json!({"safe": true}));
+                    Ok(json!({"original": true}))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(tool_result, json!({"original": true}));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
+    if !python3_available() {
+        return;
+    }
+
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_plugin_runtime();
+
+    let fixture = FakeGuardrails::new("0.22.0");
+    let mut config = fixture.config();
+    config.input = true;
+    config.tool_input = true;
+    install_local_plugin(&config).await;
+
+    let llm_error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("openai")
+            .request(LlmRequest {
+                headers: Default::default(),
+                content: json!({
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "block this request"}]
+                }),
+            })
+            .func(Arc::new(|_| Box::pin(async { Ok(json!({})) })))
+            .attributes(LlmAttributes::empty())
+            .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        llm_error
+            .to_string()
+            .contains("input rail blocked the LLM call")
+    );
+
+    let tool_error = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("lookup")
+            .args(json!({"block": true}))
+            .func(Arc::new(|_| Box::pin(async { Ok(json!({})) })))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        tool_error
+            .to_string()
+            .contains("tool_input rail blocked the tool call")
     );
 }
