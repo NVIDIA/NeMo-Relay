@@ -741,6 +741,7 @@ async fn wrapped_agent_version_probe_runs_through_the_wrapper() {
 
 #[test]
 fn prepares_claude_dry_run_without_writing_plugin() {
+    let _env = EnvScope::set(&[("ANTHROPIC_CUSTOM_HEADERS", None)]);
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         agents: AgentConfigs::default(),
