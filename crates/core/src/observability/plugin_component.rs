@@ -2997,9 +2997,15 @@ impl AtifRemoteStorage {
                 reply: reply_tx,
             })
             .map_err(|_| std::io::Error::other("ATIF storage thread is not running"))?;
-        let result = reply_rx
-            .recv()
-            .map_err(|_| std::io::Error::other("ATIF storage thread dropped the upload reply"))?;
+        let (result, failure_reason) = match reply_rx.recv() {
+            Ok(result) => (result, "upload_failed"),
+            Err(_) => (
+                Err(std::io::Error::other(
+                    "ATIF storage thread dropped the upload reply",
+                )),
+                "reply_channel_closed",
+            ),
+        };
         match &result {
             Ok(()) => {
                 if self.access_state.swap(2, Ordering::AcqRel) != 2 {
@@ -3008,7 +3014,7 @@ impl AtifRemoteStorage {
                         event = "storage_access_validated",
                         plugin_kind = "observability",
                         exporter = "atif",
-                        storage_index = self.index,
+                        resource_index = self.index,
                         resource_kind = self.resource_kind,
                         permission = "write";
                         "ATIF storage access validated"
@@ -3022,10 +3028,10 @@ impl AtifRemoteStorage {
                         event = "storage_access_failed",
                         plugin_kind = "observability",
                         exporter = "atif",
-                        storage_index = self.index,
+                        resource_index = self.index,
                         resource_kind = self.resource_kind,
                         permission = "write",
-                        reason = "upload_failed";
+                        reason = failure_reason;
                         "ATIF storage access failed"
                     );
                 }

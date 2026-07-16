@@ -1158,6 +1158,14 @@ fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() 
         patched["mcp_servers"]["filesystem"]["command"],
         json!("fs-mcp")
     );
+    assert_eq!(patched["model"]["provider"], json!("custom"));
+    assert_eq!(
+        patched["model"]["api_key"],
+        json!(format!(
+            "${{{}}}",
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV
+        ))
+    );
     for event in CodingAgent::Hermes.hook_events() {
         let groups = patched["hooks"][event].as_array().unwrap();
         assert_eq!(

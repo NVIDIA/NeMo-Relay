@@ -110,9 +110,7 @@ fn handle_hook_failure(
             error_kind = error.log_kind();
             "Hook delivery failed"
         );
-        Err(CliError::Install(format!(
-            "nemo-relay hook forward failed: {error}"
-        )))
+        Err(error)
     } else {
         log::warn!(
             target: "nemo_relay.hook",

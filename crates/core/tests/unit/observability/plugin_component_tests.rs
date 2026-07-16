@@ -82,11 +82,29 @@ fn start_http_status_server(status: &'static str) -> (String, std::thread::JoinH
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        };
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
         while !request.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).unwrap();
+            if stream.read_exact(&mut byte).is_err() {
+                return;
+            }
             request.push(byte[0]);
         }
         let headers = String::from_utf8_lossy(&request);
@@ -98,11 +116,14 @@ fn start_http_status_server(status: &'static str) -> (String, std::thread::JoinH
                         .then_some(value.trim())
                 })
             })
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
+            .and_then(|value| value.parse::<usize>().ok());
+        let Some(length) = length else {
+            return;
+        };
         let mut body = vec![0_u8; length];
-        stream.read_exact(&mut body).unwrap();
+        if stream.read_exact(&mut body).is_err() {
+            return;
+        }
         write!(
             stream,
             "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

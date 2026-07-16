@@ -235,6 +235,14 @@ fn replacement_generation_guard_retains_its_lock_when_marker_state_is_uncertain(
 fn replacement_generation_guard_retains_its_lock_when_marker_is_inaccessible() {
     use std::os::unix::fs::PermissionsExt as _;
 
+    struct PermissionRestore(std::path::PathBuf);
+
+    impl Drop for PermissionRestore {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
     crate::test_support::enable_operational_logs();
     let dir = tempdir().unwrap();
     let marker_parent = dir.path().join("marker-parent");
@@ -246,8 +254,11 @@ fn replacement_generation_guard_retains_its_lock_when_marker_is_inaccessible() {
         acquire_replacement_generation_lock(CodingAgent::Codex, &marker, &lock, true).unwrap();
 
     std::fs::set_permissions(&marker_parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _permissions = PermissionRestore(marker_parent.clone());
+    if std::fs::read_dir(&marker_parent).is_ok() {
+        return;
+    }
     drop(guard);
-    std::fs::set_permissions(&marker_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     assert!(lock.exists());
 }

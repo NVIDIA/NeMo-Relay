@@ -25,7 +25,8 @@ use super::{
     attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
     model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_session_identity_attributes, push_top_level_json_attributes, validate_attribute_mappings,
+    push_session_identity_attributes, push_top_level_json_attributes, relay_span_id,
+    relay_trace_id, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::EventSubscriberFn;
@@ -426,10 +427,9 @@ impl OpenTelemetrySubscriber {
         if removed {
             log::info!(
                 target: "nemo_relay.observability",
-                event = "exporter_deregistered",
-                exporter = "opentelemetry",
+                event = "subscriber_deregistered",
                 subscriber = name;
-                "OpenTelemetry exporter deregistered"
+                "Observability subscriber deregistered"
             );
         }
         Ok(removed)
@@ -654,6 +654,8 @@ impl OtelEventProcessor {
             .span_builder(span_name(event))
             .with_kind(span_kind(event))
             .with_start_time(to_system_time(*event.timestamp()))
+            .with_trace_id(relay_trace_id(event.uuid()))
+            .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &parent_context);
         let mut attributes = start_attributes(event);
         if is_trace_root {
@@ -724,6 +726,8 @@ impl OtelEventProcessor {
             .span_builder(format!("mark:{mark_name}"))
             .with_kind(SpanKind::Internal)
             .with_start_time(timestamp)
+            .with_trace_id(relay_trace_id(event.uuid()))
+            .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         apply_attribute_mappings(&mut attributes, &self.attribute_mappings);
@@ -750,6 +754,8 @@ impl OtelEventProcessor {
             .span_builder(format!("mark:{}", event.name()))
             .with_kind(SpanKind::Internal)
             .with_start_time(timestamp)
+            .with_trace_id(relay_trace_id(event.uuid()))
+            .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &self.parent_context(event));
         span.set_attributes(attributes);
         span.end_with_timestamp(timestamp);

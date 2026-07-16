@@ -288,12 +288,10 @@ impl<'ast> Visit<'ast> for LogMacroVisitor {
             .map(|segment| segment.ident.to_string())
             .collect::<Vec<_>>()
             .join("::");
-        if matches!(
-            path.as_str(),
-            "log::info" | "log::warn" | "log::error" | "log::debug" | "log::trace"
-        ) {
+        let macro_name = path.rsplit("::").next().unwrap_or_default();
+        if matches!(macro_name, "info" | "warn" | "error" | "debug" | "trace") {
             let tokens = item.tokens.to_string();
-            if matches!(path.as_str(), "log::debug" | "log::trace") {
+            if matches!(macro_name, "debug" | "trace") {
                 self.failures
                     .push(format!("production call site uses {path}!"));
             }
@@ -402,6 +400,27 @@ fn operational_direct_stderr_is_limited_to_emergency_and_ui_boundaries() {
             "core operational direct stderr found in {}",
             path.display()
         );
+    }
+    for (root, allowed) in [
+        (
+            crate_root.join("../adaptive/src"),
+            ["src/acg/debug.rs"].as_slice(),
+        ),
+        (crate_root.join("../pii-redaction/src"), [].as_slice()),
+    ] {
+        for path in rust_files(&root) {
+            let source = fs::read_to_string(&path).unwrap();
+            if source.contains("eprintln!") {
+                let relative = path.strip_prefix(&root).unwrap();
+                assert!(
+                    allowed
+                        .iter()
+                        .any(|allowed| relative == Path::new(allowed.trim_start_matches("src/"))),
+                    "operational direct stderr found in {}",
+                    path.display()
+                );
+            }
+        }
     }
 }
 

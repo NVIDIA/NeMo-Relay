@@ -1048,6 +1048,23 @@ async fn install_registrations_covers_registry_error_edges() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn installed_fail_open_callbacks_preserve_original_values() {
+    struct RuntimeCleanup {
+        registrations: Option<PluginRegistrationContext>,
+    }
+
+    impl Drop for RuntimeCleanup {
+        fn drop(&mut self) {
+            if let Some(context) = self.registrations.take() {
+                let mut registrations = context.into_registrations();
+                crate::plugin::rollback_registrations(&mut registrations);
+            }
+            let context = crate::api::runtime::global_context();
+            *context.write().unwrap_or_else(|error| error.into_inner()) =
+                NemoRelayContextState::new();
+            crate::shared_runtime::reset_runtime_owner_for_tests();
+        }
+    }
+
     enable_operational_logs();
     let registrations = vec![
         registration(RegistrationSurface::Subscriber, "fallback_subscriber"),
@@ -1099,6 +1116,9 @@ async fn installed_fail_open_callbacks_preserve_original_values() {
     instance
         .install_registrations(&mut registration_context)
         .expect("worker registrations should install");
+    let _cleanup = RuntimeCleanup {
+        registrations: Some(registration_context),
+    };
 
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
@@ -1167,11 +1187,6 @@ async fn installed_fail_open_callbacks_preserve_original_values() {
         );
     }
     crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");
-
-    let mut registrations = registration_context.into_registrations();
-    crate::plugin::rollback_registrations(&mut registrations);
-    *context.write().unwrap() = NemoRelayContextState::new();
-    crate::shared_runtime::reset_runtime_owner_for_tests();
 }
 
 #[tokio::test(flavor = "multi_thread")]

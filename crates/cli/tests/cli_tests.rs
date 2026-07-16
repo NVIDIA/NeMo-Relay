@@ -287,6 +287,23 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
             "missing {event}: {records:?}"
         );
     }
+    let positions = [
+        "logging_initialized",
+        "command_started",
+        "diagnostics_completed",
+        "command_completed",
+        "logging_shutdown_started",
+    ]
+    .map(|event| {
+        records
+            .iter()
+            .position(|record| record["event"] == event)
+            .expect("lifecycle event was asserted above")
+    });
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "unexpected successful command lifecycle order: {records:?}"
+    );
     assert!(
         records
             .iter()

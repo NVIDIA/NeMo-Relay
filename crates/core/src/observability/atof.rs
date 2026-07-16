@@ -507,21 +507,12 @@ impl AtofExporter {
         for endpoint in &state.endpoints {
             endpoint.flush();
         }
-        let result = stored_failure_result(
+        stored_failure_result(
             self.path
                 .as_deref()
                 .unwrap_or_else(|| Path::new("<stream>")),
             &state,
-        );
-        if result.is_ok() {
-            log::info!(
-                target: "nemo_relay.observability",
-                event = "exporter_shutdown",
-                exporter = "atof";
-                "ATOF exporter shut down"
-            );
-        }
-        result
+        )
     }
 
     /// Shut down the exporter by flushing buffered data and closing endpoints.
@@ -556,12 +547,21 @@ impl AtofExporter {
             endpoint.close();
         }
         flush_result?;
-        stored_failure_result(
+        let result = stored_failure_result(
             self.path
                 .as_deref()
                 .unwrap_or_else(|| Path::new("<stream>")),
             &state,
-        )
+        );
+        if result.is_ok() {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "exporter_shutdown",
+                exporter = "atof";
+                "ATOF exporter shut down"
+            );
+        }
+        result
     }
 }
 

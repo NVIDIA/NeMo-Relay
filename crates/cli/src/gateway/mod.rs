@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 use async_stream::stream;
 use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
+use axum::http::{
+    HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, header,
+};
 use futures_util::StreamExt;
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
@@ -65,12 +67,11 @@ const MAX_UPSTREAM_ERROR_BODY_BYTES: usize = 64 * 1024;
 /// design that splits a raw byte stream between client and runtime.
 pub(crate) async fn passthrough(
     State(state): State<AppState>,
-    request: Request<Body>,
+    mut request: Request<Body>,
 ) -> Result<Response<Body>, CliError> {
     state.touch();
-    let allow_environment_provider_auth = state.allows_environment_provider_auth(request.headers());
-    let prepared =
-        prepare_gateway_request(&state.config, request, allow_environment_provider_auth).await?;
+    let authorization = state.authorize_provider_request(request.headers_mut())?;
+    let prepared = prepare_gateway_request(&state.config, request, authorization).await?;
     let prep = state
         .sessions
         .prepare_gateway_call(&prepared.headers, build_llm_gateway_start(&prepared))
@@ -136,7 +137,7 @@ async fn run_unmanaged_gateway(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth),
+        ProviderForwarding::new(prepared.provider, prepared.authorization),
     )
     .await?;
     let status = response.status();
@@ -258,8 +259,7 @@ fn build_buffered_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
-    let forwarding =
-        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth);
+    let forwarding = ProviderForwarding::new(prepared.provider, prepared.authorization);
     Arc::new(move |request| {
         let http = http.clone();
         let method = method.clone();
@@ -441,8 +441,7 @@ fn build_streaming_func(
     let url = prepared.upstream_url.clone();
     let body_bytes = prepared.body_bytes.clone();
     let headers = prepared.headers.clone();
-    let forwarding =
-        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth);
+    let forwarding = ProviderForwarding::new(prepared.provider, prepared.authorization);
     Arc::new(move |request| {
         let http = http.clone();
         let method = method.clone();
@@ -693,7 +692,7 @@ fn encode_sse_frame(event_json: &Value, route: ProviderRoute) -> String {
 
 // Forwards the buffered request to the upstream provider with only the safe request headers. This
 // is shared by the buffered and streaming managed funcs so header filtering stays consistent.
-// Agent-native credential quirks are normalized by alignment before provider auth injection runs.
+// Source authentication is normalized at ingress, before interceptors can select a target.
 async fn forward_upstream_request(
     http: &reqwest::Client,
     method: &Method,
@@ -703,31 +702,36 @@ async fn forward_upstream_request(
     effective_request: Option<&LlmRequest>,
     forwarding: ProviderForwarding,
 ) -> Result<reqwest::Response, reqwest::Error> {
+    debug_assert_eq!(
+        forwarding
+            .authorization
+            .source_credential
+            .provider_credential_present(),
+        crate::provider_auth::has_provider_credential(headers)
+    );
     let effective = effective_dispatch_request(
         body_bytes,
         headers,
         effective_request,
         url,
-        forwarding.route,
-    );
-    let sanitized = strip_replaceable_agent_auth_headers(
-        &effective.headers,
-        effective.route,
-        forwarding.allow_environment_provider_auth,
+        forwarding.source_route,
     );
     let mut upstream = http
         .request(method.clone(), &effective.url)
         .body(effective.body_bytes.clone());
-    for (name, value) in &sanitized {
-        if should_forward_request_header(name, &sanitized) {
+    for (name, value) in &effective.headers {
+        if should_forward_request_header(name, &effective.headers) {
             upstream = upstream.header(name, value);
         }
     }
     upstream = inject_provider_auth(
         upstream,
-        effective.route,
-        &sanitized,
-        forwarding.allow_environment_provider_auth,
+        effective.target_route,
+        &effective.headers,
+        matches!(
+            effective.credential_policy,
+            TargetCredentialPolicy::SourceOrEnvironment
+        ) && forwarding.authorization.allow_environment_provider_auth,
     );
     upstream.send().await
 }
@@ -737,7 +741,14 @@ struct EffectiveUpstreamRequest {
     body_bytes: Bytes,
     headers: HeaderMap,
     url: String,
-    route: ProviderRoute,
+    target_route: ProviderRoute,
+    credential_policy: TargetCredentialPolicy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetCredentialPolicy {
+    SourceOrEnvironment,
+    ExplicitTarget,
 }
 
 #[cfg(test)]
@@ -770,15 +781,20 @@ fn effective_dispatch_request(
             body_bytes: body_bytes.clone(),
             headers,
             url: url.to_string(),
-            route,
+            target_route: route,
+            credential_policy: TargetCredentialPolicy::SourceOrEnvironment,
         };
     };
 
+    let mut body_reencoded = false;
     let body_bytes = if request.content.is_null() {
         body_bytes.clone()
     } else {
         match serde_json::to_vec(&request.content) {
-            Ok(serialized) => Bytes::from(serialized),
+            Ok(serialized) => {
+                body_reencoded = true;
+                Bytes::from(serialized)
+            }
             Err(_) => {
                 log::warn!(
                     target: "nemo_relay.gateway",
@@ -790,7 +806,8 @@ fn effective_dispatch_request(
                     body_bytes: body_bytes.clone(),
                     headers,
                     url: url.to_string(),
-                    route,
+                    target_route: route,
+                    credential_policy: TargetCredentialPolicy::SourceOrEnvironment,
                 };
             }
         }
@@ -809,6 +826,17 @@ fn effective_dispatch_request(
                 .and_then(|value| ProviderRoute::from_dispatch_override(&value));
             continue;
         }
+    }
+    let credential_policy = if override_url.is_some() || dispatch_route_header_seen {
+        crate::provider_auth::remove_provider_credentials(&mut headers);
+        TargetCredentialPolicy::ExplicitTarget
+    } else {
+        TargetCredentialPolicy::SourceOrEnvironment
+    };
+    // Observable source headers exclude credentials. Applying the rewritten map only after source
+    // credentials are removed lets an explicit target binding add its own authorization without
+    // inheriting credentials intended for the original provider.
+    for (name, value) in &request.headers {
         let Ok(name) = HeaderName::from_bytes(name.as_bytes()) else {
             continue;
         };
@@ -820,6 +848,9 @@ fn effective_dispatch_request(
         };
         headers.insert(name, value);
     }
+    if body_reencoded {
+        headers.remove(header::CONTENT_ENCODING);
+    }
     EffectiveUpstreamRequest {
         body_bytes,
         headers,
@@ -828,7 +859,8 @@ fn effective_dispatch_request(
         } else {
             override_url.unwrap_or_else(|| url.to_string())
         },
-        route: override_route.unwrap_or(route),
+        target_route: override_route.unwrap_or(route),
+        credential_policy,
     }
 }
 
@@ -942,7 +974,7 @@ async fn passthrough_streaming(
         &prepared.body_bytes,
         &prepared.headers,
         None,
-        ProviderForwarding::new(prepared.provider, prepared.allow_environment_provider_auth),
+        ProviderForwarding::new(prepared.provider, prepared.authorization),
     )
     .await?;
     let status = response.status();
@@ -1086,7 +1118,8 @@ pub(crate) async fn models(
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or(parts.uri.path());
-    let allow_environment_provider_auth = state.allows_environment_provider_auth(&parts.headers);
+    let authorization = state.authorize_provider_request(&mut parts.headers)?;
+    let allow_environment_provider_auth = authorization.allow_environment_provider_auth;
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
     let upstream_url = gateway_upstream_url_override(
         provider,

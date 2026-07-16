@@ -11,6 +11,7 @@ mod native {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
 
     use super::*;
@@ -33,6 +34,7 @@ mod native {
 
     static DISPATCHER: OnceLock<std::result::Result<Sender<DispatcherMessage>, String>> =
         OnceLock::new();
+    static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
@@ -61,7 +63,7 @@ mod native {
                     true
                 }
             }
-            Err(_error) => {
+            Err(_error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
                 log::error!(
                     target: "nemo_relay.runtime",
                     event = "subscriber_dispatcher_failed",
@@ -70,6 +72,7 @@ mod native {
                 );
                 false
             }
+            Err(_) => false,
         }
     }
 

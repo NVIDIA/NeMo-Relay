@@ -562,14 +562,20 @@ impl RemoteBackendRuntime {
             );
             FlowError::Internal(message)
         })?;
-        let response = self
+        let response = match self
             .client
             .post(self.chat_completions_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(serialized)
             .send()
             .await
-            .map_err(|err| {
+        {
+            Ok(response) => {
+                self.record_access_status(response.status());
+                response
+            }
+            Err(err) => {
+                self.record_access_failure("connection_failed", None);
                 let message = format!("nemo_guardrails remote request failed: {err}");
                 self.emit_mark(
                     "nemo_guardrails.remote.error",
@@ -583,8 +589,9 @@ impl RemoteBackendRuntime {
                         Some(message.clone()),
                     ),
                 );
-                FlowError::Internal(message)
-            })?;
+                return Err(FlowError::Internal(message));
+            }
+        };
         let status = response.status();
         let payload = response.text().await.map_err(|err| {
             let message = format!("nemo_guardrails failed to read remote response body: {err}");

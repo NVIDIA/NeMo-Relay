@@ -60,8 +60,8 @@ impl RedisBackend {
             event = "plugin_resource_access_pending",
             plugin_kind = "adaptive",
             resource_kind = "redis",
-            permission = "read_write";
-            "Plugin resource access validation started"
+            permission = "connect";
+            "Plugin Redis connectivity validation started"
         );
         let client = redis::Client::open(url).map_err(|e| {
             log::warn!(
@@ -69,7 +69,7 @@ impl RedisBackend {
                 event = "plugin_resource_access_failed",
                 plugin_kind = "adaptive",
                 resource_kind = "redis",
-                permission = "read_write",
+                permission = "connect",
                 reason = "client_configuration";
                 "Plugin resource access validation failed"
             );
@@ -81,7 +81,7 @@ impl RedisBackend {
                 event = "plugin_resource_access_failed",
                 plugin_kind = "adaptive",
                 resource_kind = "redis",
-                permission = "read_write",
+                permission = "connect",
                 reason = "connection_failed";
                 "Plugin resource access validation failed"
             );
@@ -89,11 +89,11 @@ impl RedisBackend {
         })?;
         log::info!(
             target: "nemo_relay.plugin",
-            event = "plugin_resource_access_validated",
+            event = "plugin_resource_connected",
             plugin_kind = "adaptive",
             resource_kind = "redis",
-            permission = "read_write";
-            "Plugin resource access validated"
+            permission = "connect";
+            "Plugin Redis connectivity established"
         );
         Ok(Self {
             client,

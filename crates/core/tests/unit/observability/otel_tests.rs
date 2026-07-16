@@ -1051,12 +1051,17 @@ fn records_span_start_mark_and_end() {
 }
 
 #[test]
-fn preserves_parent_child_relationships() {
+fn derives_span_ids_from_relay_uuids() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
 
-    let root_uuid = Uuid::now_v7();
-    let child_uuid = Uuid::now_v7();
+    let root_uuid = Uuid::from_u128(0x018f_0f0f_0f0f_7000_8123_4567_89ab_cdef);
+    let child_uuid = Uuid::from_u128(0x018f_0f0f_0f10_7000_8fed_cba9_8765_4321);
+    let orphan_uuid = Uuid::from_u128(0x018f_0f0f_0f11_7000_8011_2233_4455_6677);
 
     processor.process(&make_start_event(
         root_uuid,
@@ -1086,11 +1091,19 @@ fn preserves_parent_child_relationships() {
         ScopeType::Agent,
         None,
     ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(orphan_uuid)
+            .name("checkpoint")
+            .build(),
+        None,
+        None,
+    )));
 
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 2);
+    assert_eq!(spans.len(), 3);
     let parent = spans
         .iter()
         .find(|span| span.name.as_ref() == "agent")
@@ -1099,13 +1112,37 @@ fn preserves_parent_child_relationships() {
         .iter()
         .find(|span| span.name.as_ref() == "model-call")
         .unwrap();
+    let orphan = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:checkpoint")
+        .unwrap();
 
+    assert_eq!(
+        parent.span_context.trace_id().to_bytes(),
+        *root_uuid.as_bytes()
+    );
+    assert_eq!(
+        parent.span_context.span_id().to_bytes(),
+        root_uuid.as_bytes()[8..]
+    );
     assert_eq!(
         child.span_context.trace_id(),
         parent.span_context.trace_id()
     );
+    assert_eq!(
+        child.span_context.span_id().to_bytes(),
+        child_uuid.as_bytes()[8..]
+    );
     assert_eq!(child.parent_span_id, parent.span_context.span_id());
     assert!(!child.parent_span_is_remote);
+    assert_eq!(
+        orphan.span_context.trace_id().to_bytes(),
+        *orphan_uuid.as_bytes()
+    );
+    assert_eq!(
+        orphan.span_context.span_id().to_bytes(),
+        orphan_uuid.as_bytes()[8..]
+    );
 }
 
 #[test]

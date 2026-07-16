@@ -53,3 +53,26 @@ fn test_error_debug() {
     let debug = format!("{e:?}");
     assert!(debug.contains("AlreadyExists"));
 }
+
+#[test]
+fn upstream_failures_classify_retryability_and_render_status() {
+    use std::collections::BTreeMap;
+
+    let retryable = UpstreamFailure {
+        status: Some(503),
+        body: "temporarily unavailable".into(),
+        headers: BTreeMap::new(),
+        class: UpstreamFailureClass::RetryableStatus,
+    };
+    assert!(retryable.is_retryable());
+    assert!(retryable.to_string().contains("HTTP 503"));
+
+    let rejected = UpstreamFailure {
+        status: None,
+        body: "invalid API key".into(),
+        headers: BTreeMap::new(),
+        class: UpstreamFailureClass::Authentication,
+    };
+    assert!(!rejected.is_retryable());
+    assert!(rejected.to_string().contains("transport failure"));
+}

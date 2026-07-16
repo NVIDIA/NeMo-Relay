@@ -59,7 +59,7 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
         .command
         .as_ref()
         .map(Command::log_name)
-        .unwrap_or("serve");
+        .unwrap_or("default");
 
     let initialize_logging = match cli.command.as_ref() {
         Some(command) => !command.skips_logging(),

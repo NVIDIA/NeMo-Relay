@@ -16,15 +16,18 @@ pub(super) enum ProviderRoute {
 
 #[derive(Clone, Copy)]
 pub(super) struct ProviderForwarding {
-    pub(super) route: ProviderRoute,
-    pub(super) allow_environment_provider_auth: bool,
+    pub(super) source_route: ProviderRoute,
+    pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
 }
 
 impl ProviderForwarding {
-    pub(super) fn new(route: ProviderRoute, allow_environment_provider_auth: bool) -> Self {
+    pub(super) fn new(
+        source_route: ProviderRoute,
+        authorization: crate::provider_auth::ProviderRequestAuthorization,
+    ) -> Self {
         Self {
-            route,
-            allow_environment_provider_auth,
+            source_route,
+            authorization,
         }
     }
 }

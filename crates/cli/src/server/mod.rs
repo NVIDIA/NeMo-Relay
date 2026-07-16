@@ -57,6 +57,8 @@ pub(crate) struct AppState {
     pub(crate) bootstrap_fingerprint: Option<String>,
     pub(crate) bootstrap_challenge_key: Option<BootstrapChallengeKey>,
     pub(crate) require_provider_client_token: bool,
+    pub(crate) transparent_proxy_credential:
+        Option<crate::provider_auth::TransparentProxyCredential>,
     pub(crate) http: Client,
     pub(crate) sessions: SessionManager,
     pub(crate) last_activity: Arc<Mutex<Instant>>,
@@ -78,6 +80,7 @@ struct BootstrapServeOptions<'a> {
     identity: Option<ManagedBootstrapIdentity>,
     ready_file: Option<&'a Path>,
     shutdown_token: Option<String>,
+    transparent_proxy_credential: Option<crate::provider_auth::TransparentProxyCredential>,
 }
 
 /// Binds the configured address and activates enabled dynamic plugins before serving.
@@ -110,6 +113,7 @@ pub(crate) async fn serve_with_dynamic(
             identity: managed_bootstrap,
             ready_file,
             shutdown_token: bootstrap_shutdown_token,
+            ..BootstrapServeOptions::default()
         },
     )
     .await
@@ -226,6 +230,7 @@ pub(crate) async fn serve_transparent_listener_with_dynamic(
     config: GatewayConfig,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     bootstrap_fingerprint: String,
+    transparent_proxy_credential: crate::provider_auth::TransparentProxyCredential,
     shutdown: Option<oneshot::Receiver<()>>,
 ) -> Result<(), CliError> {
     serve_listener_with_dynamic_inner(
@@ -235,6 +240,7 @@ pub(crate) async fn serve_transparent_listener_with_dynamic(
         shutdown.map(ShutdownMode::Receiver),
         BootstrapServeOptions {
             fingerprint: Some(bootstrap_fingerprint),
+            transparent_proxy_credential: Some(transparent_proxy_credential),
             ..BootstrapServeOptions::default()
         },
     )
@@ -260,6 +266,7 @@ async fn serve_listener_with_dynamic_inner(
         identity: managed_bootstrap,
         ready_file,
         shutdown_token: bootstrap_shutdown_token,
+        transparent_proxy_credential,
     } = bootstrap;
     let bootstrap_challenge_key = bootstrap_fingerprint
         .as_ref()
@@ -284,6 +291,7 @@ async fn serve_listener_with_dynamic_inner(
         bootstrap_challenge_key,
         require_provider_client_token,
         bootstrap_shutdown,
+        transparent_proxy_credential,
     );
     state.bootstrap_tls = bootstrap_tls;
     state.local_address = Some(listener.local_addr()?);
@@ -325,6 +333,12 @@ async fn serve_listener_with_dynamic_inner(
         };
     let shutdown = server_shutdown_future(shutdown_mode, idle_shutdown);
     let shutdown = combine_shutdown_futures(shutdown, bootstrap_shutdown_rx);
+    log::info!(
+        target: "nemo_relay.server",
+        event = "server_shutdown_started",
+        instance_id = instance_id.as_str();
+        "Gateway server shutdown started"
+    );
     let serve_result = match shutdown {
         Some(shutdown) => {
             axum::serve(listener, app)
@@ -333,13 +347,7 @@ async fn serve_listener_with_dynamic_inner(
         }
         None => axum::serve(listener, app).await,
     };
-    log::info!(
-        target: "nemo_relay.server",
-        event = "server_shutdown_started",
-        instance_id = instance_id.as_str();
-        "Gateway server shutdown started"
-    );
-    finish_server_shutdown(serve_result, &sessions, plugin_activation).await
+    finish_server_shutdown(serve_result, &sessions, plugin_activation, &instance_id).await
 }
 
 fn server_shutdown_future(
@@ -386,6 +394,7 @@ async fn finish_server_shutdown(
     serve_result: std::io::Result<()>,
     sessions: &SessionManager,
     plugin_activation: Option<ServerPluginActivation>,
+    instance_id: &str,
 ) -> Result<(), CliError> {
     let close_result = sessions.close_all("gateway_shutdown").await;
     let flush_result = nemo_relay::api::runtime::flush_subscribers().map_err(CliError::from);
@@ -396,6 +405,7 @@ async fn finish_server_shutdown(
         log::error!(
             target: "nemo_relay.server",
             event = "server_failed",
+            instance_id,
             error_kind = "io";
             "Gateway server failed"
         );
@@ -403,6 +413,7 @@ async fn finish_server_shutdown(
             log::error!(
                 target: "nemo_relay.server",
                 event = "server_teardown_failed",
+                instance_id,
                 component = "sessions",
                 error_kind = close_error.log_kind();
                 "Gateway server teardown failed"
@@ -412,6 +423,7 @@ async fn finish_server_shutdown(
             log::error!(
                 target: "nemo_relay.server",
                 event = "server_teardown_failed",
+                instance_id,
                 component = "subscribers",
                 error_kind = flush_error.log_kind();
                 "Gateway server teardown failed"
@@ -421,6 +433,7 @@ async fn finish_server_shutdown(
             log::error!(
                 target: "nemo_relay.server",
                 event = "server_teardown_failed",
+                instance_id,
                 component = "plugins",
                 error_kind = clear_error.log_kind();
                 "Gateway server teardown failed"
@@ -428,12 +441,43 @@ async fn finish_server_shutdown(
         }
         return Err(serve_error.into());
     }
+    if let Err(error) = &close_result {
+        log::error!(
+            target: "nemo_relay.server",
+            event = "server_teardown_failed",
+            instance_id,
+            component = "sessions",
+            error_kind = error.log_kind();
+            "Gateway server teardown failed"
+        );
+    }
+    if let Err(error) = &flush_result {
+        log::error!(
+            target: "nemo_relay.server",
+            event = "server_teardown_failed",
+            instance_id,
+            component = "subscribers",
+            error_kind = error.log_kind();
+            "Gateway server teardown failed"
+        );
+    }
+    if let Err(error) = &clear_result {
+        log::error!(
+            target: "nemo_relay.server",
+            event = "server_teardown_failed",
+            instance_id,
+            component = "plugins",
+            error_kind = error.log_kind();
+            "Gateway server teardown failed"
+        );
+    }
     close_result?;
     flush_result?;
     clear_result?;
     log::info!(
         target: "nemo_relay.server",
-        event = "server_stopped";
+        event = "server_stopped",
+        instance_id;
         "Gateway server stopped"
     );
     Ok(())
@@ -479,7 +523,7 @@ pub(crate) fn router(config: GatewayConfig) -> Router {
 impl AppState {
     #[cfg(test)]
     pub(crate) fn new(config: GatewayConfig) -> Self {
-        Self::new_with_bootstrap(config, None, None, false, None)
+        Self::new_with_bootstrap(config, None, None, false, None, None)
     }
 
     fn new_with_bootstrap(
@@ -488,6 +532,7 @@ impl AppState {
         bootstrap_challenge_key: Option<BootstrapChallengeKey>,
         require_provider_client_token: bool,
         bootstrap_shutdown: Option<BootstrapShutdown>,
+        transparent_proxy_credential: Option<crate::provider_auth::TransparentProxyCredential>,
     ) -> Self {
         let sessions = SessionManager::new(config.clone());
         sessions.start_idle_sweeper();
@@ -502,6 +547,7 @@ impl AppState {
             bootstrap_fingerprint,
             bootstrap_challenge_key,
             require_provider_client_token,
+            transparent_proxy_credential,
             http,
             sessions,
             last_activity: Arc::new(Mutex::new(Instant::now())),
@@ -518,21 +564,38 @@ impl AppState {
         }
     }
 
-    /// Foreground gateways may supply provider credentials from their own environment for simple
-    /// local proxy use. Managed plugin sidecars are long-lived loopback services, so callers must
-    /// present the private per-user proof installed into their provider configuration before Relay
-    /// can spend a forwarded credential on their behalf.
-    pub(crate) fn allows_environment_provider_auth(&self, headers: &HeaderMap) -> bool {
-        if !self.require_provider_client_token {
-            return true;
+    /// Authenticate an invocation-owned transparent client before interceptors can rewrite its
+    /// route. Foreground gateways retain their existing provider-credential behavior; managed
+    /// sidecars still require their stable client proof before ambient provider credentials may be
+    /// used.
+    pub(crate) fn authorize_provider_request(
+        &self,
+        headers: &mut HeaderMap,
+    ) -> Result<crate::provider_auth::ProviderRequestAuthorization, CliError> {
+        if let Some(proxy) = &self.transparent_proxy_credential {
+            return Ok(crate::provider_auth::ProviderRequestAuthorization {
+                source_credential: proxy.consume(headers)?,
+                allow_environment_provider_auth: true,
+            });
         }
-        let Some(key) = self.bootstrap_challenge_key.as_ref() else {
-            return false;
+        let allow_environment_provider_auth = if !self.require_provider_client_token {
+            true
+        } else {
+            self.bootstrap_challenge_key
+                .as_ref()
+                .and_then(|key| {
+                    headers
+                        .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|token| key.verify_client_token(token))
+                })
+                .unwrap_or(false)
         };
-        headers
-            .get(BOOTSTRAP_CLIENT_TOKEN_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|token| key.verify_client_token(token))
+        Ok(crate::provider_auth::ProviderRequestAuthorization {
+            source_credential:
+                crate::provider_auth::SourceCredentialDisposition::from_provider_headers(headers),
+            allow_environment_provider_auth,
+        })
     }
 }
 

@@ -615,8 +615,10 @@ impl LocalGuardrailsWorker {
             "NeMo Guardrails local worker is stopping"
         );
         let writer = self.writer.lock().ok().and_then(|mut writer| writer.take());
+        let mut cleanup_succeeded = true;
         if let Ok(mut child) = self.child.lock() {
             if child.kill().is_err() {
+                cleanup_succeeded = false;
                 log::warn!(
                     target: "nemo_relay.worker",
                     event = "worker_cleanup_failed",
@@ -626,6 +628,7 @@ impl LocalGuardrailsWorker {
                 );
             }
             if child.wait().is_err() {
+                cleanup_succeeded = false;
                 log::warn!(
                     target: "nemo_relay.worker",
                     event = "worker_cleanup_failed",
@@ -638,12 +641,14 @@ impl LocalGuardrailsWorker {
         if let Some(writer) = writer {
             writer.join();
         }
-        log::info!(
-            target: "nemo_relay.worker",
-            event = "worker_stopped",
-            plugin_id = "nemo_guardrails";
-            "NeMo Guardrails local worker stopped"
-        );
+        if cleanup_succeeded {
+            log::info!(
+                target: "nemo_relay.worker",
+                event = "worker_stopped",
+                plugin_id = "nemo_guardrails";
+                "NeMo Guardrails local worker stopped"
+            );
+        }
     }
 }
 

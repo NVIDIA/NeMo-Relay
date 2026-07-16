@@ -179,8 +179,12 @@ async fn store_run(
     backend: &Arc<dyn StorageBackendDyn + Send + Sync>,
     completed_run: &RunRecord,
 ) -> bool {
-    if let Err(error) = backend.store_run_dyn(completed_run).await {
-        eprintln!("nemo-relay-adaptive drain: store_run failed: {error}");
+    if backend.store_run_dyn(completed_run).await.is_err() {
+        log::warn!(
+            target: "nemo_relay.runtime",
+            event = "adaptive_run_storage_failed";
+            "Adaptive runtime could not persist a completed run"
+        );
         return false;
     }
     true
@@ -193,11 +197,16 @@ async fn run_learners(
     hot_cache: &Arc<RwLock<HotCache>>,
 ) {
     for learner in learners {
-        if let Err(error) = learner
+        if learner
             .process_run(completed_run, backend.as_ref(), hot_cache)
             .await
+            .is_err()
         {
-            eprintln!("nemo-relay-adaptive drain: learner failed: {error}");
+            log::warn!(
+                target: "nemo_relay.runtime",
+                event = "adaptive_learner_failed";
+                "Adaptive runtime learner failed while processing a completed run"
+            );
         }
     }
 }
@@ -213,7 +222,11 @@ async fn refresh_hot_cache_plan(
                 guard.plan = plan;
             }
         }
-        Err(error) => eprintln!("nemo-relay-adaptive drain: load_plan failed: {error}"),
+        Err(_) => log::warn!(
+            target: "nemo_relay.runtime",
+            event = "adaptive_plan_refresh_failed";
+            "Adaptive runtime could not refresh the cached plan"
+        ),
     }
 }
 

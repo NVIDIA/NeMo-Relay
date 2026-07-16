@@ -73,6 +73,18 @@ pub(crate) fn default_mark_exclude_names() -> Vec<String> {
 }
 
 #[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn relay_trace_id(uuid: uuid::Uuid) -> opentelemetry::trace::TraceId {
+    opentelemetry::trace::TraceId::from_bytes(*uuid.as_bytes())
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn relay_span_id(uuid: uuid::Uuid) -> opentelemetry::trace::SpanId {
+    let mut bytes = [0; 8];
+    bytes.copy_from_slice(&uuid.as_bytes()[8..]);
+    opentelemetry::trace::SpanId::from_bytes(bytes)
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
 pub(crate) fn push_common_optimization_attributes(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,
@@ -550,11 +562,11 @@ where
                 .to_string(),
         ),
         "UNSET" => opentelemetry::trace::Status::Unset,
-        other => {
+        _ => {
             log::warn!(
                 target: "nemo_relay.observability",
                 event = "invalid_status_code",
-                status_code = other;
+                status_code = "invalid";
                 "Unrecognized OpenTelemetry status code; using unset status"
             );
             opentelemetry::trace::Status::Unset
@@ -566,3 +578,17 @@ where
 #[cfg(all(test, any(feature = "otel", feature = "openinference")))]
 #[path = "../../tests/unit/observability/attribute_projection_tests.rs"]
 mod attribute_projection_tests;
+
+#[cfg(all(test, any(feature = "otel", feature = "openinference")))]
+mod tests {
+    use super::{relay_span_id, relay_trace_id};
+    use uuid::Uuid;
+
+    #[test]
+    fn relay_id_conversions_preserve_zero_bytes() {
+        let uuid = Uuid::nil();
+
+        assert_eq!(relay_trace_id(uuid).to_bytes(), [0; 16]);
+        assert_eq!(relay_span_id(uuid).to_bytes(), [0; 8]);
+    }
+}

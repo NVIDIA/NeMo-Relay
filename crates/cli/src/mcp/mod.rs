@@ -48,13 +48,25 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
             "MCP gateway acquired"
         );
         let frames = transport::spawn_stdin_reader()?;
-        session::run(lease, frames, tokio::io::stdout()).await?;
-        log::info!(
-            target: "nemo_relay.mcp",
-            event = "mcp_session_closed";
-            "MCP session closed"
-        );
-        return Ok(ExitCode::SUCCESS);
+        return match session::run(lease, frames, tokio::io::stdout()).await {
+            Ok(()) => {
+                log::info!(
+                    target: "nemo_relay.mcp",
+                    event = "mcp_session_closed";
+                    "MCP session closed"
+                );
+                Ok(ExitCode::SUCCESS)
+            }
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.mcp",
+                    event = "mcp_session_failed",
+                    error_kind = error.log_kind();
+                    "MCP session failed"
+                );
+                Err(error)
+            }
+        };
     }
     // Starting the MCP process is the lifecycle boundary. Acquire the shared gateway before
     // reading protocol frames so hosts can rely on process startup rather than their individual
@@ -70,13 +82,25 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
         "MCP gateway acquired"
     );
     let frames = transport::spawn_stdin_reader()?;
-    session::run(lease, frames, tokio::io::stdout()).await?;
-    log::info!(
-        target: "nemo_relay.mcp",
-        event = "mcp_session_closed";
-        "MCP session closed"
-    );
-    Ok(ExitCode::SUCCESS)
+    match session::run(lease, frames, tokio::io::stdout()).await {
+        Ok(()) => {
+            log::info!(
+                target: "nemo_relay.mcp",
+                event = "mcp_session_closed";
+                "MCP session closed"
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.mcp",
+                event = "mcp_session_failed",
+                error_kind = error.log_kind();
+                "MCP session failed"
+            );
+            Err(error)
+        }
+    }
 }
 
 /// Builds the host-independent persistent MCP launch contract.
