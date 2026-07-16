@@ -19,8 +19,16 @@ live OTLP spans.
 ## Embedded ATIF Semantics
 
 - ATIF export translates NeMo Relay events into ATIF v1.7 trajectory data.
-- LLM start events become `user` steps; message content is extracted from the
-  `LLMRequest.content` payload when possible.
+- LLM start events become `user` steps as follows:
+  1. ATIF extracts the latest user message from the request annotation when
+     possible. It does not export the annotation's complete history as the step
+     message.
+  2. Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
+  3. The first subsequent LLM start annotation retains complete history. Later
+     starts retain system instructions, the latest user message, and every
+     following assistant or tool message.
+  4. When a request codec supplies an annotation, the event input uses the same
+     projection. Provider execution remains unchanged.
 - LLM end events become `agent` steps with response content, model metadata,
   token metrics, reasoning fields, and promoted `tool_calls` when the response
   uses a supported tool-call shape.
@@ -28,8 +36,8 @@ live OTLP spans.
   promoted from the preceding LLM end response.
 - Tool end events become `system` observations. Observations are correlated to
   promoted tool calls by function name and source call ID when available.
-- Mark events with data become `system` steps. Scope start/end events are
-  structural and are not emitted as trajectory steps.
+- Point-in-time mark events and scope start/end events are structural and are
+  not emitted as trajectory steps.
 - Scope nesting becomes ancestry metadata on exported steps.
 - Nested agent scopes become embedded `subagent_trajectories` with
   `subagent_trajectory_ref` observations in the parent trajectory.
@@ -47,8 +55,8 @@ live OTLP spans.
 
 - ATIF exports the full event buffer collected so far.
 - Consecutive tool observations can be merged into one system observation step.
-- Trajectories reflect sanitized event payloads, not raw secrets that
-  sanitize guardrails removed before event emission.
+- Trajectories reflect sanitized event payloads, not raw secrets that tool,
+  LLM, mark, or scope event sanitizers removed before event emission.
 - Response codecs can improve LLM end annotations, but they do not change the
   caller-visible LLM response.
 

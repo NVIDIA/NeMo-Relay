@@ -542,6 +542,15 @@ impl SwitchyardRuntime {
         })
     }
 
+    // Skip the portability guard when no configured target uses a different protocol: with no
+    // possible cross-protocol translation, provider-specific fields never need to be portable.
+    fn may_translate_protocol(&self, inbound: WireProtocol) -> bool {
+        self.config
+            .targets
+            .values()
+            .any(|target| target.protocol != inbound)
+    }
+
     async fn require_healthy_sidecar(&self) -> Result<(), String> {
         let health_url = switchyard_health_url(&self.config.decision_api_url)?;
         let client = reqwest::Client::builder()
@@ -575,7 +584,9 @@ impl SwitchyardRuntime {
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if let Err(error) = validate_portable_request(&self.translation, inbound, &original) {
+        if self.may_translate_protocol(inbound)
+            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
+        {
             self.emit_error(
                 None,
                 0,
@@ -690,7 +701,9 @@ impl SwitchyardRuntime {
         if !self.config.enabled_inbound_profiles.contains(&inbound) {
             return next(original).await;
         }
-        if let Err(error) = validate_portable_request(&self.translation, inbound, &original) {
+        if self.may_translate_protocol(inbound)
+            && let Err(error) = validate_portable_request(&self.translation, inbound, &original)
+        {
             self.emit_error(
                 None,
                 0,

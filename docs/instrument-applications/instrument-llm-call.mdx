@@ -237,8 +237,19 @@ Check both behavior and instrumentation:
 Native subscriber delivery is asynchronous. Flush subscribers before validating
 printed output. In Node.js, also wait one event-loop tick after
 `flushSubscribers()` so JavaScript callbacks can run.
+
 - LLM start input contains the request after request intercepts and
-  sanitize-request guardrails.
+  sanitize-request guardrails. Each owning agent scope starts fresh, and a
+  `compaction` mark refreshes it. The first subsequent LLM start retains
+  complete annotation history. Later starts retain system instructions, the
+  latest user message, and every following assistant or tool message. When a
+  request codec supplies an annotation, the emitted event input uses the same
+  projection. If that event-only encoding fails, Relay retains the complete
+  event input and annotation. The provider execution request remains unchanged
+  in either case.
+- Freshness belongs to agent scopes, including the implicit root. Non-agent
+  scopes, including function and custom scopes used to model requests, inherit
+  their nearest agent's state and do not start a new freshness budget.
 - LLM end output contains the provider response after response guardrails.
 - The LLM event includes the normalized `model_name` when you provide one.
 
