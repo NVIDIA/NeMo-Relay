@@ -20,8 +20,10 @@ use nemo_relay_ffi::{api, convert, error};
 use serde_json::{Value as Json, json};
 use std::ffi::{CStr, CString};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio_stream::Stream;
+
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 unsafe fn nemo_relay_string_free_internal(ptr: *mut c_char) {
     unsafe { nemo_relay_string_free(ptr) };
@@ -35,5 +37,6 @@ mod callable_tests;
 mod convert_coverage_tests;
 #[path = "../coverage/error_tests.rs"]
 mod error_coverage_tests;
+mod plugin_activation_tests;
 #[path = "../unit/types_tests.rs"]
 mod types_tests;

@@ -9,7 +9,7 @@ use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
-use crate::config::{
+use crate::configuration::{
     PLUGINS_TOML, global_plugin_config_path, project_plugin_config_path, user_config_dir,
     user_plugin_config_path,
 };

@@ -6,6 +6,29 @@
 use crate::api::event::EventNormalizationExt;
 use serde::{Deserialize, Serialize};
 
+/// Copies a projected OTLP attribute to a second attribute name.
+///
+/// `key` names the fully-qualified projected attribute and `alias` names the
+/// additional attribute to emit with the same typed value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct OtlpAttributeMapping {
+    /// Fully-qualified projected attribute to copy.
+    pub key: String,
+    /// Additional attribute name receiving the copied value.
+    pub alias: String,
+}
+
+impl OtlpAttributeMapping {
+    /// Creates an attribute mapping.
+    pub fn new(key: impl Into<String>, alias: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            alias: alias.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -47,6 +70,340 @@ pub enum MarkProjection {
 /// at high volume and are better represented as exporter-native events.
 pub(crate) fn default_mark_exclude_names() -> Vec<String> {
     vec!["llm.chunk".to_string()]
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn push_common_optimization_attributes(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    push_optimization_models_and_tokens(attributes, summary);
+    push_optimization_cost(attributes, "baseline", summary.baseline_cost.as_ref());
+    push_optimization_cost(attributes, "actual", summary.actual_cost.as_ref());
+    push_optimization_savings_and_status(attributes, summary);
+    push_optimization_pricing_provenance(attributes, summary);
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_models_and_tokens(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    if let Some(model) = summary.baseline_model.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.baseline_model",
+            model.model.clone(),
+        ));
+    }
+    if let Some(model) = summary.effective_model.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.effective_model",
+            model.model.clone(),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.prompt_tokens {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.prompt_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+    if let Some(tokens) = summary.tokens_saved.total_tokens {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.total_tokens_saved",
+            i64::try_from(tokens).unwrap_or(i64::MAX),
+        ));
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_cost(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    label: &str,
+    cost: Option<&crate::codec::response::CostEstimate>,
+) {
+    let Some(cost) = cost else {
+        return;
+    };
+    if let Some(total) = cost.total_or_component_sum() {
+        attributes.push(opentelemetry::KeyValue::new(
+            format!("nemo_relay.llm.optimization.{label}_cost"),
+            total,
+        ));
+    }
+    attributes.push(opentelemetry::KeyValue::new(
+        format!("nemo_relay.llm.optimization.{label}_cost_currency"),
+        cost.currency.clone(),
+    ));
+    if let Some(source) = cost.pricing_source.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            format!("nemo_relay.llm.optimization.{label}_pricing_source"),
+            source.clone(),
+        ));
+    }
+    if let Some(as_of) = cost.pricing_as_of.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            format!("nemo_relay.llm.optimization.{label}_pricing_as_of"),
+            as_of.clone(),
+        ));
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_savings_and_status(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    if let Some(saved) = summary.estimated_cost_saved {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.estimated_cost_saved",
+            saved,
+        ));
+        if let Some(currency) = summary.currency.as_ref() {
+            attributes.push(opentelemetry::KeyValue::new(
+                "nemo_relay.llm.optimization.estimated_cost_saved_currency",
+                currency.clone(),
+            ));
+        }
+    }
+    if let Some(currency) = summary.currency.as_ref() {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.currency",
+            currency.clone(),
+        ));
+    }
+    let status = match summary.status {
+        crate::codec::optimization::LlmOptimizationSummaryStatus::Complete => "complete",
+        crate::codec::optimization::LlmOptimizationSummaryStatus::Partial => "partial",
+    };
+    attributes.push(opentelemetry::KeyValue::new(
+        "nemo_relay.llm.optimization.status",
+        status,
+    ));
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_optimization_pricing_provenance(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    summary: &crate::codec::optimization::LlmOptimizationSummary,
+) {
+    let source = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_source.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_source.as_ref())
+        });
+    if let Some(source) = source {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_source",
+            source.clone(),
+        ));
+    }
+    let as_of = summary
+        .baseline_cost
+        .as_ref()
+        .and_then(|cost| cost.pricing_as_of.as_ref())
+        .or_else(|| {
+            summary
+                .actual_cost
+                .as_ref()
+                .and_then(|cost| cost.pricing_as_of.as_ref())
+        });
+    if let Some(as_of) = as_of {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.llm.optimization.pricing_as_of",
+            as_of.clone(),
+        ));
+    }
+}
+
+/// Validates OTLP attribute mappings shared by exporter configuration surfaces.
+pub fn validate_attribute_mappings(
+    mappings: &[OtlpAttributeMapping],
+) -> std::result::Result<(), String> {
+    let mut aliases = std::collections::HashSet::new();
+    for mapping in mappings {
+        if mapping.key.trim().is_empty() {
+            return Err("attribute mapping key must not be blank".to_string());
+        }
+        if mapping.alias.trim().is_empty() {
+            return Err("attribute mapping alias must not be blank".to_string());
+        }
+        if !aliases.insert(mapping.alias.trim()) {
+            return Err(format!(
+                "attribute mapping alias {:?} is duplicated",
+                mapping.alias
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+/// Projects only top-level JSON fields as OTLP attributes.
+///
+/// Nested objects and arrays remain JSON strings so arbitrary payloads do not
+/// create ambiguous dotted attribute paths or unbounded attribute sets.
+pub(crate) fn push_top_level_json_attributes(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    prefix: &str,
+    value: Option<&crate::json::Json>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    match value {
+        crate::json::Json::Object(values) => {
+            for (field, value) in values {
+                push_top_level_json_value(attributes, &format!("{prefix}.{field}"), value);
+            }
+        }
+        value => push_top_level_json_value(attributes, prefix, value),
+    }
+}
+
+/// Adds canonical session-correlation attributes from event metadata and the
+/// active scope-stack instance.
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn push_session_identity_attributes(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    event: &crate::api::event::Event,
+) {
+    use opentelemetry::KeyValue;
+
+    let metadata = event.metadata();
+    if let Some(session_id) = metadata
+        .and_then(|value| value.get("session_id"))
+        .and_then(crate::json::Json::as_str)
+    {
+        attributes.push(KeyValue::new("session.id", session_id.to_string()));
+    }
+    if let Some(user_id) = metadata
+        .and_then(|value| value.get("user_id"))
+        .and_then(crate::json::Json::as_str)
+    {
+        attributes.push(KeyValue::new("user.id", user_id.to_string()));
+    }
+    if let Ok(stack) = crate::api::runtime::current_scope_stack().read() {
+        attributes.push(KeyValue::new(
+            "nemo_relay.session.instance_id",
+            stack.root_uuid().to_string(),
+        ));
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+/// Serializes a value and projects its top-level JSON fields as OTLP attributes.
+pub(crate) fn push_serialized_top_level_attributes<T: Serialize + ?Sized>(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    prefix: &str,
+    value: Option<&T>,
+) {
+    let Some(value) = value else {
+        return;
+    };
+    if let Ok(value) = serde_json::to_value(value) {
+        push_top_level_json_attributes(attributes, prefix, Some(&value));
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+fn push_top_level_json_value(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    key: &str,
+    value: &crate::json::Json,
+) {
+    use opentelemetry::KeyValue;
+
+    match value {
+        crate::json::Json::Null => {}
+        crate::json::Json::Bool(value) => attributes.push(KeyValue::new(key.to_string(), *value)),
+        crate::json::Json::String(value) => {
+            attributes.push(KeyValue::new(key.to_string(), value.clone()))
+        }
+        crate::json::Json::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                attributes.push(KeyValue::new(key.to_string(), value));
+            } else if let Some(value) = value.as_u64() {
+                if let Ok(value) = i64::try_from(value) {
+                    attributes.push(KeyValue::new(key.to_string(), value));
+                } else {
+                    attributes.push(KeyValue::new(key.to_string(), value.to_string()));
+                }
+            } else if let Some(value) = value.as_f64() {
+                attributes.push(KeyValue::new(key.to_string(), value));
+            }
+        }
+        crate::json::Json::Array(_) | crate::json::Json::Object(_) => {
+            if let Ok(value) = serde_json::to_string(value) {
+                attributes.push(KeyValue::new(key.to_string(), value));
+            }
+        }
+    }
+}
+
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn apply_attribute_mappings(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    mappings: &[OtlpAttributeMapping],
+) {
+    attributes.extend(attribute_mapping_aliases(attributes, mappings));
+}
+
+/// Keeps the start attributes needed to resolve mappings at the end of a span.
+///
+/// The final span attributes must still take precedence over mapped aliases, so
+/// retain both mapped source keys and aliases that were already present at
+/// start. The span itself owns all other start attributes and does not need a
+/// second copy in the active-span state.
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn attribute_mapping_inputs(
+    attributes: &[opentelemetry::KeyValue],
+    mappings: &[OtlpAttributeMapping],
+) -> Vec<opentelemetry::KeyValue> {
+    attributes
+        .iter()
+        .filter(|attribute| {
+            mappings.iter().any(|mapping| {
+                attribute.key.as_str() == mapping.key || attribute.key.as_str() == mapping.alias
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Resolves typed aliases from a complete set of projected attributes.
+///
+/// Callers that project a span across multiple lifecycle events must pass every
+/// real span attribute so projected fields always take precedence over aliases.
+#[cfg(any(feature = "otel", feature = "openinference"))]
+pub(crate) fn attribute_mapping_aliases(
+    projected_attributes: &[opentelemetry::KeyValue],
+    mappings: &[OtlpAttributeMapping],
+) -> Vec<opentelemetry::KeyValue> {
+    if mappings.is_empty() {
+        return Vec::new();
+    }
+    let existing = projected_attributes
+        .iter()
+        .map(|attribute| attribute.key.as_str().to_string())
+        .collect::<std::collections::HashSet<_>>();
+    mappings
+        .iter()
+        .filter(|mapping| !existing.contains(mapping.alias.as_str()))
+        .filter_map(|mapping| {
+            projected_attributes
+                .iter()
+                .rev()
+                .find(|attribute| attribute.key.as_str() == mapping.key)
+                .map(|attribute| {
+                    opentelemetry::KeyValue::new(mapping.alias.clone(), attribute.value.clone())
+                })
+        })
+        .collect()
 }
 
 /// Returns whether a mark matches a configured projection exclusion.
@@ -200,3 +557,7 @@ where
     };
     span.set_status(status);
 }
+
+#[cfg(all(test, any(feature = "otel", feature = "openinference")))]
+#[path = "../../tests/unit/observability/attribute_projection_tests.rs"]
+mod attribute_projection_tests;

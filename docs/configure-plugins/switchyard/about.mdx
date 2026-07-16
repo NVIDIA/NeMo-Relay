@@ -1,0 +1,80 @@
+---
+title: "Switchyard (Experimental)"
+sidebar-title: "Switchyard (Experimental)"
+description: "Route Relay LLM requests through the experimental Switchyard Decision API integration."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+> **Experimental:** The Switchyard integration is an early-access feature. It
+> is not enabled in default Relay builds, its configuration and contracts can
+> change, and the current deployment requires a separately running Switchyard
+> Decision API service.
+
+The `nemo-relay-switchyard` plugin uses the
+[Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) Decision API to select
+backends for supported LLM requests. Relay validates each decision, translates
+requests and responses in process through Switchyard's
+`switchyard-translation` library, and dispatches directly to the selected
+Relay-owned target. Relay also owns provider credentials, retries, trusted
+fallbacks, and observability. The separately running Switchyard service owns
+routing decisions.
+
+## Prerequisites
+
+The current integration has two runtime pieces:
+
+1. A Relay build with the optional `switchyard` feature.
+2. A Switchyard service built from the pinned
+   [`topic/nemo-relay-integration` revision](https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration).
+
+The current Relay examples pin Switchyard commit
+[`8f9db9a6`](https://github.com/NVIDIA-NeMo/Switchyard/commit/8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8).
+Treat that revision as part of this experimental compatibility boundary; update
+it deliberately when testing a different Switchyard topic commit.
+
+The plugin does not start or supervise the Switchyard service. Start a compatible
+service before Relay activates the plugin. Relay derives the service's root
+`/health` URL from `decision_api_url` and fails activation unless the endpoint
+returns `{"status":"ok"}`. After activation, unavailable Decision API calls fail
+open to the configured same-protocol fallback.
+
+Profiles that depend on ATOF history, including StageRouter, must use
+`context_mode = "atof_required"` and name an enabled Relay ATOF HTTP stream sink
+with `atof_endpoint_name`. Relay fails startup validation when that sink is
+missing or invalid. Relay pushes ATOF events to the sink; a local ATOF file sink
+alone does not populate Switchyard's accumulator.
+
+Build the opt-in CLI feature with:
+
+```bash
+cargo build -p nemo-relay-cli --features switchyard
+```
+
+The default CLI build does not include the plugin or the Switchyard translation
+library.
+
+## Capabilities
+
+The integration provides the following capabilities:
+
+- `enforce` and `observe_only` routing modes.
+- OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages inbound
+  profiles.
+- Buffered and streaming protocol translation through Switchyard's
+  `switchyard-translation` library.
+- Exact Relay-owned backend bindings and per-protocol trusted fallbacks.
+- Bounded retries before the first streaming item.
+- Canonical routing marks and shared LLM optimization accounting.
+
+## Pages
+
+For more information, refer to the following pages:
+
+- [Switchyard Configuration](/configure-plugins/switchyard/configuration)
+  is the complete option and deployment reference. Review its
+  [experimental limitations](/configure-plugins/switchyard/configuration#experimental-limitations)
+  before adopting the integration.
+- [Switchyard integration examples](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/switchyard)
+  documents the pinned service worktree and manual compatibility smoke tests.

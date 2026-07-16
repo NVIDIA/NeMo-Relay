@@ -26,6 +26,7 @@ use nemo_relay::api::scope::{ScopeHandle, ScopeType};
 use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::api::tool::ToolHandle;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
+use nemo_relay::plugin::dynamic::PluginHostActivation;
 use nemo_relay_adaptive::AdaptiveRuntime;
 
 use crate::convert::{json_to_c_string, str_to_c_string};
@@ -64,6 +65,11 @@ pub struct FfiOpenInferenceSubscriber(
 );
 /// Opaque owned adaptive runtime handle.
 pub struct FfiAdaptiveRuntime(pub std::sync::Mutex<Option<AdaptiveRuntime>>);
+/// Opaque owned dynamic plugin host activation.
+///
+/// The inner option allows explicit activation cleanup to be idempotent while
+/// retaining a stable allocation until the foreign caller frees the handle.
+pub struct FfiPluginActivation(pub std::sync::Mutex<Option<PluginHostActivation>>);
 /// Opaque plugin registration context.
 ///
 /// This wrapper contains a borrowed raw pointer to an
@@ -284,6 +290,32 @@ pub unsafe extern "C" fn nemo_relay_openinference_subscriber_free(
 pub unsafe extern "C" fn nemo_relay_adaptive_runtime_free(ptr: *mut FfiAdaptiveRuntime) {
     if !ptr.is_null() {
         drop(unsafe { Box::from_raw(ptr) });
+    }
+}
+
+/// Free a dynamic plugin activation handle previously returned by
+/// `nemo_relay_initialize_with_dynamic_plugins`.
+///
+/// Any activation that has not already been explicitly cleared is cleaned up
+/// best-effort by its Rust destructor before the allocation is released. The
+/// caller's handle is set to null before cleanup, making repeated calls through
+/// the same handle variable safe when they are sequential.
+///
+/// # Safety
+/// `ptr` must be null or point to a writable activation-handle variable whose
+/// value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The
+/// caller must ensure that no operation, including
+/// `nemo_relay_plugin_activation_clear`, accesses the activation concurrently
+/// with this call and that no operation can use the handle after this call
+/// begins.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_activation_free(ptr: *mut *mut FfiPluginActivation) {
+    if ptr.is_null() {
+        return;
+    }
+    let activation = unsafe { ptr.replace(std::ptr::null_mut()) };
+    if !activation.is_null() {
+        drop(unsafe { Box::from_raw(activation) });
     }
 }
 

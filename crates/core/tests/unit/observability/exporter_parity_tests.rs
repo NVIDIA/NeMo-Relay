@@ -20,6 +20,7 @@ use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventNormalizationExt, ScopeCategory,
     ScopeEvent,
 };
+use crate::api::runtime::{create_scope_stack, with_scope_stack};
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -442,7 +443,10 @@ fn test_usage_facts_parity_for_openai_chat_payload() {
 
     let otel = exports.otel_attrs("model-call");
     assert_no_attribute_key_contains(&otel, "token_count");
-    assert!(otel.contains_key("nemo_relay.end.output_json"));
+    assert!(
+        otel.keys()
+            .any(|key| key.starts_with("nemo_relay.end.output."))
+    );
 }
 
 #[test]
@@ -616,6 +620,8 @@ fn test_tool_call_projection_parity() {
             .get("nemo_relay.tool_call_id"),
         Some(&"call_parity_1".to_string())
     );
+    // OpenTelemetry retains the raw response as JSON; it does not add
+    // OpenInference's semantic tool-call attributes.
     assert_no_attribute_key_contains(&exports.otel_attrs("model-call"), "tool_call");
 }
 
@@ -647,8 +653,20 @@ fn test_reasoning_projected_by_atif_only() {
         Some("I compared both options step by step.")
     );
 
-    assert_no_attribute_key_contains(&exports.otel_attrs("model-call"), "reasoning");
-    assert_no_attribute_key_contains(&exports.openinference_attrs("model-call"), "reasoning");
+    // The raw end data retains reasoning without adding exporter-specific
+    // reasoning semantic conventions.
+    assert_eq!(
+        exports
+            .otel_attrs("model-call")
+            .get("nemo_relay.end.data.reasoning"),
+        Some(&"I compared both options step by step.".to_string())
+    );
+    assert_eq!(
+        exports
+            .openinference_attrs("model-call")
+            .get("nemo_relay.end.data.reasoning"),
+        Some(&"I compared both options step by step.".to_string())
+    );
 }
 
 // ===================================================================
@@ -677,27 +695,35 @@ fn test_replay_payload_preservation_across_exporters() {
         serde_json::from_value(exports.agent_step().extra.clone().unwrap()).unwrap();
     assert_eq!(agent_extra.llm_response, Some(output.clone()));
 
-    // OTel preserves the same payloads as serialized JSON attributes (the
-    // start input keeps the LlmRequest envelope).
+    // OTel projects the LLM request wrapper into typed top-level attributes,
+    // keeping the provider payload in its nested content field.
     let otel = exports.otel_attrs("model-call");
-    let otel_input: Json =
-        serde_json::from_str(otel.get("nemo_relay.start.input_json").unwrap()).unwrap();
+    let otel_input: Json = serde_json::from_str(
+        otel.get("nemo_relay.start.input.content")
+            .expect("projected request content"),
+    )
+    .unwrap();
+    assert_eq!(otel_input, request_content);
     assert_eq!(
-        otel_input,
-        json!({"headers": {}, "content": request_content})
+        otel.get("nemo_relay.start.input.headers"),
+        Some(&"{}".to_string())
     );
-    let otel_output: Json =
-        serde_json::from_str(otel.get("nemo_relay.end.output_json").unwrap()).unwrap();
-    assert_eq!(otel_output, output);
+    assert!(!otel.contains_key("nemo_relay.start.input_json"));
+    assert!(
+        otel.keys()
+            .any(|key| key.starts_with("nemo_relay.end.output."))
+    );
 
-    // OpenInference preserves the raw response payload but omits the raw
-    // LLM request JSON in favor of flattened message attributes plus a
+    // OpenInference preserves the raw response payload but omits raw
+    // LLM request attributes in favor of flattened message fields plus a
     // display input.value.
     let openinference = exports.openinference_attrs("model-call");
-    let openinference_output: Json =
-        serde_json::from_str(openinference.get("nemo_relay.end.output_json").unwrap()).unwrap();
-    assert_eq!(openinference_output, output);
-    assert!(!openinference.contains_key("nemo_relay.start.input_json"));
+    assert!(
+        openinference
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.end.output."))
+    );
+    assert!(!openinference.contains_key("nemo_relay.start.input.content"));
     assert!(openinference.contains_key("llm.input_messages.0.message.content"));
 }
 
@@ -789,5 +815,67 @@ fn test_manual_fallback_payload_parity() {
     assert_eq!(
         openinference.get("llm.token_count.total"),
         Some(&"1500".to_string())
+    );
+}
+
+#[test]
+fn session_instance_correlates_distinct_otel_and_openinference_traces() {
+    let scope_stack = create_scope_stack();
+    let expected_root_uuid = scope_stack.read().unwrap().root_uuid().to_string();
+    let uuid = Uuid::now_v7();
+    let metadata = json!({"session_id": "logical-session", "user_id": "alice"});
+    let start = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name("session-root")
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ));
+    let end = make_scope_event(
+        ScopeCategory::End,
+        uuid,
+        "session-root",
+        EventCategory::agent(),
+        None,
+        None,
+    );
+    let exports = with_scope_stack(scope_stack, || export_through_all_exporters(&[start, end]));
+    let otel = exports
+        .otel_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "session-root")
+        .unwrap();
+    let openinference = exports
+        .openinference_spans
+        .iter()
+        .find(|span| span.name.as_ref() == "session-root")
+        .unwrap();
+    let otel_attributes = attr_map(&otel.attributes);
+    let openinference_attributes = attr_map(&openinference.attributes);
+
+    assert_eq!(otel_attributes["nemo_relay.uuid"], uuid.to_string());
+    assert_eq!(
+        openinference_attributes["nemo_relay.uuid"],
+        uuid.to_string()
+    );
+    assert_eq!(otel_attributes["session.id"], "logical-session");
+    assert_eq!(openinference_attributes["session.id"], "logical-session");
+    assert_eq!(otel_attributes["user.id"], "alice");
+    assert_eq!(openinference_attributes["user.id"], "alice");
+    assert_eq!(
+        otel_attributes["nemo_relay.session.instance_id"],
+        expected_root_uuid
+    );
+    assert_eq!(
+        openinference_attributes["nemo_relay.session.instance_id"],
+        expected_root_uuid
+    );
+    assert_ne!(
+        otel.span_context.trace_id(),
+        openinference.span_context.trace_id()
     );
 }

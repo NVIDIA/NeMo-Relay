@@ -669,7 +669,7 @@ fn sanitized_pii_never_reaches_subscribers_or_exporters() {
     openinference.force_flush().unwrap();
 
     let subscriber_json = serde_json::to_string(&captured_events_snapshot(&captured)).unwrap();
-    let atof_json = std::fs::read_to_string(atof.path()).unwrap();
+    let atof_json = std::fs::read_to_string(atof.path().expect("file sink path")).unwrap();
     let atif_json = serde_json::to_string(&trajectory).unwrap();
     let otel_debug = format!("{:?}", otel_exporter.get_finished_spans().unwrap());
     let openinference_debug = format!("{:?}", openinference_exporter.get_finished_spans().unwrap());

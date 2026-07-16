@@ -306,6 +306,18 @@ Plugin configuration controls process-level Observability exporters. Per-session
 configuration controls structured metadata on the top-level agent begin event
 and the plugin configuration metadata associated with the session.
 
+For example, attach a user identity to a transparent run:
+
+```bash
+nemo-relay run --session-metadata '{"user_id":"alice"}' -- codex
+```
+
+The CLI emits one `session.start` mark for the lifecycle and copies the merged
+metadata onto each top-level trace scope. It also adds a non-overridable
+`session_instance_id` derived from the session's existing root scope UUID.
+Keep `user_id` a top-level string when OTLP exporters should expose it as
+`user.id`.
+
 `hook-forward` can also pass per-session configuration through headers:
 
 - `x-nemo-relay-config-profile`
@@ -323,15 +335,17 @@ where provider traffic was expected to pass through the gateway.
 The gateway normalizes vendor hook payloads into private internal events before
 calling NeMo Relay APIs.
 
-- Agent start opens a top-level `ScopeType::Agent` scope on a dedicated
-  `ScopeStackHandle`.
+- Agent start emits a `session.start` mark on a dedicated `ScopeStackHandle`.
+  Harnesses with a reliable session boundary also open a top-level
+  `ScopeType::Agent` scope; Claude Code and Codex use bounded turn scopes.
 - Subagent start opens a child `ScopeType::Agent` scope. Subagent stop closes
   that scope when it is still active.
 - Tool pre-use starts a NeMo Relay tool span. Tool post-use, denial, or failure
   closes it.
-- Prompt, response, agent-thought, and legacy Hermes `pre_llm_call` /
-  `post_llm_call` hooks are retained as private correlation hints. They are not
-  emitted as NeMo Relay events.
+- Generated `UserPromptSubmit`, `Stop`, and Hermes `pre_llm_call` /
+  `post_llm_call` hooks are retained as private correlation hints. The adapters
+  do the same when a custom or older integration delivers a response or
+  agent-thought hook. These hints are not emitted as NeMo Relay events.
 - Compaction, notification, and unknown hook events become mark events under
   the active session scope.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
@@ -369,10 +383,10 @@ also add `llm_correlation_source`, `llm_correlation_subagent_id`,
 
 Generated hook bundles subscribe to the events needed for that mapping:
 
-| Agent | LLM lifecycle and correlation hooks | Scope, tool, and mark hooks |
+| Agent | LLM Lifecycle and Correlation Hooks | Scope, Tool, and Mark Hooks |
 | --- | --- | --- |
-| Claude Code | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
-| Codex | `UserPromptSubmit`, `AfterAgentResponse`, `AfterAgentThought`, `Stop` | `SessionStart`, `SessionEnd`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Notification`, `PreCompact` |
+| Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
+| Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
 | Hermes | `pre_api_request`, `post_api_request`, `api_request_error`, `pre_llm_call`, `post_llm_call` | `on_session_start`, `on_session_end`, `on_session_finalize`, `on_session_reset`, `subagent_start`, `subagent_stop`, `pre_tool_call`, `post_tool_call` |
 
 Hermes `pre_api_request`, `post_api_request`, and `api_request_error` hooks
