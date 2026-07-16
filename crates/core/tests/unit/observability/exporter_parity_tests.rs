@@ -819,7 +819,7 @@ fn test_manual_fallback_payload_parity() {
 }
 
 #[test]
-fn session_instance_correlates_distinct_otel_and_openinference_traces() {
+fn session_instance_correlates_otel_and_openinference_traces() {
     let scope_stack = create_scope_stack();
     let expected_root_uuid = scope_stack.read().unwrap().root_uuid().to_string();
     let uuid = Uuid::now_v7();
@@ -874,7 +874,7 @@ fn session_instance_correlates_distinct_otel_and_openinference_traces() {
         openinference_attributes["nemo_relay.session.instance_id"],
         expected_root_uuid
     );
-    assert_ne!(
+    assert_eq!(
         otel.span_context.trace_id(),
         openinference.span_context.trace_id()
     );
