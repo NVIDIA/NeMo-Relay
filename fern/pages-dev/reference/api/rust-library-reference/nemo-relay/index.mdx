@@ -32,6 +32,7 @@ Most integrations start with the high-level lifecycle helpers in [`api`](/refere
 - [`api`](/reference/api/rust-library-reference/nemo-relay/api) - Public API functions, handles, lifecycle event types, runtime helpers, and guardrail/intercept/subscriber registration. These are the primary entry points.
 - [`error`](/reference/api/rust-library-reference/nemo-relay/error) - Error types ([`error::FlowError`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror)) and the [`error::Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) type alias.
 - [`json`](/reference/api/rust-library-reference/nemo-relay/json) - JSON type alias ([`json::Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json)) and the [`json::merge_json`](/reference/api/rust-library-reference/nemo-relay/json/fn-merge-json) utility.
+- [`logging`](/reference/api/rust-library-reference/nemo-relay/logging) - Process operational logging (`log` facade + configurable stderr/file sinks).
 - [`observability`](/reference/api/rust-library-reference/nemo-relay/observability) - Built-in observability backends including [`atif::AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter), [`otel::OpenTelemetrySubscriber`](/reference/api/rust-library-reference/nemo-relay/observability/otel/struct-opentelemetrysubscriber), and [`openinference::OpenInferenceSubscriber`](/reference/api/rust-library-reference/nemo-relay/observability/openinference/struct-openinferencesubscriber).
 - [`stream`](/reference/api/rust-library-reference/nemo-relay/stream) - [`stream::LlmStreamWrapper`](/reference/api/rust-library-reference/nemo-relay/stream/struct-llmstreamwrapper) - a stream adapter that applies per-chunk intercepts and aggregates streaming LLM responses.
 
@@ -54,6 +55,7 @@ All middleware is priority-ordered (ascending) and registered by name for easy a
 - [config_editor](/reference/api/rust-library-reference/nemo-relay/config_editor): Typed configuration editor metadata.
 - [error](/reference/api/rust-library-reference/nemo-relay/error): Error types for the NeMo Relay runtime.
 - [json](/reference/api/rust-library-reference/nemo-relay/json): JSON utilities for the NeMo Relay runtime.
+- [logging](/reference/api/rust-library-reference/nemo-relay/logging): Operational process logging for Relay (stderr + optional file sinks).
 - [observability](/reference/api/rust-library-reference/nemo-relay/observability): Optional observability integrations for NeMo Relay Core.
 - [plugin](/reference/api/rust-library-reference/nemo-relay/plugin): Generic plugin infrastructure for NeMo Relay runtimes.
 - [plugins](/reference/api/rust-library-reference/nemo-relay/plugins): First-party plugin implementations for NeMo Relay Core.

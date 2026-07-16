@@ -1,0 +1,36 @@
+---
+title: "Module logging"
+sidebar-title: "logging"
+description: "Operational process logging for Relay (stderr + optional file sinks)."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Operational process logging for Relay (stderr + optional file sinks).
+
+Call sites emit through the `log` facade (`log::info!`, ...). This module owns the `spdlog-rs` backend, `LogCrateProxy` installation, formatters, and sink lifetime.
+
+## Structs
+
+- [FileLogSinkConfig](/reference/api/rust-library-reference/nemo-relay/logging/struct-filelogsinkconfig): File sink settings for non-blocking operational logging.
+- [LoggingConfig](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingconfig): Operational logging configuration for [`LoggingRuntime::configure`](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingruntime).
+- [LoggingRuntime](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingruntime): Owns logging resources that must remain alive for the process / run lifetime.
+
+## Enums
+
+- [LogFormat](/reference/api/rust-library-reference/nemo-relay/logging/enum-logformat): Output encoding for an operational log sink.
+- [LogLevel](/reference/api/rust-library-reference/nemo-relay/logging/enum-loglevel): Global / per-sink minimum severity for operational logs.
+- [LogSinkConfig](/reference/api/rust-library-reference/nemo-relay/logging/enum-logsinkconfig): Additional operational log sink beyond always-on stderr.
+
+## Constants
+
+- [DEFAULT_FILE_FLUSH_INTERVAL_MILLIS](/reference/api/rust-library-reference/nemo-relay/logging/constant-default-file-flush-interval-millis): Default periodic flush interval when [`LoggingConfig::flush_interval_millis`](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingconfig) is omitted.
+- [DEFAULT_FILE_SINK_QUEUE_ENTRIES](/reference/api/rust-library-reference/nemo-relay/logging/constant-default-file-sink-queue-entries): Default number of pending asynchronous queue entries per file sink when `queue_capacity` is omitted.
+- [MAX_FILE_SINK_QUEUE_ENTRIES](/reference/api/rust-library-reference/nemo-relay/logging/constant-max-file-sink-queue-entries): Fixed hard maximum number of pending asynchronous queue entries per file sink.
+
+## Functions
+
+- [init_logging](/reference/api/rust-library-reference/nemo-relay/logging/fn-init-logging): Installs process-wide operational logging from resolved config.
