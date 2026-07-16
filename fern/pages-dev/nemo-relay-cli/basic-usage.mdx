@@ -142,6 +142,20 @@ leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with `nemo-relay plugins edit`, or use
 `nemo-relay plugins edit --project` for project configuration.
 
+### Operational Logging
+
+The CLI initializes operational logging before operational commands run.
+`nemo-relay config` and `nemo-relay plugins edit` skip initialization so invalid
+logging settings do not prevent configuration repair.
+
+Configure temporary CLI settings with `--log-level` and
+`--log-stderr-format`, or select an absolute TOML file with
+`--log-config-path`.
+
+For defaults, source precedence, environment variables, TOML file sinks, and
+Rust APIs, refer to
+[Operational Logging](/reference/operational-logging).
+
 ## Add Model Pricing for Cost Estimates
 
 Model pricing is configured with the same `plugins.toml` discovery path as
