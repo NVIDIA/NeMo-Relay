@@ -22,7 +22,9 @@ use super::{
 pub(crate) struct GatewayConfig {
     pub(crate) bind: SocketAddr,
     pub(crate) openai_base_url: String,
+    pub(crate) openai_auth_header: Option<String>,
     pub(crate) anthropic_base_url: String,
+    pub(crate) anthropic_auth_header: Option<String>,
     pub(crate) metadata: Option<Value>,
     pub(crate) plugin_config: Option<Value>,
     pub(crate) max_hook_payload_bytes: usize,
@@ -112,7 +114,9 @@ impl Default for GatewayConfig {
                 .parse()
                 .expect("valid default bind address"),
             openai_base_url: "https://api.openai.com/v1".into(),
+            openai_auth_header: None,
             anthropic_base_url: "https://api.anthropic.com".into(),
+            anthropic_auth_header: None,
             metadata: None,
             plugin_config: None,
             max_hook_payload_bytes: DEFAULT_MAX_HOOK_PAYLOAD_BYTES,

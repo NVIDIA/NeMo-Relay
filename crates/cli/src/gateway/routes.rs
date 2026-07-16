@@ -14,21 +14,34 @@ pub(super) enum ProviderRoute {
     AnthropicCountTokens,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct ProviderForwarding {
     pub(super) source_route: ProviderRoute,
     pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
+    openai_auth_header: Option<String>,
+    anthropic_auth_header: Option<String>,
 }
 
 impl ProviderForwarding {
     pub(super) fn new(
         source_route: ProviderRoute,
         authorization: crate::provider_auth::ProviderRequestAuthorization,
+        config: &crate::configuration::GatewayConfig,
     ) -> Self {
         Self {
             source_route,
             authorization,
+            openai_auth_header: config.openai_auth_header.clone(),
+            anthropic_auth_header: config.anthropic_auth_header.clone(),
         }
+    }
+
+    pub(super) fn configured_auth_header(&self, route: ProviderRoute) -> Option<&str> {
+        configured_auth_header(
+            route,
+            self.openai_auth_header.as_deref(),
+            self.anthropic_auth_header.as_deref(),
+        )
     }
 }
 
@@ -106,6 +119,17 @@ impl ProviderRoute {
         self.upstream_url_with_base(base, path_and_query)
     }
 
+    pub(super) fn configured_auth_header(
+        self,
+        config: &crate::configuration::GatewayConfig,
+    ) -> Option<&str> {
+        configured_auth_header(
+            self,
+            config.openai_auth_header.as_deref(),
+            config.anthropic_auth_header.as_deref(),
+        )
+    }
+
     // Like `upstream_url` but with an explicit base URL. This keeps OpenAI `/v1` normalization in
     // one place for configured public, enterprise, or local proxy bases.
     pub(super) fn upstream_url_with_base(self, base: &str, path_and_query: &str) -> String {
@@ -133,6 +157,21 @@ impl ProviderRoute {
     }
 }
 
+fn configured_auth_header<'a>(
+    route: ProviderRoute,
+    openai_auth_header: Option<&'a str>,
+    anthropic_auth_header: Option<&'a str>,
+) -> Option<&'a str> {
+    match route {
+        ProviderRoute::OpenAiResponses
+        | ProviderRoute::OpenAiChatCompletions
+        | ProviderRoute::OpenAiModels => openai_auth_header,
+        ProviderRoute::AnthropicMessages | ProviderRoute::AnthropicCountTokens => {
+            anthropic_auth_header
+        }
+    }
+}
+
 pub(super) fn normalize_openai_path_for_base(base: &str, path_and_query: &str) -> String {
     match (base.ends_with("/v1"), path_and_query.starts_with("/v1/")) {
         (true, true) => path_and_query
@@ -152,12 +191,17 @@ pub(super) fn gateway_upstream_url_override(
     headers: &HeaderMap,
     path_and_query: &str,
     allow_environment_provider_auth: bool,
+    config: &crate::configuration::GatewayConfig,
 ) -> Option<String> {
     gateway_upstream_url_override_with_openai_key_state(
         route,
         headers,
         path_and_query,
-        allow_environment_provider_auth && env_var_is_nonempty("OPENAI_API_KEY"),
+        has_openai_replacement_auth(
+            route,
+            allow_environment_provider_auth,
+            route.configured_auth_header(config),
+        ),
     )
 }
 
@@ -182,11 +226,16 @@ pub(super) fn strip_replaceable_agent_auth_headers(
     headers: &HeaderMap,
     route: ProviderRoute,
     allow_environment_provider_auth: bool,
+    configured_auth_header: Option<&str>,
 ) -> HeaderMap {
     strip_replaceable_agent_auth_headers_with_openai_key_state(
         headers,
         route,
-        allow_environment_provider_auth && env_var_is_nonempty("OPENAI_API_KEY"),
+        has_openai_replacement_auth(
+            route,
+            allow_environment_provider_auth,
+            configured_auth_header,
+        ),
     )
 }
 
@@ -203,6 +252,21 @@ pub(super) fn env_var_is_nonempty(name: &str) -> bool {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .is_some()
+}
+
+fn has_openai_replacement_auth(
+    route: ProviderRoute,
+    allow_environment_provider_auth: bool,
+    configured_auth_header: Option<&str>,
+) -> bool {
+    allow_environment_provider_auth
+        && matches!(
+            route,
+            ProviderRoute::OpenAiResponses
+                | ProviderRoute::OpenAiChatCompletions
+                | ProviderRoute::OpenAiModels
+        )
+        && (configured_auth_header.is_some() || env_var_is_nonempty("OPENAI_API_KEY"))
 }
 
 // Delegates provider-specific session fallbacks to `alignment` so request construction stays
