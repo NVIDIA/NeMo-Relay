@@ -1061,6 +1061,11 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
         event_attributes.get("nemo_relay.mark.metadata.source"),
         Some(&"rust-test".to_string())
     );
+    assert!(!event_attributes.contains_key("tool.name"));
+    assert!(!event_attributes.contains_key("tool_call.function.name"));
+    assert!(!event_attributes.contains_key("output.value"));
+    assert!(!event_attributes.contains_key("output.mime_type"));
+    assert!(!event_attributes.contains_key("metadata"));
 }
 
 #[test]
@@ -2541,7 +2546,8 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         BaseEvent::builder()
             .parent_uuid(parent_uuid)
             .name("plugin.output_compacted")
-            .data(json!({"count": 3}))
+            .data(json!({"count": 3, "details": {"strategy": "compact"}}))
+            .metadata(json!({"producer": "example-plugin", "attempt": 1}))
             .build(),
         Some(EventCategory::custom()),
         Some(
@@ -2585,6 +2591,38 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         Some(&"3".to_string())
     );
     assert_eq!(
+        attributes.get("nemo_relay.mark.data.details"),
+        Some(&"{\"strategy\":\"compact\"}".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.mark.metadata.attempt"),
+        Some(&"1".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.mark.metadata.producer"),
+        Some(&"example-plugin".to_string())
+    );
+    assert_eq!(
+        attributes.get("tool.name"),
+        Some(&"plugin.output_compacted".to_string())
+    );
+    assert_eq!(
+        attributes.get("tool_call.function.name"),
+        Some(&"plugin.output_compacted".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.value"),
+        Some(&"{\"count\":3,\"details\":{\"strategy\":\"compact\"}}".to_string())
+    );
+    assert_eq!(
+        attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        attributes.get("metadata"),
+        Some(&"{\"attempt\":1,\"producer\":\"example-plugin\"}".to_string())
+    );
+    assert_eq!(
         attributes.get("nemo_relay.mark.category"),
         Some(&"custom".to_string())
     );
@@ -2593,6 +2631,115 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
         Some(&"example.compaction".to_string())
     );
     assert!(!attributes.contains_key("nemo_relay.mark.orphan"));
+}
+
+#[test]
+fn tool_projection_omits_standard_payload_attributes_when_mark_payload_is_absent() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OpenInferenceEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
+    processor.process(&make_mark_event(None, "plugin.checkpoint", None));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let attributes = attr_map(&spans[0].attributes);
+    assert_eq!(
+        attributes.get("tool.name"),
+        Some(&"plugin.checkpoint".to_string())
+    );
+    assert_eq!(
+        attributes.get("tool_call.function.name"),
+        Some(&"plugin.checkpoint".to_string())
+    );
+    assert!(!attributes.contains_key("output.value"));
+    assert!(!attributes.contains_key("output.mime_type"));
+    assert!(!attributes.contains_key("metadata"));
+    assert!(
+        !attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.data"))
+    );
+    assert!(
+        !attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.metadata"))
+    );
+}
+
+#[test]
+fn tool_projection_handles_data_and_metadata_independently() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OpenInferenceEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
+    processor.process(&make_mark_event(
+        None,
+        "plugin.data_only",
+        Some(json!({"count": 3})),
+    ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("plugin.metadata_only")
+            .metadata(json!({"attempt": 1}))
+            .build(),
+        None,
+        None,
+    )));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+
+    let data_only = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:plugin.data_only")
+        .unwrap();
+    let data_attributes = attr_map(&data_only.attributes);
+    assert_eq!(
+        data_attributes.get("output.value"),
+        Some(&"{\"count\":3}".to_string())
+    );
+    assert_eq!(
+        data_attributes.get("output.mime_type"),
+        Some(&"application/json".to_string())
+    );
+    assert_eq!(
+        data_attributes.get("nemo_relay.mark.data.count"),
+        Some(&"3".to_string())
+    );
+    assert!(!data_attributes.contains_key("metadata"));
+    assert!(
+        !data_attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.metadata"))
+    );
+
+    let metadata_only = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:plugin.metadata_only")
+        .unwrap();
+    let metadata_attributes = attr_map(&metadata_only.attributes);
+    assert!(!metadata_attributes.contains_key("output.value"));
+    assert!(!metadata_attributes.contains_key("output.mime_type"));
+    assert_eq!(
+        metadata_attributes.get("metadata"),
+        Some(&"{\"attempt\":1}".to_string())
+    );
+    assert_eq!(
+        metadata_attributes.get("nemo_relay.mark.metadata.attempt"),
+        Some(&"1".to_string())
+    );
+    assert!(
+        !metadata_attributes
+            .keys()
+            .any(|key| key.starts_with("nemo_relay.mark.data"))
+    );
 }
 
 #[test]

@@ -31,6 +31,8 @@ primary supported surfaces.
 
 ## Why Use It?
 
+Use the Go binding for the following tasks:
+
 - **Use NeMo Relay from Go**: Group agent, tool, and LLM work into the same
   scope and lifecycle model as the Rust runtime.
 - **Bridge through CGo and FFI**: Consume the shared runtime through the
@@ -42,10 +44,13 @@ primary supported surfaces.
 
 ## What You Get
 
+The Go package provides the following capabilities:
+
 - **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
   shared Rust runtime.
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
-  blocking, sanitization, and execution wrapping.
+  blocking, sanitization, and execution wrapping, including mark and scope
+  event sanitizers at global, scope-local, and plugin-context levels.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
 - **Convenience subpackages**: Short imports for scopes, tools, LLM calls,

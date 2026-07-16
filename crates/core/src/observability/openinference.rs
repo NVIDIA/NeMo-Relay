@@ -726,6 +726,7 @@ impl OpenInferenceEventProcessor {
             oi::OPENINFERENCE_SPAN_KIND,
             OpenInferenceSpanKind::Tool,
         ));
+        push_projected_mark_attributes(&mut attributes, event);
         if orphan {
             attributes.push(KeyValue::new("nemo_relay.mark.orphan", true));
         }
@@ -1394,6 +1395,20 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
         event.category_profile(),
     );
     attributes
+}
+
+fn push_projected_mark_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
+    let mark_name = event.name().to_string();
+    attributes.push(KeyValue::new(oi::tool::NAME, mark_name.clone()));
+    attributes.push(KeyValue::new(oi::tool_call::function::NAME, mark_name));
+
+    if let Some(data) = event.data().and_then(to_json_string) {
+        attributes.push(KeyValue::new(oi::output::VALUE, data));
+        attributes.push(KeyValue::new(oi::output::MIME_TYPE, "application/json"));
+    }
+    if let Some(metadata) = event.metadata().and_then(to_json_string) {
+        attributes.push(KeyValue::new(oi::METADATA, metadata));
+    }
 }
 
 fn common_attributes(event: &Event) -> Vec<KeyValue> {

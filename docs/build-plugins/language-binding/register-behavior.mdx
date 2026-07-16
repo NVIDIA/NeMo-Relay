@@ -34,6 +34,14 @@ Use the context only after validation succeeds. Keep validation deterministic an
 side-effect free. Inspect configuration and return diagnostics. Create runtime
 objects and attach them to the context during registration.
 
+The context includes mark, scope-start, and scope-end event sanitizer
+registrations in addition to the tool and LLM middleware surfaces. Event
+sanitizer callbacks receive the immutable event plus `data`,
+`category_profile`, and `metadata`, and return only those observability fields.
+Use the context methods so component name qualification and rollback also apply
+to these registries. Refer to [Event Sanitizers](/reference/event-sanitizers)
+for the binding-specific method names.
+
 ## Header Plugin Example
 
 The same model applies in every binding: validate component-local config, then install middleware through the component-scoped registration context.

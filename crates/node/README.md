@@ -25,6 +25,8 @@ should install it from npm rather than depend on the Rust crate directly.
 
 ## Why Use It?
 
+Use the Node.js binding for the following tasks:
+
 - **Own execution context in Node.js**: Group agent, tool, and LLM work into
   one scope tree from JavaScript or TypeScript.
 - **Put policy around callbacks**: Register guardrails and intercepts for
@@ -37,11 +39,15 @@ should install it from npm rather than depend on the Rust crate directly.
 
 ## What You Get
 
+The Node.js package provides the following capabilities:
+
 - **npm package for Node.js**: A Node.js 24 or newer package backed by a
   napi-rs native extension.
 - **Managed tool and LLM execution**: Helpers that emit lifecycle events and
   run middleware in a consistent order.
-- **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries.
+- **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries,
+  plus mark and scope event sanitizers for `data`, `categoryProfile`, and
+  `metadata`.
 - **Observability exporters**: Subscriber and exporter support for common
   runtime telemetry flows.
 - **Additional entry points**: `nemo-relay-node/typed`,
