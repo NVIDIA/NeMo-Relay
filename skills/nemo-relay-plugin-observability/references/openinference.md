@@ -20,12 +20,21 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
 
 - OpenInference export is for OTLP backends that understand model-centric
   OpenInference semantic conventions.
-- Configure `transport`, `endpoint`, `service_name`, optional namespace and
-  version, instrumentation scope, headers, resource attributes, and timeout.
-- Start with `http_binary` transport and an OTLP/HTTP traces endpoint. Use
-  `grpc` only when a Tokio runtime is active.
-- Scope, tool, and LLM start inputs become `input.value`.
-- Scope, tool, and LLM end outputs become `output.value`.
+- Configure the exporter with the following settings:
+  - `transport`, `endpoint`, `service_name`, optional namespace and version,
+    instrumentation scope, headers, resource attributes, and timeout.
+  - `http_binary` transport and an OTLP/HTTP traces endpoint. Use `grpc` only
+    when a Tokio runtime is active.
+- Exported events have the following mappings:
+  - Scope, tool, and LLM start inputs become `input.value`.
+  - Scope, tool, and LLM end outputs become `output.value`.
+- LLM annotations follow the freshness rules:
+  - Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
+  - The annotated input for the first subsequent LLM start retains complete
+    history. Later starts retain system instructions, the latest user message,
+    and every following assistant or tool message.
+  - When a request codec supplies an annotation, the event's provider-shaped
+    input uses the same projection. Provider execution remains unchanged.
 - LLM usage metadata maps token counters when provider responses include usage.
 - Use explicit config fields for endpoint, headers, resource attributes, and
   service identity in application code.

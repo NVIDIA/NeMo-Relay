@@ -86,6 +86,26 @@ ATOF uses one `data` field. For scope events, `data` is the semantic input on
 `scope_category == "start"` and the semantic output on
 `scope_category == "end"`.
 
+LLM start annotations use freshness state owned by the nearest agent scope:
+
+- **Fresh history:** An agent starts fresh when its scope opens and becomes
+  fresh again after a `compaction` mark. The first subsequent LLM start retains
+  the complete available request history and consumes the fresh state.
+- **Stale history:** After that first start, later LLM starts retain all system
+  instructions, the latest user message, and every following assistant or tool
+  message. If the history has no user message, the annotation retains system
+  instructions and the final non-system message.
+- **Scope ownership:** Nested agents track freshness independently. The implicit
+  root is the freshness owner for work outside an explicit agent. Non-agent
+  scopes inherit their nearest agent's state instead of starting a new budget.
+- **Codec projection:** When a request codec supplies an annotation, Relay
+  applies the same history projection to the event's provider-shaped input. If
+  that event-only encode fails, Relay retains the complete event input and
+  annotation. The request used for provider execution remains unchanged.
+- **Concurrency:** Concurrent starts have no guaranteed emission order, but
+  exactly one consumes a fresh state. Events are independent observations, not
+  a replayable history stream.
+
 ### Category Profiles
 
 Category-specific fields live under `category_profile`. NeMo Relay uses
@@ -100,7 +120,7 @@ are preserved so newer producers can interoperate with older consumers.
 LLM codecs can enrich LLM events with annotated request and response data. These
 annotations are part of the canonical event JSON under `category_profile` when
 they are present, so ATOF JSONL export and in-process subscriber JSON expose the
-same payload shape.
+same payload shape. Request annotations use the owning agent's freshness state.
 
 ### Event Contract Boundary
 
