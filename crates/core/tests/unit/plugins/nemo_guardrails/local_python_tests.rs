@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
 #[cfg(unix)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
@@ -22,8 +22,8 @@ use super::*;
 use crate::api::llm::{LlmAttributes, LlmCallExecuteParams, LlmRequest, llm_call_execute};
 #[cfg(unix)]
 use crate::api::runtime::{
-    LlmExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
-    set_thread_scope_stack,
+    LlmExecutionNextFn, NemoRelayContextState, ThreadScopeStackBinding, capture_thread_scope_stack,
+    create_scope_stack, global_context, restore_thread_scope_stack, set_thread_scope_stack,
 };
 #[cfg(unix)]
 use crate::api::tool::{ToolCallExecuteParams, tool_call_execute};
@@ -532,11 +532,30 @@ async fn install_local_plugin(config: &NeMoGuardrailsConfig) {
 }
 
 #[cfg(unix)]
-fn reset_plugin_runtime() {
+struct PluginRuntimeResetGuard {
+    previous_scope_stack: ThreadScopeStackBinding,
+}
+
+#[cfg(unix)]
+impl Drop for PluginRuntimeResetGuard {
+    fn drop(&mut self) {
+        let _ = clear_plugin_configuration();
+        crate::shared_runtime::reset_runtime_owner_for_tests();
+        *global_context().write().unwrap() = NemoRelayContextState::new();
+        restore_thread_scope_stack(self.previous_scope_stack.clone());
+    }
+}
+
+#[cfg(unix)]
+fn reset_plugin_runtime() -> PluginRuntimeResetGuard {
+    let previous_scope_stack = capture_thread_scope_stack();
     let _ = clear_plugin_configuration();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     *global_context().write().unwrap() = NemoRelayContextState::new();
     set_thread_scope_stack(create_scope_stack());
+    PluginRuntimeResetGuard {
+        previous_scope_stack,
+    }
 }
 
 #[cfg(unix)]
@@ -549,7 +568,7 @@ async fn registered_local_backend_rewrites_llm_requests_and_tool_payloads() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
-    reset_plugin_runtime();
+    let _runtime_guard = reset_plugin_runtime();
 
     let fixture = FakeGuardrails::new("0.22.0");
     let mut config = fixture.config();
@@ -623,7 +642,7 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
         .unwrap_or_else(|err| err.into_inner());
-    reset_plugin_runtime();
+    let _runtime_guard = reset_plugin_runtime();
 
     let fixture = FakeGuardrails::new("0.22.0");
     let mut config = fixture.config();
@@ -631,6 +650,8 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
     config.tool_input = true;
     install_local_plugin(&config).await;
 
+    let llm_callback_called = Arc::new(AtomicBool::new(false));
+    let llm_callback_marker = Arc::clone(&llm_callback_called);
     let llm_error = llm_call_execute(
         LlmCallExecuteParams::builder()
             .name("openai")
@@ -641,7 +662,10 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
                     "messages": [{"role": "user", "content": "block this request"}]
                 }),
             })
-            .func(Arc::new(|_| Box::pin(async { Ok(json!({})) })))
+            .func(Arc::new(move |_| {
+                llm_callback_marker.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({})) })
+            }))
             .attributes(LlmAttributes::empty())
             .response_codec(Arc::new(OpenAIChatCodec) as Arc<dyn LlmResponseCodec>)
             .build(),
@@ -653,12 +677,18 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
             .to_string()
             .contains("input rail blocked the LLM call")
     );
+    assert!(!llm_callback_called.load(Ordering::SeqCst));
 
+    let tool_callback_called = Arc::new(AtomicBool::new(false));
+    let tool_callback_marker = Arc::clone(&tool_callback_called);
     let tool_error = tool_call_execute(
         ToolCallExecuteParams::builder()
             .name("lookup")
             .args(json!({"block": true}))
-            .func(Arc::new(|_| Box::pin(async { Ok(json!({})) })))
+            .func(Arc::new(move |_| {
+                tool_callback_marker.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({})) })
+            }))
             .build(),
     )
     .await
@@ -668,4 +698,5 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
             .to_string()
             .contains("tool_input rail blocked the tool call")
     );
+    assert!(!tool_callback_called.load(Ordering::SeqCst));
 }

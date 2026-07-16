@@ -25,6 +25,10 @@ fn values_follow_nested_paths_and_return_owned_data() {
         value_at_any(&payload, &[&["missing"], &["request", "enabled"]]),
         Some(json!(true))
     );
+    assert_eq!(
+        value_at_any(&payload, &[&["request", "id"], &["request", "enabled"]]),
+        Some(json!("request-1"))
+    );
 }
 
 #[test]
@@ -42,6 +46,10 @@ fn string_helpers_accept_scalars_and_skip_empty_or_structured_values() {
     assert_eq!(string_at(&payload, &["object"]), None);
     assert_eq!(
         string_at_any(&payload, &[&["empty"], &["object"], &["object", "id"]]),
+        Some("nested".into())
+    );
+    assert_eq!(
+        string_at_any(&payload, &[&["object", "id"], &["number"]]),
         Some("nested".into())
     );
 }
