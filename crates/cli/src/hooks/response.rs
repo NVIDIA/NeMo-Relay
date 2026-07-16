@@ -110,7 +110,9 @@ fn handle_hook_failure(
             error_kind = error.log_kind();
             "Hook delivery failed"
         );
-        Err(error)
+        Err(CliError::HookDelivery {
+            source: Box::new(error),
+        })
     } else {
         log::warn!(
             target: "nemo_relay.hook",

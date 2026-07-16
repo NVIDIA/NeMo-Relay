@@ -50,6 +50,11 @@ pub(crate) enum CliError {
     Config(String),
     #[error("launcher error: {0}")]
     Launch(String),
+    #[error("nemo-relay hook forward failed: {source}")]
+    HookDelivery {
+        #[source]
+        source: Box<CliError>,
+    },
     #[error("{message}")]
     PluginLifecycle {
         command: &'static str,
@@ -78,6 +83,7 @@ impl CliError {
             Self::Install(_) => "install",
             Self::Config(_) => "configuration",
             Self::Launch(_) => "launch",
+            Self::HookDelivery { source } => source.log_kind(),
             Self::PluginLifecycle { .. } => "plugin_lifecycle",
             Self::Flow(FlowError::GuardrailRejected(_)) => "guardrail_rejected",
             Self::Flow(_) => "runtime",
@@ -89,6 +95,7 @@ impl CliError {
         match self {
             Self::GuardrailRejected(reason) => Some(reason),
             Self::Flow(FlowError::GuardrailRejected(reason)) => Some(reason),
+            Self::HookDelivery { source } => source.guardrail_rejection_reason(),
             _ => None,
         }
     }

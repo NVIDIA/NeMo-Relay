@@ -31,6 +31,10 @@ fn log_kinds_cover_every_operational_error_class() {
             CliError::PayloadTooLarge("large".into()),
             "payload_too_large",
         ),
+        (
+            CliError::Unauthorized("missing token".into()),
+            "unauthorized",
+        ),
         (CliError::Upstream(upstream), "upstream"),
         (
             CliError::ProviderFailure(UpstreamFailure {
@@ -46,6 +50,12 @@ fn log_kinds_cover_every_operational_error_class() {
         (CliError::Install("install".into()), "install"),
         (CliError::Config("config".into()), "configuration"),
         (CliError::Launch("launch".into()), "launch"),
+        (
+            CliError::HookDelivery {
+                source: Box::new(CliError::Install("hook transport".into())),
+            },
+            "install",
+        ),
         (
             CliError::PluginLifecycle {
                 command: "add",

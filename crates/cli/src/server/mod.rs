@@ -573,8 +573,17 @@ impl AppState {
         headers: &mut HeaderMap,
     ) -> Result<crate::provider_auth::ProviderRequestAuthorization, CliError> {
         if let Some(proxy) = &self.transparent_proxy_credential {
+            let source_credential = proxy.consume(headers).inspect_err(|error| {
+                log::warn!(
+                    target: "nemo_relay.gateway",
+                    event = "request_rejected",
+                    reason = "transparent_proxy_authentication",
+                    error_kind = error.log_kind();
+                    "Gateway request was rejected during transparent proxy authentication"
+                );
+            })?;
             return Ok(crate::provider_auth::ProviderRequestAuthorization {
-                source_credential: proxy.consume(headers)?,
+                source_credential,
                 allow_environment_provider_auth: true,
             });
         }
