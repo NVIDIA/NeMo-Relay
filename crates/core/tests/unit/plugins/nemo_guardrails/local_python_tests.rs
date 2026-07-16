@@ -18,14 +18,20 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use super::*;
+#[cfg(unix)]
 use crate::api::llm::{LlmAttributes, LlmCallExecuteParams, LlmRequest, llm_call_execute};
+#[cfg(unix)]
 use crate::api::runtime::{
     LlmExecutionNextFn, NemoRelayContextState, create_scope_stack, global_context,
     set_thread_scope_stack,
 };
+#[cfg(unix)]
 use crate::api::tool::{ToolCallExecuteParams, tool_call_execute};
+#[cfg(unix)]
 use crate::codec::openai_chat::OpenAIChatCodec;
+#[cfg(unix)]
 use crate::codec::traits::LlmResponseCodec;
+#[cfg(unix)]
 use crate::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
 };
