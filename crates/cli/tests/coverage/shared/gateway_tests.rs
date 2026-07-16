@@ -9,6 +9,7 @@ use crate::sessions::{LlmGatewayStart, SessionManager};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
+use axum::response::IntoResponse;
 use http_body_util::BodyExt;
 use reqwest::Client;
 use serde_json::Map;
@@ -1129,14 +1130,21 @@ fn transparent_proxy_accepts_standard_openai_and_anthropic_auth_shapes() {
 fn transparent_proxy_rejects_missing_or_foreign_credentials() {
     let credential =
         crate::provider_auth::TransparentProxyCredential::from_static("test-proxy-token");
-    assert!(credential.consume(&mut HeaderMap::new()).is_err());
+    let missing = credential.consume(&mut HeaderMap::new()).unwrap_err();
+    assert!(matches!(&missing, CliError::Unauthorized(_)));
+    assert_eq!(missing.into_response().status(), StatusCode::UNAUTHORIZED);
 
     let mut foreign = HeaderMap::new();
     foreign.insert(
         crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
         HeaderValue::from_static("different-run-token"),
     );
-    assert!(credential.consume(&mut foreign).is_err());
+    let foreign_error = credential.consume(&mut foreign).unwrap_err();
+    assert!(matches!(&foreign_error, CliError::Unauthorized(_)));
+    assert_eq!(
+        foreign_error.into_response().status(),
+        StatusCode::UNAUTHORIZED
+    );
     assert_eq!(
         foreign
             .get(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
