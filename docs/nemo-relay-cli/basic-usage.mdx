@@ -144,25 +144,68 @@ open the plugin editor again later with `nemo-relay plugins edit`, or use
 
 ### Operational Logging
 
-Configure Relay process logging under `[logging]` in `config.toml`. Stderr is
-always enabled. Optional file sinks append asynchronously so logging cannot
-block the gateway or agent on slow disk I/O.
+Relay initializes operational logging before operational commands start.
+`nemo-relay config` and `nemo-relay plugins edit` skip logging initialization so
+you can repair invalid logging settings. Logs always go to stderr. Without
+configuration, Relay uses `info` level, human-readable stderr output, and no
+file sinks.
+
+Relay selects one CLI logging source in this order:
+
+1. `--log-*` command-line options
+2. `NEMO_RELAY_LOG*` environment variables
+3. `[logging]` in the resolved Relay `config.toml`
+4. Built-in defaults
+
+Sources are not merged. Configure the level and stderr format directly:
+
+```bash
+nemo-relay --log-level debug --log-stderr-format jsonl
+```
+
+Alternatively, select an absolute TOML file containing a `[logging]` section:
+
+```bash
+nemo-relay --log-config-path /absolute/path/to/logging.toml
+```
+
+Environment variables provide the same two choices:
+
+```bash
+export NEMO_RELAY_LOG=debug
+export NEMO_RELAY_LOG_STDERR_FORMAT=jsonl
+
+# Or select an absolute TOML file instead:
+export NEMO_RELAY_LOG_CONFIG_PATH=/absolute/path/to/logging.toml
+```
+
+Do not combine `--log-config-path` with direct logging options, or
+`NEMO_RELAY_LOG_CONFIG_PATH` with the other logging environment variables.
+
+The standard Relay configuration uses the following schema:
 
 ```toml
 [logging]
 level = "info"                # minimum severity: error | warn | info | debug | trace
 stderr_format = "human"       # human | jsonl
-max_queue_capacity = 1048576  # optional; safety ceiling for each sink's queue_capacity
+flush_interval_millis = 1000  # optional; 0 flushes only during shutdown
 
 [[logging.sinks]]
 path = ".nemo-relay/logs/relay.log.jsonl"  # required; relative paths use process CWD
-format = "jsonl"            # optional; default jsonl (human | jsonl)
-level = "debug"             # optional; defaults to [logging].level
-
-# Advanced async file delivery (optional; omit to use defaults):
-queue_capacity = 1024           # max records waiting for disk write; 0 < value <= max_queue_capacity
-flush_interval_millis = 1000    # periodic flush; 0 = flush only on shutdown
+format = "jsonl"                       # optional; default jsonl
+level = "debug"                        # optional; defaults to [logging].level
+queue_capacity = 1024                  # optional; maximum 8192 queued entries
 ```
+
+File sinks append through asynchronous queues so slow file I/O does not block
+Relay. The queue limit is fixed for process safety and cannot be increased
+beyond 8192 entries per sink.
+
+Rust library integrations can initialize the same runtime with
+`LoggingRuntime::configure`, `LoggingRuntime::configure_from_environment`, or
+`LoggingRuntime::configure_from_file_path`. Keep the returned runtime alive
+until the operation finishes so pending file records are flushed during
+shutdown.
 
 ## Add Model Pricing for Cost Estimates
 
