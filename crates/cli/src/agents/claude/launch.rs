@@ -26,7 +26,7 @@ pub(crate) fn prepare(
         .filter(|value| !value.trim().is_empty())
         .map_or_else(
             || proxy_header.clone(),
-            |value| format!("{value}\n{proxy_header}"),
+            |value| replace_custom_header(&value, &proxy_header),
         );
     launch.set_secret_env("ANTHROPIC_CUSTOM_HEADERS", custom_headers);
     if dry_run {
@@ -92,6 +92,22 @@ pub(crate) fn prepare(
         .push(("ANTHROPIC_BASE_URL".into(), gateway_url.to_string()));
     launch.temp_dirs.push(root);
     Ok(())
+}
+
+fn replace_custom_header(existing: &str, replacement: &str) -> String {
+    let replacement_name = replacement
+        .split_once(':')
+        .map_or(replacement, |(name, _)| name)
+        .trim();
+    existing
+        .lines()
+        .filter(|line| {
+            line.split_once(':')
+                .is_none_or(|(name, _)| !name.trim().eq_ignore_ascii_case(replacement_name))
+        })
+        .chain(std::iter::once(replacement))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn settings_overlay(

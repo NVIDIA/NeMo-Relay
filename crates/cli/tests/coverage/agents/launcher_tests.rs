@@ -817,6 +817,54 @@ fn claude_transparent_proxy_header_preserves_existing_custom_headers() {
 }
 
 #[test]
+fn claude_transparent_proxy_header_replaces_case_insensitive_existing_entries() {
+    let _env = EnvScope::set(&[(
+        "ANTHROPIC_CUSTOM_HEADERS",
+        Some(std::ffi::OsStr::new(
+            "X-NEMO-RELAY-PROXY-TOKEN: stale-first\nx-existing: preserved\nx-NeMo-ReLaY-PrOxY-ToKeN : stale-second",
+        )),
+    )]);
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap();
+    let custom_headers = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "ANTHROPIC_CUSTOM_HEADERS").then_some(value))
+        .unwrap();
+
+    assert_eq!(
+        custom_headers,
+        &format!(
+            "x-existing: preserved\n{}: {}",
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            prepared.proxy_credential.expose()
+        )
+    );
+    assert_eq!(
+        custom_headers
+            .lines()
+            .filter(|line| line.split_once(':').is_some_and(|(name, _)| {
+                name.trim()
+                    .eq_ignore_ascii_case(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+            }))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable() {
     let resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
