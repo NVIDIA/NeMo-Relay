@@ -42,12 +42,12 @@
       "./dist/index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.5.26",
-      "minGatewayVersion": "2026.5.26"
+      "pluginApi": ">=2026.7.1",
+      "minGatewayVersion": "2026.7.1"
     },
     "build": {
-      "openclawVersion": "2026.5.26",
-      "pluginSdkVersion": "2026.5.26"
+      "openclawVersion": "2026.7.1",
+      "pluginSdkVersion": "2026.7.1"
     }
   },
   "scripts": {
@@ -60,7 +60,7 @@
     "test:live": "npm run build:test && node scripts/test-live.mjs"
   },
   "peerDependencies": {
-    "openclaw": "^2026.5.26"
+    "openclaw": "^2026.7.1"
   },
   "dependencies": {
     "nemo-relay-node": "0.6.0"
