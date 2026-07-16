@@ -103,6 +103,104 @@ async fn prepared_gateway_request_consumes_private_client_proof() {
     );
 }
 
+#[tokio::test]
+async fn prepared_gateway_request_decodes_zstd_for_observability() {
+    let body = br#"{"model":"gpt-test","stream":true}"#;
+    let compressed = zstd::stream::encode_all(body.as_slice(), 0).unwrap();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd")
+        .body(Body::from(compressed.clone()))
+        .unwrap();
+
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+
+    assert_eq!(prepared.body_bytes.as_ref(), compressed);
+    assert_eq!(
+        prepared.request_json,
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+        })
+    );
+    assert!(prepared.streaming);
+    assert_eq!(
+        prepared.headers.get(header::CONTENT_ENCODING).unwrap(),
+        "zstd"
+    );
+}
+
+#[tokio::test]
+async fn request_observability_decode_is_bounded_and_encoding_aware() {
+    let oversized = vec![b'x'; 256];
+    let compressed = zstd::stream::encode_all(oversized.as_slice(), 0).unwrap();
+    let config = GatewayConfig {
+        max_passthrough_body_bytes: 32,
+        ..GatewayConfig::default()
+    };
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd")
+        .body(Body::from(compressed))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, true)
+        .await
+        .unwrap();
+    assert!(prepared.request_json.is_null());
+
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "gzip")
+        .body(Body::from(r#"{"model":"opaque"}"#))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, true)
+        .await
+        .unwrap();
+    assert!(prepared.request_json.is_null());
+
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "identity")
+        .body(Body::from(r#"{"model":"gpt-test"}"#))
+        .unwrap();
+    let prepared = prepare_gateway_request(&config, request, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.request_json,
+        json!({
+            "model": "gpt-test",
+        })
+    );
+}
+
+#[tokio::test]
+async fn malformed_encoded_request_remains_a_raw_passthrough() {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd")
+        .body(Body::from("not-a-zstd-frame"))
+        .unwrap();
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+    let managed = build_llm_gateway_start(&prepared).request;
+
+    let (body, headers) =
+        effective_upstream_request(&prepared.body_bytes, &prepared.headers, Some(&managed));
+
+    assert!(managed.content.is_null());
+    assert_eq!(body, prepared.body_bytes);
+    assert_eq!(headers.get(header::CONTENT_ENCODING).unwrap(), "zstd");
+}
+
 #[test]
 fn selects_provider_routes() {
     assert_eq!(
@@ -294,6 +392,26 @@ fn effective_upstream_request_overlays_runtime_body_and_headers() {
         headers.get("x-runtime-json").unwrap(),
         r#"{"enabled":true}"#
     );
+}
+
+#[test]
+fn effective_upstream_request_removes_content_encoding_after_reencoding() {
+    let original_body = Bytes::from_static(b"compressed bytes");
+    let mut original_headers = HeaderMap::new();
+    original_headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+    let request = LlmRequest {
+        headers: Map::from_iter([("content-encoding".to_string(), json!("zstd"))]),
+        content: json!({ "model": "rewritten" }),
+    };
+
+    let (body, headers) =
+        effective_upstream_request(&original_body, &original_headers, Some(&request));
+
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap(),
+        json!({ "model": "rewritten" })
+    );
+    assert!(!headers.contains_key(header::CONTENT_ENCODING));
 }
 
 #[test]

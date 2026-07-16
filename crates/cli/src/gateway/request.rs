@@ -4,9 +4,10 @@
 //! Gateway request validation, buffering, and normalized LLM start construction.
 
 use std::error::Error;
+use std::io::Read;
 
 use axum::body::{Body, Bytes};
-use axum::http::{HeaderMap, Method, Request};
+use axum::http::{HeaderMap, Method, Request, header};
 use http_body_util::LengthLimitError;
 use nemo_relay::api::llm::LlmRequest;
 use serde_json::{Value, json};
@@ -46,7 +47,13 @@ pub(super) async fn prepare_gateway_request(
     let body_bytes = axum::body::to_bytes(body, config.max_passthrough_body_bytes)
         .await
         .map_err(passthrough_body_error)?;
-    let request_json = serde_json::from_slice::<Value>(&body_bytes).unwrap_or(Value::Null);
+    let request_json = request_body_for_observability(
+        &body_bytes,
+        &parts.headers,
+        config.max_passthrough_body_bytes,
+    )
+    .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
+    .unwrap_or(Value::Null);
     let path_and_query = parts
         .uri
         .path_and_query()
@@ -74,6 +81,50 @@ pub(super) async fn prepare_gateway_request(
         streaming,
         allow_environment_provider_auth,
     })
+}
+
+// Decodes the transport body only for Relay's managed request representation. The original bytes
+// and Content-Encoding header remain on PreparedGatewayRequest so unsupported or malformed
+// encodings still pass through unchanged. When the managed pipeline reserializes decoded JSON,
+// effective_dispatch_request removes Content-Encoding from the identity-encoded upstream body.
+fn request_body_for_observability(
+    body: &[u8],
+    headers: &HeaderMap,
+    max_decoded_bytes: usize,
+) -> Option<Vec<u8>> {
+    let mut encodings = Vec::new();
+    for value in headers.get_all(header::CONTENT_ENCODING) {
+        for encoding in value.to_str().ok()?.split(',') {
+            let encoding = encoding.trim();
+            if encoding.is_empty() {
+                return None;
+            }
+            encodings.push(encoding.to_ascii_lowercase());
+        }
+    }
+    if encodings.is_empty() {
+        return Some(body.to_vec());
+    }
+
+    let mut decoded = body.to_vec();
+    for encoding in encodings.iter().rev() {
+        match encoding.as_str() {
+            "identity" => {}
+            "zstd" => decoded = decode_zstd(&decoded, max_decoded_bytes)?,
+            _ => return None,
+        }
+    }
+    (decoded.len() <= max_decoded_bytes).then_some(decoded)
+}
+
+fn decode_zstd(body: &[u8], max_decoded_bytes: usize) -> Option<Vec<u8>> {
+    let decoder = zstd::stream::read::Decoder::new(body).ok()?;
+    let limit = u64::try_from(max_decoded_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let mut decoded = Vec::new();
+    decoder.take(limit).read_to_end(&mut decoded).ok()?;
+    (decoded.len() <= max_decoded_bytes).then_some(decoded)
 }
 
 fn passthrough_body_error(error: axum::Error) -> CliError {
