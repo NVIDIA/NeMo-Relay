@@ -8,10 +8,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 NeMo Relay can observe Hermes through a persistent integration or a transparent
-run. The persistent integration uses Hermes's native stdio MCP support to own a
-shared Relay gateway at `127.0.0.1:47632`. Shell hooks forward Hermes's native
+run. The persistent integration uses the Hermes native studio MCP support to own a
+shared Relay gateway at `127.0.0.1:47632`. Shell hooks forward the Hermes native
 session, subagent, tool, and model lifecycle payloads to that gateway. If you
-also point Hermes's provider at the gateway, Relay observes the model requests
+also point the Hermes provider at the gateway, Relay observes the model requests
 and responses.
 
 The MCP process manages gateway lifetime through a shared lifecycle lease. You
