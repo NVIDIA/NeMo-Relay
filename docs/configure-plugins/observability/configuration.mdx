@@ -64,20 +64,25 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "logs"
 filename = "events.jsonl"
 mode = "overwrite"
 
-[[components.config.atof.endpoints]]
+[[components.config.atof.sinks]]
+type = "stream"
+name = "archive"
 url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
 
-[components.config.atof.endpoints.headers]
+[components.config.atof.sinks.headers]
 authorization = "Bearer <token>"
 
 [components.config.atif]
@@ -142,9 +147,9 @@ The following table describes how each failure affects application work:
 
 | Failure | Behavior |
 |---|---|
-| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF endpoint config, unavailable ATOF streaming support, or ATOF endpoint worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
+| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF sink config, unavailable ATOF streaming support, or ATOF stream worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
 | ATOF event serialization or file write/flush failure after activation | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
-| ATOF streaming endpoint connection or send failure after activation | File output and other already-started endpoints continue. Endpoint failures are logged with the endpoint index; endpoint flush and close timeouts are logged instead of blocking shutdown indefinitely. |
+| ATOF stream sink connection or send failure after activation | File output and other already-started sinks continue. Stream sink failures are logged with the sink index; flush and close timeouts are logged instead of blocking shutdown indefinitely. |
 | ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The ATIF exporter records the failed sink as unhealthy and skips it for later trajectories. Other configured sinks continue to receive writes. |
 | ATIF dispatcher serialization or subscriber-management failure | The ATIF dispatcher records a fatal exporter error and stops observing later ATIF events. Other observability sections continue to run. |
 | OpenTelemetry or OpenInference construction failure | Plugin initialization fails before the subscriber is registered. |
@@ -157,7 +162,7 @@ or supported coding-agent turn scope is still open, the ATIF dispatcher writes
 the partial trajectory it has already observed.
 
 Use `nemo-relay doctor` to validate local ATOF and ATIF output directories,
-OTLP HTTP endpoints, and ATOF streaming endpoints. Validate ATIF remote storage
+OTLP HTTP endpoints, and ATOF stream sinks. Validate ATIF remote storage
 destinations, including HTTP storage and S3-compatible storage, with exporter
 logs and backend-side checks because `nemo-relay doctor` does not probe
 `atif.storage`. For local artifact paths, verify that the running process can
@@ -183,6 +188,7 @@ from nemo_relay import plugin, scope, ScopeType
 from nemo_relay.observability import (
     AtifConfig,
     AtofConfig,
+    AtofFileSinkConfig,
     ComponentSpec,
     ObservabilityConfig,
     OtlpConfig,
@@ -194,9 +200,13 @@ config = plugin.PluginConfig(
             ObservabilityConfig(
                 atof=AtofConfig(
                     enabled=True,
-                    output_directory="logs",
-                    filename="events.jsonl",
-                    mode="overwrite",
+                    sinks=[
+                        AtofFileSinkConfig(
+                            output_directory="logs",
+                            filename="events.jsonl",
+                            mode="overwrite",
+                        )
+                    ],
                 ),
                 atif=AtifConfig(
                     enabled=True,
@@ -250,12 +260,17 @@ void (async () => {
   version: 1,
   components: [
     observability.ComponentSpec({
-      version: 1,
+      version: 2,
       atof: observability.atofConfig({
         enabled: true,
-        output_directory: "logs",
-        filename: "events.jsonl",
-        mode: "overwrite",
+        sinks: [
+          {
+            type: "file",
+            output_directory: "logs",
+            filename: "events.jsonl",
+            mode: "overwrite",
+          },
+        ],
       }),
       atif: observability.atifConfig({
         enabled: true,
@@ -306,7 +321,8 @@ void (async () => {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
-    AtifSectionConfig, AtofEndpointSectionConfig, AtofSectionConfig, ComponentSpec,
+    AtifSectionConfig, AtofFileSinkSectionConfig, AtofSectionConfig,
+    AtofSinkSectionConfig, AtofStreamSinkSectionConfig, ComponentSpec,
     ObservabilityConfig, OtlpSectionConfig,
 };
 use nemo_relay::plugin::{
@@ -316,16 +332,22 @@ use nemo_relay::plugin::{
 let component = ComponentSpec::new(ObservabilityConfig {
     atof: Some(AtofSectionConfig {
         enabled: true,
-        output_directory: Some("logs".into()),
-        filename: Some("events.jsonl".into()),
-        mode: "overwrite".into(),
-        endpoints: vec![AtofEndpointSectionConfig {
-            url: "http://localhost:8080/events".into(),
-            transport: "http_post".into(),
-            headers: [("authorization".into(), "Bearer <token>".into())].into(),
-            timeout_millis: 3000,
-            field_name_policy: "preserve".into(),
-        }],
+        sinks: vec![
+            AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+                output_directory: Some("logs".into()),
+                filename: Some("events.jsonl".into()),
+                mode: "overwrite".into(),
+            }),
+            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                url: "http://localhost:8080/events".into(),
+                transport: "http_post".into(),
+                headers: [("authorization".into(), "Bearer <token>".into())].into(),
+                header_env: Default::default(),
+                timeout_millis: 3000,
+                field_name_policy: "preserve".into(),
+                name: Some("archive".into()),
+            }),
+        ],
     }),
     atif: Some(AtifSectionConfig {
         enabled: true,
@@ -381,14 +403,14 @@ Ok(())
 ## Validation and Teardown
 
 Validate plugin configuration before activating it. The plugin reports
-unsupported transports, unsupported ATOF modes, invalid ATOF streaming endpoint
-URLs, non-string endpoint headers, non-positive endpoint timeouts, unsafe ATIF
+unsupported transports, unsupported ATOF modes, invalid ATOF stream sink URLs,
+non-string stream sink headers, non-positive stream sink timeouts, unsafe ATIF
 filename templates, unknown fields according to policy, and enabled exporters
 that are unavailable in the current build or target.
 
 Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
 Clearing the plugin config deregisters inferred subscribers, flushes file
-exporters, drains and closes ATOF streaming endpoints, and shuts down owned OTLP
+exporters, drains and closes ATOF stream sinks, and shuts down owned OTLP
 subscribers.
 
 Use manual subscriber/exporter APIs instead of the plugin when you need custom
