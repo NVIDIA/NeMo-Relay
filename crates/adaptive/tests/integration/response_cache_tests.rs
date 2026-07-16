@@ -917,6 +917,22 @@ async fn misconfigured_keys_and_headers_are_rejected_by_validation() {
         "a wrong-typed budget silently vanishes and must be rejected: {:?}",
         report.diagnostics
     );
+
+    let mut mistyped_prefix = ResponseCacheConfig::default();
+    mistyped_prefix.backend.kind = "redis".to_string();
+    mistyped_prefix
+        .backend
+        .config
+        .insert("key_prefix".to_string(), json!(42));
+    let report = validate(mistyped_prefix);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "response_cache.invalid_backend_option"),
+        "a wrong-typed key_prefix silently becomes the shared default and must be rejected: {:?}",
+        report.diagnostics
+    );
 }
 
 #[tokio::test]
@@ -943,6 +959,37 @@ async fn truncated_stream_without_a_terminal_event_is_not_cached() {
         calls.load(Ordering::SeqCst),
         2,
         "a stream with no terminal event must not populate the cache"
+    );
+}
+
+#[tokio::test]
+async fn multi_choice_stream_with_an_unfinished_choice_is_not_cached() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(ResponseCacheConfig::default()).await;
+
+    // n=2: choice 0 finishes but choice 1 never carries a finish_reason before
+    // the clean EOF — a truncation of choice 1. One finished choice must not
+    // count as stream completion, or the partial aggregate would be stored and
+    // served as the full answer (the streaming flag is not part of the key, so
+    // a buffered repeat would hit it directly).
+    let truncated = vec![
+        json!({"id": "chatcmpl-2", "object": "chat.completion.chunk", "created": 1_700_000_000, "model": "gpt-4o", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "first"}, "finish_reason": null}]}),
+        json!({"id": "chatcmpl-2", "object": "chat.completion.chunk", "choices": [{"index": 1, "delta": {"role": "assistant", "content": "second"}, "finish_reason": null}]}),
+        json!({"id": "chatcmpl-2", "object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+    ];
+    let stream_calls = Arc::new(AtomicUsize::new(0));
+    let stream_provider = counting_stream_provider(Arc::clone(&stream_calls), truncated);
+    stream_call(&stream_provider, chat_request("two choices")).await;
+
+    let buffered_calls = Arc::new(AtomicUsize::new(0));
+    let buffered_provider = counting_provider(Arc::clone(&buffered_calls), sample_body());
+    call(&buffered_provider, chat_request("two choices")).await;
+
+    assert_eq!(
+        buffered_calls.load(Ordering::SeqCst),
+        1,
+        "a multi-choice stream with an unfinished choice must not populate the cache"
     );
 }
 

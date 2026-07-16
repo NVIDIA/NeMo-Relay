@@ -183,12 +183,23 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
                 .config
                 .get("url")
                 .and_then(Json::as_str)
-                .is_none()
+                .is_none_or(|url| url.trim().is_empty())
             {
                 report.diagnostics.push(response_cache_error(
                     "response_cache.missing_redis_url",
                     Some("backend.config.url"),
                     "redis backend requires backend.config.url".to_string(),
+                ));
+            }
+            // A mistyped key_prefix would silently fall back to the shared
+            // default prefix; reject it like a mistyped max_bytes.
+            if let Some(value) = config.backend.config.get("key_prefix")
+                && !value.is_string()
+            {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.invalid_backend_option",
+                    Some("backend.config"),
+                    "key_prefix must be a string".to_string(),
                 ));
             }
             // A shared redis cache with no namespace mixes every caller's

@@ -16,6 +16,7 @@ use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::error::Result as FlowResult;
 use serde_json::Value as Json;
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -265,7 +266,7 @@ fn tee_and_aggregate(
         let mut collect = codec.collector();
         let mut live = live;
         let mut collector_failed = false;
-        let mut saw_terminal = false;
+        let mut completion = StreamCompletion::default();
         while let Some(item) = live.next().await {
             match &item {
                 Ok(chunk) => {
@@ -273,7 +274,7 @@ fn tee_and_aggregate(
                     if chunk_is_inband_error(chunk) || collect(chunk.clone()).is_err() {
                         collector_failed = true;
                     }
-                    saw_terminal |= chunk_is_terminal(chunk);
+                    completion.observe(chunk);
                 }
                 Err(_) => {
                     // Upstream error is a failed call: forward it, never cache.
@@ -288,7 +289,7 @@ fn tee_and_aggregate(
         }
         // Store only protocol-complete streams: every collector finalizes a
         // clean truncation as a well-formed partial.
-        if !collector_failed && saw_terminal {
+        if !collector_failed && completion.is_terminal() {
             let aggregate = codec.finalizer()();
             // Empty = mis-inferred surface; lossy = unfaithful replay.
             if aggregate_has_no_content(&aggregate) || aggregate_replay_lossy(&aggregate) {
@@ -334,22 +335,42 @@ fn aggregate_replay_lossy(aggregate: &Json) -> bool {
     false
 }
 
-/// A chunk that marks the stream complete (`response.incomplete` is
-/// deliberately excluded: a capped answer must not replay as "the" answer).
-fn chunk_is_terminal(chunk: &Json) -> bool {
-    if let Some(choices) = chunk.get("choices").and_then(Json::as_array)
-        && choices.iter().any(|choice| {
-            choice
-                .get("finish_reason")
-                .is_some_and(|reason| !reason.is_null())
-        })
-    {
-        return true;
+/// Tracks stream completion (`response.incomplete` is deliberately excluded:
+/// a capped answer must not replay as "the" answer). Chat streams interleave
+/// per-choice chunks, so every choice that appeared must carry a
+/// `finish_reason` — a clean close after only some choices finished is a
+/// truncation that must not be cached.
+#[derive(Default)]
+struct StreamCompletion {
+    saw_stop_event: bool,
+    choices_seen: BTreeSet<u64>,
+    choices_finished: BTreeSet<u64>,
+}
+
+impl StreamCompletion {
+    fn observe(&mut self, chunk: &Json) {
+        if let Some(choices) = chunk.get("choices").and_then(Json::as_array) {
+            for choice in choices {
+                let index = choice.get("index").and_then(Json::as_u64).unwrap_or(0);
+                self.choices_seen.insert(index);
+                if choice
+                    .get("finish_reason")
+                    .is_some_and(|reason| !reason.is_null())
+                {
+                    self.choices_finished.insert(index);
+                }
+            }
+        }
+        self.saw_stop_event |= matches!(
+            chunk.get("type").and_then(Json::as_str),
+            Some("message_stop" | "response.completed")
+        );
     }
-    matches!(
-        chunk.get("type").and_then(Json::as_str),
-        Some("message_stop" | "response.completed")
-    )
+
+    fn is_terminal(&self) -> bool {
+        self.saw_stop_event
+            || (!self.choices_seen.is_empty() && self.choices_seen == self.choices_finished)
+    }
 }
 
 /// Provider-native in-band error chunk; a false positive only skips a store.

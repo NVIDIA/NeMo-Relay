@@ -204,6 +204,10 @@ async fn repeat_workload_yields_expected_hits_and_savings() {
         "every request is either a hit or a miss (no bypasses here)"
     );
     assert_eq!(
+        stats.bypasses, 0,
+        "no request may be marked as a bypass here"
+    );
+    assert_eq!(
         calls.load(Ordering::SeqCst),
         total_requests - stats.hits,
         "provider_calls_on == total_requests - hits"
@@ -270,6 +274,7 @@ async fn bypass_rate_one_disables_reuse() {
         stats.bypasses, total_requests,
         "every request must be marked as a bypass"
     );
+    assert_eq!(stats.misses, 0, "full bypass must not mark misses");
     assert_eq!(stats.saved_tokens, 0, "a bypass saves nothing");
 
     deregister_subscriber("bench_bypass").unwrap();
