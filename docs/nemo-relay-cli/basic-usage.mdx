@@ -165,8 +165,13 @@ which compatible client sends the request.
 
 Use `openai_auth_header` or `anthropic_auth_header` under `[upstream]` when an
 upstream requires a complete `Authorization` value such as `Bearer ...` or
-`Basic ...`. Prefer the corresponding environment variables to avoid storing
-credentials in `config.toml`:
+`Basic ...`. Most deployments do not need this: use `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY` for standard provider API-key authentication. Use a
+configured authorization value for an enterprise gateway, proxy, or compatible
+endpoint that requires nonstandard authentication, including when a local
+client credential must be replaced before forwarding upstream. Prefer the
+corresponding environment variables to avoid storing credentials in
+`config.toml`:
 
 ```bash
 export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
