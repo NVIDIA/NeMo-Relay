@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 use async_stream::stream;
 use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
+use axum::http::{
+    HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, header,
+};
 use futures_util::StreamExt;
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
@@ -785,11 +787,15 @@ fn effective_dispatch_request(
         };
     };
 
+    let mut body_reencoded = false;
     let body_bytes = if request.content.is_null() {
         body_bytes.clone()
     } else {
         match serde_json::to_vec(&request.content) {
-            Ok(serialized) => Bytes::from(serialized),
+            Ok(serialized) => {
+                body_reencoded = true;
+                Bytes::from(serialized)
+            }
             Err(error) => {
                 eprintln!(
                     "nemo-relay CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
@@ -839,6 +845,9 @@ fn effective_dispatch_request(
             continue;
         };
         headers.insert(name, value);
+    }
+    if body_reencoded {
+        headers.remove(header::CONTENT_ENCODING);
     }
     EffectiveUpstreamRequest {
         body_bytes,
