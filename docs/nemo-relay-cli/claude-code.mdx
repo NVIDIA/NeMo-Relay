@@ -70,15 +70,9 @@ Create `.nemo-relay/config.toml` for project defaults or
 `~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
-[upstream]
-anthropic_base_url = "https://api.anthropic.com"
-
 [agents.claude]
 command = "claude"
 ```
-
-For custom provider hosts and authentication, refer to
-[Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
 
 Then configure observability with `nemo-relay plugins edit --project` or
 `.nemo-relay/plugins.toml`:

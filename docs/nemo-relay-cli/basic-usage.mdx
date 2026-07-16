@@ -142,54 +142,6 @@ leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with `nemo-relay plugins edit`, or use
 `nemo-relay plugins edit --project` for project configuration.
 
-### Provider upstreams
-
-Set provider base URLs under `[upstream]` when Relay must forward compatible
-requests to a proxy, enterprise endpoint, or another provider host:
-
-```toml
-[upstream]
-openai_base_url = "https://api.openai.com/v1"
-anthropic_base_url = "https://api.anthropic.com"
-```
-
-Relay selects the configured upstream from the request path, regardless of
-which compatible client sends the request.
-
-| Gateway endpoint | Upstream setting |
-| --- | --- |
-| `/responses`, `/v1/responses` | `openai_base_url` |
-| `/chat/completions`, `/v1/chat/completions` | `openai_base_url` |
-| `/models`, `/v1/models` | `openai_base_url` |
-| `/v1/messages`, `/v1/messages/count_tokens` | `anthropic_base_url` |
-
-Use `openai_auth_header` or `anthropic_auth_header` under `[upstream]` when an
-upstream requires a complete `Authorization` value such as `Bearer ...` or
-`Basic ...`. Most deployments do not need this: use `OPENAI_API_KEY` or
-`ANTHROPIC_API_KEY` for standard provider API-key authentication. Use a
-configured authorization value for an enterprise gateway, proxy, or compatible
-endpoint that requires nonstandard authentication, including when a local
-client credential must be replaced before forwarding upstream. Prefer the
-corresponding environment variables to avoid storing credentials in
-`config.toml`:
-
-```bash
-export NEMO_RELAY_OPENAI_AUTH_HEADER="Bearer <openai-credential>"
-export NEMO_RELAY_ANTHROPIC_AUTH_HEADER="Basic <anthropic-credential>"
-```
-
-Relay preserves an inbound `Authorization`, `x-api-key`, `api-key`, or
-`anthropic-api-key` value. If the request has none of those headers, Relay uses
-the route-specific configured authorization value. If that value is also
-unset, Relay uses `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` with the provider's
-standard authentication scheme.
-
-The exception is a Codex ChatGPT OAuth-style OpenAI `Authorization` value. When
-Relay has a replacement OpenAI credential—either `openai_auth_header` in the
-config file or `NEMO_RELAY_OPENAI_AUTH_HEADER` in the environment—it strips the
-OAuth token and forwards the configured credential to the configured OpenAI
-upstream. Without a replacement, Relay retains the existing ChatGPT routing.
-
 ## Add Model Pricing for Cost Estimates
 
 Model pricing is configured with the same `plugins.toml` discovery path as
@@ -277,9 +229,7 @@ port is discovered by the wrapper and exposed to hooks through
 Common environment variables for direct gateway server use are:
 
 - `NEMO_RELAY_GATEWAY_BIND`
-- `NEMO_RELAY_OPENAI_AUTH_HEADER`
 - `NEMO_RELAY_OPENAI_BASE_URL`
-- `NEMO_RELAY_ANTHROPIC_AUTH_HEADER`
 - `NEMO_RELAY_ANTHROPIC_BASE_URL`
 - `NEMO_RELAY_MAX_HOOK_PAYLOAD_BYTES`
 - `NEMO_RELAY_MAX_PASSTHROUGH_BODY_BYTES`
