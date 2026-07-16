@@ -14,6 +14,8 @@ use crate::plugins::nemo_guardrails::component::{RailSelector, RemoteBackendConf
 use tokio_stream::StreamExt;
 
 fn runtime_config(remote: RemoteBackendConfig) -> NeMoGuardrailsConfig {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     NeMoGuardrailsConfig {
         remote: Some(remote),
         ..NeMoGuardrailsConfig::default()
@@ -1037,6 +1039,18 @@ async fn tool_remote_check_http_status_failures_are_reported() {
             )
             .await,
         "status 503",
+    );
+
+    let permission_error = runtime_with_endpoint(spawn_http_response(
+        "403 Forbidden",
+        "application/json",
+        r#"{"error":"forbidden"}"#,
+    ));
+    assert_flow_error_contains(
+        permission_error
+            .check_tool_input("weather_lookup", &json!({"city": "Phoenix"}))
+            .await,
+        "status 403",
     );
 }
 

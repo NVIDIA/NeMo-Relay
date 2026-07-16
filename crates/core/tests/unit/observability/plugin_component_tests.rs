@@ -77,6 +77,41 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
     (url, captures)
 }
 
+#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
+fn start_http_status_server(status: &'static str) -> (String, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+        }
+        let headers = String::from_utf8_lossy(&request);
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then_some(value.trim())
+                })
+            })
+            .unwrap()
+            .parse::<usize>()
+            .unwrap();
+        let mut body = vec![0_u8; length];
+        stream.read_exact(&mut body).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+    });
+    (url, server)
+}
+
 #[cfg(feature = "atof-streaming")]
 fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec<String> {
     for _ in 0..100 {
@@ -90,6 +125,8 @@ fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec
 }
 
 fn reset_runtime() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     let _ = clear_plugin_configuration();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
@@ -1061,6 +1098,50 @@ fn atof_stream_sinks_fan_out_and_teardown_all_workers() {
         assert!(events.contains("\"scope_category\":\"start\""));
         assert!(events.contains("\"name\":\"checkpoint\""));
         assert!(events.contains("\"scope_category\":\"end\""));
+    }
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
+fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let secret_var = format!("NEMO_RELAY_TEST_S3_SECRET_{}", std::process::id());
+    // SAFETY: The variable name is unique to this test process and is removed before returning.
+    unsafe { std::env::set_var(&secret_var, "test-secret") };
+    let s3 = AtifStorageConfig::S3(S3StorageConfig {
+        bucket: "test-bucket".into(),
+        key_prefix: Some("trajectories".into()),
+        access_key_id: Some("test-access-key".into()),
+        secret_access_key_var: Some(secret_var.clone()),
+        session_token_var: None,
+        region: Some("us-east-1".into()),
+        endpoint_url: Some("http://127.0.0.1:9".into()),
+        allow_http: Some(true),
+    });
+    let storage = build_atif_storage(3, &s3).expect("S3 client configuration should resolve");
+    drop(storage);
+    // SAFETY: Cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(&secret_var) };
+
+    for (status, succeeds) in [("200 OK", true), ("503 Service Unavailable", false)] {
+        let (endpoint, server) = start_http_status_server(status);
+        let storage = AtifRemoteStorage::from_config(
+            4,
+            &AtifStorageConfig::Http(HttpStorageConfig {
+                endpoint,
+                headers: std::collections::HashMap::new(),
+                header_env: std::collections::HashMap::new(),
+                timeout_millis: 5_000,
+            }),
+        )
+        .unwrap();
+
+        let result = storage.put("trajectory.json", "session", b"{}");
+        assert_eq!(result.is_ok(), succeeds);
+        drop(storage);
+        server.join().unwrap();
     }
 }
 

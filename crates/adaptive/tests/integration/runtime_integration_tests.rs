@@ -4,7 +4,7 @@
 //! Integration tests for runtime integration in the NeMo Relay adaptive crate.
 
 use std::pin::Pin;
-use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, Once, RwLock};
 
 use chrono::Utc;
 use nemo_relay::api::event::Event;
@@ -48,12 +48,23 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
+static TEST_LOGGING: Once = Once::new();
+
+fn enable_operational_logs() {
+    TEST_LOGGING.call_once(|| {
+        let runtime =
+            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+                .expect("test logging should initialize");
+        Box::leak(Box::new(runtime));
+    });
+}
 
 fn short_hash(value: &str) -> &str {
     value.get(..16).unwrap_or(value)
 }
 
 fn reset_global() {
+    enable_operational_logs();
     let _ = clear_plugin_configuration();
     let _ = deregister_plugin("test.header_plugin");
     let _ = deregister_plugin("test.failing_plugin");

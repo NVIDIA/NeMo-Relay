@@ -14,6 +14,17 @@ use crate::commands::plugins::{
 };
 
 #[test]
+fn operational_command_names_cover_logging_exempt_commands() {
+    for (args, expected) in [
+        (vec!["nemo-relay", "codex"], "codex"),
+        (vec!["nemo-relay", "config"], "config"),
+    ] {
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(cli.command.unwrap().log_name(), expected);
+    }
+}
+
+#[test]
 fn bootstrap_shutdown_token_is_removed_before_runtime_startup() {
     let _environment = crate::test_support::EnvScope::set(&[(
         crate::bootstrap::state::BOOTSTRAP_SHUTDOWN_TOKEN_ENV,

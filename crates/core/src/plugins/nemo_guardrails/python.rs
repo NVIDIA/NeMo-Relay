@@ -489,10 +489,14 @@ impl LocalGuardrailsWorker {
         }
     }
 
-    async fn request(&self, mut payload: Json) -> FlowResult<Json> {
+    async fn request(&self, payload: Json) -> FlowResult<Json> {
+        self.request_with_timeout(payload, WORKER_RPC_TIMEOUT).await
+    }
+
+    async fn request_with_timeout(&self, mut payload: Json, timeout: Duration) -> FlowResult<Json> {
         let receiver = self.send_request(&mut payload)?;
         let response_task = tokio::task::spawn_blocking(move || receiver.recv());
-        let envelope = match tokio::time::timeout(WORKER_RPC_TIMEOUT, response_task).await {
+        let envelope = match tokio::time::timeout(timeout, response_task).await {
             Ok(result) => result
                 .map_err(|err| FlowError::Internal(format!("worker response task failed: {err}")))?
                 .map_err(|err| {
@@ -509,7 +513,7 @@ impl LocalGuardrailsWorker {
                 self.shutdown();
                 return Err(FlowError::Internal(format!(
                     "worker request timed out after {} seconds",
-                    WORKER_RPC_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 )));
             }
         };

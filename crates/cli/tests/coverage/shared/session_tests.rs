@@ -6214,6 +6214,7 @@ fn weak_subagent_start_status_does_not_teach_request_affinity() {
 
 #[tokio::test]
 async fn gateway_shutdown_attempts_remaining_sessions_after_close_error() {
+    crate::test_support::enable_operational_logs();
     let subscriber_name = "cli-close-all-deferred-error-test";
     let _ = deregister_subscriber(subscriber_name);
 
@@ -6857,6 +6858,7 @@ fn merge_metadata_handles_objects_nulls_and_scalars() {
 }
 
 fn session_test_config() -> GatewayConfig {
+    crate::test_support::enable_operational_logs();
     GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),

@@ -35,6 +35,7 @@ fn failed_reaper_spawn_terminates_and_reaps_the_retained_child() {
 
 #[test]
 fn persistent_gateway_requires_a_loopback_endpoint() {
+    crate::test_support::enable_operational_logs();
     let non_loopback = GatewaySpec::new("0.0.0.0:47632".parse().unwrap())
         .acquire()
         .unwrap_err();
@@ -43,6 +44,7 @@ fn persistent_gateway_requires_a_loopback_endpoint() {
 
 #[test]
 fn compatible_gateway_is_reused_without_starting_another_process() {
+    crate::test_support::enable_operational_logs();
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("config");
     let _environment = EnvScope::set(&[
@@ -85,6 +87,7 @@ fn compatible_gateway_is_reused_without_starting_another_process() {
 
 #[test]
 fn foreign_and_incompatible_listeners_are_never_adopted() {
+    crate::test_support::enable_operational_logs();
     for (status, body, expected) in [
         ("200 OK", "{}", "not a compatible"),
         (

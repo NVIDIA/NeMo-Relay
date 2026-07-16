@@ -152,3 +152,7 @@ impl IntoResponse for CliError {
         (status, body).into_response()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/coverage/shared/error_tests.rs"]
+mod tests;

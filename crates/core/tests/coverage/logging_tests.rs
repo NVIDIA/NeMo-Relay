@@ -202,6 +202,120 @@ fn logging_config_file_requires_logging_section() {
 }
 
 #[test]
+fn logging_configuration_covers_file_environment_and_sink_validation_edges() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("logging.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[logging]
+level = "error"
+stderr_format = "jsonl"
+flush_interval_millis = 25
+
+[[logging.sinks]]
+path = "relay.log"
+level = "warn"
+format = "human"
+queue_capacity = 7
+"#,
+    )
+    .unwrap();
+
+    {
+        let _environment = LoggingEnvScope::set(&[
+            ("NEMO_RELAY_LOG", None),
+            ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+            ("NEMO_RELAY_LOG_CONFIG_PATH", Some(config_path.as_os_str())),
+        ]);
+        let config = LoggingConfig::from_environment().unwrap().unwrap();
+        assert_eq!(config.level, LogLevel::Error);
+        assert_eq!(config.stderr_format, LogFormat::Jsonl);
+        assert_eq!(config.flush_interval_millis, 25);
+        assert_eq!(
+            config.sinks,
+            vec![LogSinkConfig::File(FileLogSinkConfig {
+                path: "relay.log".into(),
+                level: LogLevel::Warn,
+                format: LogFormat::Human,
+                queue_capacity: 7,
+            })]
+        );
+    }
+
+    for (name, document, expected) in [
+        (
+            "missing path",
+            "[logging]\n[[logging.sinks]]\nformat = \"jsonl\"\n",
+            "requires path",
+        ),
+        (
+            "empty path",
+            "[logging]\n[[logging.sinks]]\npath = \"\"\n",
+            "path must not be empty",
+        ),
+        (
+            "zero queue",
+            "[logging]\n[[logging.sinks]]\npath = \"relay.log\"\nqueue_capacity = 0\n",
+            "must be greater than 0",
+        ),
+        (
+            "oversized queue",
+            "[logging]\n[[logging.sinks]]\npath = \"relay.log\"\nqueue_capacity = 8193\n",
+            "exceeds maximum",
+        ),
+    ] {
+        let error = LoggingConfig::from_toml_document(document)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(expected), "{name}: {error}");
+    }
+
+    let wrong_extension = temp.path().join("logging.json");
+    assert!(
+        LoggingConfig::from_file_path(&wrong_extension)
+            .unwrap_err()
+            .to_string()
+            .contains(".toml file")
+    );
+    let missing_file = temp.path().join("missing.toml");
+    assert!(
+        LoggingConfig::from_file_path(&missing_file)
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read")
+    );
+    let invalid_file = temp.path().join("invalid.toml");
+    std::fs::write(&invalid_file, "[logging\n").unwrap();
+    assert!(
+        LoggingConfig::from_file_path(&invalid_file)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid logging configuration")
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn logging_environment_rejects_non_unicode_values() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let invalid = OsString::from_vec(vec![0xff]);
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", Some(invalid.as_os_str())),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+
+    assert!(
+        LoggingConfig::from_environment()
+            .unwrap_err()
+            .to_string()
+            .contains("valid Unicode")
+    );
+}
+
+#[test]
 fn human_formatter_includes_correlation_and_event_context() {
     let line = format_event_for_test(
         LogFormat::Human,
@@ -599,10 +713,74 @@ fn human_and_jsonl_share_root_id_across_destinations_in_formatter() {
 }
 
 #[test]
+fn trace_level_names_are_consistent_across_formats() {
+    let human = format_event_for_test(
+        LogFormat::Human,
+        "trace-root",
+        Level::Trace,
+        "nemo_relay.logging_test",
+        None,
+        "",
+        &[],
+    );
+    let jsonl = format_event_for_test(
+        LogFormat::Jsonl,
+        "trace-root",
+        Level::Trace,
+        "nemo_relay.logging_test",
+        None,
+        "",
+        &[],
+    );
+
+    assert!(human.contains(" TRACE "));
+    assert_eq!(
+        serde_json::from_str::<Value>(jsonl.trim_end()).unwrap()["level"],
+        "trace"
+    );
+}
+
+#[test]
 fn stderr_only_logger_builds_without_file_sinks() {
     let _lock = lock_logging_tests();
     let runtime = init_logging(&default_config()).unwrap();
     runtime.shutdown();
+}
+
+#[test]
+fn logging_runtime_configures_defaults_from_an_empty_environment() {
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    let runtime = LoggingRuntime::configure_from_environment().unwrap();
+    runtime.shutdown();
+}
+
+#[test]
+fn unresolved_parent_components_are_normalized_before_sink_creation() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp
+        .path()
+        .join("missing")
+        .join("discarded")
+        .join("..")
+        .join("normalized")
+        .join("relay.log.jsonl");
+    let config = LoggingConfig {
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+
+    let (logger, _pools) = build_logger(&config, "root".into()).unwrap();
+    logger.flush();
+
+    assert!(temp.path().join("missing/normalized").is_dir());
 }
 
 #[test]

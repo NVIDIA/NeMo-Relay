@@ -18,6 +18,7 @@ struct EnvScope {
 
 impl EnvScope {
     fn set(values: &[(&'static str, Option<&std::ffi::OsStr>)]) -> Self {
+        crate::test_support::enable_operational_logs();
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1788,10 +1789,23 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
         ..GatewayConfig::default()
     };
 
-    let error = execute_live_run(listener, gateway_config, &gateway_url, prepared)
-        .await
-        .unwrap_err()
-        .to_string();
+    let error = TransparentRun {
+        agent: CodingAgent::ClaudeCode,
+        prepared,
+        resolved: ResolvedConfig {
+            gateway: gateway_config,
+            ..resolved
+        },
+        dynamic_plugins: Vec::new(),
+        listener,
+        gateway_url,
+        dry_run: false,
+        print: false,
+    }
+    .execute()
+    .await
+    .unwrap_err()
+    .to_string();
 
     assert!(error.contains("ATOF mode"));
     assert!(!error.contains("gateway did not become ready"));

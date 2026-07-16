@@ -158,6 +158,7 @@ impl Drop for TestServer {
 }
 
 fn test_config() -> GatewayConfig {
+    crate::test_support::enable_operational_logs();
     GatewayConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         openai_base_url: "http://127.0.0.1".into(),
@@ -195,6 +196,20 @@ fn startup_status_reports_bound_gateway_and_exporters() {
     assert!(output.contains("NeMo Relay"));
     assert!(output.contains("Gateway        http://127.0.0.1:4567"));
     assert!(output.contains("OpenTelemetry http://127.0.0.1:4318/v1/traces"));
+}
+
+#[tokio::test]
+async fn failed_server_result_is_reported_after_successful_teardown() {
+    let sessions = SessionManager::new(test_config());
+    let error = finish_server_shutdown(
+        Err(std::io::Error::other("listener failed")),
+        &sessions,
+        None,
+    )
+    .await
+    .expect_err("server failure should be preserved after teardown");
+
+    assert!(matches!(error, CliError::Io(_)));
 }
 
 #[test]

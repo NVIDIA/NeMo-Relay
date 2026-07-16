@@ -119,6 +119,8 @@ struct FakeGuardrails {
 #[cfg(unix)]
 impl FakeGuardrails {
     fn new(version: &str) -> Self {
+        let _ = spdlog::init_log_crate_proxy();
+        log::set_max_level(log::LevelFilter::Info);
         let id = NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
         let module_name = format!("fake_guardrails_{id}");
         let root = std::env::temp_dir().join(format!(
@@ -183,6 +185,65 @@ fn python3_available() -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+#[test]
+#[cfg(unix)]
+fn shutdown_handles_an_already_reaped_worker_process() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+    let mut child = Command::new("true").spawn().unwrap();
+    child.wait().unwrap();
+    let worker = LocalGuardrailsWorker {
+        writer: Mutex::new(None),
+        child: Mutex::new(child),
+        waiters: Arc::new(Mutex::new(HashMap::new())),
+        stream_events: Arc::new(Mutex::new(HashMap::new())),
+        next_id: AtomicU64::new(0),
+        shutdown_started: AtomicBool::new(false),
+    };
+
+    worker.shutdown();
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn request_timeout_stops_an_unresponsive_worker() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+    let child = Command::new("sleep").arg("60").spawn().unwrap();
+    let (sender, receiver) = std_mpsc::channel::<String>();
+    let waiters = Arc::new(Mutex::new(HashMap::new()));
+    let stream_events = Arc::new(Mutex::new(HashMap::new()));
+    let closed_waiters = Arc::clone(&waiters);
+    let closed_stream_events = Arc::clone(&stream_events);
+    let handle = thread::spawn(move || {
+        while receiver.recv().is_ok() {
+            thread::sleep(Duration::from_millis(50));
+            notify_worker_closed(
+                &closed_waiters,
+                &closed_stream_events,
+                "test worker closed".into(),
+            );
+        }
+    });
+    let worker = LocalGuardrailsWorker {
+        writer: Mutex::new(Some(WorkerCommandWriter {
+            sender,
+            error: Arc::new(Mutex::new(None)),
+            handle: Some(handle),
+        })),
+        child: Mutex::new(child),
+        waiters,
+        stream_events,
+        next_id: AtomicU64::new(0),
+        shutdown_started: AtomicBool::new(false),
+    };
+
+    let error = worker
+        .request_with_timeout(json!({"command": "never-reply"}), Duration::from_millis(10))
+        .await;
+    assert!(error.unwrap_err().to_string().contains("timed out"));
 }
 
 #[cfg(unix)]

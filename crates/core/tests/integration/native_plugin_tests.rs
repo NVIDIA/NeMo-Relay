@@ -1768,6 +1768,8 @@ struct BuiltFixture {
 }
 
 fn build_fixture_plugin() -> BuiltFixture {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     let source_dir = TempDir::new().expect("fixture source dir");
     let fixture_dir = source_dir.path().join("native_plugin");
     let fixture_src_dir = fixture_dir.join("src");

@@ -43,6 +43,8 @@ impl Drop for ResetPricingResolverGuard {
 }
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
@@ -3157,12 +3159,15 @@ fn scope_end_output_payload_is_exported_to_openinference_attributes() {
 
 #[test]
 fn scope_end_metadata_sets_openinference_span_status() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     let cases = [
         (
             json!({"otel.status_code": "ERROR", "otel.status_description": "failed"}),
             Status::error("failed".to_string()),
         ),
         (json!({"otel.status_code": "OK"}), Status::Ok),
+        (json!({"otel.status_code": "INVALID"}), Status::Unset),
         (json!({}), Status::Unset),
     ];
 

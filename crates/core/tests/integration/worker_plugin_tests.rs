@@ -37,6 +37,11 @@ use uuid::Uuid;
 
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn enable_operational_logs() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 #[test]
 fn worker_activation_with_no_specs_is_empty() {
     let activation = load_worker_plugins(Vec::<WorkerPluginLoadSpec>::new())
@@ -1235,6 +1240,7 @@ impl BuiltWorkerFixture {
 }
 
 fn build_fixture_worker() -> BuiltWorkerFixture {
+    enable_operational_logs();
     static FIXTURE_BINARY: OnceLock<PathBuf> = OnceLock::new();
     let binary_path = FIXTURE_BINARY.get_or_init(|| {
         let fixture_dir = fixture_root();

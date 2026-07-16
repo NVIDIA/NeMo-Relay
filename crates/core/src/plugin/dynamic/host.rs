@@ -444,6 +444,8 @@ mod tests {
 
     #[test]
     fn unsafe_kind_deregistration_retains_runtime_and_owner() {
+        let _ = spdlog::init_log_crate_proxy();
+        log::set_max_level(log::LevelFilter::Info);
         let _guard = crate::shared_runtime::runtime_owner_test_mutex()
             .lock()
             .unwrap_or_else(|error| error.into_inner());

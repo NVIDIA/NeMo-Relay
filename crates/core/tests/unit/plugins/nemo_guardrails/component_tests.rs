@@ -41,6 +41,8 @@ use serde_json::json;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn reset_runtime() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     let _ = clear_plugin_configuration();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();

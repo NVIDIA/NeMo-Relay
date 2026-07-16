@@ -26,6 +26,11 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+fn enable_operational_logs() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 fn temp_dir(prefix: &str) -> PathBuf {
     let id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -449,6 +454,7 @@ fn endpoint_http_helper_edges_are_safe() {
 
 #[test]
 fn append_mode_preserves_existing_lines() {
+    enable_operational_logs();
     let dir = temp_dir("atof-append");
     let path = dir.join("events.jsonl");
     fs::write(&path, "{\"existing\":true}\n").unwrap();
@@ -562,6 +568,7 @@ fn subscriber_writes_canonical_event_jsonl() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn streaming_sink_receives_raw_atof_events() {
+    enable_operational_logs();
     let dir = temp_dir("atof-streaming-http");
     let (url, captures) = start_http_capture_server(3);
     let exporter = AtofExporter::new(
@@ -602,6 +609,7 @@ fn streaming_sink_receives_raw_atof_events() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn websocket_endpoint_receives_fifo_json_text_events() {
+    enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -634,6 +642,7 @@ fn websocket_endpoint_receives_fifo_json_text_events() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn websocket_flush_drains_events_queued_before_reconnect() {
+    enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket-reconnect");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let local_addr = listener.local_addr().unwrap();
@@ -1458,6 +1467,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
+    enable_operational_logs();
     let (body_tx, body) = ndjson_body_channel();
     drop(body);
     send_ndjson_event(0, &body_tx, "{}".into());
@@ -1488,7 +1498,24 @@ fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn endpoint_worker_reports_flush_and_close_timeouts() {
+    enable_operational_logs();
+    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+    let worker = AtofEndpointWorker {
+        sender,
+        timeout: std::time::Duration::from_millis(1),
+        index: 7,
+        transport: AtofEndpointTransport::HttpPost,
+    };
+
+    worker.flush();
+    worker.close();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
+    enable_operational_logs();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -1536,6 +1563,7 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
+    enable_operational_logs();
     let mut headers = std::collections::HashMap::new();
     headers.insert("bad header".to_string(), "ok".to_string());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1574,7 +1602,76 @@ fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn http_endpoint_worker_reports_request_transport_failure() {
+    enable_operational_logs();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_http_post_endpoint(
+                0,
+                AtofEndpointConfig::new(
+                    "http://127.0.0.1:0/events",
+                    AtofEndpointTransport::HttpPost,
+                )
+                .with_timeout_millis(100),
+                rx,
+            )
+            .await;
+        });
+    });
+
+    tx.send(EndpointMessage::Event("{\"kind\":\"mark\"}".into()))
+        .unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn ndjson_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
+    enable_operational_logs();
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("bad header".to_string(), "ok".to_string());
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_ndjson_endpoint(
+                0,
+                AtofEndpointConfig {
+                    url: "http://127.0.0.1:9/events".into(),
+                    transport: AtofEndpointTransport::Ndjson,
+                    headers,
+                    header_env: std::collections::HashMap::new(),
+                    timeout_millis: 1,
+                    field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+                },
+                rx,
+            )
+            .await;
+        });
+    });
+
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
+    enable_operational_logs();
     let mut headers = std::collections::HashMap::new();
     headers.insert("bad header".to_string(), "ok".to_string());
     let config = AtofEndpointConfig {
@@ -1600,6 +1697,7 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn ndjson_upload_close_timeout_acknowledges_close() {
+    enable_operational_logs();
     let request = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let request: tokio::task::JoinHandle<reqwest::Result<reqwest::Response>> =
             tokio::spawn(async {
@@ -1617,7 +1715,56 @@ fn ndjson_upload_close_timeout_acknowledges_close() {
 }
 
 #[test]
+#[cfg(feature = "atof-streaming")]
+fn ndjson_upload_completion_reports_success_http_upload_and_task_failures() {
+    enable_operational_logs();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    for response in [
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        runtime.block_on(async {
+            let request = tokio::spawn(async move { reqwest::get(url).await });
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            finish_ndjson_upload(2, request, std::time::Duration::from_secs(5), done_tx).await;
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap();
+        });
+        server.join().unwrap();
+    }
+
+    runtime.block_on(async {
+        let upload_error = tokio::spawn(async { reqwest::get("http://127.0.0.1:0").await });
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        finish_ndjson_upload(3, upload_error, std::time::Duration::from_secs(5), done_tx).await;
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let task_error = tokio::spawn(async {
+            std::future::pending::<reqwest::Result<reqwest::Response>>().await
+        });
+        task_error.abort();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        finish_ndjson_upload(4, task_error, std::time::Duration::from_secs(5), done_tx).await;
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+    });
+}
+
+#[test]
 fn force_flush_reports_stored_subscriber_failure() {
+    enable_operational_logs();
     let dir = temp_dir("atof-stored-failure");
     let exporter = AtofExporter::new(
         AtofExporterConfig::new()

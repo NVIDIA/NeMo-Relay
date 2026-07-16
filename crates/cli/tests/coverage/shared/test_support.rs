@@ -6,8 +6,19 @@ use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, Once};
 use std::time::{Duration, Instant};
+
+static TEST_LOGGING: Once = Once::new();
+
+pub(crate) fn enable_operational_logs() {
+    TEST_LOGGING.call_once(|| {
+        let runtime =
+            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+                .expect("test logging should initialize");
+        Box::leak(Box::new(runtime));
+    });
+}
 
 #[must_use]
 pub(crate) struct CwdTestScope {

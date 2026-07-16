@@ -215,6 +215,7 @@ fn replacement_generation_guard_removes_an_owned_lock_after_marker_removal() {
 
 #[test]
 fn replacement_generation_guard_retains_its_lock_when_marker_state_is_uncertain() {
+    crate::test_support::enable_operational_logs();
     let dir = tempdir().unwrap();
     let marker = dir.path().join("generation-marker");
     let lock = dir.path().join("generation.lock");
@@ -227,6 +228,40 @@ fn replacement_generation_guard_retains_its_lock_when_marker_state_is_uncertain(
     drop(guard);
 
     assert!(lock.exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn replacement_generation_guard_retains_its_lock_when_marker_is_inaccessible() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    crate::test_support::enable_operational_logs();
+    let dir = tempdir().unwrap();
+    let marker_parent = dir.path().join("marker-parent");
+    std::fs::create_dir(&marker_parent).unwrap();
+    let marker = marker_parent.join("generation-marker");
+    let lock = dir.path().join("generation.lock");
+    crate::installation::generation::write_new_generation_with_token_at(&marker, &lock).unwrap();
+    let guard =
+        acquire_replacement_generation_lock(CodingAgent::Codex, &marker, &lock, true).unwrap();
+
+    std::fs::set_permissions(&marker_parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+    drop(guard);
+    std::fs::set_permissions(&marker_parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(lock.exists());
+}
+
+#[test]
+fn best_effort_generation_lock_cleanup_reports_directory_removal_failure() {
+    crate::test_support::enable_operational_logs();
+    let dir = tempdir().unwrap();
+    let lock = dir.path().join("generation.lock");
+    std::fs::create_dir(&lock).unwrap();
+
+    remove_generation_lock_best_effort(&lock);
+
+    assert!(lock.is_dir());
 }
 
 #[test]
@@ -893,6 +928,7 @@ impl MockSetupRunner {
 }
 
 fn options(dir: &Path) -> PluginInstallOptions {
+    crate::test_support::enable_operational_logs();
     PluginInstallOptions {
         install_dir: dir.to_path_buf(),
         operation_lock_dir: dir.join("operation-locks"),
@@ -1982,6 +2018,7 @@ fn host_registration_report_surfaces_capture_status_and_stderr_variants() {
 
 #[test]
 fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
+    crate::test_support::enable_operational_logs();
     let dir = tempdir().unwrap();
     let empty_path = dir.path().join("empty-path");
     std::fs::create_dir_all(&empty_path).unwrap();
@@ -2022,6 +2059,40 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
     assert_eq!(CodingAgent::Codex.as_arg(), "codex");
     assert_eq!(CodingAgent::Codex.label(), "Codex");
     assert_eq!(CodingAgent::Codex.executable(), "codex");
+
+    assert_eq!(
+        uninstall(
+            CodingAgent::Codex,
+            crate::installation::UninstallRequest {
+                install_dir: Some(dir.path().join("dry-run-uninstall")),
+                dry_run: true,
+            },
+        )
+        .unwrap(),
+        std::process::ExitCode::SUCCESS
+    );
+
+    let install_error = install(
+        CodingAgent::Codex,
+        crate::installation::InstallRequest {
+            install_dir: Some(dir.path().join("failed-install")),
+            force: false,
+            dry_run: false,
+            skip_doctor: true,
+        },
+    )
+    .expect_err("an unavailable host CLI should fail installation");
+    assert!(matches!(install_error, CliError::Install(_)));
+
+    let uninstall_error = uninstall(
+        CodingAgent::Codex,
+        crate::installation::UninstallRequest {
+            install_dir: Some(dir.path().join("failed-uninstall")),
+            dry_run: false,
+        },
+    )
+    .expect_err("an unavailable host CLI should fail uninstallation");
+    assert!(matches!(uninstall_error, CliError::Install(_)));
 }
 
 #[test]

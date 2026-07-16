@@ -422,6 +422,8 @@ impl Plugin for FailingDeregisterPlugin {
 }
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let ctx = global_context();
     let mut state = ctx.write().unwrap();

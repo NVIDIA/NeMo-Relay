@@ -15,6 +15,7 @@ use serde_json::Map;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_http_client() -> Client {
+    crate::test_support::enable_operational_logs();
     Client::new()
 }
 

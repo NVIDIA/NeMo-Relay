@@ -24,9 +24,9 @@ use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::traits::LlmResponseCodec;
 use crate::plugin::{
-    PluginComponentSpec, PluginConfig, PluginRegistrationContext, clear_plugin_configuration,
-    ensure_builtin_plugins_registered, initialize_plugins, list_plugin_kinds,
-    validate_plugin_config,
+    PluginComponentSpec, PluginConfig, PluginError, PluginRegistrationContext,
+    clear_plugin_configuration, ensure_builtin_plugins_registered, initialize_plugins,
+    list_plugin_kinds, validate_plugin_config,
 };
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 use nemo_relay::observability::atof::{AtofExporter, AtofExporterConfig};
@@ -37,7 +37,19 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+static TEST_LOGGING: Once = Once::new();
+
+fn enable_operational_logs() {
+    TEST_LOGGING.call_once(|| {
+        let runtime =
+            nemo_relay::logging::init_logging(&nemo_relay::logging::LoggingConfig::default())
+                .expect("test logging should initialize");
+        Box::leak(Box::new(runtime));
+    });
+}
 
 fn component(config: Json) -> PluginComponentSpec {
     let Json::Object(config) = config else {
@@ -59,6 +71,7 @@ fn plugin_config(config: Json) -> PluginConfig {
 }
 
 fn reset_runtime() {
+    enable_operational_logs();
     let _ = clear_plugin_configuration();
     crate::plugins::pii_redaction::component::clear_local_backend_provider().unwrap();
     crate::shared_runtime::reset_runtime_owner_for_tests();
@@ -461,6 +474,37 @@ fn local_backend_provider_is_invoked_for_local_model_mode() {
     futures::executor::block_on(plugin.register(&config, &mut ctx)).unwrap();
 
     assert!(called.load(Ordering::SeqCst));
+}
+
+#[test]
+fn local_backend_reports_missing_and_failed_provider_initialization() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let plugin = PiiRedactionPlugin;
+    let config = json!({"mode": "local_model"});
+    let Json::Object(config) = config else {
+        panic!("component config must be object");
+    };
+    let mut ctx = PluginRegistrationContext::with_namespace("missing::");
+    let missing = futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect_err("missing local provider should fail registration");
+    assert!(missing.to_string().contains("unavailable"));
+
+    register_local_backend_provider(Arc::new(|_, _| {
+        Err(PluginError::RegistrationFailed(
+            "provider initialization failed".into(),
+        ))
+    }))
+    .unwrap();
+    let mut ctx = PluginRegistrationContext::with_namespace("failed::");
+    let failed = futures::executor::block_on(plugin.register(&config, &mut ctx))
+        .expect_err("failed local provider should fail registration");
+    assert!(
+        failed
+            .to_string()
+            .contains("provider initialization failed")
+    );
 }
 
 #[test]

@@ -22,6 +22,7 @@ struct BootstrapConfigHome {
 
 impl BootstrapConfigHome {
     fn enter(path: &std::path::Path) -> Self {
+        crate::test_support::enable_operational_logs();
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -52,6 +53,7 @@ struct TransparentRunEnvironment {
 
 impl TransparentRunEnvironment {
     fn without_gateway() -> Self {
+        crate::test_support::enable_operational_logs();
         let guard = crate::test_support::ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
