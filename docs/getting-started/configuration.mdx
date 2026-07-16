@@ -8,7 +8,9 @@ position: 4
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-NeMo Relay runtime behavior is configured through API objects and registration calls rather than a global configuration file.
+Most NeMo Relay runtime behavior is configured through API objects and
+registration calls rather than a global configuration file. Process-wide
+operational logging also supports environment variables and TOML configuration.
 
 ## Core Runtime Setup
 
@@ -20,6 +22,9 @@ Most applications configure NeMo Relay by:
 4. Deregistering global middleware that should not remain active for the lifetime of the process.
 
 Use scope-local registration when behavior must be tied to one request, session, or agent run.
+
+For process-wide stderr and file logging, refer to
+[Operational Logging](/getting-started/operational-logging).
 
 ## Plugin Setup
 
@@ -50,9 +55,9 @@ plugin component to own standard exporter setup and teardown. Refer to
 and [Observability](/configure-plugins/observability/about)
 for the supported export paths.
 
-NeMo Relay does not require application-level environment variables for normal
-runtime use. Configure most behavior through API objects, registration calls, or
-plugin configuration.
+Outside operational logging, NeMo Relay does not require application-level
+environment variables for normal runtime use. Configure most behavior through
+API objects, registration calls, or plugin configuration.
 
 `OTEL_*` variables are only relevant when the underlying OpenTelemetry exporter
 reads endpoint settings from the environment. Prefer explicit config objects in
