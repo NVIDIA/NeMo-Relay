@@ -33,6 +33,54 @@ fn lock_attempts_distinguish_contention_from_errors() {
     fs2::FileExt::unlock(&waiter).unwrap();
 }
 
+#[test]
+fn bounded_file_reads_stream_regular_content_and_reject_directories() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("payload.json");
+    std::fs::write(&path, b"relay payload").unwrap();
+
+    assert_eq!(
+        crate::filesystem::bounded::read_bounded_regular_file(&path, "payload").unwrap(),
+        b"relay payload"
+    );
+
+    let mut chunks = Vec::new();
+    crate::filesystem::bounded::stream_bounded_regular_file(&path, "payload", |chunk| {
+        chunks.extend_from_slice(chunk);
+    })
+    .unwrap();
+    assert_eq!(chunks, b"relay payload");
+
+    let error = crate::filesystem::bounded::read_bounded_regular_file(directory.path(), "payload")
+        .unwrap_err();
+    assert!(error.contains("must be a regular file"), "{error}");
+}
+
+#[test]
+fn backups_and_snapshots_restore_original_or_missing_files() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("relay.toml");
+    std::fs::write(&path, b"original").unwrap();
+
+    backup(&path).unwrap();
+    std::fs::write(&path, b"changed").unwrap();
+    backup(&path).unwrap();
+    assert_eq!(std::fs::read(backup_path(&path)).unwrap(), b"original");
+    remove_backup(&path).unwrap();
+    remove_backup(&path).unwrap();
+
+    let existing = snapshot_optional_file(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    restore_file_snapshot(&existing).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"changed");
+
+    let missing = directory.path().join("missing.toml");
+    let absent = snapshot_optional_file(&missing).unwrap();
+    std::fs::write(&missing, b"temporary").unwrap();
+    restore_file_snapshot(&absent).unwrap();
+    assert!(!missing.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn private_atomic_write_ignores_a_permissive_umask() {

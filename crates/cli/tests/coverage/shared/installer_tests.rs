@@ -217,6 +217,36 @@ fn verified_hook_response_rejects_invalid_status_and_fail_open_http_errors() {
 }
 
 #[test]
+fn hook_response_statuses_preserve_guardrail_rejections_and_fail_closed_errors() {
+    let rejection = handle_hook_forward_status(
+        reqwest::StatusCode::FORBIDDEN,
+        r#"{"error":{"type":"nemo_relay_guardrail_rejected","reason":"policy denied"}}"#.into(),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(rejection.contains("policy denied"), "{rejection}");
+
+    let fallback = handle_hook_forward_status(
+        reqwest::StatusCode::BAD_REQUEST,
+        r#"{"error":{"type":"nemo_relay_guardrail_rejected","message":"fallback"}}"#.into(),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(fallback.contains("fallback"), "{fallback}");
+
+    let error = handle_hook_forward_status(
+        reqwest::StatusCode::BAD_GATEWAY,
+        "not a guardrail response".into(),
+        true,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("HTTP 502"), "{error}");
+}
+
+#[test]
 fn windows_hook_decoder_rejects_unsafe_odd_and_trailing_argument_envelopes() {
     const SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
     #[cfg(windows)]
