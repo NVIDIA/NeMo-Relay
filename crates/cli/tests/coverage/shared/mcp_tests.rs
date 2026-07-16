@@ -421,6 +421,7 @@ async fn borrowed_transparent_gateway_is_authenticated_and_monitored() {
         config,
         Vec::new(),
         fingerprint.clone(),
+        crate::provider_auth::TransparentProxyCredential::generate().unwrap(),
         Some(shutdown_rx),
     ));
     tokio::time::timeout(Duration::from_secs(5), async {

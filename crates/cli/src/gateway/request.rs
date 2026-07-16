@@ -30,13 +30,13 @@ pub(super) struct PreparedGatewayRequest {
     pub(super) body_bytes: Bytes,
     pub(super) request_json: Value,
     pub(super) streaming: bool,
-    pub(super) allow_environment_provider_auth: bool,
+    pub(super) authorization: crate::provider_auth::ProviderRequestAuthorization,
 }
 
 pub(super) async fn prepare_gateway_request(
     config: &crate::configuration::GatewayConfig,
     request: Request<Body>,
-    allow_environment_provider_auth: bool,
+    mut authorization: crate::provider_auth::ProviderRequestAuthorization,
 ) -> Result<PreparedGatewayRequest, CliError> {
     let (mut parts, body) = request.into_parts();
     parts.headers.remove(BOOTSTRAP_CLIENT_TOKEN_HEADER);
@@ -56,9 +56,17 @@ pub(super) async fn prepare_gateway_request(
         provider,
         &parts.headers,
         path_and_query,
-        allow_environment_provider_auth,
+        authorization.allow_environment_provider_auth,
     )
     .unwrap_or_else(|| provider.upstream_url(config, path_and_query));
+    parts.headers = super::routes::strip_replaceable_agent_auth_headers(
+        &parts.headers,
+        provider,
+        authorization.allow_environment_provider_auth,
+    );
+    authorization.source_credential = authorization
+        .source_credential
+        .after_source_normalization(&parts.headers);
     let streaming = request_json
         .get("stream")
         .and_then(Value::as_bool)
@@ -72,7 +80,7 @@ pub(super) async fn prepare_gateway_request(
         body_bytes,
         request_json,
         streaming,
-        allow_environment_provider_auth,
+        authorization,
     })
 }
 

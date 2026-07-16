@@ -394,6 +394,7 @@ async fn healthz_rejects_a_different_persistent_gateway_fingerprint() {
         Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
         false,
         None,
+        None,
     ));
     let response = app
         .oneshot(
@@ -426,22 +427,43 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         Some(key.clone()),
         true,
         None,
+        None,
     );
     let mut headers = HeaderMap::new();
-    assert!(!state.allows_environment_provider_auth(&headers));
+    assert!(
+        !state
+            .authorize_provider_request(&mut headers)
+            .unwrap()
+            .allow_environment_provider_auth
+    );
     headers.insert(
         crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
         HeaderValue::from_static("hmac-sha256:wrong"),
     );
-    assert!(!state.allows_environment_provider_auth(&headers));
+    assert!(
+        !state
+            .authorize_provider_request(&mut headers)
+            .unwrap()
+            .allow_environment_provider_auth
+    );
     headers.insert(
         crate::configuration::BOOTSTRAP_CLIENT_TOKEN_HEADER,
         HeaderValue::from_str(&key.client_token()).unwrap(),
     );
-    assert!(state.allows_environment_provider_auth(&headers));
+    assert!(
+        state
+            .authorize_provider_request(&mut headers)
+            .unwrap()
+            .allow_environment_provider_auth
+    );
 
     let foreground = AppState::new(test_config());
-    assert!(foreground.allows_environment_provider_auth(&HeaderMap::new()));
+    assert!(
+        foreground
+            .authorize_provider_request(&mut HeaderMap::new())
+            .unwrap()
+            .allow_environment_provider_auth
+    );
 
     let transparent = AppState::new_with_bootstrap(
         test_config(),
@@ -449,8 +471,26 @@ async fn managed_sidecar_requires_private_client_proof_for_forwarded_credentials
         Some(BootstrapChallengeKey::from_bytes(b"test challenge key")),
         false,
         None,
+        Some(crate::provider_auth::TransparentProxyCredential::from_static("test-proxy-token")),
     );
-    assert!(transparent.allows_environment_provider_auth(&HeaderMap::new()));
+    assert!(
+        transparent
+            .authorize_provider_request(&mut HeaderMap::new())
+            .is_err()
+    );
+    let mut transparent_headers = HeaderMap::new();
+    transparent_headers.insert(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+        HeaderValue::from_static("test-proxy-token"),
+    );
+    let authorization = transparent
+        .authorize_provider_request(&mut transparent_headers)
+        .unwrap();
+    assert!(authorization.allow_environment_provider_auth);
+    assert!(
+        !transparent_headers
+            .contains_key(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+    );
 }
 
 #[tokio::test]
@@ -461,6 +501,7 @@ async fn healthz_only_refreshes_idle_activity_for_an_authenticated_heartbeat() {
         Some("expected-fingerprint".into()),
         Some(challenge_key.clone()),
         true,
+        None,
         None,
     );
     let activity = state.last_activity.clone();
@@ -529,6 +570,7 @@ async fn bootstrap_shutdown_requires_the_private_owner_token() {
             token: "private-token".into(),
             sender: Arc::new(std::sync::Mutex::new(Some(sender))),
         }),
+        None,
     ));
     let rejected = app
         .clone()
@@ -2364,6 +2406,91 @@ async fn gateway_forwards_openai_json_without_rewriting_payload() {
 }
 
 #[tokio::test]
+async fn transparent_gateway_requires_and_consumes_its_invocation_token() {
+    let upstream = spawn_upstream(false).await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router_with_state(AppState::new_with_bootstrap(
+        config,
+        Some("transparent-fingerprint".into()),
+        None,
+        false,
+        None,
+        Some(
+            crate::provider_auth::TransparentProxyCredential::from_static(
+                "current-invocation-token",
+            ),
+        ),
+    ));
+    let body = || {
+        Body::from(
+            json!({
+                "model": "gpt-test",
+                "messages": [{ "role": "user", "content": "hello" }]
+            })
+            .to_string(),
+        )
+    };
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .header(
+                    crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+                    "different-invocation-token",
+                )
+                .body(body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::UNAUTHORIZED);
+
+    let accepted = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .header(
+                    crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+                    "current-invocation-token",
+                )
+                .header("authorization", "Bearer upstream-provider-key")
+                .body(body())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let bytes = accepted.into_body().collect().await.unwrap().to_bytes();
+    let payload: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        payload["authorization"],
+        json!("Bearer upstream-provider-key")
+    );
+    assert_eq!(payload["transparent_proxy_token"], Value::Null);
+}
+
+#[tokio::test]
 async fn gateway_accepts_codex_responses_path() {
     let upstream = spawn_upstream(false).await;
     let mut config = test_config();
@@ -2878,6 +3005,9 @@ async fn spawn_upstream(streaming: bool) -> TestServer {
                 .and_then(|value| value.to_str().ok()),
             "x_test_intercept": headers
                 .get("x-test-intercept")
+                .and_then(|value| value.to_str().ok()),
+            "transparent_proxy_token": headers
+                .get(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
                 .and_then(|value| value.to_str().ok()),
             "connection": headers
                 .get(header::CONNECTION)

@@ -287,7 +287,25 @@ fn prepares_codex_config_overrides() {
                 // When OPENAI_API_KEY is in the environment the gateway substitutes it;
                 // otherwise codex's own auth is forwarded as-is.
                 && arg.contains("requires_openai_auth=true")
-                && arg.contains("supports_websockets=false"))
+                && arg.contains("supports_websockets=false")
+                && arg.contains("env_http_headers")
+                && arg.contains(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER)
+                && arg.contains(crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV))
+    );
+    assert!(
+        !prepared
+            .argv
+            .iter()
+            .any(|arg| arg.contains(prepared.proxy_credential.expose()))
+    );
+    assert!(prepared.env.contains(&(
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV.into(),
+        prepared.proxy_credential.expose().into()
+    )));
+    assert!(
+        prepared
+            .secret_env_names
+            .contains(&crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV.into())
     );
     assert!(
         !prepared
@@ -745,6 +763,57 @@ fn prepares_claude_dry_run_without_writing_plugin() {
             .contains(&("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()))
     );
     assert!(prepared.notes[0].contains("would generate"));
+    let custom_headers = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "ANTHROPIC_CUSTOM_HEADERS").then_some(value))
+        .unwrap();
+    assert!(custom_headers.starts_with(&format!(
+        "{}: ",
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER
+    )));
+    assert!(custom_headers.ends_with(prepared.proxy_credential.expose()));
+    assert!(
+        prepared
+            .secret_env_names
+            .contains(&"ANTHROPIC_CUSTOM_HEADERS".into())
+    );
+}
+
+#[test]
+fn claude_transparent_proxy_header_preserves_existing_custom_headers() {
+    let _env = EnvScope::set(&[(
+        "ANTHROPIC_CUSTOM_HEADERS",
+        Some(std::ffi::OsStr::new("x-existing: preserved")),
+    )]);
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig::default(),
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::ClaudeCode,
+        vec!["claude".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        true,
+    )
+    .unwrap();
+    let custom_headers = prepared
+        .env
+        .iter()
+        .find_map(|(name, value)| (name == "ANTHROPIC_CUSTOM_HEADERS").then_some(value))
+        .unwrap();
+
+    assert_eq!(
+        custom_headers,
+        &format!(
+            "x-existing: preserved\n{}: {}",
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+            prepared.proxy_credential.expose()
+        )
+    );
 }
 
 #[test]
@@ -833,6 +902,14 @@ fn prepares_hermes_hook_environment() {
         .expect("Hermes overlay path");
     let hooks = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
     let hooks: serde_json::Value = serde_yaml::from_str(&hooks).unwrap();
+    assert_eq!(hooks["model"]["provider"], json!("custom"));
+    assert_eq!(
+        hooks["model"]["api_key"],
+        json!(format!(
+            "${{{}}}",
+            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV
+        ))
+    );
     assert!(crate::hook_assertions::value_has_command_arguments(
         &hooks,
         &[
@@ -1662,6 +1739,10 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
         env: Vec::new(),
         temp_dirs: vec![overlay.clone()],
         notes: Vec::new(),
+        proxy_credential: crate::provider_auth::TransparentProxyCredential::from_static(
+            "test-proxy-token",
+        ),
+        secret_env_names: Vec::new(),
     };
     let observed_wrapper_pid_path = wrapper_pid_path.clone();
     let observed_descendant_pid_path = descendant_pid_path.clone();

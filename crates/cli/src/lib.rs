@@ -19,6 +19,7 @@ mod mcp;
 mod mcp_environment;
 mod plugins;
 mod process;
+mod provider_auth;
 mod server;
 mod sessions;
 

@@ -13,8 +13,22 @@ use crate::process::{PreparedAgentLaunch, insert_after_host};
 pub(crate) fn prepare(
     launch: &mut PreparedAgentLaunch,
     gateway_url: &str,
+    proxy_credential: &crate::provider_auth::TransparentProxyCredential,
     dry_run: bool,
 ) -> Result<(), CliError> {
+    let proxy_header = format!(
+        "{}: {}",
+        crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_HEADER,
+        proxy_credential.expose()
+    );
+    let custom_headers = std::env::var("ANTHROPIC_CUSTOM_HEADERS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(
+            || proxy_header.clone(),
+            |value| format!("{value}\n{proxy_header}"),
+        );
+    launch.set_secret_env("ANTHROPIC_CUSTOM_HEADERS", custom_headers);
     if dry_run {
         insert_after_host(
             &mut launch.argv,
