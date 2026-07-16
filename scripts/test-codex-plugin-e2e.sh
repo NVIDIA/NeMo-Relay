@@ -143,10 +143,13 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.atof]
 enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
 output_directory = "atof"
 filename = "events.jsonl"
 mode = "append"

@@ -35,9 +35,9 @@ only when it includes `enabled = true`.
 
 The following table lists the runtime behavior that each section installs:
 
-| Section | Runtime behavior |
+| Section | Runtime Behavior |
 |---|---|
-| `atof` | Registers a global Agent Trajectory Observability Format (ATOF) JSONL exporter for raw lifecycle events. |
+| `atof` | Registers a global Agent Trajectory Observability Format (ATOF) exporter with file and stream sinks for raw lifecycle events. |
 | `atif` | Registers one Agent Trajectory Interchange Format (ATIF) dispatcher that writes one trajectory file for each top-level Agent scope or supported coding-agent turn scope. |
 | `opentelemetry` | Registers a global OpenTelemetry OTLP subscriber. |
 | `openinference` | Registers a global OpenInference OTLP subscriber. |
@@ -82,8 +82,8 @@ url = "http://localhost:8080/events"
 transport = "http_post"
 timeout_millis = 3000
 
-[components.config.atof.sinks.headers]
-authorization = "Bearer <token>"
+[components.config.atof.sinks.header_env]
+authorization = "NEMO_RELAY_ATOF_AUTH_HEADER"
 
 [components.config.atif]
 enabled = true
@@ -130,6 +130,13 @@ unknown_field = "warn"
 unsupported_value = "error"
 ```
 
+Observability component configuration requires `version = 2`. To update an
+older ATOF configuration, follow [Migrate From Version 1](/configure-plugins/observability/atof#migrate-from-version-1).
+
+This example reads its ATOF authorization header from
+`NEMO_RELAY_ATOF_AUTH_HEADER`. Set that variable to the complete header value
+before validation or activation; NeMo Relay rejects missing or blank values.
+
 Include only the sections you want to configure. In layered `plugins.toml`
 files, omission inherits lower-precedence values; write `enabled = false` to
 disable an inherited section.
@@ -147,7 +154,7 @@ The following table describes how each failure affects application work:
 
 | Failure | Behavior |
 |---|---|
-| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF sink config, unavailable ATOF streaming support, or ATOF stream worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
+| Invalid `plugins.toml`, duplicate component kinds, malformed component shapes, unsupported values, unavailable exporter features, ATOF file-open failures, invalid ATOF stream sink configuration, unavailable ATOF streaming support, or ATOF stream worker startup failures | Validation or initialization fails. If a previous plugin configuration was active, NeMo Relay attempts to restore it after a failed replacement. |
 | ATOF event serialization or file write/flush failure after activation | Application work continues. The exporter stores the failure, stops accepting later events for that file, and returns the stored error from `force_flush()` or `shutdown()`. |
 | ATOF stream sink connection or send failure after activation | File output and other already-started sinks continue. Stream sink failures are logged with the sink index; flush and close timeouts are logged instead of blocking shutdown indefinitely. |
 | ATIF local file write, HTTP storage, or S3-compatible storage failure | Application work continues. The ATIF exporter records the failed sink as unhealthy and skips it for later trajectories. Other configured sinks continue to receive writes. |
@@ -171,7 +178,7 @@ create the output directory and that teardown calls `plugin.clear()` or
 
 ## Per-Language Plugin Configuration
 
-The following examples configure and activate the Observability component
+The following examples configure and activate the observability component
 through each supported language binding:
 
 `validate()` checks only the supplied in-memory object. `initialize()` also
@@ -189,6 +196,7 @@ from nemo_relay.observability import (
     AtifConfig,
     AtofConfig,
     AtofFileSinkConfig,
+    AtofStreamSinkConfig,
     ComponentSpec,
     ObservabilityConfig,
     OtlpConfig,
@@ -205,7 +213,15 @@ config = plugin.PluginConfig(
                             output_directory="logs",
                             filename="events.jsonl",
                             mode="overwrite",
-                        )
+                        ),
+                        AtofStreamSinkConfig(
+                            name="archive",
+                            url="http://localhost:8080/events",
+                            transport="http_post",
+                            header_env={
+                                "authorization": "NEMO_RELAY_ATOF_AUTH_HEADER"
+                            },
+                        ),
                     ],
                 ),
                 atif=AtifConfig(
@@ -257,50 +273,59 @@ const observability = require("nemo-relay-node/observability");
 
 void (async () => {
   await plugin.initialize({
-  version: 1,
-  components: [
-    observability.ComponentSpec({
-      version: 2,
-      atof: observability.atofConfig({
-        enabled: true,
-        sinks: [
-          {
-            type: "file",
-            output_directory: "logs",
-            filename: "events.jsonl",
-            mode: "overwrite",
+    version: 1,
+    components: [
+      observability.ComponentSpec({
+        version: 2,
+        atof: observability.atofConfig({
+          enabled: true,
+          sinks: [
+            {
+              type: "file",
+              output_directory: "logs",
+              filename: "events.jsonl",
+              mode: "overwrite",
+            },
+            {
+              type: "stream",
+              name: "archive",
+              url: "http://localhost:8080/events",
+              transport: "http_post",
+              header_env: {
+                authorization: "NEMO_RELAY_ATOF_AUTH_HEADER",
+              },
+            },
+          ],
+        }),
+        atif: observability.atifConfig({
+          enabled: true,
+          output_directory: "logs",
+          filename_template: "trajectory-{session_id}.json",
+        }),
+        opentelemetry: observability.otlpConfig({
+          enabled: true,
+          endpoint: "http://localhost:4318/v1/traces",
+          service_name: "nemo-relay",
+          service_namespace: "agent",
+          service_version: "0.6.0",
+          instrumentation_scope: "nemo-relay-observability",
+          resource_attributes: {
+            "deployment.environment": "dev",
           },
-        ],
+        }),
+        openinference: observability.otlpConfig({
+          enabled: true,
+          endpoint: "http://localhost:6006/v1/traces",
+          service_name: "nemo-relay",
+          service_namespace: "agent",
+          service_version: "0.6.0",
+          instrumentation_scope: "nemo-relay-openinference",
+          resource_attributes: {
+            "deployment.environment": "dev",
+          },
+        }),
       }),
-      atif: observability.atifConfig({
-        enabled: true,
-        output_directory: "logs",
-        filename_template: "trajectory-{session_id}.json",
-      }),
-      opentelemetry: observability.otlpConfig({
-        enabled: true,
-        endpoint: "http://localhost:4318/v1/traces",
-        service_name: "nemo-relay",
-        service_namespace: "agent",
-        service_version: "0.6.0",
-        instrumentation_scope: "nemo-relay-observability",
-        resource_attributes: {
-          "deployment.environment": "dev",
-        },
-      }),
-      openinference: observability.otlpConfig({
-        enabled: true,
-        endpoint: "http://localhost:6006/v1/traces",
-        service_name: "nemo-relay",
-        service_namespace: "agent",
-        service_version: "0.6.0",
-        instrumentation_scope: "nemo-relay-openinference",
-        resource_attributes: {
-          "deployment.environment": "dev",
-        },
-      }),
-    }),
-  ],
+    ],
   });
 
   try {
@@ -318,8 +343,6 @@ void (async () => {
 
 <Tab title="Rust" language="rust">
 ```rust
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use nemo_relay::observability::plugin_component::{
     AtifSectionConfig, AtofFileSinkSectionConfig, AtofSectionConfig,
     AtofSinkSectionConfig, AtofStreamSinkSectionConfig, ComponentSpec,
@@ -329,70 +352,76 @@ use nemo_relay::plugin::{
     clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
 };
 
-let component = ComponentSpec::new(ObservabilityConfig {
-    atof: Some(AtofSectionConfig {
-        enabled: true,
-        sinks: vec![
-            AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
-                output_directory: Some("logs".into()),
-                filename: Some("events.jsonl".into()),
-                mode: "overwrite".into(),
-            }),
-            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
-                url: "http://localhost:8080/events".into(),
-                transport: "http_post".into(),
-                headers: [("authorization".into(), "Bearer <token>".into())].into(),
-                header_env: Default::default(),
-                timeout_millis: 3000,
-                field_name_policy: "preserve".into(),
-                name: Some("archive".into()),
-            }),
-        ],
-    }),
-    atif: Some(AtifSectionConfig {
-        enabled: true,
-        output_directory: Some("logs".into()),
-        filename_template: "trajectory-{session_id}.json".into(),
-        ..AtifSectionConfig::default()
-    }),
-    opentelemetry: Some(OtlpSectionConfig {
-        enabled: true,
-        endpoint: Some("http://localhost:4318/v1/traces".into()),
-        service_name: "nemo-relay".into(),
-        service_namespace: Some("agent".into()),
-        service_version: Some("0.6.0".into()),
-        instrumentation_scope: Some("nemo-relay-observability".into()),
-        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
-        ..OtlpSectionConfig::default()
-    }),
-    openinference: Some(OtlpSectionConfig {
-        enabled: true,
-        endpoint: Some("http://localhost:6006/v1/traces".into()),
-        service_name: "nemo-relay".into(),
-        service_namespace: Some("agent".into()),
-        service_version: Some("0.6.0".into()),
-        instrumentation_scope: Some("nemo-relay-openinference".into()),
-        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
-        ..OtlpSectionConfig::default()
-    }),
-    ..ObservabilityConfig::default()
-});
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let component = ComponentSpec::new(ObservabilityConfig {
+        atof: Some(AtofSectionConfig {
+            enabled: true,
+            sinks: vec![
+                AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+                    output_directory: Some("logs".into()),
+                    filename: Some("events.jsonl".into()),
+                    mode: "overwrite".into(),
+                }),
+                AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                    url: "http://localhost:8080/events".into(),
+                    transport: "http_post".into(),
+                    headers: Default::default(),
+                    header_env: [(
+                        "authorization".into(),
+                        "NEMO_RELAY_ATOF_AUTH_HEADER".into(),
+                    )]
+                    .into(),
+                    timeout_millis: 3000,
+                    field_name_policy: "preserve".into(),
+                    name: Some("archive".into()),
+                }),
+            ],
+        }),
+        atif: Some(AtifSectionConfig {
+            enabled: true,
+            output_directory: Some("logs".into()),
+            filename_template: "trajectory-{session_id}.json".into(),
+            ..AtifSectionConfig::default()
+        }),
+        opentelemetry: Some(OtlpSectionConfig {
+            enabled: true,
+            endpoint: Some("http://localhost:4318/v1/traces".into()),
+            service_name: "nemo-relay".into(),
+            service_namespace: Some("agent".into()),
+            service_version: Some("0.6.0".into()),
+            instrumentation_scope: Some("nemo-relay-observability".into()),
+            resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+            ..OtlpSectionConfig::default()
+        }),
+        openinference: Some(OtlpSectionConfig {
+            enabled: true,
+            endpoint: Some("http://localhost:6006/v1/traces".into()),
+            service_name: "nemo-relay".into(),
+            service_namespace: Some("agent".into()),
+            service_version: Some("0.6.0".into()),
+            instrumentation_scope: Some("nemo-relay-openinference".into()),
+            resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+            ..OtlpSectionConfig::default()
+        }),
+        ..ObservabilityConfig::default()
+    });
 
-let config = PluginConfig {
-    version: 1,
-    components: vec![component.into()],
-    policy: Default::default(),
-};
+    let config = PluginConfig {
+        version: 1,
+        components: vec![component.into()],
+        policy: Default::default(),
+    };
 
-let report = validate_plugin_config(&config);
-assert!(!report.has_errors());
+    let report = validate_plugin_config(&config);
+    assert!(!report.has_errors());
 
-let _active = initialize_plugins(config).await?;
+    let _active = initialize_plugins(config).await?;
 
-// Run instrumented application work here.
+    // Run instrumented application work here.
 
-clear_plugin_configuration()?;
-Ok(())
+    clear_plugin_configuration()?;
+    Ok(())
 }
 ```
 
@@ -409,7 +438,7 @@ filename templates, unknown fields according to policy, and enabled exporters
 that are unavailable in the current build or target.
 
 Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
-Clearing the plugin config deregisters inferred subscribers, flushes file
+Clearing the plugin configuration deregisters inferred subscribers, flushes file
 exporters, drains and closes ATOF stream sinks, and shuts down owned OTLP
 subscribers.
 
