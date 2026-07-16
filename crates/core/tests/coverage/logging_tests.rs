@@ -308,13 +308,15 @@ fn file_sink_receives_jsonl_and_preserves_existing_content() {
     );
     runtime.logger.flush();
     // AsyncPoolSink flush queues work on the pool; wait briefly for the append to land.
-    let contents = wait_for_log_line(&path, |contents| contents.lines().count() >= 2);
+    let contents = wait_for_log_line(&path, |contents| contents.contains("server_started"));
     runtime.shutdown();
 
     assert!(contents.starts_with("{\"preexisting\":true}\n"));
-    let mut lines = contents.lines();
-    let _preexisting = lines.next().unwrap();
-    let record: Value = serde_json::from_str(lines.next().expect("logged line")).unwrap();
+    let record: Value = contents
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|record| record["event"] == "server_started")
+        .expect("server event");
     assert_eq!(record["root_relay_id"], root);
     assert_eq!(record["target"], "nemo_relay.server");
     assert_eq!(record["event"], "server_started");
@@ -526,6 +528,43 @@ fn shutdown_drains_async_file_sink_without_waiting() {
 }
 
 #[test]
+fn logging_runtime_emits_initialized_and_shutdown_lifecycle_events() {
+    let _lock = lock_logging_tests();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("lifecycle.log.jsonl");
+    let config = LoggingConfig {
+        level: LogLevel::Info,
+        stderr_format: LogFormat::Human,
+        sinks: vec![LogSinkConfig::File(FileLogSinkConfig {
+            path: path.clone(),
+            level: LogLevel::Info,
+            format: LogFormat::Jsonl,
+            ..FileLogSinkConfig::default()
+        })],
+        ..default_config()
+    };
+
+    let runtime = init_logging(&config).unwrap();
+    runtime.shutdown();
+
+    let records = std::fs::read_to_string(&path).expect("lifecycle log file");
+    let records = records
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(records.iter().any(|record| {
+        record["target"] == "nemo_relay.logging"
+            && record["event"] == "logging_initialized"
+            && record["level"] == "info"
+    }));
+    assert!(records.iter().any(|record| {
+        record["target"] == "nemo_relay.logging"
+            && record["event"] == "logging_shutdown_started"
+            && record["level"] == "info"
+    }));
+}
+
+#[test]
 fn default_logging_config_has_stderr_defaults_and_no_sinks() {
     let config = LoggingConfig::default();
     assert_eq!(config.level, LogLevel::Info);
@@ -684,7 +723,11 @@ fn multiple_file_sinks_receive_same_event() {
     let human = wait_for_log_line(&path_b, |contents| contents.contains("fanout"));
     runtime.shutdown();
 
-    let record: Value = serde_json::from_str(jsonl.lines().next().unwrap()).unwrap();
+    let record: Value = jsonl
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|record| record["event"] == "fanout")
+        .expect("fanout event");
     assert_eq!(record["root_relay_id"], root);
     assert_eq!(record["event"], "fanout");
     assert!(human.contains("event=fanout"));

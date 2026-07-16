@@ -409,12 +409,30 @@ impl OpenTelemetrySubscriber {
 
     /// Registers this subscriber globally with the NeMo Relay runtime.
     pub fn register(&self, name: &str) -> Result<()> {
-        register_subscriber(name, self.subscriber()).map_err(Into::into)
+        register_subscriber(name, self.subscriber())?;
+        log::info!(
+            target: "nemo_relay.observability",
+            event = "exporter_registered",
+            exporter = "opentelemetry",
+            subscriber = name;
+            "OpenTelemetry exporter registered"
+        );
+        Ok(())
     }
 
     /// Deregisters a previously-registered global subscriber by name.
     pub fn deregister(&self, name: &str) -> Result<bool> {
-        deregister_subscriber(name).map_err(Into::into)
+        let removed = deregister_subscriber(name)?;
+        if removed {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "exporter_deregistered",
+                exporter = "opentelemetry",
+                subscriber = name;
+                "OpenTelemetry exporter deregistered"
+            );
+        }
+        Ok(removed)
     }
 
     /// Flushes finished spans through the underlying tracer provider.
@@ -434,7 +452,16 @@ impl OpenTelemetrySubscriber {
         let guard = self.inner.processor.lock().map_err(|_| {
             OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
         })?;
-        guard.shutdown()
+        let result = guard.shutdown();
+        if result.is_ok() {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "exporter_shutdown",
+                exporter = "opentelemetry";
+                "OpenTelemetry exporter shut down"
+            );
+        }
+        result
     }
 }
 

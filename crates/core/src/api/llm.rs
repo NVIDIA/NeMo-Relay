@@ -360,9 +360,13 @@ fn project_llm_request_to_current_user_turn(
     if let Some(codec) = request_codec {
         match codec.encode(annotation, request) {
             Ok(encoded) => *request = encoded,
-            Err(error) => {
-                eprintln!(
-                    "nemo_relay: LLM request projection encode failed; preserving full event history: {error}"
+            Err(_) => {
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "projection_failed",
+                    projection = "llm_current_turn",
+                    recovery = "preserve_full_history";
+                    "LLM request projection failed; preserving full event history"
                 );
                 *annotation = original_annotation
                     .expect("codec-backed projection should preserve the original annotation")
@@ -507,8 +511,14 @@ fn emit_optimization_marks_with(
     if contributions.is_empty() {
         return;
     }
-    if let Err(error) = ensure_runtime_owner() {
-        eprintln!("nemo_relay: unable to emit LLM optimization marks: {error}");
+    if ensure_runtime_owner().is_err() {
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "optimization_marks_skipped",
+            reason = "runtime_owner_unavailable",
+            contribution_count = contributions.len();
+            "LLM optimization marks were skipped"
+        );
         return;
     }
     for (contribution, recorded_at) in contributions {

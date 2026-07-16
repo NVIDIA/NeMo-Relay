@@ -1440,6 +1440,7 @@ fn callback_for_client(
     (
         WorkerPluginCallback {
             activation_id: ACTIVATION_ID.into(),
+            plugin_kind: "fixture_worker".into(),
             runtime: tokio::runtime::Handle::current(),
             client,
             host_state: state,

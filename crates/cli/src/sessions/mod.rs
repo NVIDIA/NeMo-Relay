@@ -311,7 +311,13 @@ impl SessionManager {
                 )
                 .await
                 {
-                    eprintln!("nemo-relay CLI gateway: idle session teardown failed: {error}");
+                    log::warn!(
+                        target: "nemo_relay.session",
+                        event = "session_cleanup_failed",
+                        reason = "idle_timeout",
+                        error_kind = error.log_kind();
+                        "Idle session cleanup failed"
+                    );
                 }
             }
         });
@@ -501,13 +507,26 @@ impl SessionManager {
 
         if finish == GatewaySessionFinish::Close
             && let Some(session) = closing.as_mut()
-            && let Err(error) = session
+        {
+            match session
                 .close_for_shutdown("uncorrelated_gateway_call_complete")
                 .await
-        {
-            eprintln!(
-                "nemo-relay CLI gateway: failed to close isolated session {session_id}: {error}"
-            );
+            {
+                Ok(()) => log::info!(
+                    target: "nemo_relay.session",
+                    event = "session_closed",
+                    session_id = session_id;
+                    "Session closed"
+                ),
+                Err(error) => log::warn!(
+                    target: "nemo_relay.session",
+                    event = "session_cleanup_failed",
+                    session_id = session_id,
+                    reason = "isolated_session_close",
+                    error_kind = error.log_kind();
+                    "Session cleanup failed"
+                ),
+            }
         }
     }
 
@@ -1321,9 +1340,13 @@ impl Session {
             return Ok(());
         }
         if !self.subagents.contains_key(&event.subagent_id) {
-            eprintln!(
-                "nemo-relay CLI gateway: received {} for subagent {} without a matching start",
-                event.event_name, event.subagent_id
+            log::warn!(
+                target: "nemo_relay.session",
+                event = "session_correlation_failed",
+                session_id = event.session_id.as_str(),
+                subagent_id = event.subagent_id.as_str(),
+                lifecycle_event = event.event_name.as_str();
+                "Subagent lifecycle event had no matching start"
             );
             if self.agent_kind == AgentKind::ClaudeCode && self.turn_scope.is_none() {
                 return Ok(());

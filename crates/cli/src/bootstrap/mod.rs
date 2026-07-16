@@ -91,11 +91,48 @@ impl GatewaySpec {
     /// Return the compatible gateway already bound at this endpoint, or start the existing server
     /// under a per-user lock and wait for authenticated readiness.
     pub(crate) fn acquire(&self) -> Result<GatewayEndpoint, String> {
-        acquire_gateway(self)
+        match acquire_gateway(self) {
+            Ok(endpoint) => Ok(endpoint),
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.bootstrap",
+                    event = "gateway_acquisition_failed",
+                    bind = self.bind.to_string().as_str();
+                    "Gateway acquisition failed"
+                );
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn recover(&self, expected_instance: &str) -> Result<GatewayEndpoint, String> {
-        recover_gateway(self, expected_instance)
+        log::warn!(
+            target: "nemo_relay.bootstrap",
+            event = "gateway_recovery_started",
+            instance_id = expected_instance;
+            "Gateway recovery started"
+        );
+        match recover_gateway(self, expected_instance) {
+            Ok(endpoint) => {
+                log::info!(
+                    target: "nemo_relay.bootstrap",
+                    event = "gateway_recovered",
+                    previous_instance_id = expected_instance,
+                    instance_id = endpoint.instance_id.as_str();
+                    "Gateway recovery completed"
+                );
+                Ok(endpoint)
+            }
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.bootstrap",
+                    event = "gateway_recovery_failed",
+                    instance_id = expected_instance;
+                    "Gateway recovery failed"
+                );
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn healthy_instance(&self, url: &str) -> Option<String> {
@@ -235,6 +272,13 @@ fn compatible_endpoint(
     instance_id: Option<String>,
 ) -> Result<GatewayEndpoint, String> {
     let instance_id = instance_id.ok_or_else(|| foreign_listener_error(&url))?;
+    log::info!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_reused",
+        instance_id = instance_id.as_str(),
+        address = address.to_string().as_str();
+        "An existing gateway was reused"
+    );
     Ok(GatewayEndpoint {
         address,
         url,
@@ -255,6 +299,12 @@ fn incompatible_relay_error(url: &str) -> String {
 }
 
 fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, String> {
+    log::info!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_spawn_started",
+        bind = spec.bind.to_string().as_str();
+        "Gateway process spawn started"
+    );
     let relay = relay_binary()?;
     let ready_path = state.join(format!(
         "gateway-{}-{}.ready.json",
@@ -302,7 +352,14 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
         .map_err(|error| format!("failed to spawn nemo-relay gateway: {error}"))?;
     let mut child = ArmedChild::new(child);
     let deadline = Instant::now() + BOOTSTRAP_START_TIMEOUT;
+    let mut attempts = 0_u64;
+    log::warn!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_readiness_pending";
+        "Waiting for the spawned gateway to become ready"
+    );
     while Instant::now() < deadline {
+        attempts += 1;
         if let Some(endpoint) = read_ready_file(&ready_path)?
             && (endpoint.address == spec.bind
                 || (spec.bind.port() == 0 && endpoint.address.ip() == spec.bind.ip()))
@@ -314,6 +371,13 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
                 return Err(error);
             }
             let _ = fs::remove_file(&ready_path);
+            log::info!(
+                target: "nemo_relay.bootstrap",
+                event = "gateway_ready",
+                instance_id = endpoint.instance_id.as_str(),
+                attempt_count = attempts;
+                "Spawned gateway became ready"
+            );
             return Ok(endpoint);
         }
         match child.try_wait() {
@@ -372,6 +436,11 @@ fn hand_off_to_reaper_with<T>(
         }
         return Err(format!("failed to start gateway reaper thread: {error}"));
     }
+    log::info!(
+        target: "nemo_relay.bootstrap",
+        event = "gateway_reaper_handoff";
+        "Gateway process ownership was handed to the reaper"
+    );
     Ok(())
 }
 

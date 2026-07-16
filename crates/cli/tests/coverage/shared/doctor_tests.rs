@@ -693,6 +693,7 @@ fn collect_environment_and_completions_cover_missing_home_and_unknown_shell() {
 #[allow(clippy::await_holding_lock)]
 async fn collect_agents_filters_target_and_records_version() {
     let temp = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let codex = temp.path().join("codex");
     std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.143.0\\n'\n").unwrap();
     make_executable(&codex);
@@ -710,8 +711,10 @@ async fn collect_agents_filters_target_and_records_version() {
 
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
     let temp = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let wrapper = temp.path().join("npx");
     std::fs::write(
         &wrapper,
@@ -734,6 +737,7 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
 #[allow(clippy::await_holding_lock)]
 async fn collect_agents_distinguishes_required_and_optional_version_failures() {
     let temp = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let codex = temp.path().join("codex");
     std::fs::write(&codex, "#!/bin/sh\nprintf 'codex-cli 0.1.0\\n'\n").unwrap();
     make_executable(&codex);

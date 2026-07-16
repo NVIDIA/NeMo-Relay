@@ -19,21 +19,14 @@ pub(super) async fn handle_hook_forward_response(
             let status = response.status();
             let body = match read_hook_response(response).await {
                 Ok(body) => body,
-                Err(error) if fail_closed => return Err(error),
                 Err(error) => {
-                    eprintln!("nemo-relay hook forward failed: {error}");
-                    return Ok(());
+                    return handle_hook_failure(error, fail_closed, "response_read", None);
                 }
             };
             handle_hook_forward_status(status, body, fail_closed)
         }
         Err(error) => {
-            eprintln!("nemo-relay hook forward failed: {error}");
-            if fail_closed {
-                Err(CliError::Upstream(error))
-            } else {
-                Ok(())
-            }
+            handle_hook_failure(CliError::Upstream(error), fail_closed, "transport", None)
         }
     }
 }
@@ -51,12 +44,12 @@ pub(crate) fn handle_verified_hook_forward_response(
                 Ok(status) => status,
                 Err(error) => {
                     let message = format!("verified hook response had an invalid status: {error}");
-                    eprintln!("nemo-relay hook forward failed: {message}");
-                    return if fail_closed {
-                        Err(CliError::Install(message))
-                    } else {
-                        Ok(())
-                    };
+                    return handle_hook_failure(
+                        CliError::Install(message),
+                        fail_closed,
+                        "invalid_status",
+                        None,
+                    );
                 }
             };
             handle_hook_forward_status(
@@ -65,16 +58,12 @@ pub(crate) fn handle_verified_hook_forward_response(
                 fail_closed,
             )
         }
-        Err(error) => {
-            eprintln!("nemo-relay hook forward failed: {error}");
-            if fail_closed {
-                Err(CliError::Install(format!(
-                    "verified hook forward failed: {error}"
-                )))
-            } else {
-                Ok(())
-            }
-        }
+        Err(error) => handle_hook_failure(
+            CliError::Install(format!("verified hook forward failed: {error}")),
+            fail_closed,
+            "verified_transport",
+            None,
+        ),
     }
 }
 
@@ -87,18 +76,56 @@ pub(crate) fn handle_hook_forward_status(
         if let Some(reason) = guardrail_rejection_reason(&body) {
             return Err(CliError::GuardrailRejected(reason));
         }
-        eprintln!("nemo-relay hook forward failed with HTTP {status}");
-        if fail_closed {
-            return Err(CliError::Install(format!(
-                "hook forward failed with HTTP {status}"
-            )));
-        }
-        return Ok(());
+        return handle_hook_failure(
+            CliError::Install(format!("hook forward failed with HTTP {status}")),
+            fail_closed,
+            "http_status",
+            Some(status.as_u16()),
+        );
     }
     if !body.is_empty() {
         println!("{body}");
     }
     Ok(())
+}
+
+fn handle_hook_failure(
+    error: CliError,
+    fail_closed: bool,
+    reason: &'static str,
+    status_code: Option<u16>,
+) -> Result<(), CliError> {
+    let mode = if fail_closed {
+        "fail_closed"
+    } else {
+        "fail_open"
+    };
+    if fail_closed {
+        log::error!(
+            target: "nemo_relay.hook",
+            event = "hook_delivery_failed",
+            mode,
+            reason,
+            status_code,
+            error_kind = error.log_kind();
+            "Hook delivery failed"
+        );
+        Err(CliError::Install(format!(
+            "nemo-relay hook forward failed: {error}"
+        )))
+    } else {
+        log::warn!(
+            target: "nemo_relay.hook",
+            event = "hook_delivery_failed",
+            mode,
+            reason,
+            status_code,
+            error_kind = error.log_kind();
+            "Hook delivery failed open"
+        );
+        eprintln!("nemo-relay hook forward failed: {error}");
+        Ok(())
+    }
 }
 
 pub(super) async fn read_hook_response(response: reqwest::Response) -> Result<String, CliError> {

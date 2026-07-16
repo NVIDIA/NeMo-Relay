@@ -63,6 +63,24 @@ pub(crate) enum CliError {
 }
 
 impl CliError {
+    pub(crate) fn log_kind(&self) -> &'static str {
+        match self {
+            Self::GuardrailRejected(_) => "guardrail_rejected",
+            Self::InvalidPayload(_) => "invalid_payload",
+            Self::PayloadTooLarge(_) => "payload_too_large",
+            Self::Upstream(_) => "upstream",
+            Self::ProviderFailure(_) => "provider_failure",
+            Self::Http(_) => "http",
+            Self::Io(_) => "io",
+            Self::Install(_) => "install",
+            Self::Config(_) => "configuration",
+            Self::Launch(_) => "launch",
+            Self::PluginLifecycle { .. } => "plugin_lifecycle",
+            Self::Flow(_) => "runtime",
+            Self::OpenInference(_) => "openinference",
+        }
+    }
+
     pub(crate) fn guardrail_rejection_reason(&self) -> Option<&str> {
         match self {
             Self::GuardrailRejected(reason) => Some(reason),

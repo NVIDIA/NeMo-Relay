@@ -74,6 +74,13 @@ impl Plugin for PricingPlugin {
                 .map_err(|error| PluginError::InvalidConfig(error.to_string()))?;
             set_active_pricing_resolver(resolver)
                 .map_err(|error| PluginError::RegistrationFailed(error.to_string()))?;
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_validation_completed",
+                plugin_kind = PRICING_PLUGIN_KIND,
+                resource_count = 0;
+                "Plugin resource validation completed"
+            );
             ctx.add_registration(PluginRegistration::new(
                 "plugin",
                 ctx.qualify_name("pricing"),

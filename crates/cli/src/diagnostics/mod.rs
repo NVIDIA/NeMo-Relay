@@ -64,21 +64,39 @@ pub(crate) async fn collect_report(
                 details: "valid".into(),
             },
         ),
-        Err(err) => (
-            ResolvedConfig::default(),
-            Check {
-                name: "Resolution",
-                status: Status::Fail,
-                details: format!("could not resolve merged config: {err}"),
-            },
-        ),
+        Err(err) => {
+            log::warn!(
+                target: "nemo_relay.diagnostics",
+                event = "diagnostic_probe_failed",
+                probe = "configuration",
+                error_kind = err.log_kind();
+                "Diagnostic probe failed"
+            );
+            (
+                ResolvedConfig::default(),
+                Check {
+                    name: "Resolution",
+                    status: Status::Fail,
+                    details: format!("could not resolve merged config: {err}"),
+                },
+            )
+        }
     };
     let cwd = std::env::current_dir().ok();
     let home = home_dir();
     let configured_agents = configured_agent_names(&resolved.agents);
     let (plugin_sources, plugin_error) = match effective_plugin_toml_sources() {
         Ok(sources) => (sources, None),
-        Err(error) => (Vec::new(), Some(error.to_string())),
+        Err(error) => {
+            log::warn!(
+                target: "nemo_relay.diagnostics",
+                event = "diagnostic_probe_failed",
+                probe = "plugin_configuration",
+                error_kind = error.log_kind();
+                "Diagnostic probe failed"
+            );
+            (Vec::new(), Some(error.to_string()))
+        }
     };
     let plugin_resolution =
         plugin_resolution_check(&resolved, &resolution, plugin_error.as_deref());
@@ -1167,6 +1185,15 @@ pub(crate) async fn run_doctor(
     json: bool,
 ) -> Result<std::process::ExitCode, CliError> {
     let report = collect_report(target_agent).await?;
+    log::info!(
+        target: "nemo_relay.diagnostics",
+        event = "diagnostics_completed",
+        agent_count = report.agents.len(),
+        host_plugin_count = report.host_plugins.len(),
+        observability_check_count = report.observability.len(),
+        completion_check_count = report.completions.len();
+        "Diagnostics completed"
+    );
     if json {
         print!("{}", format_json(&report)?);
     } else {
@@ -1185,6 +1212,13 @@ pub(crate) async fn run_doctor(
 /// decisions (e.g., CI gating on JSON output).
 pub(crate) async fn run_agents(json: bool) -> Result<std::process::ExitCode, CliError> {
     let agents = agents_report().await?;
+    log::info!(
+        target: "nemo_relay.diagnostics",
+        event = "diagnostics_completed",
+        agent_count = agents.len(),
+        report = "agents";
+        "Agent diagnostics completed"
+    );
     let output = if json {
         format_agents_json(&agents)?
     } else {

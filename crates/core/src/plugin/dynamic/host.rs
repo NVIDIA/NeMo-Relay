@@ -115,6 +115,13 @@ impl PluginHostActivation {
         mut config: PluginConfig,
         dynamic_plugins: Vec<DynamicPluginActivationSpec>,
     ) -> Result<(Self, ConfigReport)> {
+        let dynamic_plugin_count = dynamic_plugins.len();
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "dynamic_plugin_activation_started",
+            plugin_count = dynamic_plugin_count;
+            "Dynamic plugin activation started"
+        );
         let claim = acquire_plugin_host_lease()?;
 
         #[cfg(not(feature = "worker-grpc"))]
@@ -202,6 +209,13 @@ impl PluginHostActivation {
                 if failures.is_empty() {
                     return Err(error);
                 }
+                log::error!(
+                    target: "nemo_relay.plugin",
+                    event = "plugin_rollback_failed",
+                    plugin_count = dynamic_plugin_count,
+                    failure_count = failures.len();
+                    "Dynamic plugin activation rollback was incomplete"
+                );
                 if let Some(native) = native {
                     std::mem::forget(native);
                 }
@@ -221,6 +235,12 @@ impl PluginHostActivation {
             }
         };
 
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "dynamic_plugin_activated",
+            plugin_count = dynamic_plugin_count;
+            "Dynamic plugins activated"
+        );
         Ok((
             Self {
                 active: true,
@@ -307,6 +327,11 @@ impl PluginHostActivation {
         self.claim.take();
 
         if errors.is_empty() {
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "dynamic_plugin_cleared";
+                "Dynamic plugin activation cleared"
+            );
             Ok(())
         } else {
             Err(crate::plugin::PluginError::RegistrationFailed(format!(
@@ -390,8 +415,13 @@ fn plugin_error_context(
 
 impl Drop for PluginHostActivation {
     fn drop(&mut self) {
-        if let Err(error) = self.clear_inner() {
-            eprintln!("nemo_relay: dynamic plugin activation cleanup failed during drop: {error}");
+        if self.clear_inner().is_err() {
+            log::error!(
+                target: "nemo_relay.plugin",
+                event = "plugin_cleanup_failed",
+                cleanup = "dynamic_activation_drop";
+                "Dynamic plugin activation cleanup failed during drop"
+            );
         }
     }
 }

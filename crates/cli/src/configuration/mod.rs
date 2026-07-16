@@ -92,6 +92,13 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
     let mut resolved = load_shared_config(args.config.as_ref(), args.plugin_config_path.as_ref())?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     enforce_required_dynamic_plugin_startup(args.config.as_ref(), &resolved)?;
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "configuration_resolved",
+        mode = "server",
+        dynamic_plugin_count = resolved.dynamic_plugins.len();
+        "Runtime configuration resolved"
+    );
     Ok(resolved)
 }
 
@@ -848,7 +855,14 @@ fn load_or_create_bootstrap_hmac_key_at_with_timeout(
 pub(crate) fn resolve_plugins_config(
     explicit: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
-    load_shared_config(explicit, None)
+    let resolved = load_shared_config(explicit, None)?;
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "plugin_configuration_resolved",
+        dynamic_plugin_count = resolved.dynamic_plugins.len();
+        "Plugin configuration resolved"
+    );
+    Ok(resolved)
 }
 
 /// Resolves transparent `run` configuration and switches the gateway to an ephemeral bind address.
@@ -879,6 +893,13 @@ pub(crate) fn resolve_run_config(
     if !command.dry_run {
         enforce_required_dynamic_plugin_startup(config, &resolved)?;
     }
+    log::info!(
+        target: "nemo_relay.configuration",
+        event = "configuration_resolved",
+        mode = "run",
+        dynamic_plugin_count = resolved.dynamic_plugins.len();
+        "Runtime configuration resolved"
+    );
     Ok(resolved)
 }
 

@@ -445,18 +445,6 @@ fn endpoint_http_helper_edges_are_safe() {
         None,
         "unknown field name policies should be rejected"
     );
-    assert_eq!(truncate_log_body("  short body  "), "short body");
-
-    let long_body = "é".repeat(1_025);
-    let truncated = truncate_log_body(&long_body);
-    assert!(truncated.ends_with("... <truncated>"));
-    assert_eq!(
-        truncated
-            .trim_end_matches("... <truncated>")
-            .chars()
-            .count(),
-        1_024
-    );
 }
 
 #[test]
@@ -1602,8 +1590,10 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
 
         let mut socket = None;
         let mut pending = std::collections::VecDeque::from(["{\"kind\":\"mark\"}".to_string()]);
-        assert!(!drain_websocket_pending(0, &config, &mut socket, &mut pending).await);
+        let mut retry = WebSocketRetryState::default();
+        assert!(!drain_websocket_pending(0, &config, &mut socket, &mut pending, &mut retry).await);
         assert_eq!(pending.len(), 1);
+        assert_eq!(retry.attempts, 1);
     });
 }
 

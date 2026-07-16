@@ -358,8 +358,11 @@ pub(crate) fn configure_detached(_command: &mut Command) {
     let (in_job, limits) = current_windows_job_limits();
     let (_, limited_lifetime) = windows_creation_flags(in_job, limits);
     if limited_lifetime {
-        eprintln!(
-            "warning: the current Windows Job Object does not permit process breakaway; the shared Relay gateway lifetime is limited to the host job"
+        log::warn!(
+            target: "nemo_relay.bootstrap",
+            event = "gateway_lifetime_limited",
+            reason = "windows_job_breakaway_denied";
+            "The shared gateway lifetime is limited to the host job"
         );
     }
 }
@@ -382,9 +385,12 @@ pub(crate) fn terminate_tree(child: &mut DetachedChild) {
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .status();
         if !status.is_ok_and(|status| status.success()) {
-            eprintln!(
-                "failed to terminate detached gateway process tree {} with taskkill",
-                child.id()
+            log::error!(
+                target: "nemo_relay.bootstrap",
+                event = "gateway_cleanup_failed",
+                process_id = child.id(),
+                reason = "taskkill_failed";
+                "Detached gateway process cleanup failed"
             );
             return;
         }

@@ -1480,6 +1480,7 @@ fn hook_write_helpers_cover_toml_escaping() {
 #[cfg(unix)]
 #[test]
 fn exit_code_preserves_normal_and_shell_wrapped_codes() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let status = std::process::Command::new("/bin/sh")
         .args(["-c", "exit 7"])
         .status()
@@ -1497,8 +1498,10 @@ fn exit_code_preserves_normal_and_shell_wrapped_codes() {
 // Windows `.cmd` argv delivery is covered independently by `agent_process_tests`.
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn run_starts_gateway_injects_env_and_returns_agent_exit_code() {
     let temp = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let config = temp.path().join("config.toml");
     std::fs::write(&config, "[upstream]\n").unwrap();
     let output = temp.path().join("env.txt");
@@ -1674,8 +1677,10 @@ async fn wait_for_health_reports_unready_gateway() {
 
 #[cfg(unix)]
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
     let temp = tempfile::tempdir().unwrap();
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let wrapper_pid_path = temp.path().join("wrapper.pid");
     let descendant_pid_path = temp.path().join("descendant.pid");
     let script = temp.path().join("test-agent");
@@ -1744,8 +1749,10 @@ async fn gateway_failure_terminates_the_agent_and_restores_private_state() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let _env = EnvScope::without_managed_bootstrap();
     let _ = nemo_relay::plugin::clear_plugin_configuration();
     let resolved = ResolvedConfig {
@@ -1791,8 +1798,10 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
     let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let _env = EnvScope::without_managed_bootstrap();
     let _ = nemo_relay::plugin::clear_plugin_configuration();
     let temp = tempfile::tempdir().unwrap();

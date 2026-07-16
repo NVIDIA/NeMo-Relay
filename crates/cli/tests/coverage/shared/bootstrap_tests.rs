@@ -10,6 +10,7 @@ use std::process::Command;
 
 #[test]
 fn failed_reaper_spawn_terminates_and_reaps_the_retained_child() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let child = Command::new(std::env::current_exe().unwrap())
         .arg("--list")
         .stdout(Stdio::null())

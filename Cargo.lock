@@ -1631,6 +1631,7 @@ name = "nemo-relay-adaptive"
 version = "0.6.0"
 dependencies = [
  "chrono",
+ "log",
  "nemo-relay",
  "redis",
  "regex",
@@ -1667,6 +1668,7 @@ dependencies = [
  "hyper-util",
  "jsonschema",
  "libc",
+ "log",
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
@@ -1741,6 +1743,7 @@ name = "nemo-relay-pii-redaction"
 version = "0.6.0"
 dependencies = [
  "futures",
+ "log",
  "nemo-relay",
  "opentelemetry_sdk",
  "regex",

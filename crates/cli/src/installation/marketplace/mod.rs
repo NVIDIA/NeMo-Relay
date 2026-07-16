@@ -141,6 +141,14 @@ pub(crate) fn install(
     host: impl MarketplaceHost,
     command: InstallRequest,
 ) -> Result<ExitCode, CliError> {
+    let host_name = host.install_arg();
+    log::info!(
+        target: "nemo_relay.installation",
+        event = "installation_started",
+        host = host_name,
+        dry_run = command.dry_run;
+        "Plugin installation started"
+    );
     let operation_lock_dir = if command.dry_run {
         PathBuf::new()
     } else {
@@ -156,13 +164,37 @@ pub(crate) fn install(
         dry_run: command.dry_run,
         skip_doctor: command.skip_doctor,
     };
-    run_for_host(host, &options, install_host)
+    let result = run_for_host(host, &options, install_host);
+    match &result {
+        Ok(_) => log::info!(
+            target: "nemo_relay.installation",
+            event = "installation_completed",
+            host = host_name;
+            "Plugin installation completed"
+        ),
+        Err(error) => log::error!(
+            target: "nemo_relay.installation",
+            event = "installation_failed",
+            host = host_name,
+            error_kind = error.log_kind();
+            "Plugin installation failed"
+        ),
+    }
+    result
 }
 
 pub(crate) fn uninstall(
     host: impl MarketplaceHost,
     command: UninstallRequest,
 ) -> Result<ExitCode, CliError> {
+    let host_name = host.install_arg();
+    log::info!(
+        target: "nemo_relay.installation",
+        event = "uninstallation_started",
+        host = host_name,
+        dry_run = command.dry_run;
+        "Plugin uninstallation started"
+    );
     let operation_lock_dir = if command.dry_run {
         PathBuf::new()
     } else {
@@ -178,7 +210,23 @@ pub(crate) fn uninstall(
         dry_run: command.dry_run,
         skip_doctor: true,
     };
-    run_for_host(host, &options, uninstall_host)
+    let result = run_for_host(host, &options, uninstall_host);
+    match &result {
+        Ok(_) => log::info!(
+            target: "nemo_relay.installation",
+            event = "uninstallation_completed",
+            host = host_name;
+            "Plugin uninstallation completed"
+        ),
+        Err(error) => log::error!(
+            target: "nemo_relay.installation",
+            event = "uninstallation_failed",
+            host = host_name,
+            error_kind = error.log_kind();
+            "Plugin uninstallation failed"
+        ),
+    }
+    result
 }
 
 pub(crate) fn plugin_doctor_options(install_dir: Option<PathBuf>) -> PluginInstallOptions {
@@ -1039,10 +1087,16 @@ fn uninstall_host_with_setup_override(
         plugin_setup_installed: true,
     });
     layout.validate_persisted_state(&state)?;
-    if let Err(error) = require_relay(options, runner)
+    if let Err(_error) = require_relay(options, runner)
         .and_then(|relay| validate_relay_hook_forward(&relay, options, runner))
     {
-        eprintln!("warning: skipping nemo-relay validation during uninstall: {error}");
+        log::warn!(
+            target: "nemo_relay.installation",
+            event = "installation_validation_skipped",
+            operation = "uninstall",
+            error_kind = "validation";
+            "Relay validation was skipped during uninstall"
+        );
     }
     let mut state = state;
     if force_plugin_setup_uninstall && !state.plugin_setup_installed {
@@ -1530,19 +1584,31 @@ impl Drop for ReplacementGenerationLock {
                 match fs::metadata(retirement.marker_path()) {
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
                     Err(error) => {
-                        eprintln!(
-                            "warning: retaining MCP generation lock {} because marker {} could not be inspected: {error}",
-                            self.lock_path.display(),
-                            retirement.marker_path().display()
+                        let lock_path = self.lock_path.display().to_string();
+                        let marker_path = retirement.marker_path().display().to_string();
+                        let error_kind = error.kind().to_string();
+                        log::warn!(
+                            target: "nemo_relay.installation",
+                            event = "installation_cleanup_deferred",
+                            component = "mcp_generation_lock",
+                            path = lock_path.as_str(),
+                            marker_path = marker_path.as_str(),
+                            error_kind = error_kind.as_str();
+                            "An MCP generation lock was retained because its marker could not be inspected"
                         );
                         false
                     }
                     Ok(_) => match retirement.visible_marker_uses_transaction_lock() {
                         Ok(referenced) => !referenced,
-                        Err(error) => {
-                            eprintln!(
-                                "warning: retaining MCP generation lock {} because its marker reference could not be verified: {error}",
-                                self.lock_path.display()
+                        Err(_error) => {
+                            let lock_path = self.lock_path.display().to_string();
+                            log::warn!(
+                                target: "nemo_relay.installation",
+                                event = "installation_cleanup_deferred",
+                                component = "mcp_generation_lock",
+                                path = lock_path.as_str(),
+                                error_kind = "marker_reference";
+                                "An MCP generation lock was retained because its marker reference could not be verified"
                             );
                             false
                         }
@@ -1708,9 +1774,10 @@ impl ForceInstallSnapshot {
             match fs::remove_dir_all(&self.backup_marketplace_root) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => eprintln!(
-                    "warning: failed to remove replaced marketplace backup {}: {error}",
-                    self.backup_marketplace_root.display()
+                Err(error) => log_cleanup_failure(
+                    "marketplace_backup",
+                    &self.backup_marketplace_root,
+                    error.kind(),
                 ),
             }
         }
@@ -1720,10 +1787,9 @@ impl ForceInstallSnapshot {
             match fs::remove_dir_all(backup_plugin_root) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => eprintln!(
-                    "warning: failed to remove replaced plugin backup {}: {error}",
-                    backup_plugin_root.display()
-                ),
+                Err(error) => {
+                    log_cleanup_failure("plugin_backup", backup_plugin_root, error.kind())
+                }
             }
         }
         drop(self.generation_retirement.take());
@@ -1737,11 +1803,21 @@ fn remove_generation_lock_best_effort(path: &Path) {
     match fs::remove_file(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => eprintln!(
-            "warning: failed to remove retired MCP generation lock {}: {error}",
-            path.display()
-        ),
+        Err(error) => log_cleanup_failure("mcp_generation_lock", path, error.kind()),
     }
+}
+
+fn log_cleanup_failure(component: &'static str, path: &Path, error_kind: std::io::ErrorKind) {
+    let path = path.display().to_string();
+    let error_kind = error_kind.to_string();
+    log::warn!(
+        target: "nemo_relay.installation",
+        event = "installation_cleanup_failed",
+        component = component,
+        path = path.as_str(),
+        error_kind = error_kind.as_str();
+        "Installation cleanup failed"
+    );
 }
 
 fn generation_lock_is_absent(path: &Path) -> bool {

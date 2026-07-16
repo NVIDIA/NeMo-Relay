@@ -112,16 +112,47 @@ impl TransparentRun {
         if self.dry_run {
             return Ok(ExitCode::SUCCESS);
         }
+        let agent = self.agent.as_arg();
+        log::info!(
+            target: "nemo_relay.agent",
+            event = "agent_launch_started",
+            agent = agent;
+            "Agent launch started"
+        );
         self.prepared
             .print_live_status(self.agent, &self.gateway_url, &self.resolved);
-        execute_live_run_with_dynamic(
+        let result = execute_live_run_with_dynamic(
             self.listener,
             self.resolved.gateway,
             self.dynamic_plugins,
             &self.gateway_url,
             self.prepared,
         )
-        .await
+        .await;
+        match &result {
+            Ok(code) if *code == ExitCode::SUCCESS => log::info!(
+                target: "nemo_relay.agent",
+                event = "agent_exited",
+                agent = agent,
+                outcome = "success";
+                "Agent exited"
+            ),
+            Ok(_) => log::warn!(
+                target: "nemo_relay.agent",
+                event = "agent_exited",
+                agent = agent,
+                outcome = "failure";
+                "Agent exited unsuccessfully"
+            ),
+            Err(error) => log::error!(
+                target: "nemo_relay.agent",
+                event = "agent_launch_failed",
+                agent = agent,
+                error_kind = error.log_kind();
+                "Agent launch failed"
+            ),
+        }
+        result
     }
 }
 

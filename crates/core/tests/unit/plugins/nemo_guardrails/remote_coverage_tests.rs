@@ -707,6 +707,7 @@ async fn remote_execute_reports_non_stream_success_http_errors_and_invalid_json(
         response["choices"][0]["message"]["content"],
         json!("guarded")
     );
+    assert_eq!(success.access_state.load(Ordering::Acquire), 2);
 
     let invalid_json = runtime_with_endpoint(spawn_http_response(
         "200 OK",
@@ -717,6 +718,7 @@ async fn remote_execute_reports_non_stream_success_http_errors_and_invalid_json(
         invalid_json.execute(simple_chat_request(), false).await,
         "failed to parse remote response JSON",
     );
+    assert_eq!(invalid_json.access_state.load(Ordering::Acquire), 2);
 
     let http_error = runtime_with_endpoint(spawn_http_response(
         "502 Bad Gateway",
@@ -727,6 +729,7 @@ async fn remote_execute_reports_non_stream_success_http_errors_and_invalid_json(
         http_error.execute(simple_chat_request(), false).await,
         "status 502",
     );
+    assert_eq!(http_error.access_state.load(Ordering::Acquire), 1);
 }
 
 #[tokio::test]
@@ -748,6 +751,7 @@ async fn remote_execute_transport_and_stream_status_errors_are_reported() {
         runtime.execute(simple_chat_request(), false).await,
         "remote request failed",
     );
+    assert_eq!(runtime.access_state.load(Ordering::Acquire), 1);
     assert_flow_error_contains(
         runtime.execute_stream(simple_chat_request()).await,
         "remote stream request failed",

@@ -908,12 +908,19 @@ fn register_plugin_with_owner(
     }
     let registration_id = NEXT_PLUGIN_REGISTRATION_ID.fetch_add(1, Ordering::Relaxed);
     guard.insert(
-        plugin_kind,
+        plugin_kind.clone(),
         RegisteredPlugin {
             registration_id,
             owner,
             plugin,
         },
+    );
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_registered",
+        plugin_kind = plugin_kind.as_str(),
+        registration_id = registration_id;
+        "Plugin kind registered"
     );
     Ok(registration_id)
 }
@@ -971,10 +978,19 @@ pub fn deregister_plugin(plugin_kind: &str) -> bool {
 }
 
 pub(crate) fn deregister_plugin_checked(plugin_kind: &str) -> Result<bool> {
-    PLUGIN_HANDLERS
+    let removed = PLUGIN_HANDLERS
         .write()
         .map(|mut guard| guard.remove(plugin_kind).is_some())
-        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))
+        .map_err(|err| PluginError::Internal(format!("plugin registry lock poisoned: {err}")))?;
+    if removed {
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_deregistered",
+            plugin_kind = plugin_kind;
+            "Plugin kind deregistered"
+        );
+    }
+    Ok(removed)
 }
 
 pub(crate) fn deregister_plugin_registration_checked(
@@ -987,6 +1003,13 @@ pub(crate) fn deregister_plugin_registration_checked(
     match guard.get(plugin_kind) {
         Some(plugin) if plugin.registration_id == expected_registration_id => {
             guard.remove(plugin_kind);
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_deregistered",
+                plugin_kind = plugin_kind,
+                registration_id = expected_registration_id;
+                "Plugin kind deregistered"
+            );
             Ok(PluginDeregistrationOutcome::Removed)
         }
         Some(_) => Ok(PluginDeregistrationOutcome::Replaced),
@@ -1373,6 +1396,17 @@ async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<ConfigReport> {
+    let enabled_component_count = config
+        .components
+        .iter()
+        .filter(|component| component.enabled)
+        .count();
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_configuration_activation_started",
+        component_count = enabled_component_count;
+        "Plugin configuration activation started"
+    );
     let report = validate_plugin_config(&config);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
@@ -1402,6 +1436,12 @@ async fn initialize_plugins_exact_inner(
         {
             Ok(registrations) => {
                 store_active_plugin_configuration(config, report.clone(), registrations)?;
+                log::info!(
+                    target: "nemo_relay.plugin",
+                    event = "plugin_configuration_replaced",
+                    component_count = enabled_component_count;
+                    "Plugin configuration replaced"
+                );
                 Ok(report)
             }
             Err(err) => match initialize_plugin_components_catching_panics(
@@ -1417,17 +1457,37 @@ async fn initialize_plugins_exact_inner(
                         previous_report,
                         registrations,
                     )?;
+                    log::warn!(
+                        target: "nemo_relay.plugin",
+                        event = "plugin_configuration_restored",
+                        recovery = "previous_configuration";
+                        "Plugin activation failed; previous configuration restored"
+                    );
                     Err(err)
                 }
-                Err(restore_err) => Err(PluginError::RegistrationFailed(format!(
-                    "{err}; previous plugin configuration could not be restored: {restore_err}"
-                ))),
+                Err(restore_err) => {
+                    log::error!(
+                        target: "nemo_relay.plugin",
+                        event = "plugin_rollback_failed",
+                        recovery = "previous_configuration";
+                        "Plugin activation failed and the previous configuration could not be restored"
+                    );
+                    Err(PluginError::RegistrationFailed(format!(
+                        "{err}; previous plugin configuration could not be restored: {restore_err}"
+                    )))
+                }
             },
         }
     } else {
         let registrations =
             initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
         store_active_plugin_configuration(config, report.clone(), registrations)?;
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_configuration_activated",
+            component_count = enabled_component_count;
+            "Plugin configuration activated"
+        );
         Ok(report)
     }
 }
@@ -1606,6 +1666,12 @@ pub fn clear_plugin_configuration() -> Result<()> {
         // Deregistration callbacks are single-use. If one failed, the process
         // can no longer prove that replacing configuration is safe.
         std::mem::forget(lease);
+        log::error!(
+            target: "nemo_relay.plugin",
+            event = "plugin_cleanup_failed",
+            callbacks_cleared = false;
+            "Plugin configuration cleanup was incomplete"
+        );
         return Err(PluginError::RegistrationFailed(format!(
             concat!(
                 "{}; plugin configuration mutations are disabled for this process because ",
@@ -1617,6 +1683,13 @@ pub fn clear_plugin_configuration() -> Result<()> {
                 .map(|error| error.to_string())
                 .unwrap_or_else(|| "plugin teardown was incomplete".into())
         )));
+    }
+    if outcome.result.is_ok() {
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_configuration_cleared";
+            "Plugin configuration cleared"
+        );
     }
     outcome.result
 }

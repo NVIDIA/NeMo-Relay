@@ -387,6 +387,15 @@ impl AtofExporter {
                     }
                 })?;
                 let file = open_file(&path, file_sink.mode)?;
+                log::info!(
+                    target: "nemo_relay.observability",
+                    event = "storage_access_validated",
+                    plugin_kind = "observability",
+                    exporter = "atof",
+                    resource_kind = "local_file",
+                    permission = "write";
+                    "ATOF storage access validated"
+                );
                 (Some(path), Some(BufWriter::new(file)), Vec::new())
             }
             AtofSinkConfig::Stream(stream_sink) => {
@@ -442,12 +451,30 @@ impl AtofExporter {
 
     /// Register this exporter globally under the given subscriber name.
     pub fn register(&self, name: &str) -> Result<()> {
-        register_subscriber(name, self.subscriber()).map_err(Into::into)
+        register_subscriber(name, self.subscriber()).map_err(AtofExporterError::from)?;
+        log::info!(
+            target: "nemo_relay.observability",
+            event = "exporter_registered",
+            exporter = "atof",
+            subscriber = name;
+            "ATOF exporter registered"
+        );
+        Ok(())
     }
 
     /// Deregister a global subscriber by name.
     pub fn deregister(&self, name: &str) -> Result<bool> {
-        deregister_subscriber(name).map_err(Into::into)
+        let removed = deregister_subscriber(name).map_err(AtofExporterError::from)?;
+        if removed {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "exporter_deregistered",
+                exporter = "atof",
+                subscriber = name;
+                "ATOF exporter deregistered"
+            );
+        }
+        Ok(removed)
     }
 
     /// Flush the underlying file and drain queued endpoint events.
@@ -480,12 +507,21 @@ impl AtofExporter {
         for endpoint in &state.endpoints {
             endpoint.flush();
         }
-        stored_failure_result(
+        let result = stored_failure_result(
             self.path
                 .as_deref()
                 .unwrap_or_else(|| Path::new("<stream>")),
             &state,
-        )
+        );
+        if result.is_ok() {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "exporter_shutdown",
+                exporter = "atof";
+                "ATOF exporter shut down"
+            );
+        }
+        result
     }
 
     /// Shut down the exporter by flushing buffered data and closing endpoints.
@@ -604,6 +640,8 @@ impl NdjsonBodyMessage {
 struct AtofEndpointWorker {
     sender: tokio::sync::mpsc::UnboundedSender<EndpointMessage>,
     timeout: Duration,
+    index: usize,
+    transport: AtofEndpointTransport,
 }
 
 impl AtofEndpointWorker {
@@ -616,7 +654,15 @@ impl AtofEndpointWorker {
         if self.sender.send(EndpointMessage::Flush(tx)).is_ok()
             && rx.recv_timeout(self.timeout).is_err()
         {
-            eprintln!("nemo_relay: timed out flushing ATOF endpoint");
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "endpoint_flush_failed",
+                exporter = "atof",
+                endpoint_index = self.index,
+                transport = self.transport.as_str(),
+                reason = "timeout";
+                "ATOF endpoint flush timed out"
+            );
         }
     }
 
@@ -625,7 +671,15 @@ impl AtofEndpointWorker {
         if self.sender.send(EndpointMessage::Close(tx)).is_ok()
             && rx.recv_timeout(self.timeout).is_err()
         {
-            eprintln!("nemo_relay: timed out closing ATOF endpoint");
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "endpoint_close_failed",
+                exporter = "atof",
+                endpoint_index = self.index,
+                transport = self.transport.as_str(),
+                reason = "timeout";
+                "ATOF endpoint close timed out"
+            );
         }
     }
 }
@@ -637,7 +691,6 @@ fn start_endpoint_workers(configs: &[AtofStreamSinkConfig]) -> Result<Vec<AtofEn
         match start_endpoint_worker(index, config.clone()) {
             Ok(worker) => workers.push(worker),
             Err(error) => {
-                eprintln!("nemo_relay: invalid ATOF endpoint[{index}]: {error}");
                 return Err(AtofExporterError::InvalidEndpoint(format!(
                     "endpoints[{index}]: {error}"
                 )));
@@ -653,7 +706,6 @@ fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndp
         return Ok(Vec::new());
     }
     let message = "ATOF streaming endpoints are not supported in this build".to_string();
-    eprintln!("nemo_relay: {message}");
     Err(AtofExporterError::InvalidEndpoint(message))
 }
 
@@ -661,14 +713,34 @@ fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndp
 fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<AtofEndpointWorker> {
     validate_endpoint_config(&config)?;
     let timeout = Duration::from_millis(config.timeout_millis);
+    let transport = config.transport;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     std::thread::Builder::new()
         .name(format!("nemo-relay-atof-endpoint-{index}"))
         .spawn(move || run_endpoint_worker(index, config, rx))
         .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
+    log::info!(
+        target: "nemo_relay.observability",
+        event = "endpoint_started",
+        exporter = "atof",
+        endpoint_index = index,
+        transport = transport.as_str();
+        "ATOF endpoint worker started"
+    );
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_access_pending",
+        plugin_kind = "observability",
+        resource_kind = "stream_endpoint",
+        resource_index = index,
+        permission = "write";
+        "Plugin resource access will be validated on first use"
+    );
     Ok(AtofEndpointWorker {
         sender: tx,
         timeout,
+        index,
+        transport,
     })
 }
 
@@ -752,8 +824,15 @@ fn run_endpoint_worker(
         .build()
     {
         Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] runtime failed: {error}");
+        Err(_) => {
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "endpoint_failed",
+                exporter = "atof",
+                endpoint_index = index,
+                reason = "runtime_initialization";
+                "ATOF endpoint runtime failed"
+            );
             return;
         }
     };
@@ -777,8 +856,16 @@ async fn run_http_post_endpoint(
         .default_headers(
             match resolved_header_map(&config.headers, &config.header_env) {
                 Ok(headers) => headers,
-                Err(error) => {
-                    eprintln!("nemo_relay: ATOF endpoint[{index}] disabled: {error}");
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.observability",
+                        event = "endpoint_disabled",
+                        exporter = "atof",
+                        endpoint_index = index,
+                        transport = "http_post",
+                        reason = "invalid_headers";
+                        "ATOF endpoint disabled"
+                    );
                     drain_closed(rx).await;
                     return;
                 }
@@ -787,12 +874,21 @@ async fn run_http_post_endpoint(
         .build()
     {
         Ok(client) => client,
-        Err(error) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] client build failed: {error}");
+        Err(_) => {
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "endpoint_disabled",
+                exporter = "atof",
+                endpoint_index = index,
+                transport = "http_post",
+                reason = "client_initialization";
+                "ATOF endpoint disabled"
+            );
             drain_closed(rx).await;
             return;
         }
     };
+    let mut access_validated = false;
     while let Some(message) = rx.recv().await {
         match message {
             EndpointMessage::Event(raw_json) => {
@@ -804,11 +900,31 @@ async fn run_http_post_endpoint(
                     .send()
                     .await;
                 match result {
-                    Ok(response) if response.status().is_success() => {}
-                    Ok(response) => log_http_error(index, "HTTP", response).await,
-                    Err(error) => {
-                        eprintln!("nemo_relay: ATOF endpoint[{index}] send failed: {error}")
+                    Ok(response) if response.status().is_success() => {
+                        if !access_validated {
+                            log::info!(
+                                target: "nemo_relay.observability",
+                                event = "endpoint_access_validated",
+                                plugin_kind = "observability",
+                                exporter = "atof",
+                                endpoint_index = index,
+                                transport = "http_post",
+                                permission = "write";
+                                "ATOF endpoint access validated"
+                            );
+                            access_validated = true;
+                        }
                     }
+                    Ok(response) => log_http_error(index, "http_post", response),
+                    Err(_) => log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "endpoint_delivery_failed",
+                        exporter = "atof",
+                        endpoint_index = index,
+                        transport = "http_post",
+                        reason = "request_failed";
+                        "ATOF endpoint delivery failed"
+                    ),
                 }
             }
             EndpointMessage::Flush(done) => {
@@ -829,10 +945,14 @@ async fn run_websocket_endpoint(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
     let mut pending = std::collections::VecDeque::new();
+    let mut retry = WebSocketRetryState::default();
     let mut socket = match connect_websocket(&config).await {
-        Ok(socket) => Some(socket),
-        Err(error) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] websocket startup failed: {error}");
+        Ok(socket) => {
+            retry.record_recovered(index);
+            Some(socket)
+        }
+        Err(_) => {
+            retry.record_failure(index);
             None
         }
     };
@@ -840,14 +960,20 @@ async fn run_websocket_endpoint(
         match message {
             EndpointMessage::Event(raw_json) => {
                 pending.push_back(endpoint_event_json(&config, raw_json));
-                let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
+                let _ =
+                    drain_websocket_pending(index, &config, &mut socket, &mut pending, &mut retry)
+                        .await;
             }
             EndpointMessage::Flush(done) => {
-                let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
+                let _ =
+                    drain_websocket_pending(index, &config, &mut socket, &mut pending, &mut retry)
+                        .await;
                 let _ = done.send(());
             }
             EndpointMessage::Close(done) => {
-                let _ = drain_websocket_pending(index, &config, &mut socket, &mut pending).await;
+                let _ =
+                    drain_websocket_pending(index, &config, &mut socket, &mut pending, &mut retry)
+                        .await;
                 if let Some(mut ws) = socket.take() {
                     let _ = ws.close(None).await;
                 }
@@ -863,22 +989,81 @@ type AtofWebSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 #[cfg(feature = "atof-streaming")]
+#[derive(Default)]
+struct WebSocketRetryState {
+    attempts: u64,
+    warning_emitted: bool,
+    access_validated: bool,
+}
+
+#[cfg(feature = "atof-streaming")]
+impl WebSocketRetryState {
+    fn record_failure(&mut self, index: usize) {
+        self.attempts = self.attempts.saturating_add(1);
+        if !self.warning_emitted {
+            log::warn!(
+                target: "nemo_relay.observability",
+                event = "endpoint_reconnecting",
+                exporter = "atof",
+                endpoint_index = index,
+                transport = "websocket";
+                "ATOF endpoint connection failed; reconnecting"
+            );
+            self.warning_emitted = true;
+        }
+    }
+
+    fn record_recovered(&mut self, index: usize) {
+        if self.attempts > 0 {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "endpoint_reconnected",
+                exporter = "atof",
+                endpoint_index = index,
+                transport = "websocket",
+                attempt_count = self.attempts + 1;
+                "ATOF endpoint reconnected"
+            );
+        }
+        if !self.access_validated {
+            log::info!(
+                target: "nemo_relay.observability",
+                event = "endpoint_access_validated",
+                plugin_kind = "observability",
+                exporter = "atof",
+                endpoint_index = index,
+                transport = "websocket",
+                permission = "connect";
+                "ATOF endpoint access validated"
+            );
+            self.access_validated = true;
+        }
+        self.attempts = 0;
+        self.warning_emitted = false;
+    }
+}
+
+#[cfg(feature = "atof-streaming")]
 async fn drain_websocket_pending(
     index: usize,
     config: &AtofEndpointConfig,
     socket: &mut Option<AtofWebSocket>,
     pending: &mut std::collections::VecDeque<String>,
+    retry: &mut WebSocketRetryState,
 ) -> bool {
     let timeout = Duration::from_millis(config.timeout_millis);
+    let attempts_before = retry.attempts;
     match tokio::time::timeout(
         timeout,
-        drain_websocket_pending_inner(index, config, socket, pending),
+        drain_websocket_pending_inner(index, config, socket, pending, retry),
     )
     .await
     {
         Ok(drained) => drained,
         Err(_) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] websocket drain timed out");
+            if retry.attempts == attempts_before {
+                retry.record_failure(index);
+            }
             false
         }
     }
@@ -890,15 +1075,17 @@ async fn drain_websocket_pending_inner(
     config: &AtofEndpointConfig,
     socket: &mut Option<AtofWebSocket>,
     pending: &mut std::collections::VecDeque<String>,
+    retry: &mut WebSocketRetryState,
 ) -> bool {
     while let Some(raw_json) = pending.front().cloned() {
         if socket.is_none() {
             match connect_websocket(config).await {
-                Ok(ws) => *socket = Some(ws),
-                Err(error) => {
-                    eprintln!(
-                        "nemo_relay: ATOF endpoint[{index}] websocket reconnect failed: {error}"
-                    );
+                Ok(ws) => {
+                    *socket = Some(ws);
+                    retry.record_recovered(index);
+                }
+                Err(_) => {
+                    retry.record_failure(index);
                     tokio::time::sleep(Duration::from_millis(50)).await;
                     continue;
                 }
@@ -917,8 +1104,8 @@ async fn drain_websocket_pending_inner(
             Ok(()) => {
                 pending.pop_front();
             }
-            Err(error) => {
-                eprintln!("nemo_relay: ATOF endpoint[{index}] websocket send failed: {error}");
+            Err(_) => {
+                retry.record_failure(index);
                 *socket = None;
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -962,8 +1149,16 @@ async fn run_ndjson_endpoint(
 ) {
     let client = match build_ndjson_client(&config) {
         Ok(client) => client,
-        Err(error) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] {error}");
+        Err(_) => {
+            log::error!(
+                target: "nemo_relay.observability",
+                event = "endpoint_disabled",
+                exporter = "atof",
+                endpoint_index = index,
+                transport = "ndjson",
+                reason = "client_initialization";
+                "ATOF endpoint disabled"
+            );
             drain_closed(rx).await;
             return;
         }
@@ -1036,10 +1231,21 @@ fn send_ndjson_event(
     body_tx: &tokio::sync::mpsc::UnboundedSender<NdjsonBodyMessage>,
     raw_json: String,
 ) {
-    if let Err(error) = body_tx.send(NdjsonBodyMessage::Event(
-        format!("{raw_json}\n").into_bytes(),
-    )) {
-        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON send failed: {error}");
+    if body_tx
+        .send(NdjsonBodyMessage::Event(
+            format!("{raw_json}\n").into_bytes(),
+        ))
+        .is_err()
+    {
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "endpoint_delivery_failed",
+            exporter = "atof",
+            endpoint_index = index,
+            transport = "ndjson",
+            reason = "body_channel_closed";
+            "ATOF endpoint delivery failed"
+        );
     }
 }
 
@@ -1050,7 +1256,15 @@ fn send_ndjson_flush(
     done: std_mpsc::Sender<()>,
 ) {
     if let Err(error) = body_tx.send(NdjsonBodyMessage::Flush(done)) {
-        eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON flush failed: {error}");
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "endpoint_flush_failed",
+            exporter = "atof",
+            endpoint_index = index,
+            transport = "ndjson",
+            reason = "body_channel_closed";
+            "ATOF endpoint flush failed"
+        );
         error.0.acknowledge_if_flush();
     }
 }
@@ -1063,15 +1277,44 @@ async fn finish_ndjson_upload(
     done: std_mpsc::Sender<()>,
 ) {
     match tokio::time::timeout(close_timeout, request).await {
-        Ok(Ok(Ok(response))) if response.status().is_success() => {}
-        Ok(Ok(Ok(response))) => log_http_error(index, "NDJSON HTTP", response).await,
-        Ok(Ok(Err(error))) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON upload failed: {error}")
-        }
-        Ok(Err(error)) => {
-            eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON task failed: {error}")
-        }
-        Err(_) => eprintln!("nemo_relay: ATOF endpoint[{index}] NDJSON close timed out"),
+        Ok(Ok(Ok(response))) if response.status().is_success() => log::info!(
+            target: "nemo_relay.observability",
+            event = "endpoint_access_validated",
+            plugin_kind = "observability",
+            exporter = "atof",
+            endpoint_index = index,
+            transport = "ndjson",
+            permission = "write";
+            "ATOF endpoint access validated"
+        ),
+        Ok(Ok(Ok(response))) => log_http_error(index, "ndjson", response),
+        Ok(Ok(Err(_))) => log::warn!(
+            target: "nemo_relay.observability",
+            event = "endpoint_delivery_failed",
+            exporter = "atof",
+            endpoint_index = index,
+            transport = "ndjson",
+            reason = "upload_failed";
+            "ATOF endpoint upload failed"
+        ),
+        Ok(Err(_)) => log::error!(
+            target: "nemo_relay.observability",
+            event = "endpoint_failed",
+            exporter = "atof",
+            endpoint_index = index,
+            transport = "ndjson",
+            reason = "task_failed";
+            "ATOF endpoint task failed"
+        ),
+        Err(_) => log::warn!(
+            target: "nemo_relay.observability",
+            event = "endpoint_close_failed",
+            exporter = "atof",
+            endpoint_index = index,
+            transport = "ndjson",
+            reason = "timeout";
+            "ATOF endpoint close timed out"
+        ),
     }
     let _ = done.send(());
 }
@@ -1155,30 +1398,17 @@ fn collision_free_key(object: &serde_json::Map<String, Json>, key: String) -> St
 }
 
 #[cfg(feature = "atof-streaming")]
-async fn log_http_error(index: usize, label: &str, response: reqwest::Response) {
+fn log_http_error(index: usize, transport: &str, response: reqwest::Response) {
     let status = response.status();
-    match response.text().await {
-        Ok(body) if !body.trim().is_empty() => eprintln!(
-            "nemo_relay: ATOF endpoint[{index}] {label} status {status}: {}",
-            truncate_log_body(&body)
-        ),
-        Ok(_) => eprintln!("nemo_relay: ATOF endpoint[{index}] {label} status {status}"),
-        Err(error) => eprintln!(
-            "nemo_relay: ATOF endpoint[{index}] {label} status {status}; failed to read response body: {error}"
-        ),
-    }
-}
-
-#[cfg(feature = "atof-streaming")]
-fn truncate_log_body(body: &str) -> String {
-    const LIMIT: usize = 1024;
-    let trimmed = body.trim();
-    if trimmed.chars().count() <= LIMIT {
-        return trimmed.to_string();
-    }
-    let mut truncated = trimmed.chars().take(LIMIT).collect::<String>();
-    truncated.push_str("... <truncated>");
-    truncated
+    log::warn!(
+        target: "nemo_relay.observability",
+        event = "endpoint_delivery_failed",
+        exporter = "atof",
+        endpoint_index = index,
+        transport = transport,
+        status = status.as_u16();
+        "ATOF endpoint returned an unsuccessful status"
+    );
 }
 
 // ---------------------------------------------------------------------------

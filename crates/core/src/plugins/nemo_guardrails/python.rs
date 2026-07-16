@@ -6,7 +6,7 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::thread;
 use std::time::Duration;
@@ -368,10 +368,17 @@ struct LocalGuardrailsWorker {
     waiters: Arc<Mutex<HashMap<String, std_mpsc::Sender<WorkerEnvelope>>>>,
     stream_events: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<WorkerEnvelope>>>>,
     next_id: AtomicU64,
+    shutdown_started: AtomicBool,
 }
 
 impl LocalGuardrailsWorker {
     fn start(config: &NeMoGuardrailsConfig) -> PluginResult<Arc<Self>> {
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_starting",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker is starting"
+        );
         let python = python_executable(config);
         let mut command = Command::new(&python);
         command
@@ -407,9 +414,24 @@ impl LocalGuardrailsWorker {
             waiters: Arc::new(Mutex::new(HashMap::new())),
             stream_events: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
+            shutdown_started: AtomicBool::new(false),
         });
         worker.spawn_reader(stdout);
         worker.initialize(config)?;
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_validated",
+            plugin_kind = "nemo_guardrails",
+            resource_kind = "python_worker",
+            permission = "execute";
+            "Plugin resource access validated"
+        );
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_connected",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker connected"
+        );
         Ok(worker)
     }
 
@@ -477,6 +499,13 @@ impl LocalGuardrailsWorker {
                     FlowError::Internal(format!("worker response channel closed: {err}"))
                 })?,
             Err(_) => {
+                log::error!(
+                    target: "nemo_relay.worker",
+                    event = "worker_failed",
+                    plugin_id = "nemo_guardrails",
+                    reason = "request_timeout";
+                    "NeMo Guardrails local worker request timed out"
+                );
                 self.shutdown();
                 return Err(FlowError::Internal(format!(
                     "worker request timed out after {} seconds",
@@ -572,14 +601,45 @@ impl LocalGuardrailsWorker {
     }
 
     fn shutdown(&self) {
+        if self.shutdown_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_stopping",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker is stopping"
+        );
         let writer = self.writer.lock().ok().and_then(|mut writer| writer.take());
         if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            if child.kill().is_err() {
+                log::warn!(
+                    target: "nemo_relay.worker",
+                    event = "worker_cleanup_failed",
+                    plugin_id = "nemo_guardrails",
+                    operation = "kill";
+                    "NeMo Guardrails local worker cleanup failed"
+                );
+            }
+            if child.wait().is_err() {
+                log::warn!(
+                    target: "nemo_relay.worker",
+                    event = "worker_cleanup_failed",
+                    plugin_id = "nemo_guardrails",
+                    operation = "wait";
+                    "NeMo Guardrails local worker cleanup failed"
+                );
+            }
         }
         if let Some(writer) = writer {
             writer.join();
         }
+        log::info!(
+            target: "nemo_relay.worker",
+            event = "worker_stopped",
+            plugin_id = "nemo_guardrails";
+            "NeMo Guardrails local worker stopped"
+        );
     }
 }
 

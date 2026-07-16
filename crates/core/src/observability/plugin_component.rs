@@ -21,6 +21,8 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+#[cfg(feature = "object-store")]
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(any(feature = "otel", feature = "openinference", feature = "object-store"))]
 use std::time::Duration;
@@ -908,9 +910,19 @@ fn build_atif_storage(
     index: usize,
     config: &AtifStorageConfig,
 ) -> PluginResult<Arc<AtifRemoteStorage>> {
-    AtifRemoteStorage::from_config(index, config)
+    let storage = AtifRemoteStorage::from_config(index, config)
         .map(Arc::new)
-        .map_err(observability_registration_error)
+        .map_err(observability_registration_error)?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_access_pending",
+        plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+        resource_kind = storage.resource_kind,
+        resource_index = index,
+        permission = "write";
+        "Plugin resource access will be validated on first use"
+    );
+    Ok(storage)
 }
 
 #[cfg(not(feature = "object-store"))]
@@ -928,10 +940,22 @@ fn register_opentelemetry(
     section: OtlpSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    let endpoint_configured = section.endpoint.is_some();
     let subscriber = Arc::new(
         OpenTelemetrySubscriber::new(build_otel_config(section)?)
             .map_err(observability_registration_error)?,
     );
+    if endpoint_configured {
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_pending",
+            plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+            resource_kind = "otlp_endpoint",
+            exporter = "opentelemetry",
+            permission = "write";
+            "Plugin resource access will be validated during export"
+        );
+    }
     ctx.register_subscriber("opentelemetry", subscriber.subscriber())?;
     ctx.add_registration(PluginRegistration::new(
         "observability",
@@ -960,10 +984,22 @@ fn register_openinference(
     section: OtlpSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    let endpoint_configured = section.endpoint.is_some();
     let subscriber = Arc::new(
         OpenInferenceSubscriber::new(build_openinference_config(section)?)
             .map_err(observability_registration_error)?,
     );
+    if endpoint_configured {
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_pending",
+            plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+            resource_kind = "otlp_endpoint",
+            exporter = "openinference",
+            permission = "write";
+            "Plugin resource access will be validated during export"
+        );
+    }
     ctx.register_subscriber("openinference", subscriber.subscriber())?;
     ctx.add_registration(PluginRegistration::new(
         "observability",
@@ -999,6 +1035,7 @@ struct AtifDispatcher {
     /// Per-sink last error. A sink that recorded an error is skipped on
     /// subsequent trajectories; other sinks continue to receive writes.
     sink_errors: HashMap<SinkLabel, String>,
+    validated_sinks: HashSet<SinkLabel>,
 }
 
 struct ManagedAtifExporter {
@@ -1098,6 +1135,7 @@ impl AtifDispatcher {
             scope_subscribers: HashMap::new(),
             fatal_error: None,
             sink_errors: HashMap::new(),
+            validated_sinks: HashSet::new(),
         }
     }
 
@@ -1219,7 +1257,33 @@ impl AtifDispatcher {
         results: Vec<(SinkLabel, std::io::Result<()>)>,
     ) -> Option<(Uuid, String)> {
         for (label, result) in results {
-            if let Err(err) = result {
+            if result.is_ok()
+                && label == SinkLabel::Local
+                && self.validated_sinks.insert(label.clone())
+            {
+                log::info!(
+                    target: "nemo_relay.observability",
+                    event = "storage_access_validated",
+                    plugin_kind = "observability",
+                    exporter = "atif",
+                    resource_kind = "local_file",
+                    permission = "write";
+                    "ATIF storage access validated"
+                );
+            } else if let Err(err) = result {
+                match &label {
+                    SinkLabel::Local => log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "storage_access_failed",
+                        plugin_kind = "observability",
+                        exporter = "atif",
+                        resource_kind = "local_file",
+                        permission = "write",
+                        reason = "write_failed";
+                        "ATIF storage access failed"
+                    ),
+                    SinkLabel::Remote(_) => {}
+                }
                 self.sink_errors.insert(label, err.to_string());
             }
         }
@@ -2665,6 +2729,9 @@ struct AtifRemoteStorage;
 struct AtifRemoteStorage {
     sender: std::sync::mpsc::Sender<AtifUploadRequest>,
     key_prefix: String,
+    index: usize,
+    resource_kind: &'static str,
+    access_state: AtomicU8,
 }
 
 #[cfg(feature = "object-store")]
@@ -2827,6 +2894,9 @@ impl AtifRemoteStorage {
             Ok(Ok(())) => Ok(Self {
                 sender: req_tx,
                 key_prefix: String::new(),
+                index,
+                resource_kind: "http_endpoint",
+                access_state: AtomicU8::new(0),
             }),
             Ok(Err(err)) => Err(err),
             Err(_) => Err(std::io::Error::other(
@@ -2904,6 +2974,9 @@ impl AtifRemoteStorage {
             Ok(Ok(())) => Ok(Self {
                 sender: req_tx,
                 key_prefix,
+                index,
+                resource_kind: "s3_bucket",
+                access_state: AtomicU8::new(0),
             }),
             Ok(Err(err)) => Err(err),
             Err(_) => Err(std::io::Error::other(
@@ -2924,9 +2997,41 @@ impl AtifRemoteStorage {
                 reply: reply_tx,
             })
             .map_err(|_| std::io::Error::other("ATIF storage thread is not running"))?;
-        reply_rx
+        let result = reply_rx
             .recv()
-            .map_err(|_| std::io::Error::other("ATIF storage thread dropped the upload reply"))?
+            .map_err(|_| std::io::Error::other("ATIF storage thread dropped the upload reply"))?;
+        match &result {
+            Ok(()) => {
+                if self.access_state.swap(2, Ordering::AcqRel) != 2 {
+                    log::info!(
+                        target: "nemo_relay.observability",
+                        event = "storage_access_validated",
+                        plugin_kind = "observability",
+                        exporter = "atif",
+                        storage_index = self.index,
+                        resource_kind = self.resource_kind,
+                        permission = "write";
+                        "ATIF storage access validated"
+                    );
+                }
+            }
+            Err(_) => {
+                if self.access_state.swap(1, Ordering::AcqRel) != 1 {
+                    log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "storage_access_failed",
+                        plugin_kind = "observability",
+                        exporter = "atif",
+                        storage_index = self.index,
+                        resource_kind = self.resource_kind,
+                        permission = "write",
+                        reason = "upload_failed";
+                        "ATIF storage access failed"
+                    );
+                }
+            }
+        }
+        result
     }
 }
 

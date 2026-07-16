@@ -1009,6 +1009,7 @@ fn corrupt_generation_fence(path: &Path, corruption: &str) {
 struct CrossProcessLockHolder {
     child: Option<Child>,
     release: PathBuf,
+    _cwd: crate::test_support::CwdTestScope,
 }
 
 impl CrossProcessLockHolder {
@@ -1018,6 +1019,7 @@ impl CrossProcessLockHolder {
         global_lock_dir: Option<&Path>,
         synchronization_dir: &Path,
     ) -> Self {
+        let cwd = crate::test_support::CwdTestScope::locked();
         let ready = synchronization_dir.join("ready");
         let release = synchronization_dir.join("release");
         let mut command = Command::new(std::env::current_exe().unwrap());
@@ -1053,6 +1055,7 @@ impl CrossProcessLockHolder {
         Self {
             child: Some(child),
             release,
+            _cwd: cwd,
         }
     }
 

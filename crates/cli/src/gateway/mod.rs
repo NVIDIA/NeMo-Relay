@@ -99,9 +99,14 @@ async fn run_managed_gateway(
         let session_id = prep.session_id.clone();
         let session_finish = prep.session_finish;
         let model = prep.model_name.as_deref().unwrap_or("<unknown>");
-        eprintln!(
-            "nemo-relay CLI gateway: bypassing managed LLM observability for Claude Code startup probe session={session_id} provider={} model={model}",
-            prep.provider_name
+        log::warn!(
+            target: "nemo_relay.gateway",
+            event = "observability_bypassed",
+            session_id = session_id.as_str(),
+            provider = prep.provider_name.as_str(),
+            model = model,
+            reason = "startup_probe";
+            "Managed observability was bypassed for a startup probe"
         );
         state
             .sessions
@@ -774,9 +779,12 @@ fn effective_dispatch_request(
     } else {
         match serde_json::to_vec(&request.content) {
             Ok(serialized) => Bytes::from(serialized),
-            Err(error) => {
-                eprintln!(
-                    "nemo-relay CLI gateway: failed to serialize rewritten LLM request body; forwarding original request: {error}"
+            Err(_) => {
+                log::warn!(
+                    target: "nemo_relay.gateway",
+                    event = "request_rewrite_fallback",
+                    reason = "serialization_failed";
+                    "The original upstream request was retained after rewrite serialization failed"
                 );
                 return EffectiveUpstreamRequest {
                     body_bytes: body_bytes.clone(),

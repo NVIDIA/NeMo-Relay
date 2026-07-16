@@ -55,6 +55,11 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
 // top-level server flags so transparent launch can share config parsing with daemon startup.
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
     let cli = Cli::parse();
+    let command_name = cli
+        .command
+        .as_ref()
+        .map(Command::log_name)
+        .unwrap_or("serve");
 
     let initialize_logging = match cli.command.as_ref() {
         Some(command) => !command.skips_logging(),
@@ -82,10 +87,48 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
         None
     };
 
-    match cli.command {
+    log::info!(
+        target: "nemo_relay.cli",
+        event = "command_started",
+        command = command_name;
+        "CLI command started"
+    );
+
+    let result = match cli.command {
         Some(command) => run_command(command, &cli.server).await,
         None => run_default(&cli.server, bootstrap_shutdown_token).await,
+    };
+    match &result {
+        Ok(code) if *code == ExitCode::SUCCESS => log::info!(
+            target: "nemo_relay.cli",
+            event = "command_completed",
+            command = command_name,
+            outcome = "success";
+            "CLI command completed"
+        ),
+        Ok(_) => log::warn!(
+            target: "nemo_relay.cli",
+            event = "command_completed",
+            command = command_name,
+            outcome = "nonzero_exit";
+            "CLI command completed with a non-zero exit status"
+        ),
+        Err(error) if error.guardrail_rejection_reason().is_some() => log::warn!(
+            target: "nemo_relay.cli",
+            event = "command_rejected",
+            command = command_name,
+            error_kind = error.log_kind();
+            "CLI command was rejected by policy"
+        ),
+        Err(error) => log::error!(
+            target: "nemo_relay.cli",
+            event = "command_failed",
+            command = command_name,
+            error_kind = error.log_kind();
+            "CLI command failed"
+        ),
     }
+    result
 }
 
 async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, error::CliError> {

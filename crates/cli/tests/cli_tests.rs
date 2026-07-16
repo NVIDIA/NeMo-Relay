@@ -53,6 +53,37 @@ fn toml_basic_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+fn write_jsonl_logging_config(temp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let config_path = temp.join("logging.toml");
+    let log_path = temp.join("operational.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"[logging]
+level = "info"
+stderr_format = "jsonl"
+
+[[logging.sinks]]
+path = {}
+level = "info"
+format = "jsonl"
+queue_capacity = 64
+"#,
+            toml_basic_string(log_path.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    (config_path, log_path)
+}
+
+fn read_jsonl_records(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
     write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
 }
@@ -222,6 +253,79 @@ fn cli_version_exits_successfully() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("nemo-relay "));
+}
+
+#[test]
+fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secrets() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config_path, log_path) = write_jsonl_logging_config(temp.path());
+    let secret = "NEMO_RELAY_SECRET_SENTINEL_7a91";
+    let output = Command::new(gateway_bin())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_TEST_SECRET", secret)
+        .args(["--log-config-path"])
+        .arg(&config_path)
+        .args(["agents", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    assert!(!contents.contains(secret));
+    let records = read_jsonl_records(&log_path);
+    for event in [
+        "logging_initialized",
+        "command_started",
+        "diagnostics_completed",
+        "command_completed",
+        "logging_shutdown_started",
+    ] {
+        assert!(
+            records.iter().any(|record| record["event"] == event),
+            "missing {event}: {records:?}"
+        );
+    }
+    assert!(
+        records
+            .iter()
+            .all(|record| { record["level"] != "debug" && record["level"] != "trace" })
+    );
+}
+
+#[test]
+fn cli_logs_final_failure_before_shutdown_and_preserves_user_error() {
+    let temp = tempfile::tempdir().unwrap();
+    let (config_path, log_path) = write_jsonl_logging_config(temp.path());
+    let secret = "NEMO_RELAY_ARGV_SECRET_SENTINEL_2c48";
+    let catalog = temp.path().join(format!("{secret}.json"));
+    std::fs::write(&catalog, format!(r#"{{"secret":"{secret}"}}"#)).unwrap();
+    let output = Command::new(gateway_bin())
+        .args(["--log-config-path"])
+        .arg(&config_path)
+        .args(["model-pricing", "validate"])
+        .arg(&catalog)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid model pricing catalog"));
+    let contents = std::fs::read_to_string(&log_path).unwrap();
+    assert!(!contents.contains(secret));
+    let records = read_jsonl_records(&log_path);
+    let failed = records
+        .iter()
+        .position(|record| record["event"] == "command_failed")
+        .expect("command_failed record");
+    let shutdown = records
+        .iter()
+        .position(|record| record["event"] == "logging_shutdown_started")
+        .expect("logging_shutdown_started record");
+    assert!(failed < shutdown);
+    assert_eq!(records[failed]["target"], "nemo_relay.cli");
+    assert_eq!(records[failed]["level"], "error");
+    assert_eq!(records[failed]["fields"]["command"], "model_pricing");
 }
 
 #[test]

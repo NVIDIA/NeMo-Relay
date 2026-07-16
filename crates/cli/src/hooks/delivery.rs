@@ -132,8 +132,26 @@ fn capture_generation_guard(
 }
 
 fn handle_hook_error(error: CliError, fail_closed: bool) -> Result<(), CliError> {
-    eprintln!("nemo-relay hook forward failed: {error}");
-    if fail_closed { Err(error) } else { Ok(()) }
+    if fail_closed {
+        log::error!(
+            target: "nemo_relay.hook",
+            event = "hook_delivery_failed",
+            mode = "fail_closed",
+            error_kind = error.log_kind();
+            "Hook delivery failed"
+        );
+        Err(error)
+    } else {
+        log::warn!(
+            target: "nemo_relay.hook",
+            event = "hook_delivery_failed",
+            mode = "fail_open",
+            error_kind = error.log_kind();
+            "Hook delivery failed open"
+        );
+        eprintln!("nemo-relay hook forward failed: {error}");
+        Ok(())
+    }
 }
 
 // Reads the native hook payload from stdin and normalizes empty payloads to JSON object syntax.

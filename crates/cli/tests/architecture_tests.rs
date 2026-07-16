@@ -255,6 +255,156 @@ fn all_target_is_command_only() {
     }
 }
 
+const OPERATIONAL_LOG_TARGETS: &[&str] = &[
+    "nemo_relay.logging",
+    "nemo_relay.runtime",
+    "nemo_relay.plugin",
+    "nemo_relay.worker",
+    "nemo_relay.observability",
+    "nemo_relay.cli",
+    "nemo_relay.configuration",
+    "nemo_relay.server",
+    "nemo_relay.gateway",
+    "nemo_relay.session",
+    "nemo_relay.agent",
+    "nemo_relay.bootstrap",
+    "nemo_relay.mcp",
+    "nemo_relay.hook",
+    "nemo_relay.installation",
+    "nemo_relay.diagnostics",
+];
+
+#[derive(Default)]
+struct LogMacroVisitor {
+    failures: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for LogMacroVisitor {
+    fn visit_macro(&mut self, item: &'ast syn::Macro) {
+        let path = item
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        if matches!(
+            path.as_str(),
+            "log::info" | "log::warn" | "log::error" | "log::debug" | "log::trace"
+        ) {
+            let tokens = item.tokens.to_string();
+            if matches!(path.as_str(), "log::debug" | "log::trace") {
+                self.failures
+                    .push(format!("production call site uses {path}!"));
+            }
+            let target = string_field(&tokens, "target :");
+            if target
+                .as_deref()
+                .is_none_or(|target| !OPERATIONAL_LOG_TARGETS.contains(&target))
+            {
+                self.failures.push(format!(
+                    "{path}! has an invalid or missing target: {tokens}"
+                ));
+            }
+            let event = string_field(&tokens, "event =");
+            if event.as_deref().is_none_or(|event| !is_snake_case(event)) {
+                self.failures
+                    .push(format!("{path}! has an invalid or missing event: {tokens}"));
+            }
+            for field in [
+                "error =",
+                "payload =",
+                "body =",
+                "headers =",
+                "credentials =",
+                "configuration =",
+                "environment =",
+                "argv =",
+            ] {
+                if tokens.contains(field) {
+                    self.failures.push(format!(
+                        "{path}! uses privacy-sensitive field {field:?}: {tokens}"
+                    ));
+                }
+            }
+        }
+        syn::visit::visit_macro(self, item);
+    }
+}
+
+fn string_field(tokens: &str, marker: &str) -> Option<String> {
+    let suffix = tokens.split_once(marker)?.1.trim_start();
+    let suffix = suffix.strip_prefix('"')?;
+    Some(suffix.split_once('"')?.0.to_string())
+}
+
+fn is_snake_case(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('_')
+        && !value.ends_with('_')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+#[test]
+fn operational_log_calls_follow_the_stable_contract() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for src in [
+        crate_root.join("src"),
+        crate_root.join("../core/src"),
+        crate_root.join("../adaptive/src"),
+        crate_root.join("../pii-redaction/src"),
+    ] {
+        for path in rust_files(&src) {
+            let source = fs::read_to_string(&path).unwrap();
+            let file = syn::parse_file(&source).unwrap();
+            let mut visitor = LogMacroVisitor::default();
+            visitor.visit_file(&file);
+            assert!(
+                visitor.failures.is_empty(),
+                "{}: {}",
+                path.display(),
+                visitor.failures.join("; ")
+            );
+        }
+    }
+}
+
+#[test]
+fn operational_direct_stderr_is_limited_to_emergency_and_ui_boundaries() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let allowed_cli = [
+        "src/lib.rs",
+        "src/commands/mod.rs",
+        "src/agents/codex/launch.rs",
+        "src/hooks/delivery.rs",
+        "src/hooks/response.rs",
+        "src/plugins/lifecycle/render.rs",
+    ];
+    for path in rust_files(&crate_root.join("src")) {
+        let source = fs::read_to_string(&path).unwrap();
+        if source.contains("eprintln!") {
+            let relative = path.strip_prefix(crate_root).unwrap();
+            assert!(
+                allowed_cli
+                    .iter()
+                    .any(|allowed| relative == Path::new(allowed)),
+                "operational direct stderr found in {}",
+                path.display()
+            );
+        }
+    }
+    for path in rust_files(&crate_root.join("../core/src")) {
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains("eprintln!"),
+            "core operational direct stderr found in {}",
+            path.display()
+        );
+    }
+}
+
 #[test]
 fn shared_runtime_subsystems_do_not_dispatch_host_variants() {
     let src = source_root();

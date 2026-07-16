@@ -85,6 +85,13 @@ impl LoggingRuntime {
         spdlog::log_crate_proxy().set_filter(None);
         log::set_max_level(log_level_filter(config.level));
 
+        log::info!(
+            target: "nemo_relay.logging",
+            event = "logging_initialized",
+            file_sink_count = config.sinks.len();
+            "Operational logging initialized"
+        );
+
         Ok(Self {
             root_relay_id,
             logger,
@@ -117,6 +124,11 @@ impl LoggingRuntime {
 
 impl Drop for LoggingRuntime {
     fn drop(&mut self) {
+        log::info!(
+            target: "nemo_relay.logging",
+            event = "logging_shutdown_started";
+            "Operational logging shutdown started"
+        );
         // Periodic flusher must stop before exit flush so it cannot race teardown.
         self.logger.set_flush_period(None);
         // `Logger::flush` only enqueues AsyncPoolSink work. `flush_on_exit` destroys the

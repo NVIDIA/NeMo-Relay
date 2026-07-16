@@ -126,10 +126,38 @@ pub(crate) enum Command {
 }
 
 impl Command {
+    pub(crate) fn log_name(&self) -> &'static str {
+        match self {
+            Self::Claude(_) => "claude",
+            Self::Codex(_) => "codex",
+            Self::Hermes(_) => "hermes",
+            Self::Mcp => "mcp",
+            Self::Config(_) => "config",
+            Self::Plugins(_) => "plugins",
+            Self::Install(_) => "install",
+            Self::Uninstall(_) => "uninstall",
+            Self::ModelPricing(_) => "model_pricing",
+            Self::Doctor(_) => "doctor",
+            Self::Agents(_) => "agents",
+            Self::Completions(_) => "completions",
+            Self::Run(_) => "run",
+            Self::HookForward(_) => "hook_forward",
+        }
+    }
+
     /// Configuration-editing commands remain available even when operational logging settings are
     /// invalid, so users can repair their configuration.
     pub(crate) fn skips_logging(&self) -> bool {
         matches!(self, Self::Config(_))
             || matches!(self, Self::Plugins(command) if command.is_edit())
+            || matches!(self, Self::HookForward(command) if transparent_hook_is_inert(command))
     }
+}
+
+fn transparent_hook_is_inert(command: &HookForwardCommand) -> bool {
+    !command.transparent_run
+        && std::env::var(crate::configuration::TRANSPARENT_RUN_ENV)
+            .ok()
+            .as_deref()
+            == Some("1")
 }

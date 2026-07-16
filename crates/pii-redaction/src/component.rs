@@ -728,6 +728,13 @@ fn register_builtin_backend(
         PluginError::InvalidConfig("built-in PII redaction config is missing".to_string())
     })?;
     let compiled = CompiledBuiltinBackend::new(builtin, config.codec.clone())?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_validation_completed",
+        plugin_kind = PII_REDACTION_PLUGIN_KIND,
+        resource_count = 0;
+        "Plugin resource validation completed"
+    );
 
     if config.mark {
         ctx.register_mark_sanitize_guardrail(

@@ -22,6 +22,11 @@ pub(crate) const SERVER_NAME: &str = "nemo-relay";
 const LAUNCH_ARGS: &[&str] = &["mcp"];
 
 pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliError> {
+    log::info!(
+        target: "nemo_relay.mcp",
+        event = "mcp_session_started";
+        "MCP session started"
+    );
     if transparent_run_active() {
         // An installed plugin can still be enabled inside `nemo-relay run`. In that process the
         // wrapper already owns a healthy dynamic gateway, so this MCP instance authenticates and
@@ -36,8 +41,19 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
         let bootstrap_fingerprint =
             crate::configuration::transparent_gateway_fingerprint(&gateway_url);
         let lease = gateway::GatewayLease::borrow(gateway_url, bootstrap_fingerprint).await?;
+        log::info!(
+            target: "nemo_relay.mcp",
+            event = "gateway_acquired",
+            mode = "borrowed";
+            "MCP gateway acquired"
+        );
         let frames = transport::spawn_stdin_reader()?;
         session::run(lease, frames, tokio::io::stdout()).await?;
+        log::info!(
+            target: "nemo_relay.mcp",
+            event = "mcp_session_closed";
+            "MCP session closed"
+        );
         return Ok(ExitCode::SUCCESS);
     }
     // Starting the MCP process is the lifecycle boundary. Acquire the shared gateway before
@@ -47,8 +63,19 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
         .await?
         .acquire()
         .await?;
+    log::info!(
+        target: "nemo_relay.mcp",
+        event = "gateway_acquired",
+        mode = "managed";
+        "MCP gateway acquired"
+    );
     let frames = transport::spawn_stdin_reader()?;
     session::run(lease, frames, tokio::io::stdout()).await?;
+    log::info!(
+        target: "nemo_relay.mcp",
+        event = "mcp_session_closed";
+        "MCP session closed"
+    );
     Ok(ExitCode::SUCCESS)
 }
 
