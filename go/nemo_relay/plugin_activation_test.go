@@ -669,7 +669,8 @@ func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
 				func(_ string, args json.RawMessage) json.RawMessage {
 					staticCallbacks.Add(1)
 					var payload map[string]any
-					if err := json.Unmarshal(args, &payload); err != nil {
+					err := json.Unmarshal(args, &payload)
+					if err != nil {
 						return args
 					}
 					payload["static_saw_dynamic"] = payload["native_plugin"] == true
