@@ -986,7 +986,7 @@ fn load_shared_config_scoped(
                 path.display()
             )));
         }
-        merge_toml(&mut merged, parsed);
+        merge_gateway_config_toml(&mut merged, parsed);
     }
     let plugin_toml = load_plugin_toml_config_scoped(explicit, plugin_config_path, user_only)?;
     let mut resolved = ResolvedConfig {
@@ -1193,17 +1193,29 @@ fn apply_file_upstream_config(
     let Some(upstream) = upstream else {
         return Ok(());
     };
-    if let Some(value) = upstream.openai_base_url {
+    let FileUpstreamConfig {
+        openai_base_url,
+        openai_auth_header,
+        anthropic_base_url,
+        anthropic_auth_header,
+    } = upstream;
+    if let Some(value) = openai_base_url {
         gateway.openai_base_url = value;
+        if openai_auth_header.is_none() {
+            gateway.openai_auth_header = None;
+        }
     }
-    if let Some(value) = upstream.openai_auth_header {
+    if let Some(value) = openai_auth_header {
         gateway.openai_auth_header =
             Some(validate_auth_header("upstream.openai_auth_header", value)?);
     }
-    if let Some(value) = upstream.anthropic_base_url {
+    if let Some(value) = anthropic_base_url {
         gateway.anthropic_base_url = value;
+        if anthropic_auth_header.is_none() {
+            gateway.anthropic_auth_header = None;
+        }
     }
-    if let Some(value) = upstream.anthropic_auth_header {
+    if let Some(value) = anthropic_auth_header {
         gateway.anthropic_auth_header = Some(validate_auth_header(
             "upstream.anthropic_auth_header",
             value,
@@ -1476,19 +1488,27 @@ fn apply_env_config(config: &mut GatewayConfig) -> Result<(), CliError> {
     {
         config.bind = value;
     }
+    let openai_auth_header = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_BASE_URL") {
         config.openai_base_url = value;
+        if openai_auth_header.is_none() {
+            config.openai_auth_header = None;
+        }
     }
-    if let Ok(value) = std::env::var("NEMO_RELAY_OPENAI_AUTH_HEADER") {
+    if let Some(value) = openai_auth_header {
         config.openai_auth_header = Some(validate_auth_header(
             "NEMO_RELAY_OPENAI_AUTH_HEADER",
             value,
         )?);
     }
+    let anthropic_auth_header = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER").ok();
     if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_BASE_URL") {
         config.anthropic_base_url = value;
+        if anthropic_auth_header.is_none() {
+            config.anthropic_auth_header = None;
+        }
     }
-    if let Ok(value) = std::env::var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER") {
+    if let Some(value) = anthropic_auth_header {
         config.anthropic_auth_header = Some(validate_auth_header(
             "NEMO_RELAY_ANTHROPIC_AUTH_HEADER",
             value,
@@ -1545,6 +1565,29 @@ fn merge_toml(left: &mut toml::Value, right: toml::Value) {
         }
         (left, right) => *left = right,
     }
+}
+
+// Upstream credentials are bound to their configured endpoint. A higher-priority layer that
+// changes an endpoint without supplying a replacement credential must not inherit the credential
+// for the old endpoint.
+fn merge_gateway_config_toml(left: &mut toml::Value, right: toml::Value) {
+    if let (Some(existing), Some(override_upstream)) = (
+        left.get_mut("upstream").and_then(toml::Value::as_table_mut),
+        right.get("upstream").and_then(toml::Value::as_table),
+    ) {
+        for (base_url, auth_header) in [
+            ("openai_base_url", "openai_auth_header"),
+            ("anthropic_base_url", "anthropic_auth_header"),
+        ] {
+            let endpoint_changed = override_upstream
+                .get(base_url)
+                .is_some_and(|value| existing.get(base_url) != Some(value));
+            if endpoint_changed && !override_upstream.contains_key(auth_header) {
+                existing.remove(auth_header);
+            }
+        }
+    }
+    merge_toml(left, right);
 }
 
 fn legacy_observability_sections(value: &toml::Value) -> Vec<&'static str> {

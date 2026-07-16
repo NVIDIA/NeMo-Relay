@@ -37,7 +37,9 @@ struct PluginConfigDiscoveryScope {
     previous_xdg_config_home: Option<OsString>,
     previous_config_scope: Option<OsString>,
     previous_openai_api_key: Option<OsString>,
+    previous_openai_base_url: Option<OsString>,
     previous_openai_auth_header: Option<OsString>,
+    previous_anthropic_base_url: Option<OsString>,
     previous_anthropic_auth_header: Option<OsString>,
     previous_bootstrap_fingerprint: Option<OsString>,
     previous_plugin_idle_timeout: Option<OsString>,
@@ -53,7 +55,9 @@ impl PluginConfigDiscoveryScope {
         let previous_xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
         let previous_config_scope = std::env::var_os("NEMO_RELAY_CONFIG_SCOPE");
         let previous_openai_api_key = std::env::var_os("OPENAI_API_KEY");
+        let previous_openai_base_url = std::env::var_os("NEMO_RELAY_OPENAI_BASE_URL");
         let previous_openai_auth_header = std::env::var_os("NEMO_RELAY_OPENAI_AUTH_HEADER");
+        let previous_anthropic_base_url = std::env::var_os("NEMO_RELAY_ANTHROPIC_BASE_URL");
         let previous_anthropic_auth_header = std::env::var_os("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
         let previous_bootstrap_fingerprint = std::env::var_os(BOOTSTRAP_FINGERPRINT_ENV);
         let previous_plugin_idle_timeout = std::env::var_os(PLUGIN_IDLE_TIMEOUT_ENV);
@@ -61,7 +65,9 @@ impl PluginConfigDiscoveryScope {
             std::env::set_var("XDG_CONFIG_HOME", xdg_config_home);
             std::env::remove_var("NEMO_RELAY_CONFIG_SCOPE");
             std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("NEMO_RELAY_OPENAI_BASE_URL");
             std::env::remove_var("NEMO_RELAY_OPENAI_AUTH_HEADER");
+            std::env::remove_var("NEMO_RELAY_ANTHROPIC_BASE_URL");
             std::env::remove_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER");
             std::env::remove_var(BOOTSTRAP_FINGERPRINT_ENV);
             std::env::remove_var(PLUGIN_IDLE_TIMEOUT_ENV);
@@ -74,7 +80,9 @@ impl PluginConfigDiscoveryScope {
             previous_xdg_config_home,
             previous_config_scope,
             previous_openai_api_key,
+            previous_openai_base_url,
             previous_openai_auth_header,
+            previous_anthropic_base_url,
             previous_anthropic_auth_header,
             previous_bootstrap_fingerprint,
             previous_plugin_idle_timeout,
@@ -102,6 +110,14 @@ impl PluginConfigDiscoveryScope {
             std::env::set_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", anthropic);
         }
     }
+
+    fn set_base_urls(&self, openai: &str, anthropic: &str) {
+        // SAFETY: This scope holds the process-wide environment mutex.
+        unsafe {
+            std::env::set_var("NEMO_RELAY_OPENAI_BASE_URL", openai);
+            std::env::set_var("NEMO_RELAY_ANTHROPIC_BASE_URL", anthropic);
+        }
+    }
 }
 
 impl Drop for PluginConfigDiscoveryScope {
@@ -120,9 +136,17 @@ impl Drop for PluginConfigDiscoveryScope {
                 Some(value) => std::env::set_var("OPENAI_API_KEY", value),
                 None => std::env::remove_var("OPENAI_API_KEY"),
             }
+            match self.previous_openai_base_url.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_OPENAI_BASE_URL", value),
+                None => std::env::remove_var("NEMO_RELAY_OPENAI_BASE_URL"),
+            }
             match self.previous_openai_auth_header.take() {
                 Some(value) => std::env::set_var("NEMO_RELAY_OPENAI_AUTH_HEADER", value),
                 None => std::env::remove_var("NEMO_RELAY_OPENAI_AUTH_HEADER"),
+            }
+            match self.previous_anthropic_base_url.take() {
+                Some(value) => std::env::set_var("NEMO_RELAY_ANTHROPIC_BASE_URL", value),
+                None => std::env::remove_var("NEMO_RELAY_ANTHROPIC_BASE_URL"),
             }
             match self.previous_anthropic_auth_header.take() {
                 Some(value) => std::env::set_var("NEMO_RELAY_ANTHROPIC_AUTH_HEADER", value),
@@ -530,6 +554,81 @@ anthropic_auth_header = "Basic anthropic-file"
         resolved.gateway.anthropic_auth_header.as_deref(),
         Some("Basic anthropic-env")
     );
+}
+
+#[test]
+fn endpoint_overrides_clear_inherited_provider_auth_headers() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let nested = project.join("nested");
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(xdg.join("nemo-relay")).unwrap();
+    std::fs::write(
+        project.join(".nemo-relay/config.toml"),
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        xdg.join("nemo-relay/config.toml"),
+        r#"
+[upstream]
+openai_base_url = "http://user-openai"
+anthropic_base_url = "http://user-anthropic"
+"#,
+    )
+    .unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&nested, &xdg);
+
+    let resolved = resolve_server_config(&GatewayOverrides::default()).unwrap();
+
+    assert_eq!(resolved.gateway.openai_base_url, "http://user-openai");
+    assert!(resolved.gateway.openai_auth_header.is_none());
+    assert_eq!(resolved.gateway.anthropic_base_url, "http://user-anthropic");
+    assert!(resolved.gateway.anthropic_auth_header.is_none());
+}
+
+#[test]
+fn endpoint_environment_overrides_clear_file_provider_auth_headers() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let scope = PluginConfigDiscoveryScope::enter(temp.path(), &xdg);
+    let path = temp.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[upstream]
+openai_auth_header = "Bearer file-openai"
+anthropic_auth_header = "Basic file-anthropic"
+"#,
+    )
+    .unwrap();
+    scope.set_base_urls("http://environment-openai", "http://environment-anthropic");
+
+    let resolved = resolve_server_config(&GatewayOverrides {
+        config: Some(path),
+        ..GatewayOverrides::default()
+    })
+    .unwrap();
+
+    assert_eq!(
+        resolved.gateway.openai_base_url,
+        "http://environment-openai"
+    );
+    assert!(resolved.gateway.openai_auth_header.is_none());
+    assert_eq!(
+        resolved.gateway.anthropic_base_url,
+        "http://environment-anthropic"
+    );
+    assert!(resolved.gateway.anthropic_auth_header.is_none());
 }
 
 #[test]

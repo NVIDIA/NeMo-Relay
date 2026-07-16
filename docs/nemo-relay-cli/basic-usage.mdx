@@ -184,6 +184,12 @@ the route-specific configured authorization value. If that value is also
 unset, Relay uses `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` with the provider's
 standard authentication scheme.
 
+The exception is a Codex ChatGPT OAuth-style OpenAI `Authorization` value. When
+Relay has a replacement OpenAI credential—either `openai_auth_header` in the
+config file or `NEMO_RELAY_OPENAI_AUTH_HEADER` in the environment—it strips the
+OAuth token and forwards the configured credential to the configured OpenAI
+upstream. Without a replacement, Relay retains the existing ChatGPT routing.
+
 ## Add Model Pricing for Cost Estimates
 
 Model pricing is configured with the same `plugins.toml` discovery path as
