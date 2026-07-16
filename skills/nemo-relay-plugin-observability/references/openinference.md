@@ -20,14 +20,22 @@ for example Arize Phoenix or another OpenInference-aware OTLP backend.
 
 - OpenInference export is for OTLP backends that understand model-centric
   OpenInference semantic conventions.
-- Configure the exporter with the following settings:
-  - `transport`, `endpoint`, `service_name`, optional namespace and version,
-    instrumentation scope, headers, resource attributes, and timeout.
-  - `http_binary` transport and an OTLP/HTTP traces endpoint. Use `grpc` only
-    when a Tokio runtime is active.
-- Exported events have the following mappings:
-  - Scope, tool, and LLM start inputs become `input.value`.
-  - Scope, tool, and LLM end outputs become `output.value`.
+- Set `transport`, `endpoint`, and `service_name`, then add a namespace, version,
+  instrumentation scope, headers, resource attributes, timeout, or
+  `attribute_mappings` when needed.
+- NeMo Relay projects lifecycle payload fields to typed OTLP attributes with
+  dotted names. Non-LLM start metadata and all end metadata use
+  `openinference.metadata`, while mark metadata uses
+  `nemo_relay.mark.metadata`.
+- NeMo Relay emits a top-level object or array field as a JSON string, omits a
+  top-level `null` field, and no longer emits the old aggregate `*_json` payload
+  attributes.
+- Use `attribute_mappings` to copy a fully qualified projected attribute to a
+  backend-specific alias without changing its OTLP type.
+- Start with `http_binary` transport and an OTLP/HTTP traces endpoint. Use
+  `grpc` only when a Tokio runtime is active.
+- Scope, tool, and LLM start inputs become `input.value`.
+- Scope, tool, and LLM end outputs become `output.value`.
 - LLM annotations follow the freshness rules:
   - Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
   - The annotated input for the first subsequent LLM start retains complete
