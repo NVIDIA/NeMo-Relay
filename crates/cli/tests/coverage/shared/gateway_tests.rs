@@ -134,6 +134,47 @@ async fn prepared_gateway_request_decodes_zstd_for_observability() {
 }
 
 #[tokio::test]
+async fn prepared_gateway_request_decodes_chained_zstd_for_observability() {
+    let body = br#"{"model":"gpt-test","stream":true}"#;
+    let compressed_once = zstd::stream::encode_all(body.as_slice(), 0).unwrap();
+    let compressed_twice = zstd::stream::encode_all(compressed_once.as_slice(), 0).unwrap();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/responses")
+        .header(header::CONTENT_ENCODING, "zstd, zstd")
+        .body(Body::from(compressed_twice.clone()))
+        .unwrap();
+
+    let prepared = prepare_gateway_request(&GatewayConfig::default(), request, true)
+        .await
+        .unwrap();
+
+    assert_eq!(prepared.body_bytes.as_ref(), compressed_twice);
+    assert_eq!(
+        prepared.request_json,
+        json!({
+            "model": "gpt-test",
+            "stream": true,
+        })
+    );
+    assert_eq!(
+        prepared.headers.get(header::CONTENT_ENCODING).unwrap(),
+        "zstd, zstd"
+    );
+}
+
+#[test]
+fn zstd_decoder_window_tracks_the_managed_body_limit() {
+    assert_eq!(zstd_window_log_max(0), 10);
+    assert_eq!(zstd_window_log_max(1 << 10), 10);
+    assert_eq!(zstd_window_log_max((1 << 10) + 1), 11);
+    assert_eq!(
+        zstd_window_log_max(usize::MAX),
+        if usize::BITS == 32 { 30 } else { 31 }
+    );
+}
+
+#[tokio::test]
 async fn request_observability_decode_is_bounded_and_encoding_aware() {
     let oversized = vec![b'x'; 256];
     let compressed = zstd::stream::encode_all(oversized.as_slice(), 0).unwrap();

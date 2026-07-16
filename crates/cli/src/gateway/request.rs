@@ -3,6 +3,7 @@
 
 //! Gateway request validation, buffering, and normalized LLM start construction.
 
+use std::borrow::Cow;
 use std::error::Error;
 use std::io::Read;
 
@@ -87,11 +88,11 @@ pub(super) async fn prepare_gateway_request(
 // and Content-Encoding header remain on PreparedGatewayRequest so unsupported or malformed
 // encodings still pass through unchanged. When the managed pipeline reserializes decoded JSON,
 // effective_dispatch_request removes Content-Encoding from the identity-encoded upstream body.
-fn request_body_for_observability(
-    body: &[u8],
+fn request_body_for_observability<'a>(
+    body: &'a [u8],
     headers: &HeaderMap,
     max_decoded_bytes: usize,
-) -> Option<Vec<u8>> {
+) -> Option<Cow<'a, [u8]>> {
     let mut encodings = Vec::new();
     for value in headers.get_all(header::CONTENT_ENCODING) {
         for encoding in value.to_str().ok()?.split(',') {
@@ -103,14 +104,14 @@ fn request_body_for_observability(
         }
     }
     if encodings.is_empty() {
-        return Some(body.to_vec());
+        return Some(Cow::Borrowed(body));
     }
 
-    let mut decoded = body.to_vec();
+    let mut decoded = Cow::Borrowed(body);
     for encoding in encodings.iter().rev() {
         match encoding.as_str() {
             "identity" => {}
-            "zstd" => decoded = decode_zstd(&decoded, max_decoded_bytes)?,
+            "zstd" => decoded = Cow::Owned(decode_zstd(&decoded, max_decoded_bytes)?),
             _ => return None,
         }
     }
@@ -118,13 +119,24 @@ fn request_body_for_observability(
 }
 
 fn decode_zstd(body: &[u8], max_decoded_bytes: usize) -> Option<Vec<u8>> {
-    let decoder = zstd::stream::read::Decoder::new(body).ok()?;
+    let mut decoder = zstd::stream::read::Decoder::new(body).ok()?;
+    decoder
+        .window_log_max(zstd_window_log_max(max_decoded_bytes))
+        .ok()?;
     let limit = u64::try_from(max_decoded_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     let mut decoded = Vec::new();
     decoder.take(limit).read_to_end(&mut decoded).ok()?;
     (decoded.len() <= max_decoded_bytes).then_some(decoded)
+}
+
+pub(super) fn zstd_window_log_max(max_decoded_bytes: usize) -> u32 {
+    const ZSTD_WINDOW_LOG_MIN: u32 = 10;
+    const ZSTD_WINDOW_LOG_MAX: u32 = if usize::BITS == 32 { 30 } else { 31 };
+
+    let required_log = usize::BITS - max_decoded_bytes.saturating_sub(1).leading_zeros();
+    required_log.clamp(ZSTD_WINDOW_LOG_MIN, ZSTD_WINDOW_LOG_MAX)
 }
 
 fn passthrough_body_error(error: axum::Error) -> CliError {
