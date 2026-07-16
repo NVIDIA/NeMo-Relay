@@ -34,6 +34,8 @@ pub(crate) enum CliError {
     InvalidPayload(String),
     #[error("payload too large: {0}")]
     PayloadTooLarge(String),
+    #[error("unauthorized gateway client: {0}")]
+    Unauthorized(String),
     #[error("gateway upstream error: {0}")]
     Upstream(#[from] reqwest::Error),
     #[error("{0}")]
@@ -48,6 +50,11 @@ pub(crate) enum CliError {
     Config(String),
     #[error("launcher error: {0}")]
     Launch(String),
+    #[error("nemo-relay hook forward failed: {source}")]
+    HookDelivery {
+        #[source]
+        source: Box<CliError>,
+    },
     #[error("{message}")]
     PluginLifecycle {
         command: &'static str,
@@ -63,10 +70,32 @@ pub(crate) enum CliError {
 }
 
 impl CliError {
+    pub(crate) fn log_kind(&self) -> &'static str {
+        match self {
+            Self::GuardrailRejected(_) => "guardrail_rejected",
+            Self::InvalidPayload(_) => "invalid_payload",
+            Self::PayloadTooLarge(_) => "payload_too_large",
+            Self::Unauthorized(_) => "unauthorized",
+            Self::Upstream(_) => "upstream",
+            Self::ProviderFailure(_) => "provider_failure",
+            Self::Http(_) => "http",
+            Self::Io(_) => "io",
+            Self::Install(_) => "install",
+            Self::Config(_) => "configuration",
+            Self::Launch(_) => "launch",
+            Self::HookDelivery { source } => source.log_kind(),
+            Self::PluginLifecycle { .. } => "plugin_lifecycle",
+            Self::Flow(FlowError::GuardrailRejected(_)) => "guardrail_rejected",
+            Self::Flow(_) => "runtime",
+            Self::OpenInference(_) => "openinference",
+        }
+    }
+
     pub(crate) fn guardrail_rejection_reason(&self) -> Option<&str> {
         match self {
             Self::GuardrailRejected(reason) => Some(reason),
             Self::Flow(FlowError::GuardrailRejected(reason)) => Some(reason),
+            Self::HookDelivery { source } => source.guardrail_rejection_reason(),
             _ => None,
         }
     }
@@ -98,6 +127,7 @@ impl IntoResponse for CliError {
         let status = match (guardrail_reason.is_some(), &self) {
             (true, _) => StatusCode::FORBIDDEN,
             (false, Self::PayloadTooLarge(_)) => StatusCode::PAYLOAD_TOO_LARGE,
+            (false, Self::Unauthorized(_)) => StatusCode::UNAUTHORIZED,
             (false, Self::InvalidPayload(_)) => StatusCode::BAD_REQUEST,
             (false, Self::Upstream(_)) => StatusCode::BAD_GATEWAY,
             (false, Self::ProviderFailure(failure)) => failure
@@ -134,3 +164,7 @@ impl IntoResponse for CliError {
         (status, body).into_response()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/coverage/shared/error_tests.rs"]
+mod tests;

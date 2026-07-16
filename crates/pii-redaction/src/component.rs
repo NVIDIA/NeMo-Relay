@@ -244,7 +244,7 @@ nemo_relay::editor_config! {
             kind: Enum,
             values: ["remove", "redact", "regex_replace", "hash", "mask"],
         },
-        target_paths => { label: "target_paths", kind: Json },
+        target_paths => { label: "target_paths", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
         pattern => { label: "pattern", kind: String, optional: true },
         detector => {
             label: "detector",
@@ -728,6 +728,13 @@ fn register_builtin_backend(
         PluginError::InvalidConfig("built-in PII redaction config is missing".to_string())
     })?;
     let compiled = CompiledBuiltinBackend::new(builtin, config.codec.clone())?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_validation_completed",
+        plugin_kind = PII_REDACTION_PLUGIN_KIND,
+        resource_count = 0;
+        "Plugin resource validation completed"
+    );
 
     if config.mark {
         ctx.register_mark_sanitize_guardrail(

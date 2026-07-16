@@ -230,6 +230,10 @@ func runConcurrentScopePushPopWorker(errCh chan<- error) {
 // ============================================================================
 
 func TestPushPopScope(t *testing.T) {
+	runTestWithScopeStack(t, testPushPopScope)
+}
+
+func testPushPopScope(t *testing.T) {
 	handle, err := PushScope("test_scope", ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf(pushScopeFailed, err)
@@ -259,6 +263,10 @@ func TestPushPopScope(t *testing.T) {
 }
 
 func TestScopeHandleProperties(t *testing.T) {
+	runTestWithScopeStack(t, testScopeHandleProperties)
+}
+
+func testScopeHandleProperties(t *testing.T) {
 	handle, err := PushScope("props_test", ScopeTypeRetriever)
 	if err != nil {
 		t.Fatalf(pushScopeFailed, err)
@@ -277,6 +285,10 @@ func TestScopeHandleProperties(t *testing.T) {
 }
 
 func TestPushScopeWithAttributes(t *testing.T) {
+	runTestWithScopeStack(t, testPushScopeWithAttributes)
+}
+
+func testPushScopeWithAttributes(t *testing.T) {
 	handle, err := PushScope("parallel", ScopeTypeFunction, WithScopeAttributes(ScopeAttrParallel))
 	if err != nil {
 		t.Fatalf(pushScopeFailed, err)
@@ -289,6 +301,10 @@ func TestPushScopeWithAttributes(t *testing.T) {
 }
 
 func TestPushScopeWithParent(t *testing.T) {
+	runTestWithScopeStack(t, testPushScopeWithParent)
+}
+
+func testPushScopeWithParent(t *testing.T) {
 	parent, err := PushScope("parent", ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf("PushScope parent failed: %v", err)
@@ -307,6 +323,10 @@ func TestPushScopeWithParent(t *testing.T) {
 }
 
 func TestNestedScopes(t *testing.T) {
+	runTestWithScopeStack(t, testNestedScopes)
+}
+
+func testNestedScopes(t *testing.T) {
 	s1, _ := PushScope("level1", ScopeTypeAgent)
 	s2, _ := PushScope("level2", ScopeTypeFunction)
 	s3, _ := PushScope("level3", ScopeTypeTool)
@@ -332,6 +352,10 @@ func TestNestedScopes(t *testing.T) {
 }
 
 func TestPopInvalidScopeErrors(t *testing.T) {
+	runTestWithScopeStack(t, testPopInvalidScopeErrors)
+}
+
+func testPopInvalidScopeErrors(t *testing.T) {
 	handle, _ := PushScope("once", ScopeTypeAgent)
 	PopScope(handle)
 	err := PopScope(handle)
@@ -341,6 +365,10 @@ func TestPopInvalidScopeErrors(t *testing.T) {
 }
 
 func TestAllScopeTypes(t *testing.T) {
+	runTestWithScopeStack(t, testAllScopeTypes)
+}
+
+func testAllScopeTypes(t *testing.T) {
 	types := []ScopeType{
 		ScopeTypeAgent, ScopeTypeFunction, ScopeTypeTool, ScopeTypeLlm,
 		ScopeTypeRetriever, ScopeTypeEmbedder, ScopeTypeReranker,
@@ -377,6 +405,10 @@ func TestEmitEventWithData(t *testing.T) {
 }
 
 func TestEmitEventWithParent(t *testing.T) {
+	runTestWithScopeStack(t, testEmitEventWithParent)
+}
+
+func testEmitEventWithParent(t *testing.T) {
 	handle, _ := PushScope("evt_scope", ScopeTypeAgent)
 	defer PopScope(handle)
 
@@ -391,6 +423,10 @@ func TestEmitEventWithParent(t *testing.T) {
 // ============================================================================
 
 func TestSubscriberRegistration(t *testing.T) {
+	runTestWithScopeStack(t, testSubscriberRegistration)
+}
+
+func testSubscriberRegistration(t *testing.T) {
 	count := 0
 	var mu sync.Mutex
 	err := RegisterSubscriber("go_test_sub", func(event Event) {
@@ -465,6 +501,10 @@ func TestDuplicateSubscriberFails(t *testing.T) {
 }
 
 func TestSubscriberEventProperties(t *testing.T) {
+	runTestWithScopeStack(t, testSubscriberEventProperties)
+}
+
+func testSubscriberEventProperties(t *testing.T) {
 	var events []struct {
 		uuid      string
 		name      string
@@ -538,6 +578,10 @@ func TestMarkEvent(t *testing.T) {
 }
 
 func TestEventScopeTypeMatchesEventFamily(t *testing.T) {
+	runTestWithScopeStack(t, testEventScopeTypeMatchesEventFamily)
+}
+
+func testEventScopeTypeMatchesEventFamily(t *testing.T) {
 	contract := &scopeTypeContract{}
 	var mu sync.Mutex
 
@@ -597,6 +641,10 @@ func TestEventScopeTypeMatchesEventFamily(t *testing.T) {
 // ============================================================================
 
 func TestDeeplyNestedScopes(t *testing.T) {
+	runTestWithScopeStack(t, testDeeplyNestedScopes)
+}
+
+func testDeeplyNestedScopes(t *testing.T) {
 	const depth = 15
 	handles := pushDepthScopes(t, depth)
 
@@ -616,6 +664,10 @@ func TestDeeplyNestedScopes(t *testing.T) {
 }
 
 func TestPushScopeWithCombinedAttributes(t *testing.T) {
+	runTestWithScopeStack(t, testPushScopeWithCombinedAttributes)
+}
+
+func testPushScopeWithCombinedAttributes(t *testing.T) {
 	attrs := ScopeAttrParallel | ScopeAttrRelocatable
 	handle, err := PushScope("combined_attrs", ScopeTypeAgent, WithScopeAttributes(attrs))
 	if err != nil {
@@ -632,6 +684,10 @@ func TestPushScopeWithCombinedAttributes(t *testing.T) {
 }
 
 func TestScopeWithDataAndMetadata(t *testing.T) {
+	runTestWithScopeStack(t, testScopeWithDataAndMetadata)
+}
+
+func testScopeWithDataAndMetadata(t *testing.T) {
 	handle, err := PushScope("data_scope", ScopeTypeAgent,
 		WithData(json.RawMessage(`{"user_id": "u123"}`)),
 		WithMetadata(json.RawMessage(`{"trace_id": "t456"}`)),
@@ -663,6 +719,10 @@ func TestScopeWithDataAndMetadata(t *testing.T) {
 }
 
 func TestPopScopeWithEndMetadataMergesWithScopeMetadata(t *testing.T) {
+	runTestWithScopeStack(t, testPopScopeWithEndMetadataMergesWithScopeMetadata)
+}
+
+func testPopScopeWithEndMetadataMergesWithScopeMetadata(t *testing.T) {
 	var capturedMeta json.RawMessage
 	var mu sync.Mutex
 
@@ -748,6 +808,10 @@ func TestConcurrentScopePushPop(t *testing.T) {
 }
 
 func TestSubscriberReceivesAllEventFields(t *testing.T) {
+	runTestWithScopeStack(t, testSubscriberReceivesAllEventFields)
+}
+
+func testSubscriberReceivesAllEventFields(t *testing.T) {
 	type eventData struct {
 		uuid       string
 		name       string

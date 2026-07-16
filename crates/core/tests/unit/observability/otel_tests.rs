@@ -284,6 +284,8 @@ fn openai_chat_provider_response(model_id: &str) -> Json {
 }
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
@@ -327,6 +329,26 @@ fn make_start_event(
         scope_type,
         input,
     )
+}
+
+fn make_start_event_with_metadata(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    metadata: Json,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .name(name)
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::Start,
+        Vec::new(),
+        EventCategory::agent(),
+        None,
+    ))
 }
 
 fn make_end_event(
@@ -420,6 +442,18 @@ fn make_mark_event(parent_uuid: Option<Uuid>, name: &str, data: Option<Json>) ->
             .parent_uuid_opt(parent_uuid)
             .name(name)
             .data_opt(data)
+            .build(),
+        None,
+        None,
+    ))
+}
+
+fn make_mark_event_with_metadata(parent_uuid: Option<Uuid>, metadata: Json) -> Event {
+    Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .name("session.start")
+            .metadata(metadata)
             .build(),
         None,
         None,
@@ -585,6 +619,266 @@ fn subscriber_registration_and_provider_lifecycle_methods_work() {
 }
 
 #[test]
+fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_options(
+        provider,
+        "mapping-scope",
+        OpenTelemetrySubscriberOptions {
+            mark_projection: MarkProjection::Tool,
+            mark_exclude_names: vec!["custom.mark".to_string()],
+            attribute_mappings: vec![
+                crate::observability::OtlpAttributeMapping::new(
+                    "nemo_relay.start.data.tenant",
+                    "tenant.id",
+                ),
+                crate::observability::OtlpAttributeMapping::new(
+                    "nemo_relay.end.data.tenant",
+                    "nemo_relay.start.data.tenant",
+                ),
+                crate::observability::OtlpAttributeMapping::new(
+                    "nemo_relay.start.data.tenant",
+                    "nemo_relay.start.data.existing",
+                ),
+                crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
+            ],
+        },
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    let uuid = Uuid::now_v7();
+    callback(&make_start_event(
+        uuid,
+        None,
+        "mapped-scope",
+        ScopeType::Agent,
+        Some(json!({"tenant": 7, "existing": 9})),
+    ));
+    callback(&make_end_event(
+        uuid,
+        None,
+        "mapped-scope",
+        ScopeType::Agent,
+        Some(json!({"tenant": 8})),
+    ));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mapped-scope")
+        .unwrap();
+    assert_eq!(
+        span.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "nemo_relay.start.data.tenant")
+            .count(),
+        1
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "tenant.id")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::I64(7))
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "nemo_relay.start.data.existing")
+            .count(),
+        1
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "nemo_relay.start.data.existing")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::I64(9))
+    );
+    assert!(
+        !span
+            .attributes
+            .iter()
+            .any(|attribute| attribute.key.as_str() == "ignored.alias")
+    );
+}
+
+#[test]
+fn session_identity_is_projected_on_trace_roots_and_marks_only() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "session-identity");
+    let callback = subscriber.subscriber();
+    let root_uuid = Uuid::now_v7();
+    let child_uuid = Uuid::now_v7();
+    let second_root_uuid = Uuid::now_v7();
+    let instance_id = crate::api::runtime::current_scope_stack()
+        .read()
+        .unwrap()
+        .root_uuid()
+        .to_string();
+    let identity = json!({"session_id": "logical-session", "user_id": "alice"});
+
+    callback(&make_start_event_with_metadata(
+        root_uuid,
+        None,
+        "identity-root",
+        identity.clone(),
+    ));
+    callback(&make_start_event_with_metadata(
+        child_uuid,
+        Some(root_uuid),
+        "identity-child",
+        identity.clone(),
+    ));
+    callback(&make_mark_event_with_metadata(
+        Some(root_uuid),
+        identity.clone(),
+    ));
+    callback(&make_end_event(
+        child_uuid,
+        Some(root_uuid),
+        "identity-child",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_end_event(
+        root_uuid,
+        None,
+        "identity-root",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_start_event_with_metadata(
+        second_root_uuid,
+        None,
+        "identity-second-root",
+        json!({"session_id": "logical-session", "user_id": 42}),
+    ));
+    callback(&make_end_event(
+        second_root_uuid,
+        None,
+        "identity-second-root",
+        ScopeType::Agent,
+        None,
+    ));
+    callback(&make_mark_event_with_metadata(None, identity));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let root = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-root")
+        .unwrap();
+    let child = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-child")
+        .unwrap();
+    let second_root = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "identity-second-root")
+        .unwrap();
+    let orphan_mark = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:session.start")
+        .unwrap();
+
+    let root_attributes = attr_map(&root.attributes);
+    assert_eq!(root_attributes["session.id"], "logical-session");
+    assert_eq!(root_attributes["user.id"], "alice");
+    assert_eq!(
+        root_attributes["nemo_relay.session.instance_id"],
+        instance_id
+    );
+    assert_eq!(
+        root.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "session.id")
+            .count(),
+        1
+    );
+    let child_attributes = attr_map(&child.attributes);
+    assert!(!child_attributes.contains_key("session.id"));
+    assert!(!child_attributes.contains_key("user.id"));
+    assert!(!child_attributes.contains_key("nemo_relay.session.instance_id"));
+    assert_eq!(
+        child_attributes["nemo_relay.start.metadata.user_id"],
+        "alice"
+    );
+    let second_root_attributes = attr_map(&second_root.attributes);
+    assert_eq!(second_root_attributes["session.id"], "logical-session");
+    assert!(!second_root_attributes.contains_key("user.id"));
+    assert_eq!(
+        second_root_attributes["nemo_relay.start.metadata.user_id"],
+        "42"
+    );
+    assert_eq!(
+        second_root_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+    assert_ne!(
+        root.span_context.trace_id(),
+        second_root.span_context.trace_id()
+    );
+
+    let mark_attributes = attr_map(&root.events.events[0].attributes);
+    assert_eq!(mark_attributes["session.id"], "logical-session");
+    assert_eq!(mark_attributes["user.id"], "alice");
+    assert_eq!(
+        mark_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+    let orphan_attributes = attr_map(&orphan_mark.attributes);
+    assert_eq!(orphan_attributes["session.id"], "logical-session");
+    assert_eq!(orphan_attributes["user.id"], "alice");
+    assert_eq!(
+        orphan_attributes["nemo_relay.session.instance_id"],
+        root_attributes["nemo_relay.session.instance_id"]
+    );
+}
+
+#[test]
+fn mapped_orphan_mark_alias_cannot_replace_intrinsic_mark_fields() {
+    let (provider, exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider_with_attribute_mappings(
+        provider,
+        "mapping-scope",
+        [crate::observability::OtlpAttributeMapping::new(
+            "nemo_relay.mark.data.value",
+            "nemo_relay.mark.orphan",
+        )],
+    )
+    .unwrap();
+    let callback = subscriber.subscriber();
+    callback(&make_mark_event(
+        None,
+        "mapped-orphan-mark",
+        Some(json!({"value": "not-an-orphan-flag"})),
+    ));
+    subscriber.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    let span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:mapped-orphan-mark")
+        .unwrap();
+    assert_eq!(
+        span.attributes
+            .iter()
+            .filter(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
+            .count(),
+        1
+    );
+    assert_eq!(
+        span.attributes
+            .iter()
+            .find(|attribute| attribute.key.as_str() == "nemo_relay.mark.orphan")
+            .map(|attribute| &attribute.value),
+        Some(&opentelemetry::Value::Bool(true))
+    );
+}
+
+#[test]
 fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_global();
@@ -634,22 +928,22 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 
     let attributes = attr_map(&span.attributes);
     assert_eq!(
-        attributes.get("nemo_relay.start.data_json"),
-        Some(&"{\"task\":\"scope-start\"}".to_string())
+        attributes.get("nemo_relay.start.input.task"),
+        Some(&"scope-start".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.start.metadata_json"),
-        Some(&"{\"phase\":\"start\"}".to_string())
+        attributes.get("nemo_relay.start.metadata.phase"),
+        Some(&"start".to_string())
     );
 
     let event_attributes = attr_map(&span.events.events[0].attributes);
     assert_eq!(
-        event_attributes.get("nemo_relay.mark.data_json"),
-        Some(&"{\"step\":1}".to_string())
+        event_attributes.get("nemo_relay.mark.data.step"),
+        Some(&"1".to_string())
     );
     assert_eq!(
-        event_attributes.get("nemo_relay.mark.metadata_json"),
-        Some(&"{\"source\":\"rust-test\"}".to_string())
+        event_attributes.get("nemo_relay.mark.metadata.source"),
+        Some(&"rust-test".to_string())
     );
 }
 
@@ -747,22 +1041,27 @@ fn records_span_start_mark_and_end() {
         Some(&root_uuid.to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.start.input_json"),
-        Some(&"{\"query\":\"hello\"}".to_string())
+        attributes.get("nemo_relay.start.input.query"),
+        Some(&"hello".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.end.output_json"),
-        Some(&"{\"result\":\"ok\"}".to_string())
+        attributes.get("nemo_relay.end.output.result"),
+        Some(&"ok".to_string())
     );
 }
 
 #[test]
-fn preserves_parent_child_relationships() {
+fn derives_span_ids_from_relay_uuids() {
     let (provider, exporter) = make_provider();
-    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let mut processor = OtelEventProcessor::new_with_mark_projection(
+        provider.clone(),
+        "test-scope".to_string(),
+        MarkProjection::Tool,
+    );
 
-    let root_uuid = Uuid::now_v7();
-    let child_uuid = Uuid::now_v7();
+    let root_uuid = Uuid::from_u128(0x018f_0f0f_0f0f_7000_8123_4567_89ab_cdef);
+    let child_uuid = Uuid::from_u128(0x018f_0f0f_0f10_7000_8fed_cba9_8765_4321);
+    let orphan_uuid = Uuid::from_u128(0x018f_0f0f_0f11_7000_8011_2233_4455_6677);
 
     processor.process(&make_start_event(
         root_uuid,
@@ -792,11 +1091,19 @@ fn preserves_parent_child_relationships() {
         ScopeType::Agent,
         None,
     ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(orphan_uuid)
+            .name("checkpoint")
+            .build(),
+        None,
+        None,
+    )));
 
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 2);
+    assert_eq!(spans.len(), 3);
     let parent = spans
         .iter()
         .find(|span| span.name.as_ref() == "agent")
@@ -805,13 +1112,37 @@ fn preserves_parent_child_relationships() {
         .iter()
         .find(|span| span.name.as_ref() == "model-call")
         .unwrap();
+    let orphan = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "mark:checkpoint")
+        .unwrap();
 
+    assert_eq!(
+        parent.span_context.trace_id().to_bytes(),
+        *root_uuid.as_bytes()
+    );
+    assert_eq!(
+        parent.span_context.span_id().to_bytes(),
+        root_uuid.as_bytes()[8..]
+    );
     assert_eq!(
         child.span_context.trace_id(),
         parent.span_context.trace_id()
     );
+    assert_eq!(
+        child.span_context.span_id().to_bytes(),
+        child_uuid.as_bytes()[8..]
+    );
     assert_eq!(child.parent_span_id, parent.span_context.span_id());
     assert!(!child.parent_span_is_remote);
+    assert_eq!(
+        orphan.span_context.trace_id().to_bytes(),
+        *orphan_uuid.as_bytes()
+    );
+    assert_eq!(
+        orphan.span_context.span_id().to_bytes(),
+        orphan_uuid.as_bytes()[8..]
+    );
 }
 
 #[test]
@@ -977,16 +1308,16 @@ fn tool_projection_emits_generic_mark_as_parented_zero_duration_span() {
         Some(&"tool".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.mark.data_json"),
-        Some(&"{\"count\":3}".to_string())
+        attributes.get("nemo_relay.mark.data.count"),
+        Some(&"3".to_string())
     );
     assert_eq!(
         attributes.get("nemo_relay.mark.category"),
         Some(&"custom".to_string())
     );
     assert_eq!(
-        attributes.get("nemo_relay.mark.category_profile_json"),
-        Some(&"{\"subtype\":\"example.compaction\"}".to_string())
+        attributes.get("nemo_relay.mark.category_profile.subtype"),
+        Some(&"example.compaction".to_string())
     );
     assert!(!attributes.contains_key("nemo_relay.mark.orphan"));
 }
@@ -1240,6 +1571,12 @@ fn semantic_scope_type_and_span_kind_follow_event_variants() {
     );
     assert_eq!(semantic_scope_type(&remote_tool), Some(ScopeType::Tool));
     assert_eq!(span_kind(&remote_tool), SpanKind::Client);
+    let remote_tool_attributes = attr_map(&start_attributes(&remote_tool));
+    assert_eq!(
+        remote_tool_attributes.get("nemo_relay.handle_attributes"),
+        Some(&"[\"remote\"]".to_string())
+    );
+    assert!(!remote_tool_attributes.contains_key("nemo_relay.handle_attributes_json"));
 
     let llm_event = make_end_event(
         Uuid::now_v7(),
@@ -1328,7 +1665,7 @@ fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
     assert!(keys.iter().any(|k| k == "nemo_relay.llm.cost.currency"));
     assert!(
         keys.iter()
-            .all(|k| !k.to_ascii_lowercase().contains("token") && !k.starts_with("gen_ai")),
+            .all(|k| !k.starts_with("llm.token") && !k.starts_with("gen_ai")),
         "no token attributes expected on the LLM span: {keys:?}"
     );
 }
@@ -1453,12 +1790,12 @@ fn helper_functions_cover_additional_otel_branches() {
 
     let start_attributes = attr_map(&start_attributes(&tool_event));
     assert_eq!(
-        start_attributes.get("nemo_relay.start.input_json"),
-        Some(&"{\"query\":\"hello\"}".to_string())
+        start_attributes.get("nemo_relay.start.data.query"),
+        Some(&"hello".to_string())
     );
     assert_eq!(
-        start_attributes.get("nemo_relay.start.metadata_json"),
-        Some(&"{\"meta\":true}".to_string())
+        start_attributes.get("nemo_relay.start.metadata.meta"),
+        Some(&"true".to_string())
     );
 
     let tool_end_attributes = attr_map(&end_attributes(&Event::Scope(ScopeEvent::new(
@@ -1473,8 +1810,8 @@ fn helper_functions_cover_additional_otel_branches() {
         Some(CategoryProfile::builder().tool_call_id("call-456").build()),
     ))));
     assert_eq!(
-        tool_end_attributes.get("nemo_relay.end.output_json"),
-        Some(&"{\"result\":true}".to_string())
+        tool_end_attributes.get("nemo_relay.end.data.result"),
+        Some(&"true".to_string())
     );
 
     {
@@ -1767,12 +2104,12 @@ fn helper_functions_cover_additional_otel_branches() {
     ));
     let mark_attributes = attr_map(&mark_attributes(&mark));
     assert_eq!(
-        mark_attributes.get("nemo_relay.mark.data_json"),
-        Some(&"{\"kind\":\"aux\"}".to_string())
+        mark_attributes.get("nemo_relay.mark.data.kind"),
+        Some(&"aux".to_string())
     );
     assert_eq!(
-        mark_attributes.get("nemo_relay.mark.metadata_json"),
-        Some(&"{\"source\":\"unit\"}".to_string())
+        mark_attributes.get("nemo_relay.mark.metadata.source"),
+        Some(&"unit".to_string())
     );
 
     let mut processor = OtelEventProcessor::new(make_provider().0, "test".into());

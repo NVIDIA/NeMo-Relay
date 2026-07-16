@@ -347,7 +347,7 @@ nemo_relay::editor_config! {
 nemo_relay::editor_config! {
     impl TelemetryComponentConfig {
         subscriber_name => { label: "subscriber_name", kind: String, optional: true },
-        learners => { label: "learners", kind: Json },
+        learners => { label: "learners", kind: List, list: &nemo_relay::config_editor::STRING_LIST_ITEM },
     }
 }
 

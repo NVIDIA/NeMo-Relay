@@ -20,7 +20,7 @@ use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{
-    PluginConfig, clear_plugin_configuration, initialize_plugins, validate_plugin_config,
+    PluginConfig, clear_plugin_configuration, initialize_plugins_exact, validate_plugin_config,
 };
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
@@ -1049,7 +1049,7 @@ async fn cache_coexists_with_acg_execution_intercept() {
         }),
         ..AdaptiveConfig::default()
     };
-    let report = initialize_plugins(PluginConfig {
+    let report = initialize_plugins_exact(PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     })

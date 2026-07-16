@@ -4,6 +4,8 @@
 package nemo_relay
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +13,22 @@ import (
 	"testing"
 	"time"
 )
+
+const otelTenantAttributeAlias = "tenant.id"
+
+func assertOtlpStringAttribute(t *testing.T, body []byte, key string, value string) {
+	t.Helper()
+	encoded := append([]byte{0x0a}, binary.AppendUvarint(nil, uint64(len(key)))...)
+	encoded = append(encoded, key...)
+	attributeValue := append([]byte{0x0a}, binary.AppendUvarint(nil, uint64(len(value)))...)
+	attributeValue = append(attributeValue, value...)
+	encoded = append(encoded, 0x12)
+	encoded = binary.AppendUvarint(encoded, uint64(len(attributeValue)))
+	encoded = append(encoded, attributeValue...)
+	if !bytes.Contains(body, encoded) {
+		t.Fatalf("expected OTLP string attribute %s=%s", key, value)
+	}
+}
 
 func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 	config := NewOpenTelemetryConfig()
@@ -45,6 +63,10 @@ func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {
 	config.Timeout = 1250 * time.Millisecond
 	config.Headers["authorization"] = "Bearer token"
 	config.ResourceAttributes["deployment.environment"] = "test"
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "nemo_relay.start.data.tenant",
+		Alias: otelTenantAttributeAlias,
+	}}
 
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
@@ -80,6 +102,15 @@ func TestOpenTelemetrySubscriberRejectsInvalidTransport(t *testing.T) {
 	}
 }
 
+func TestOpenTelemetrySubscriberRejectsInvalidAttributeMapping(t *testing.T) {
+	config := NewOpenTelemetryConfig()
+	config.AttributeMappings = []OtlpAttributeMapping{{Key: "", Alias: otelTenantAttributeAlias}}
+
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected invalid attribute mapping error")
+	}
+}
+
 func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	type otelRequest struct {
 		Path        string
@@ -105,6 +136,10 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	config := NewOpenTelemetryConfig()
 	config.Endpoint = server.URL + "/v1/traces"
 	config.ServiceName = "go-agent"
+	config.AttributeMappings = []OtlpAttributeMapping{{
+		Key:   "nemo_relay.mark.metadata.source",
+		Alias: otelTenantAttributeAlias,
+	}}
 
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
@@ -150,6 +185,7 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 		if len(request.Body) == 0 {
 			t.Fatal("expected non-empty OTLP request body")
 		}
+		assertOtlpStringAttribute(t, request.Body, otelTenantAttributeAlias, "go")
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
 	}

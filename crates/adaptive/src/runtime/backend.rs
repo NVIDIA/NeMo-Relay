@@ -14,7 +14,16 @@ pub async fn build_backend(
     backend: &BackendSpec,
 ) -> Result<Arc<dyn StorageBackendDyn + Send + Sync>> {
     match backend.kind.as_str() {
-        "in_memory" => Ok(Arc::new(InMemoryBackend::new())),
+        "in_memory" => {
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_validation_completed",
+                plugin_kind = "adaptive",
+                resource_count = 0;
+                "Plugin resource validation completed"
+            );
+            Ok(Arc::new(InMemoryBackend::new()))
+        }
         #[cfg(feature = "redis-backend")]
         "redis" => {
             let url = backend

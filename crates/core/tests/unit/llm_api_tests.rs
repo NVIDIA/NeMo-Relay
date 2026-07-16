@@ -33,6 +33,8 @@ use crate::json::Json;
 use crate::{codec::optimization::LlmOptimizationContribution, codec::response::PricingResolver};
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
     *context.write().unwrap() = NemoRelayContextState::new();
@@ -648,6 +650,36 @@ fn rejected_optimization_mark_queue_keeps_cursor_and_summary_evidence() {
     .expect("queue rejection must not discard close-time evidence");
     assert_eq!(summary.contributions.len(), 1);
     assert_eq!(summary.contributions[0].producer, "test");
+}
+
+#[test]
+fn unavailable_runtime_owner_skips_optimization_mark_delivery() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    crate::shared_runtime::initialize_shared_runtime_binding("python").unwrap();
+    let owner = format!(
+        "pid={};binding=rust;version={}",
+        std::process::id(),
+        env!("CARGO_PKG_VERSION").split('.').next().unwrap()
+    );
+    // SAFETY: The runtime-owner test mutex serializes this process-global test variable.
+    unsafe { std::env::set_var("NEMO_RELAY_RUNTIME_OWNER", owner) };
+
+    let handle = LlmHandle::builder().name("owner-unavailable").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "test",
+                "owner_unavailable"
+            ))
+    );
+    emit_optimization_marks_with(&handle, &[], Some, |_event, _subscribers| {
+        panic!("an unavailable runtime owner must skip mark delivery")
+    });
+    assert_eq!(handle.optimization_recorder.unemitted().len(), 1);
+
+    reset_global();
 }
 
 #[test]

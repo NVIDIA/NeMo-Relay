@@ -24,7 +24,14 @@ Rust runtime.
 This binding is experimental and source-first. Rust, Python, and Node.js are the
 primary supported surfaces.
 
+> **DO NOT TREAT AS PRODUCTION-READY:** the experimental
+> `InitializeWithDynamicPlugins` lifecycle needs a real consumer to validate
+> shutdown, ownership, and error handling before it can be promoted to a stable
+> contract.
+
 ## Why Use It?
+
+Use the Go binding for the following tasks:
 
 - **Use NeMo Relay from Go**: Group agent, tool, and LLM work into the same
   scope and lifecycle model as the Rust runtime.
@@ -37,10 +44,13 @@ primary supported surfaces.
 
 ## What You Get
 
+The Go package provides the following capabilities:
+
 - **Scope, tool, and LLM helpers**: Managed lifecycle APIs backed by the
   shared Rust runtime.
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
-  blocking, sanitization, and execution wrapping.
+  blocking, sanitization, and execution wrapping, including mark and scope
+  event sanitizers at global, scope-local, and plugin-context levels.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
 - **Convenience subpackages**: Short imports for scopes, tools, LLM calls,

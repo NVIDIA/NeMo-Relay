@@ -880,6 +880,82 @@ fn test_exporter_prefers_explicit_end_model_over_raw_start_model() {
 }
 
 #[test]
+fn test_paired_span_falls_back_to_start_event_model_without_normalized_response() {
+    let llm_uuid = Uuid::now_v7();
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .model_name("profile-start-model")
+        .build();
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("llm-call")
+        .scope_type(ScopeType::Llm)
+        .output(json!({"content": "done"}))
+        .model_name("profile-end-model")
+        .build();
+
+    let candidate = LlmSpanCandidate::from_events(llm_uuid, &start, &end).unwrap();
+
+    assert_eq!(candidate.model_name.as_deref(), Some("profile-start-model"));
+}
+
+#[test]
+fn test_exporter_prefers_effective_response_model_over_requested_profile_model() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let llm_uuid = Uuid::now_v7();
+
+    let start = event_builder(llm_uuid, EventType::Start)
+        .name("anthropic.messages")
+        .scope_type(ScopeType::Llm)
+        .input(json!({
+            "model": "qwen3:4b",
+            "messages": [{"role": "user", "content": "hello"}]
+        }))
+        .model_name("qwen3:4b")
+        .build();
+
+    let end = event_builder(llm_uuid, EventType::End)
+        .name("anthropic.messages")
+        .scope_type(ScopeType::Llm)
+        .output(json!({
+            "type": "message",
+            "role": "assistant",
+            "model": "qwen3.6:35b",
+            "content": [{"type": "text", "text": "done"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 7, "output_tokens": 3}
+        }))
+        .model_name("qwen3:4b")
+        .annotated_response(annotated_response_with_usage(
+            "qwen3.6:35b",
+            Usage {
+                prompt_tokens: Some(7),
+                completion_tokens: Some(3),
+                total_tokens: Some(10),
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                cost: None,
+            },
+        ))
+        .build();
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(start);
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    assert_eq!(
+        trajectory.steps[1].model_name.as_deref(),
+        Some("qwen3.6:35b")
+    );
+}
+
+#[test]
 fn test_extract_metrics_supports_provider_usage_payloads() {
     let openai_metrics = extract_metrics(
         &json!({

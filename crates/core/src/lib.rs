@@ -34,6 +34,7 @@
 //!   and guardrail/intercept/subscriber registration. These are the primary entry points.
 //! - [`error`] — Error types ([`error::FlowError`]) and the [`error::Result`] type alias.
 //! - [`json`] — JSON type alias ([`json::Json`]) and the [`json::merge_json`] utility.
+//! - [`logging`] — Process operational logging (`log` facade + configurable stderr/file sinks).
 //! - [`observability`] — Built-in observability backends including
 //!   [`atif::AtifExporter`](observability::atif::AtifExporter),
 //!   [`otel::OpenTelemetrySubscriber`](observability::otel::OpenTelemetrySubscriber),
@@ -59,6 +60,7 @@ pub mod config_editor;
 mod context;
 pub mod error;
 pub mod json;
+pub mod logging;
 pub mod observability;
 pub mod plugin;
 pub mod plugins;

@@ -44,10 +44,51 @@ pub(super) fn register_local_backend(
 ) -> PluginResult<()> {
     let provider = local_backend_provider_guard()?.clone();
 
-    match provider {
-        Some(provider) => provider(config, ctx),
-        None => Err(PluginError::RegistrationFailed(
+    let Some(provider) = provider else {
+        log::warn!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_failed",
+            plugin_kind = "pii_redaction",
+            resource_kind = "local_model_backend",
+            permission = "execute",
+            reason = "provider_unavailable";
+            "Plugin resource access validation failed"
+        );
+        return Err(PluginError::RegistrationFailed(
             "PII redaction local-model backend is unavailable in this runtime".to_string(),
-        )),
+        ));
+    };
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_access_pending",
+        plugin_kind = "pii_redaction",
+        resource_kind = "local_model_backend",
+        permission = "execute";
+        "Plugin resource access validation started"
+    );
+    match provider(config, ctx) {
+        Ok(()) => {
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_access_validated",
+                plugin_kind = "pii_redaction",
+                resource_kind = "local_model_backend",
+                permission = "execute";
+                "Plugin resource access validated"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_resource_access_failed",
+                plugin_kind = "pii_redaction",
+                resource_kind = "local_model_backend",
+                permission = "execute",
+                reason = "initialization_failed";
+                "Plugin resource access validation failed"
+            );
+            Err(error)
+        }
     }
 }

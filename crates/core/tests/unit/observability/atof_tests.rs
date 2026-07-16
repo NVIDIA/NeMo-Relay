@@ -26,6 +26,11 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+fn enable_operational_logs() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 fn temp_dir(prefix: &str) -> PathBuf {
     let id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -351,15 +356,18 @@ fn start_websocket_capture_server(
 #[test]
 fn default_config_uses_cwd_append_and_timestamped_filename() {
     let config = AtofExporterConfig::default();
+    let AtofSinkConfig::File(file) = config.sink else {
+        panic!("default ATOF config must use a file sink");
+    };
 
-    assert_eq!(config.output_directory, std::env::current_dir().unwrap());
-    assert_eq!(config.mode, AtofExporterMode::Append);
+    assert_eq!(file.output_directory, std::env::current_dir().unwrap());
+    assert_eq!(file.mode, AtofExporterMode::Append);
     assert_eq!(AtofExporterMode::Append.as_str(), "append");
     assert_eq!(AtofExporterMode::Overwrite.as_str(), "overwrite");
-    assert!(config.filename.starts_with("nemo-relay-events-"));
-    assert!(config.filename.ends_with(".jsonl"));
+    assert!(file.filename.starts_with("nemo-relay-events-"));
+    assert!(file.filename.ends_with(".jsonl"));
     assert_eq!(
-        config.filename.len(),
+        file.filename.len(),
         "nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl".len()
     );
 }
@@ -376,7 +384,7 @@ fn endpoint_and_exporter_config_builders_preserve_values() {
         .with_output_directory(&dir)
         .with_mode(AtofExporterMode::Overwrite)
         .with_filename("custom.jsonl")
-        .with_endpoints(vec![endpoint.clone()]);
+        .with_stream_sink(endpoint.clone());
 
     assert_eq!(
         endpoint.headers.get("x-test").map(String::as_str),
@@ -392,8 +400,8 @@ fn endpoint_and_exporter_config_builders_preserve_values() {
         AtofEndpointFieldNamePolicy::parse("replace_dots"),
         Some(AtofEndpointFieldNamePolicy::ReplaceDots)
     );
-    assert_eq!(config.path(), dir.join("custom.jsonl"));
-    assert_eq!(config.endpoints, vec![endpoint]);
+    assert_eq!(config.path(), None);
+    assert_eq!(config.sink, AtofSinkConfig::Stream(endpoint));
 }
 
 #[test]
@@ -442,22 +450,11 @@ fn endpoint_http_helper_edges_are_safe() {
         None,
         "unknown field name policies should be rejected"
     );
-    assert_eq!(truncate_log_body("  short body  "), "short body");
-
-    let long_body = "é".repeat(1_025);
-    let truncated = truncate_log_body(&long_body);
-    assert!(truncated.ends_with("... <truncated>"));
-    assert_eq!(
-        truncated
-            .trim_end_matches("... <truncated>")
-            .chars()
-            .count(),
-        1_024
-    );
 }
 
 #[test]
 fn append_mode_preserves_existing_lines() {
+    enable_operational_logs();
     let dir = temp_dir("atof-append");
     let path = dir.join("events.jsonl");
     fs::write(&path, "{\"existing\":true}\n").unwrap();
@@ -514,7 +511,7 @@ fn subscriber_writes_scope_and_mark_events_as_raw_jsonl() {
     subscriber(&make_mark_event("checkpoint"));
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["kind"], "scope");
     assert_eq!(lines[0]["scope_category"], "start");
@@ -539,7 +536,7 @@ fn shutdown_is_idempotent_and_subscriber_noops_after_close() {
     subscriber(&make_mark_event("after-close"));
     exporter.shutdown().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0]["name"], "before-close");
 }
@@ -558,7 +555,7 @@ fn subscriber_writes_canonical_event_jsonl() {
     (exporter.subscriber())(&event);
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0], event.try_to_json_value().unwrap());
     assert!(lines[0].get("annotated_request").is_none());
@@ -570,9 +567,10 @@ fn subscriber_writes_canonical_event_jsonl() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
-fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
+fn streaming_sink_receives_raw_atof_events() {
+    enable_operational_logs();
     let dir = temp_dir("atof-streaming-http");
-    let (url, captures) = start_http_capture_server(4);
+    let (url, captures) = start_http_capture_server(3);
     let exporter = AtofExporter::new(
         AtofExporterConfig::new()
             .with_output_directory(&dir)
@@ -580,8 +578,7 @@ fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
             .with_endpoint(AtofEndpointConfig::new(
                 url.clone(),
                 AtofEndpointTransport::HttpPost,
-            ))
-            .with_endpoint(AtofEndpointConfig::new(url, AtofEndpointTransport::Ndjson)),
+            )),
     )
     .unwrap();
     let subscriber = exporter.subscriber();
@@ -592,14 +589,9 @@ fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
     subscriber(&make_mark_event("after-flush"));
     exporter.shutdown().unwrap();
 
-    let lines = read_jsonl(exporter.path());
-    assert_eq!(lines.len(), 3);
-    assert_eq!(lines[0]["name"], "first");
-    assert_eq!(lines[1]["name"], "second");
-    assert_eq!(lines[2]["name"], "after-flush");
-
-    let bodies = wait_for_captures(&captures, 4);
-    assert_eq!(bodies.len(), 4, "captured bodies: {bodies:?}");
+    assert_eq!(exporter.path(), None);
+    let bodies = wait_for_captures(&captures, 3);
+    assert_eq!(bodies.len(), 3, "captured bodies: {bodies:?}");
     let all_streamed = bodies.join("");
     assert!(all_streamed.contains("\"name\":\"first\""));
     assert!(all_streamed.contains("\"name\":\"second\""));
@@ -609,7 +601,7 @@ fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
             .lines()
             .filter(|line| line.contains("\"kind\":\"mark\""))
             .count(),
-        6,
+        3,
         "three HTTP POST records plus three NDJSON records: {bodies:?}"
     );
 }
@@ -617,6 +609,7 @@ fn streaming_endpoints_receive_raw_atof_events_and_file_output_remains() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn websocket_endpoint_receives_fifo_json_text_events() {
+    enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -649,6 +642,7 @@ fn websocket_endpoint_receives_fifo_json_text_events() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn websocket_flush_drains_events_queued_before_reconnect() {
+    enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket-reconnect");
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let local_addr = listener.local_addr().unwrap();
@@ -819,7 +813,7 @@ fn subscriber_preserves_wire_format_llm_lifecycle_payloads_as_raw_jsonl() {
     }
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), events.len());
     for (line, event) in lines.iter().zip(events.iter()) {
         assert_eq!(line, &event.try_to_json_value().unwrap());
@@ -941,7 +935,7 @@ fn openclaw_subagent_events_preserve_nested_and_fallback_parent_uuid() {
     }
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     let nested_start = lines
         .iter()
         .find(|line| {
@@ -1024,7 +1018,7 @@ fn subscriber_preserves_openclaw_placeholder_replay_payloads_as_raw_jsonl() {
     }
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), events.len());
     for (line, event) in lines.iter().zip(events.iter()) {
         assert_eq!(line, &event.try_to_json_value().unwrap());
@@ -1088,7 +1082,7 @@ fn subscriber_preserves_openclaw_model_timing_marks_as_raw_jsonl() {
     }
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), events.len());
     for (line, event) in lines.iter().zip(events.iter()) {
         assert_eq!(line, &event.try_to_json_value().unwrap());
@@ -1185,7 +1179,7 @@ fn subscriber_preserves_openclaw_hook_only_fallback_payloads_as_raw_jsonl() {
     }
     exporter.force_flush().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), events.len());
     for (line, event) in lines.iter().zip(events.iter()) {
         assert_eq!(line, &event.try_to_json_value().unwrap());
@@ -1246,7 +1240,7 @@ fn register_deregister_flush_and_shutdown_work_with_runtime_events() {
     exporter.shutdown().unwrap();
     exporter.shutdown().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), 3);
     assert_eq!(lines[0]["name"], "atof_scope");
     assert_eq!(lines[1]["name"], "atof_mark");
@@ -1284,7 +1278,7 @@ fn missing_output_directory_is_created() {
     .unwrap();
 
     let output_path = output_dir.join("events.jsonl");
-    assert_eq!(exporter.path(), output_path.as_path());
+    assert_eq!(exporter.path(), Some(output_path.as_path()));
     assert!(output_dir.is_dir());
     assert!(output_path.exists());
 }
@@ -1473,6 +1467,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
+    enable_operational_logs();
     let (body_tx, body) = ndjson_body_channel();
     drop(body);
     send_ndjson_event(0, &body_tx, "{}".into());
@@ -1503,7 +1498,24 @@ fn endpoint_worker_helpers_acknowledge_flush_and_close_error_paths() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn endpoint_worker_reports_flush_and_close_timeouts() {
+    enable_operational_logs();
+    let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+    let worker = AtofEndpointWorker {
+        sender,
+        timeout: std::time::Duration::from_millis(1),
+        index: 7,
+        transport: AtofEndpointTransport::HttpPost,
+    };
+
+    worker.flush();
+    worker.close();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
+    enable_operational_logs();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -1551,6 +1563,7 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
+    enable_operational_logs();
     let mut headers = std::collections::HashMap::new();
     headers.insert("bad header".to_string(), "ok".to_string());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1589,7 +1602,76 @@ fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
+fn http_endpoint_worker_reports_request_transport_failure() {
+    enable_operational_logs();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_http_post_endpoint(
+                0,
+                AtofEndpointConfig::new(
+                    "http://127.0.0.1:0/events",
+                    AtofEndpointTransport::HttpPost,
+                )
+                .with_timeout_millis(100),
+                rx,
+            )
+            .await;
+        });
+    });
+
+    tx.send(EndpointMessage::Event("{\"kind\":\"mark\"}".into()))
+        .unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn ndjson_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
+    enable_operational_logs();
+    let mut headers = std::collections::HashMap::new();
+    headers.insert("bad header".to_string(), "ok".to_string());
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let worker = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            run_ndjson_endpoint(
+                0,
+                AtofEndpointConfig {
+                    url: "http://127.0.0.1:9/events".into(),
+                    transport: AtofEndpointTransport::Ndjson,
+                    headers,
+                    header_env: std::collections::HashMap::new(),
+                    timeout_millis: 1,
+                    field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+                },
+                rx,
+            )
+            .await;
+        });
+    });
+
+    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
+    let (close_tx, close_rx) = std::sync::mpsc::channel();
+    tx.send(EndpointMessage::Close(close_tx)).unwrap();
+    flush_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    close_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap();
+    worker.join().unwrap();
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
 fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
+    enable_operational_logs();
     let mut headers = std::collections::HashMap::new();
     headers.insert("bad header".to_string(), "ok".to_string());
     let config = AtofEndpointConfig {
@@ -1605,14 +1687,17 @@ fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
 
         let mut socket = None;
         let mut pending = std::collections::VecDeque::from(["{\"kind\":\"mark\"}".to_string()]);
-        assert!(!drain_websocket_pending(0, &config, &mut socket, &mut pending).await);
+        let mut retry = WebSocketRetryState::default();
+        assert!(!drain_websocket_pending(0, &config, &mut socket, &mut pending, &mut retry).await);
         assert_eq!(pending.len(), 1);
+        assert_eq!(retry.attempts, 1);
     });
 }
 
 #[test]
 #[cfg(feature = "atof-streaming")]
 fn ndjson_upload_close_timeout_acknowledges_close() {
+    enable_operational_logs();
     let request = tokio::runtime::Runtime::new().unwrap().block_on(async {
         let request: tokio::task::JoinHandle<reqwest::Result<reqwest::Response>> =
             tokio::spawn(async {
@@ -1630,7 +1715,56 @@ fn ndjson_upload_close_timeout_acknowledges_close() {
 }
 
 #[test]
+#[cfg(feature = "atof-streaming")]
+fn ndjson_upload_completion_reports_success_http_upload_and_task_failures() {
+    enable_operational_logs();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    for response in [
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        runtime.block_on(async {
+            let request = tokio::spawn(async move { reqwest::get(url).await });
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            finish_ndjson_upload(2, request, std::time::Duration::from_secs(5), done_tx).await;
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap();
+        });
+        server.join().unwrap();
+    }
+
+    runtime.block_on(async {
+        let upload_error = tokio::spawn(async { reqwest::get("http://127.0.0.1:0").await });
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        finish_ndjson_upload(3, upload_error, std::time::Duration::from_secs(5), done_tx).await;
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let task_error = tokio::spawn(async {
+            std::future::pending::<reqwest::Result<reqwest::Response>>().await
+        });
+        task_error.abort();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        finish_ndjson_upload(4, task_error, std::time::Duration::from_secs(5), done_tx).await;
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+    });
+}
+
+#[test]
 fn force_flush_reports_stored_subscriber_failure() {
+    enable_operational_logs();
     let dir = temp_dir("atof-stored-failure");
     let exporter = AtofExporter::new(
         AtofExporterConfig::new()
@@ -1669,7 +1803,7 @@ fn force_flush_keeps_exporter_open_and_shutdown_is_terminal() {
     subscriber(&make_mark_event("after_shutdown"));
     exporter.shutdown().unwrap();
 
-    let lines = read_jsonl(exporter.path());
+    let lines = read_jsonl(exporter.path().expect("file sink path"));
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[0]["name"], "before_flush");
     assert_eq!(lines[1]["name"], "after_flush");

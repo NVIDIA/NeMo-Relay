@@ -15,6 +15,8 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn reset_global() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();

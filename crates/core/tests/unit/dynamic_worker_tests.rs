@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::api::event::{BaseEvent, MarkEvent};
+use crate::api::runtime::NemoRelayContextState;
 use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -27,8 +28,14 @@ use super::*;
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
 
+fn enable_operational_logs() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
+}
+
 #[test]
 fn python_environment_resolution_requires_lifecycle_managed_path() {
+    enable_operational_logs();
     let plugin_id = "acme.python";
     let digest = Sha256::digest(plugin_id.as_bytes())
         .iter()
@@ -65,6 +72,7 @@ fn python_environment_resolution_requires_lifecycle_managed_path() {
 
 #[test]
 fn python_worker_launch_clears_host_python_environment() {
+    enable_operational_logs();
     let mut command = Command::new("python");
     clear_host_python_environment(&mut command);
     let removed = command
@@ -78,6 +86,7 @@ fn python_worker_launch_clears_host_python_environment() {
 
 #[test]
 fn response_helpers_cover_error_and_unexpected_shapes() {
+    enable_operational_logs();
     let worker_error = WorkerError {
         code: "worker.failed".into(),
         message: "boom".into(),
@@ -181,6 +190,7 @@ fn response_helpers_cover_error_and_unexpected_shapes() {
 
 #[test]
 fn envelope_and_error_helpers_cover_failure_paths() {
+    enable_operational_logs();
     assert!(
         required_envelope(None, "required test")
             .expect_err("missing envelope should fail")
@@ -222,6 +232,7 @@ fn envelope_and_error_helpers_cover_failure_paths() {
 
 #[test]
 fn registration_plan_and_scope_type_helpers_validate_edges() {
+    enable_operational_logs();
     let empty_name = validate_registration_plan(
         "fixture_worker",
         &RegisterResponse {
@@ -317,6 +328,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
 
 #[test]
 fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
+    enable_operational_logs();
     assert!(
         validate_relay_compatibility(None)
             .expect_err("missing relay compatibility should fail")
@@ -340,6 +352,7 @@ fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
 #[test]
 #[cfg(unix)]
 fn worker_endpoints_fail_when_host_socket_cannot_bind() {
+    enable_operational_logs();
     let activation_dir = std::env::temp_dir().join(format!("nmrw-unit-{}", Uuid::now_v7()));
     let host_socket = activation_dir.join("host.sock");
     std::fs::create_dir_all(&host_socket).expect("host socket directory should be created");
@@ -359,6 +372,7 @@ fn worker_endpoints_fail_when_host_socket_cannot_bind() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn callback_helpers_cover_worker_response_edges() {
+    enable_operational_logs();
     let worker_error = WorkerError {
         code: "worker.failed".into(),
         message: "boom".into(),
@@ -525,6 +539,7 @@ async fn callback_helpers_cover_worker_response_edges() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn callback_stream_transport_error_surfaces_to_host_stream() {
+    enable_operational_logs();
     let (callback, _shutdown) = fake_callback_service(|_| InvokeResponse {
         result: Some(InvokeResult::Empty(EmptyResult {})),
     })
@@ -552,6 +567,7 @@ async fn callback_stream_transport_error_surfaces_to_host_stream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn callback_stream_stops_when_host_receiver_is_dropped() {
+    enable_operational_logs();
     let (yield_tx, yield_rx) = oneshot::channel();
     let (stream_dropped_tx, stream_dropped_rx) = oneshot::channel();
     let stream_dropped_tx = Arc::new(Mutex::new(Some(stream_dropped_tx)));
@@ -612,6 +628,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn callback_timeout_sends_explicit_worker_cancellation() {
+    enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
     let started_tx = Arc::new(Mutex::new(Some(started_tx)));
     let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
@@ -669,6 +686,7 @@ async fn callback_timeout_sends_explicit_worker_cancellation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
+    enable_operational_logs();
     let (started_tx, started_rx) = oneshot::channel();
     let started_tx = Arc::new(Mutex::new(Some(started_tx)));
     let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
@@ -844,6 +862,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
 
 #[test]
 fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
+    enable_operational_logs();
     let state = Arc::new(WorkerHostRuntimeState::new(
         ACTIVATION_ID.into(),
         AUTH_TOKEN.into(),
@@ -910,6 +929,7 @@ fn invocation_cleanup_releases_host_state_locks_before_unwinding() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dropping_host_stream_sends_explicit_worker_cancellation() {
+    enable_operational_logs();
     let (yield_tx, yield_rx) = oneshot::channel();
     let yield_rx = Arc::new(Mutex::new(Some(yield_rx)));
     let (callback, _shutdown, mut cancel_rx) = fake_callback_service_with_handlers(
@@ -967,6 +987,7 @@ async fn dropping_host_stream_sends_explicit_worker_cancellation() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn install_registrations_covers_registry_error_edges() {
+    enable_operational_logs();
     for surface in [
         RegistrationSurface::Subscriber,
         RegistrationSurface::ToolSanitizeRequestGuardrail,
@@ -1026,7 +1047,151 @@ async fn install_registrations_covers_registry_error_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn installed_fail_open_callbacks_preserve_original_values() {
+    struct RuntimeCleanup {
+        registrations: Option<PluginRegistrationContext>,
+    }
+
+    impl Drop for RuntimeCleanup {
+        fn drop(&mut self) {
+            if let Some(context) = self.registrations.take() {
+                let mut registrations = context.into_registrations();
+                crate::plugin::rollback_registrations(&mut registrations);
+            }
+            let context = crate::api::runtime::global_context();
+            *context.write().unwrap_or_else(|error| error.into_inner()) =
+                NemoRelayContextState::new();
+            crate::shared_runtime::reset_runtime_owner_for_tests();
+        }
+    }
+
+    enable_operational_logs();
+    let registrations = vec![
+        registration(RegistrationSurface::Subscriber, "fallback_subscriber"),
+        registration(RegistrationSurface::MarkSanitizeGuardrail, "fallback_mark"),
+        registration(
+            RegistrationSurface::ScopeSanitizeStartGuardrail,
+            "fallback_scope_start",
+        ),
+        registration(
+            RegistrationSurface::ScopeSanitizeEndGuardrail,
+            "fallback_scope_end",
+        ),
+        registration(
+            RegistrationSurface::ToolSanitizeRequestGuardrail,
+            "fallback_tool_request",
+        ),
+        registration(
+            RegistrationSurface::ToolSanitizeResponseGuardrail,
+            "fallback_tool_response",
+        ),
+        registration(
+            RegistrationSurface::LlmSanitizeRequestGuardrail,
+            "fallback_llm_request",
+        ),
+        registration(
+            RegistrationSurface::LlmSanitizeResponseGuardrail,
+            "fallback_llm_response",
+        ),
+    ];
+    let (mut instance, _instance_shutdown) = fake_worker_instance(registrations).await;
+    let (error_client, _error_shutdown) = fake_worker_client(|_| InvokeResponse {
+        result: Some(InvokeResult::Error(WorkerError {
+            code: "worker.failed".into(),
+            message: "callback unavailable".into(),
+            retryable: false,
+        })),
+    })
+    .await;
+    instance.client = error_client;
+
+    let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    crate::shared_runtime::reset_runtime_owner_for_tests();
+    let context = crate::api::runtime::global_context();
+    *context.write().unwrap() = NemoRelayContextState::new();
+
+    let mut registration_context = PluginRegistrationContext::new();
+    instance
+        .install_registrations(&mut registration_context)
+        .expect("worker registrations should install");
+    let _cleanup = RuntimeCleanup {
+        registrations: Some(registration_context),
+    };
+
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("fail-open-event")
+            .data(json!({"preserved": true}))
+            .build(),
+        None,
+        None,
+    ));
+    let tool_request = json!({"request": "preserved"});
+    let tool_response = json!({"response": "preserved"});
+    let llm_request = valid_llm_request();
+    let llm_response = json!({"response": "preserved"});
+
+    {
+        let state = context.read().unwrap();
+        let subscribers = state.collect_event_subscribers(&[]);
+        NemoRelayContextState::emit_event(&event, &subscribers);
+
+        for registry in [
+            &state.mark_sanitize_guardrails,
+            &state.scope_sanitize_start_guardrails,
+            &state.scope_sanitize_end_guardrails,
+        ] {
+            let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
+            assert_eq!(
+                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries)
+                    .data(),
+                event.data()
+            );
+        }
+
+        let entries = state.tool_sanitize_request_entries(&[]);
+        assert_eq!(
+            NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                "tool",
+                tool_request.clone(),
+                &entries,
+            ),
+            tool_request
+        );
+        let entries = state.tool_sanitize_response_entries(&[]);
+        assert_eq!(
+            NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                "tool",
+                tool_response.clone(),
+                &entries,
+            ),
+            tool_response
+        );
+        let entries = state.llm_sanitize_request_entries(&[]);
+        assert_eq!(
+            NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+                llm_request.clone(),
+                &entries,
+            ),
+            llm_request
+        );
+        let entries = state.llm_sanitize_response_entries(&[]);
+        assert_eq!(
+            NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+                llm_response.clone(),
+                &entries,
+            ),
+            llm_response
+        );
+    }
+    crate::api::subscriber::flush_subscribers().expect("subscriber callback should flush");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn adapter_register_rejects_config_drift_even_without_validation_call() {
+    enable_operational_logs();
     let (instance, _shutdown) = fake_worker_instance(Vec::new()).await;
     let adapter = WorkerPluginAdapter {
         plugin_kind: "fixture_worker".into(),
@@ -1045,6 +1210,7 @@ async fn adapter_register_rejects_config_drift_even_without_validation_call() {
 
 #[tokio::test]
 async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
+    enable_operational_logs();
     let state = Arc::new(WorkerHostRuntimeState::new(
         ACTIVATION_ID.into(),
         AUTH_TOKEN.into(),
@@ -1188,6 +1354,7 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
 
 #[tokio::test]
 async fn host_runtime_service_reports_poisoned_internal_locks() {
+    enable_operational_logs();
     let state = Arc::new(WorkerHostRuntimeState::new(
         ACTIVATION_ID.into(),
         AUTH_TOKEN.into(),
@@ -1263,11 +1430,13 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
 
 #[test]
 fn owned_worker_runtime_drop_is_idempotent_when_runtime_already_taken() {
+    enable_operational_logs();
     drop(OwnedWorkerRuntime { runtime: None });
 }
 
 #[tokio::test]
 async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
+    enable_operational_logs();
     let state = Arc::new(WorkerHostRuntimeState::new(
         ACTIVATION_ID.into(),
         AUTH_TOKEN.into(),
@@ -1440,6 +1609,7 @@ fn callback_for_client(
     (
         WorkerPluginCallback {
             activation_id: ACTIVATION_ID.into(),
+            plugin_kind: "fixture_worker".into(),
             runtime: tokio::runtime::Handle::current(),
             client,
             host_state: state,
@@ -1451,6 +1621,7 @@ fn callback_for_client(
 async fn fake_worker_instance(
     registrations: Vec<Registration>,
 ) -> (WorkerPluginInstance, oneshot::Sender<()>) {
+    enable_operational_logs();
     let (client, shutdown_tx) = fake_worker_client(|_| InvokeResponse {
         result: Some(InvokeResult::Empty(EmptyResult {})),
     })
@@ -1478,6 +1649,7 @@ async fn fake_worker_instance(
             shutdown: Mutex::new(None),
             process: Mutex::new(None),
             activation_dir,
+            teardown_started: AtomicBool::new(false),
         },
         shutdown_tx,
     )

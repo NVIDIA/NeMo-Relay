@@ -11,6 +11,7 @@ mod native {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
 
     use super::*;
@@ -33,6 +34,7 @@ mod native {
 
     static DISPATCHER: OnceLock<std::result::Result<Sender<DispatcherMessage>, String>> =
         OnceLock::new();
+    static DISPATCHER_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
 
     thread_local! {
         static IN_DISPATCHER: Cell<bool> = const { Cell::new(false) };
@@ -49,17 +51,28 @@ mod native {
         };
         match dispatcher_sender() {
             Ok(sender) => {
-                if let Err(error) = sender.send(message) {
-                    eprintln!("nemo_relay: failed to queue subscriber event: {error}");
+                if sender.send(message).is_err() {
+                    log::warn!(
+                        target: "nemo_relay.runtime",
+                        event = "subscriber_event_dropped",
+                        reason = "dispatcher_disconnected";
+                        "Subscriber event was dropped because the dispatcher stopped"
+                    );
                     false
                 } else {
                     true
                 }
             }
-            Err(error) => {
-                eprintln!("nemo_relay: failed to start subscriber dispatcher: {error}");
+            Err(_error) if !DISPATCHER_FAILURE_LOGGED.swap(true, Ordering::AcqRel) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_dispatcher_failed",
+                    error_kind = "initialization";
+                    "Subscriber dispatcher failed to start"
+                );
                 false
             }
+            Err(_) => false,
         }
     }
 
@@ -91,11 +104,19 @@ mod native {
 
     fn start_dispatcher() -> std::result::Result<Sender<DispatcherMessage>, String> {
         let (tx, rx) = mpsc::channel::<DispatcherMessage>();
-        std::thread::Builder::new()
+        let sender = std::thread::Builder::new()
             .name("nemo-relay-subscriber-dispatcher".into())
             .spawn(move || run_dispatcher(rx))
             .map(|_| tx)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string());
+        if sender.is_ok() {
+            log::info!(
+                target: "nemo_relay.runtime",
+                event = "subscriber_dispatcher_started";
+                "Subscriber dispatcher started"
+            );
+        }
+        sender
     }
 
     fn run_dispatcher(rx: Receiver<DispatcherMessage>) {
@@ -147,7 +168,11 @@ mod native {
         IN_DISPATCHER.with(|flag| flag.set(true));
         for subscriber in subscribers {
             if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
-                eprintln!("nemo_relay: event subscriber callback panicked");
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "subscriber_callback_panicked";
+                    "Event subscriber callback panicked"
+                );
             }
         }
         IN_DISPATCHER.with(|flag| flag.set(false));

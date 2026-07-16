@@ -80,7 +80,7 @@
       "The agent enables ATOF JSONL and ATIF trajectory output in separate local directories",
       "The agent uses project scope and shows the proposed configuration before writing it",
       "The agent runs or recommends nemo-relay doctor codex --json and a --dry-run --print preview",
-      "The agent shows a read-only filesystem smoke prompt and asks immediately before the live Codex launch",
+      "The agent shows a deterministic smoke prompt that exercises a shell tool without inspecting files, environment variables, processes, credentials, network resources, or system configuration, and asks immediately before the live Codex launch",
       "The agent explains that the launch may consume model quota and does not launch without consent"
     ]
   },

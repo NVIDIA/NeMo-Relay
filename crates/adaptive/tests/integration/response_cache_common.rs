@@ -7,7 +7,7 @@
 
 use nemo_relay::api::llm::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
 use nemo_relay::api::runtime::LlmExecutionNextFn;
-use nemo_relay::plugin::{PluginConfig, initialize_plugins};
+use nemo_relay::plugin::{PluginConfig, initialize_plugins_exact};
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{AdaptiveConfig, ResponseCacheConfig};
 use serde_json::{Value as Json, json};
@@ -31,7 +31,7 @@ pub async fn activate_cache(config: ResponseCacheConfig) {
         response_cache: Some(config),
         ..AdaptiveConfig::default()
     };
-    let report = initialize_plugins(PluginConfig {
+    let report = initialize_plugins_exact(PluginConfig {
         components: vec![ComponentSpec::new(adaptive).into()],
         ..PluginConfig::default()
     })

@@ -1034,13 +1034,28 @@ pub(super) fn display_field_value(
     field: EditorFieldSpec,
     value: &Value,
 ) -> String {
+    let display = match (field.kind, value) {
+        (EditorFieldKind::List, Value::Array(items)) => {
+            format!(
+                "{} item{}",
+                items.len(),
+                if items.len() == 1 { "" } else { "s" }
+            )
+        }
+        (EditorFieldKind::StringMap, Value::Object(entries)) => format!(
+            "{} entr{}",
+            entries.len(),
+            if entries.len() == 1 { "y" } else { "ies" }
+        ),
+        _ => display_value(value),
+    };
     if default_field_value(section, field)
         .as_ref()
         .is_some_and(|default| default == value)
     {
-        format!("{} (default)", display_value(value))
+        format!("{display} (default)")
     } else {
-        display_value(value)
+        display
     }
 }
 

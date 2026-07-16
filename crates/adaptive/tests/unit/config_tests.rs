@@ -101,9 +101,11 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     assert_eq!(backend.field("config").unwrap().kind, EditorFieldKind::Json);
 
     let telemetry = schema.field("telemetry").unwrap().schema().unwrap();
+    let learners = telemetry.field("learners").unwrap();
+    assert_eq!(learners.kind, EditorFieldKind::List);
     assert_eq!(
-        telemetry.field("learners").unwrap().kind,
-        EditorFieldKind::Json
+        learners.list_item.expect("learners item metadata").kind,
+        EditorFieldKind::String
     );
 
     let acg = schema.field("acg").unwrap().schema().unwrap();

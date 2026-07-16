@@ -18,6 +18,12 @@ use crate::plugin::{
 };
 use serde_json::json;
 use std::fs;
+#[cfg(feature = "atof-streaming")]
+use std::io::{Read, Write};
+#[cfg(feature = "atof-streaming")]
+use std::net::TcpListener;
+#[cfg(feature = "atof-streaming")]
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir(prefix: &str) -> PathBuf {
@@ -30,7 +36,118 @@ fn temp_dir(prefix: &str) -> PathBuf {
     path
 }
 
+#[cfg(feature = "atof-streaming")]
+fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let thread_captures = Arc::clone(&captures);
+    std::thread::spawn(move || {
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let headers = String::from_utf8_lossy(&request);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        name.eq_ignore_ascii_case("content-length")
+                            .then_some(value.trim())
+                    })
+                })
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+            let mut body = vec![0_u8; length];
+            stream.read_exact(&mut body).unwrap();
+            thread_captures
+                .lock()
+                .unwrap()
+                .push(String::from_utf8(body).unwrap());
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+        }
+    });
+    (url, captures)
+}
+
+#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
+fn start_http_status_server(status: &'static str) -> (String, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        };
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            if stream.read_exact(&mut byte).is_err() {
+                return;
+            }
+            request.push(byte[0]);
+        }
+        let headers = String::from_utf8_lossy(&request);
+        let length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then_some(value.trim())
+                })
+            })
+            .and_then(|value| value.parse::<usize>().ok());
+        let Some(length) = length else {
+            return;
+        };
+        let mut body = vec![0_u8; length];
+        if stream.read_exact(&mut body).is_err() {
+            return;
+        }
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+    });
+    (url, server)
+}
+
+#[cfg(feature = "atof-streaming")]
+fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec<String> {
+    for _ in 0..100 {
+        let snapshot = captures.lock().unwrap().clone();
+        if snapshot.len() >= expected {
+            return snapshot;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    captures.lock().unwrap().clone()
+}
+
 fn reset_runtime() {
+    let _ = spdlog::init_log_crate_proxy();
+    log::set_max_level(log::LevelFilter::Info);
     let _ = clear_plugin_configuration();
     crate::shared_runtime::reset_runtime_owner_for_tests();
     let context = global_context();
@@ -65,14 +182,18 @@ fn editor_schema_tracks_observability_config_types() {
     assert!(atof.optional);
 
     let atof_schema = atof.schema().expect("atof editor schema");
-    let mode = atof_schema.field("mode").expect("atof mode field");
-    assert_eq!(mode.kind, EditorFieldKind::Enum);
-    assert_eq!(mode.enum_values, &["append", "overwrite"]);
-    let endpoints = atof_schema
-        .field("endpoints")
-        .expect("atof endpoints field");
-    assert_eq!(endpoints.kind, EditorFieldKind::Json);
-    assert!(endpoints.optional);
+    let sinks = atof_schema.field("sinks").expect("atof sinks field");
+    assert_eq!(sinks.kind, EditorFieldKind::List);
+    let sink = sinks.list_item.expect("ATOF sink list metadata");
+    assert_eq!(sink.kind, EditorFieldKind::Section);
+    assert_eq!(
+        sink.tagged_union.map(|metadata| metadata.discriminator),
+        Some("type")
+    );
+    assert_eq!(
+        sink.tagged_union.expect("sink tagged union").variants.len(),
+        2
+    );
 
     let otlp = schema
         .field("openinference")
@@ -81,6 +202,18 @@ fn editor_schema_tracks_observability_config_types() {
         .expect("openinference editor schema");
     let headers = otlp.field("headers").expect("headers field");
     assert_eq!(headers.kind, EditorFieldKind::StringMap);
+
+    let attribute_mappings = otlp
+        .field("attribute_mappings")
+        .expect("attribute mappings field");
+    assert_eq!(attribute_mappings.kind, EditorFieldKind::List);
+    let mapping = attribute_mappings
+        .list_item
+        .expect("attribute mapping list item");
+    assert_eq!(mapping.kind, EditorFieldKind::Section);
+    let mapping_schema = mapping.schema.expect("attribute mapping schema")();
+    assert_eq!(mapping_schema.fields[0].name, "key");
+    assert_eq!(mapping_schema.fields[1].name, "alias");
 }
 
 fn push_agent(name: &str) -> crate::api::scope::ScopeHandle {
@@ -192,7 +325,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     reset_runtime();
 
     let defaults = ObservabilityConfig::default();
-    assert_eq!(defaults.version, 1);
+    assert_eq!(defaults.version, 2);
     assert!(defaults.atof.is_none());
     assert!(defaults.atif.is_none());
     assert!(defaults.opentelemetry.is_none());
@@ -200,16 +333,18 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let atof = AtofSectionConfig::default();
     assert!(!atof.enabled);
-    assert_eq!(atof.mode, "append");
-    assert!(atof.output_directory.is_none());
-    assert!(atof.filename.is_none());
+    assert!(atof.sinks.is_empty());
 
     let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "endpoints": [{"url": "http://localhost/events"}]
+        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
     }))
     .unwrap();
-    assert_eq!(parsed_atof.endpoints[0].transport, "http_post");
-    assert_eq!(parsed_atof.endpoints[0].field_name_policy, "preserve");
+    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
+        panic!("expected stream sink");
+    };
+    assert_eq!(stream.name.as_deref(), Some("switchyard"));
+    assert_eq!(stream.transport, "http_post");
+    assert_eq!(stream.field_name_policy, "preserve");
 
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
@@ -222,6 +357,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(!otlp.enabled);
     assert_eq!(otlp.mark_projection, MarkProjection::Inherit);
     assert_eq!(otlp.mark_exclude_names, vec!["llm.chunk"]);
+    assert!(otlp.attribute_mappings.is_empty());
     assert_eq!(otlp.transport, "http_binary");
     assert_eq!(otlp.service_name, "nemo-relay");
     assert_eq!(otlp.timeout_millis, 3_000);
@@ -236,12 +372,21 @@ fn default_config_and_component_conversion_cover_public_shape() {
     .into();
     assert_eq!(generic.kind, OBSERVABILITY_PLUGIN_KIND);
     assert!(generic.enabled);
-    assert_eq!(generic.config["version"], json!(1));
+    assert_eq!(generic.config["version"], json!(2));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
 }
 
 #[test]
 fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
+    let mappings: OtlpSectionConfig = serde_json::from_value(json!({
+        "attribute_mappings": [{
+            "key": "nemo_relay.start.metadata.tenant",
+            "alias": "tenant.id"
+        }]
+    }))
+    .unwrap();
+    assert_eq!(mappings.attribute_mappings.len(), 1);
+
     let otlp: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool"
     }))
@@ -287,6 +432,43 @@ fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
         diagnostic.code == "observability.unknown_field"
             && diagnostic.field.as_deref() == Some("mark_projection")
     }));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "openinference": {
+            "attribute_mappings": [
+                {"key": "", "alias": "tenant.id"},
+                {"key": "openinference.metadata.tenant", "alias": "tenant.id"}
+            ]
+        }
+    })));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.unsupported_value"
+            && diagnostic.field.as_deref() == Some("attribute_mappings")
+            && diagnostic
+                .message
+                .contains("attribute mapping key must not be blank")
+    }));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "policy": {"unknown_field": "error"},
+        "opentelemetry": {
+            "attribute_mappings": [{
+                "key": "nemo_relay.start.metadata.tenant",
+                "alias": "tenant.id"
+            }]
+        },
+        "openinference": {
+            "attribute_mappings": [{
+                "key": "openinference.metadata.tenant",
+                "alias": "tenant.id"
+            }]
+        }
+    })));
+    assert!(
+        !report.has_errors(),
+        "valid attribute mappings must not be reported as unknown: {:?}",
+        report.diagnostics
+    );
 }
 
 #[cfg(feature = "schema")]
@@ -304,12 +486,18 @@ fn schema_contains_every_supported_observability_option() {
         "output_directory",
         "filename",
         "mode",
-        "endpoints",
+        "name",
+        "sinks",
+        "type",
+        "url",
+        "field_name_policy",
+        "header_env",
         "agent_name",
         "agent_version",
         "model_name",
         "mark_projection",
         "mark_exclude_names",
+        "attribute_mappings",
         "tool_definitions",
         "extra",
         "filename_template",
@@ -408,7 +596,7 @@ fn empty_and_disabled_config_register_nothing() {
     reset_runtime();
 
     let config = plugin_config(json!({
-        "atof": {"enabled": false, "mode": "overwrite"},
+        "atof": {"enabled": false},
         "atif": {"enabled": false},
         "opentelemetry": {"enabled": false, "transport": "grpc"},
         "openinference": {"enabled": false, "transport": "grpc"}
@@ -429,8 +617,7 @@ fn disabled_file_sections_do_not_create_files() {
     let config = plugin_config(json!({
         "atof": {
             "enabled": false,
-            "output_directory": dir,
-            "filename": "events.jsonl"
+            "sinks": [{"type": "file", "output_directory": dir, "filename": "events.jsonl"}]
         },
         "atif": {
             "enabled": false,
@@ -475,7 +662,7 @@ fn unknown_fields_and_bad_values_follow_policy() {
     reset_runtime();
 
     let warn_report = validate_plugin_config(&plugin_config(json!({
-        "atof": {"bogus": true, "mode": "invalid"},
+        "atof": {"bogus": true, "sinks": [{"type": "file", "mode": "invalid"}]},
         "atif": {"filename_template": "missing-session"}
     })));
     assert!(warn_report.has_errors());
@@ -489,7 +676,7 @@ fn unknown_fields_and_bad_values_follow_policy() {
         warn_report
             .diagnostics
             .iter()
-            .any(|diag| diag.field.as_deref() == Some("mode"))
+            .any(|diag| diag.field.as_deref() == Some("sinks[0].mode"))
     );
     assert!(
         warn_report
@@ -500,7 +687,7 @@ fn unknown_fields_and_bad_values_follow_policy() {
 
     let ignore_report = validate_plugin_config(&plugin_config(json!({
         "policy": {"unknown_field": "ignore", "unsupported_value": "ignore"},
-        "atof": {"bogus": true, "mode": "invalid"},
+        "atof": {"bogus": true, "sinks": [{"type": "file", "mode": "invalid"}]},
         "atif": {"filename_template": "missing-session"}
     })));
     assert!(!ignore_report.has_errors());
@@ -524,7 +711,7 @@ fn invalid_shapes_and_strict_policy_are_reported() {
     );
 
     let unsupported_version = validate_plugin_config(&plugin_config(json!({
-        "version": 2,
+        "version": 1,
     })));
     assert!(unsupported_version.has_errors());
     assert!(unsupported_version.diagnostics.iter().any(|diag| diag.code
@@ -565,12 +752,17 @@ fn atof_endpoint_validation_rejects_bad_values() {
     let report = validate_plugin_config(&plugin_config(json!({
         "atof": {
             "enabled": true,
-            "endpoints": [
-                {"url": "", "transport": "http_post"},
-                {"url": "http://localhost/events", "transport": "bogus"},
-                {"url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
-                {"url": "not a url", "transport": "http_post"},
-                {"url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"}
+            "sinks": [
+                {"type": "stream", "url": "", "transport": "http_post"},
+                {"type": "stream", "url": "http://localhost/events", "transport": "bogus"},
+                {"type": "stream", "url": "http://localhost/events", "transport": "ndjson", "timeout_millis": 0},
+                {"type": "stream", "url": "not a url", "transport": "http_post"},
+                {"type": "stream", "url": "http://localhost/events", "transport": "http_post", "field_name_policy": "bogus"},
+                {"type": "stream", "url": "http://localhost/events", "transport": "websocket"},
+                {"type": "stream", "url": "http://localhost/events", "headers": {"invalid header": "value", "x-api-key": "value"}, "header_env": {"X-Api-Key": "NEMO_RELAY_TEST_MISSING_ATOF_HEADER_ENV"}},
+                {"type": "stream", "name": "switchyard", "url": "http://localhost/first"},
+                {"type": "stream", "name": "switchyard", "url": "http://localhost/second"},
+                {"type": "stream", "name": " ", "url": "http://localhost/blank"}
             ]
         }
     })));
@@ -580,42 +772,133 @@ fn atof_endpoint_validation_rejects_bad_values() {
         report
             .diagnostics
             .iter()
-            .any(|diag| { diag.field.as_deref() == Some("endpoints[0].url") })
+            .any(|diag| { diag.field.as_deref() == Some("sinks[0].url") })
     );
     assert!(
         report
             .diagnostics
             .iter()
-            .any(|diag| { diag.field.as_deref() == Some("endpoints[1].transport") })
+            .any(|diag| { diag.field.as_deref() == Some("sinks[1].transport") })
     );
     assert!(
         report
             .diagnostics
             .iter()
-            .any(|diag| { diag.field.as_deref() == Some("endpoints[2].timeout_millis") })
+            .any(|diag| { diag.field.as_deref() == Some("sinks[2].timeout_millis") })
     );
     #[cfg(feature = "atof-streaming")]
     assert!(
         report
             .diagnostics
             .iter()
-            .any(|diag| { diag.field.as_deref() == Some("endpoints[3].url") })
+            .any(|diag| { diag.field.as_deref() == Some("sinks[3].url") })
     );
     assert!(
         report
             .diagnostics
             .iter()
-            .any(|diag| { diag.field.as_deref() == Some("endpoints[4].field_name_policy") })
+            .any(|diag| { diag.field.as_deref() == Some("sinks[4].field_name_policy") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[5].url") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[6].header_env.X-Api-Key") })
+    );
+    #[cfg(feature = "atof-streaming")]
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[6].headers.invalid header") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[8].name") })
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diag| { diag.field.as_deref() == Some("sinks[9].name") })
     );
 }
 
 #[test]
-fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
+fn atof_stream_sink_name_validation_reports_each_invalid_name() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "sinks": [
+                {"type": "stream", "url": "http://localhost/missing"},
+                {"type": "stream", "name": "", "url": "http://localhost/empty"},
+                {"type": "stream", "name": " leading", "url": "http://localhost/leading"},
+                {"type": "stream", "name": "trailing ", "url": "http://localhost/trailing"},
+                {"type": "stream", "name": "duplicate", "url": "http://localhost/first"},
+                {"type": "stream", "name": "duplicate", "url": "http://localhost/second"},
+                {"type": "stream", "name": "valid", "url": "http://localhost/valid"}
+            ]
+        }
+    })));
+
+    let name_diagnostics = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic
+                .field
+                .as_deref()
+                .is_some_and(|field| field.ends_with(".name"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(name_diagnostics.len(), 4);
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[1].name")
+            && diagnostic.message.contains("must be non-empty")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[2].name")
+            && diagnostic
+                .message
+                .contains("leading or trailing whitespace")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[3].name")
+            && diagnostic
+                .message
+                .contains("leading or trailing whitespace")
+    }));
+    assert!(name_diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("sinks[5].name")
+            && diagnostic.message.contains("must be unique")
+    }));
+    assert!(!name_diagnostics.iter().any(|diagnostic| {
+        matches!(
+            diagnostic.field.as_deref(),
+            Some("sinks[0].name" | "sinks[4].name" | "sinks[6].name")
+        )
+    }));
+}
+
+#[test]
+fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("authorization".to_string(), "token".to_string());
-    let config = build_atof_endpoint_config(
+    let config = build_atof_sink_config(
         2,
-        AtofEndpointSectionConfig {
+        AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: Some("switchyard".into()),
             url: "ws://127.0.0.1:47632/events".into(),
             transport: "websocket".into(),
             headers: headers.clone(),
@@ -625,10 +908,13 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
             )]),
             timeout_millis: 123,
             field_name_policy: "replace_dots".into(),
-        },
+        }),
     )
     .unwrap();
 
+    let CoreAtofSinkConfig::Stream(config) = config else {
+        panic!("expected stream sink")
+    };
     assert_eq!(config.url, "ws://127.0.0.1:47632/events");
     assert_eq!(
         config.transport,
@@ -645,33 +931,35 @@ fn build_atof_endpoint_config_maps_headers_timeout_and_rejects_transport() {
         crate::observability::atof::AtofEndpointFieldNamePolicy::ReplaceDots
     );
 
-    let error = build_atof_endpoint_config(
+    let error = build_atof_sink_config(
         3,
-        AtofEndpointSectionConfig {
+        AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "smtp".into(),
             headers: std::collections::HashMap::new(),
             header_env: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "preserve".into(),
-        },
+        }),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("endpoints[3].transport"));
+    assert!(error.to_string().contains("sinks[3].transport"));
 
-    let error = build_atof_endpoint_config(
+    let error = build_atof_sink_config(
         4,
-        AtofEndpointSectionConfig {
+        AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+            name: None,
             url: "http://127.0.0.1:47632/events".into(),
             transport: "http_post".into(),
             headers: std::collections::HashMap::new(),
             header_env: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "bogus".into(),
-        },
+        }),
     )
     .unwrap_err();
-    assert!(error.to_string().contains("endpoints[4].field_name_policy"));
+    assert!(error.to_string().contains("sinks[4].field_name_policy"));
 }
 
 #[test]
@@ -686,13 +974,11 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
         "policy": {"unsupported_value": "ignore"},
         "atof": {
             "enabled": true,
-            "mode": "invalid",
-            "output_directory": dir,
-            "filename": "events.jsonl"
+            "sinks": [{"type": "file", "mode": "invalid", "output_directory": dir, "filename": "events.jsonl"}]
         }
     }));
     let error = futures::executor::block_on(initialize_plugins_exact(invalid_atof)).unwrap_err();
-    assert!(error.to_string().contains("ATOF mode"));
+    assert!(error.to_string().contains("ATOF sinks[0].mode"));
 
     let invalid_atif_template = plugin_config(json!({
         "policy": {"unsupported_value": "ignore"},
@@ -709,8 +995,7 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
     let invalid_path = plugin_config(json!({
         "atof": {
             "enabled": true,
-            "output_directory": not_a_directory,
-            "filename": "events.jsonl"
+            "sinks": [{"type": "file", "output_directory": not_a_directory, "filename": "events.jsonl"}]
         }
     }));
     let error = futures::executor::block_on(initialize_plugins_exact(invalid_path)).unwrap_err();
@@ -749,9 +1034,10 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
     let config = plugin_config(json!({
         "atof": {
             "enabled": true,
-            "output_directory": dir,
-            "filename": "events.jsonl",
-            "mode": "overwrite"
+            "sinks": [
+                {"type": "file", "output_directory": dir, "filename": "events.jsonl", "mode": "overwrite"},
+                {"type": "file", "output_directory": dir, "filename": "events-copy.jsonl", "mode": "overwrite"}
+            ]
         }
     }));
     futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
@@ -786,6 +1072,98 @@ fn atof_enabled_writes_jsonl_and_teardown_flushes() {
     assert!(lines[0].contains("\"kind\":\"scope\""));
     assert!(lines[1].contains("\"kind\":\"mark\""));
     assert!(lines[2].contains("\"scope_category\":\"end\""));
+    assert_eq!(
+        fs::read_to_string(dir.join("events-copy.jsonl"))
+            .unwrap()
+            .lines()
+            .count(),
+        3
+    );
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn atof_stream_sinks_fan_out_and_teardown_all_workers() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let (first_url, first_captures) = start_http_capture_server(3);
+    let (second_url, second_captures) = start_http_capture_server(3);
+
+    let config = plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "sinks": [
+                {"type": "stream", "url": first_url, "transport": "http_post"},
+                {"type": "stream", "url": second_url, "transport": "http_post"}
+            ]
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+
+    let agent = push_agent("atof-stream-agent");
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("checkpoint")
+            .parent(&agent)
+            .data(json!({"step": 1}))
+            .build(),
+    )
+    .unwrap();
+    pop(&agent);
+    clear_plugin_configuration().unwrap();
+
+    for captures in [&first_captures, &second_captures] {
+        let bodies = wait_for_captures(captures, 3);
+        assert_eq!(bodies.len(), 3, "captured bodies: {bodies:?}");
+        let events = bodies.join("");
+        assert!(events.contains("\"scope_category\":\"start\""));
+        assert!(events.contains("\"name\":\"checkpoint\""));
+        assert!(events.contains("\"scope_category\":\"end\""));
+    }
+}
+
+#[test]
+#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
+fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let secret_var = format!("NEMO_RELAY_TEST_S3_SECRET_{}", std::process::id());
+    // SAFETY: The variable name is unique to this test process and is removed before returning.
+    unsafe { std::env::set_var(&secret_var, "test-secret") };
+    let s3 = AtifStorageConfig::S3(S3StorageConfig {
+        bucket: "test-bucket".into(),
+        key_prefix: Some("trajectories".into()),
+        access_key_id: Some("test-access-key".into()),
+        secret_access_key_var: Some(secret_var.clone()),
+        session_token_var: None,
+        region: Some("us-east-1".into()),
+        endpoint_url: Some("http://127.0.0.1:9".into()),
+        allow_http: Some(true),
+    });
+    let storage = build_atif_storage(3, &s3).expect("S3 client configuration should resolve");
+    drop(storage);
+    // SAFETY: Cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(&secret_var) };
+
+    for (status, succeeds) in [("200 OK", true), ("503 Service Unavailable", false)] {
+        let (endpoint, server) = start_http_status_server(status);
+        let storage = AtifRemoteStorage::from_config(
+            4,
+            &AtifStorageConfig::Http(HttpStorageConfig {
+                endpoint,
+                headers: std::collections::HashMap::new(),
+                header_env: std::collections::HashMap::new(),
+                timeout_millis: 5_000,
+            }),
+        )
+        .unwrap();
+
+        let result = storage.put("trajectory.json", "session", b"{}");
+        assert_eq!(result.is_ok(), succeeds);
+        drop(storage);
+        server.join().unwrap();
+    }
 }
 
 #[test]
@@ -868,7 +1246,10 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .uuid(agent_uuid)
             .parent_uuid(root_uuid)
             .name("root-agent")
-            .metadata(json!({"session_id": "root-session"}))
+            .metadata(json!({
+                "session_id": "root-session",
+                "user_id": "alice"
+            }))
             .build(),
         ScopeCategory::Start,
         vec![],
@@ -881,6 +1262,32 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
             .unwrap()
             .observe_global(
                 &start_event,
+                "__test__",
+                Arc::clone(&manager),
+                Arc::clone(&empty_storage),
+            )
+            .is_none()
+    );
+
+    let session_start_mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(agent_uuid)
+            .name("session.start")
+            .metadata(json!({
+                "session_id": "root-session",
+                "user_id": "alice",
+                "session_instance_id": root_uuid.to_string()
+            }))
+            .build(),
+        None,
+        None,
+    ));
+    assert!(
+        manager
+            .lock()
+            .unwrap()
+            .observe_global(
+                &session_start_mark,
                 "__test__",
                 Arc::clone(&manager),
                 Arc::clone(&empty_storage),
@@ -973,6 +1380,27 @@ fn atif_routes_global_descendant_events_by_parent_uuid() {
 
     let value: Json = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["extra"]["nemo_relay"]["session_id"], "root-session");
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_instance_id"],
+        root_uuid.to_string()
+    );
+    assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
+    assert_eq!(
+        value["extra"]["observed_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["name"] == "session.start")
+            .count(),
+        1
+    );
+    assert!(
+        value["steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().all(|step| step["event"] != "session.start"))
+    );
     assert_eq!(
         value["subagent_trajectories"][0]["session_id"],
         "child-session"
@@ -1272,6 +1700,64 @@ fn atif_dispatcher_default_output_path_uses_current_directory() {
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
     );
+}
+
+#[test]
+fn atif_payload_merges_correlation_with_existing_trajectory_extra() {
+    let agent_uuid = Uuid::now_v7();
+    let trajectory = crate::observability::atif::AtifTrajectory {
+        schema_version: "ATIF-v1.7".to_string(),
+        session_id: agent_uuid.to_string(),
+        trajectory_id: Some(agent_uuid.to_string()),
+        agent: AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+        steps: Vec::new(),
+        notes: None,
+        final_metrics: None,
+        continued_trajectory_ref: None,
+        subagent_trajectories: None,
+        extra: Some(json!({
+            "existing": "preserved",
+            "nemo_relay": {
+                "existing": "nested",
+                "session_id": "untrusted"
+            }
+        })),
+    };
+    let write = prepare_atif_payload(
+        agent_uuid,
+        format!("trajectory-{agent_uuid}.json"),
+        None,
+        trajectory,
+        Vec::new(),
+        AtifCorrelation {
+            session_id: Some("logical-session".to_string()),
+            session_instance_id: Some("instance-id".to_string()),
+            user_id: Some("alice".to_string()),
+        },
+    )
+    .unwrap();
+    let value: Json = serde_json::from_slice(&write.payload).unwrap();
+
+    assert_eq!(value["session_id"], agent_uuid.to_string());
+    assert_eq!(value["trajectory_id"], agent_uuid.to_string());
+    assert_eq!(value["extra"]["existing"], "preserved");
+    assert_eq!(value["extra"]["nemo_relay"]["existing"], "nested");
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_id"],
+        "logical-session"
+    );
+    assert_eq!(
+        value["extra"]["nemo_relay"]["session_instance_id"],
+        "instance-id"
+    );
+    assert_eq!(value["extra"]["nemo_relay"]["user_id"], "alice");
+    assert_eq!(value["extra"]["observed_events"], json!([]));
 }
 
 #[test]

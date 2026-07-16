@@ -10,6 +10,7 @@ metadata:
 
 Use this skill when an application wants stronger domain types than raw JSON for
 tool or LLM integration.
+Keep typed boundaries explicit so middleware still sees predictable JSON.
 
 ## Default Guidance
 

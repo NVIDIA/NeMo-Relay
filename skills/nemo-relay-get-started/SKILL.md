@@ -10,6 +10,7 @@ metadata:
 
 Guide a new user to visible Relay value with the least complicated applicable
 trial. Do not begin with production deployment or Relay's full architecture.
+Keep the first run focused on one observable success path.
 
 ## Choose A Try-Now Path
 

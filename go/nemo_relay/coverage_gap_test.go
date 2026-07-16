@@ -61,6 +61,21 @@ func TestEventBaseNilPointerFallbacks(t *testing.T) {
 }
 
 func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
+	runTestWithScopeStack(t, testPublicAPIErrorAndDefaultCoverage)
+}
+
+func testPublicAPIErrorAndDefaultCoverage(t *testing.T) {
+	assertInvalidScopePayloads(t)
+	assertInvalidCallPayloads(t)
+	assertClosedExporterFails(t)
+	assertZeroSubscriberConfigs(t)
+	if got := mustConfigMap(nil); len(got) != 0 {
+		t.Fatalf("expected empty map for nil config payload, got %#v", got)
+	}
+}
+
+func assertInvalidScopePayloads(t *testing.T) {
+	t.Helper()
 	for _, tc := range []struct {
 		name string
 		opt  ScopeOption
@@ -84,7 +99,10 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 	if err := PopScope(handle); err != nil {
 		t.Fatalf("cleanup PopScope failed: %v", err)
 	}
+}
 
+func assertInvalidCallPayloads(t *testing.T) {
+	t.Helper()
 	if _, err := ToolCall("invalid_tool_json", json.RawMessage("{")); err == nil {
 		t.Fatal("expected ToolCall to fail on invalid JSON args")
 	}
@@ -125,7 +143,10 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 	if _, err := LlmRequestIntercepts("invalid_llm_request_intercepts", json.RawMessage("{")); err == nil {
 		t.Fatal("expected LlmRequestIntercepts to fail on invalid JSON")
 	}
+}
 
+func assertClosedExporterFails(t *testing.T) {
+	t.Helper()
 	exporter, err := NewAtifExporter("session-gap", "agent-gap", "1.0.0", "")
 	if err != nil {
 		t.Fatalf("NewAtifExporter failed: %v", err)
@@ -134,7 +155,10 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 	if _, err := exporter.ExportJSON(); err == nil {
 		t.Fatal("expected ExportJSON to fail after Close")
 	}
+}
 
+func assertZeroSubscriberConfigs(t *testing.T) {
+	t.Helper()
 	otel, err := NewOpenTelemetrySubscriber(OpenTelemetryConfig{})
 	if err != nil {
 		t.Fatalf("NewOpenTelemetrySubscriber with zero config failed: %v", err)
@@ -146,13 +170,13 @@ func TestPublicAPIErrorAndDefaultCoverage(t *testing.T) {
 		t.Fatalf("NewOpenInferenceSubscriber with zero config failed: %v", err)
 	}
 	openInference.Close()
-
-	if got := mustConfigMap(nil); len(got) != 0 {
-		t.Fatalf("expected empty map for nil config payload, got %#v", got)
-	}
 }
 
 func TestWrapperAndCodecFinalizersRun(t *testing.T) {
+	runTestWithScopeStack(t, testWrapperAndCodecFinalizersRun)
+}
+
+func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	scopeHandle, err := PushScope("finalizer_scope", ScopeTypeAgent)
 	if err != nil {
 		t.Fatalf("PushScope failed: %v", err)

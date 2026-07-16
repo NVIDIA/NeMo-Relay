@@ -46,6 +46,10 @@ use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::Usage;
 use nemo_relay::error::{FlowError, Result as FlowResult};
+use nemo_relay::plugin::dynamic::{
+    DynamicPluginActivationSpec as CoreDynamicPluginActivationSpec, DynamicPluginKind,
+    PluginHostActivation as CorePluginHostActivation,
+};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginConfig, PluginError, PluginRegistration,
     PluginRegistrationContext, active_plugin_report as active_plugin_report_impl,
@@ -85,6 +89,21 @@ fn init() {
         .expect("node pii redaction plugin component registration should succeed");
 }
 
+#[cfg(not(test))]
+#[napi_derive::module_exports]
+fn install_well_known_symbol_methods(exports: JsObject, env: Env) -> napi::Result<()> {
+    let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
+    let activation = activation.coerce_to_object()?;
+    let mut prototype: JsObject = activation.get_named_property("prototype")?;
+    let symbol: JsFunction = env.get_global()?.get_named_property("Symbol")?;
+    let symbol = symbol.coerce_to_object()?;
+    let async_dispose: napi::JsSymbol = symbol.get_named_property("asyncDispose")?;
+    let close: JsFunction = prototype.get_named_property("close")?;
+    prototype.set_property(async_dispose, close)?;
+    prototype.delete_named_property("[Symbol.asyncDispose]")?;
+    Ok(())
+}
+
 fn parse_string_map(
     value: Option<Json>,
     field_name: &str,
@@ -107,6 +126,22 @@ fn parse_string_map(
         out.insert(key, value);
     }
     Ok(out)
+}
+
+fn parse_attribute_mappings(
+    value: Option<Vec<OtlpAttributeMapping>>,
+) -> napi::Result<Vec<nemo_relay::observability::OtlpAttributeMapping>> {
+    let mappings = value
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mapping| nemo_relay::observability::OtlpAttributeMapping {
+            key: mapping.key,
+            alias: mapping.alias,
+        })
+        .collect::<Vec<_>>();
+    nemo_relay::observability::validate_attribute_mappings(&mappings)
+        .map_err(napi::Error::from_reason)?;
+    Ok(mappings)
 }
 
 fn otel_status_metadata(status_code: &'static str, status_message: Option<String>) -> Json {
@@ -168,6 +203,7 @@ fn build_otel_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
+    config = config.with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
 
     Ok(config)
 }
@@ -176,59 +212,67 @@ fn build_atof_config(
     options: Option<AtofExporterConfig>,
 ) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
     let options = options.unwrap_or_default();
-    let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
-
-    if let Some(output_directory) = options.output_directory {
-        config = config.with_output_directory(PathBuf::from(output_directory));
-    }
-    if let Some(filename) = options.filename {
-        config = config.with_filename(filename);
-    }
-    if let Some(mode) = options.mode {
-        let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode) else {
-            return Err(napi::Error::from_reason(
-                "mode must be 'append' or 'overwrite'",
-            ));
-        };
-        config = config.with_mode(mode);
-    }
-    let mut endpoints = Vec::new();
-    for endpoint in options.endpoints.unwrap_or_default() {
-        let transport = endpoint
-            .transport
-            .unwrap_or_else(|| "http_post".to_string());
-        let Some(transport) =
-            nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
-        else {
-            return Err(napi::Error::from_reason(
-                "endpoint transport must be 'http_post', 'websocket', or 'ndjson'",
-            ));
-        };
-        let mut endpoint_config =
-            nemo_relay::observability::atof::AtofEndpointConfig::new(endpoint.url, transport);
-        if let Some(timeout_millis) = endpoint.timeout_millis {
-            endpoint_config = endpoint_config.with_timeout_millis(timeout_millis.into());
+    match options.r#type.as_deref().unwrap_or("file") {
+        "file" => {
+            let mut config = nemo_relay::observability::atof::AtofExporterConfig::new();
+            if let Some(output_directory) = options.output_directory {
+                config = config.with_output_directory(PathBuf::from(output_directory));
+            }
+            if let Some(filename) = options.filename {
+                config = config.with_filename(filename);
+            }
+            if let Some(mode) = options.mode {
+                let Some(mode) = nemo_relay::observability::atof::AtofExporterMode::parse(&mode)
+                else {
+                    return Err(napi::Error::from_reason(
+                        "mode must be 'append' or 'overwrite'",
+                    ));
+                };
+                config = config.with_mode(mode);
+            }
+            Ok(config)
         }
-        if let Some(field_name_policy) = endpoint.field_name_policy {
-            let Some(field_name_policy) =
-                nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
-                    &field_name_policy,
-                )
+        "stream" => {
+            let url = options
+                .url
+                .ok_or_else(|| napi::Error::from_reason("stream sink requires url"))?;
+            let transport = options.transport.unwrap_or_else(|| "http_post".to_string());
+            let Some(transport) =
+                nemo_relay::observability::atof::AtofEndpointTransport::parse(&transport)
             else {
                 return Err(napi::Error::from_reason(
-                    "endpoint field_name_policy must be 'preserve' or 'replace_dots'",
+                    "stream transport must be 'http_post', 'websocket', or 'ndjson'",
                 ));
             };
-            endpoint_config = endpoint_config.with_field_name_policy(field_name_policy);
+            let mut sink =
+                nemo_relay::observability::atof::AtofStreamSinkConfig::new(url, transport);
+            if let Some(timeout_millis) = options.timeout_millis {
+                sink = sink.with_timeout_millis(timeout_millis.into());
+            }
+            if let Some(field_name_policy) = options.field_name_policy {
+                let Some(field_name_policy) =
+                    nemo_relay::observability::atof::AtofEndpointFieldNamePolicy::parse(
+                        &field_name_policy,
+                    )
+                else {
+                    return Err(napi::Error::from_reason(
+                        "stream field_name_policy must be 'preserve' or 'replace_dots'",
+                    ));
+                };
+                sink = sink.with_field_name_policy(field_name_policy);
+            }
+            for (key, value) in parse_string_map(options.headers, "headers")? {
+                sink = sink.with_header(key, value);
+            }
+            for (key, variable) in parse_string_map(options.header_env, "headerEnv")? {
+                sink = sink.with_header_env(key, variable);
+            }
+            Ok(nemo_relay::observability::atof::AtofExporterConfig::new().with_stream_sink(sink))
         }
-        for (key, value) in parse_string_map(endpoint.headers, "endpoint.headers")? {
-            endpoint_config = endpoint_config.with_header(key, value);
-        }
-        endpoints.push(endpoint_config);
+        _ => Err(napi::Error::from_reason(
+            "ATOF sink type must be 'file' or 'stream'",
+        )),
     }
-    config = config.with_endpoints(endpoints);
-
-    Ok(config)
 }
 
 fn build_openinference_config(
@@ -277,6 +321,7 @@ fn build_openinference_config(
     for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
         config = config.with_resource_attribute(key, value);
     }
+    config = config.with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
 
     Ok(config)
 }
@@ -3341,37 +3386,33 @@ impl AtifExporter {
     }
 }
 
-/// Mutable configuration object for `AtofExporter`.
+/// One tagged sink configuration for `AtofExporter`.
 #[napi(object)]
 #[derive(Default)]
 pub struct AtofExporterConfig {
+    /// Sink type: `"file"` (default) or `"stream"`.
+    pub r#type: Option<String>,
     /// Output directory. Defaults to the current working directory.
     pub output_directory: Option<String>,
     /// `"append"` (default) or `"overwrite"`.
     pub mode: Option<String>,
     /// Output filename. Defaults to `nemo-relay-events-YYYY-MM-DD-HH.MM.SS.jsonl`.
     pub filename: Option<String>,
-    /// Streaming endpoints that receive every raw ATOF event.
-    pub endpoints: Option<Vec<AtofEndpointConfig>>,
-}
-
-/// Mutable configuration object for one ATOF streaming endpoint.
-#[napi(object)]
-#[derive(Default)]
-pub struct AtofEndpointConfig {
-    /// Endpoint URL.
-    pub url: String,
+    /// Stream endpoint URL. Required when `type` is `"stream"`.
+    pub url: Option<String>,
     /// `"http_post"` (default), `"websocket"`, or `"ndjson"`.
     pub transport: Option<String>,
-    /// Extra endpoint headers as string key/value pairs.
+    /// Extra stream headers as string key/value pairs.
     pub headers: Option<Json>,
-    /// Per-endpoint timeout in milliseconds.
+    /// Header names mapped to environment variables that supply their values.
+    pub header_env: Option<Json>,
+    /// Per-stream timeout in milliseconds.
     pub timeout_millis: Option<u32>,
-    /// Field name policy applied before sending events.
+    /// Field name policy applied before sending stream events.
     pub field_name_policy: Option<String>,
 }
 
-/// Filesystem-backed Agent Trajectory Observability Format (ATOF) JSONL event exporter.
+/// Single-sink Agent Trajectory Observability Format (ATOF) exporter.
 #[napi]
 pub struct AtofExporter {
     inner: nemo_relay::observability::atof::AtofExporter,
@@ -3388,10 +3429,12 @@ impl AtofExporter {
         Ok(Self { inner })
     }
 
-    /// Return the JSONL output path.
+    /// Return the JSONL output path, or `null` for a stream sink.
     #[napi(getter)]
-    pub fn path(&self) -> String {
-        self.inner.path().to_string_lossy().into_owned()
+    pub fn path(&self) -> Option<String> {
+        self.inner
+            .path()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     /// Register this exporter globally with the given name.
@@ -3449,6 +3492,17 @@ pub struct OpenTelemetryConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Typed projected attributes copied to aliases.
+    pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
+}
+
+/// Typed projected attribute copy configuration.
+#[napi(object)]
+pub struct OtlpAttributeMapping {
+    /// Fully-qualified projected attribute to copy.
+    pub key: String,
+    /// Additional attribute name receiving the copied value.
+    pub alias: String,
 }
 
 /// Mutable configuration object for `OpenInferenceSubscriber`.
@@ -3473,6 +3527,8 @@ pub struct OpenInferenceConfig {
     pub instrumentation_scope: Option<String>,
     /// Export timeout in milliseconds. Defaults to `3000`.
     pub timeout_millis: Option<u32>,
+    /// Typed projected attributes copied to aliases.
+    pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
 }
 
 /// OpenTelemetry-backed event subscriber.
@@ -4005,6 +4061,248 @@ pub async fn initialize_plugins(config: Json) -> napi::Result<Json> {
         .await
         .map_err(|e| napi::Error::from_reason(e.to_string()))?;
     serde_json::to_value(&report).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NodeDynamicPluginActivationSpec {
+    #[serde(alias = "plugin_id")]
+    plugin_id: String,
+    kind: DynamicPluginKind,
+    #[serde(alias = "manifest_ref")]
+    manifest_ref: String,
+    #[serde(default, alias = "environment_ref")]
+    environment_ref: Option<String>,
+    #[serde(default)]
+    config: serde_json::Map<String, Json>,
+}
+
+impl From<NodeDynamicPluginActivationSpec> for CoreDynamicPluginActivationSpec {
+    fn from(spec: NodeDynamicPluginActivationSpec) -> Self {
+        Self {
+            plugin_id: spec.plugin_id,
+            kind: spec.kind,
+            manifest_ref: spec.manifest_ref,
+            environment_ref: spec.environment_ref,
+            config: spec.config,
+        }
+    }
+}
+
+/// Owned dynamic plugin activation.
+///
+/// Keep this object alive while code may invoke callbacks registered by the
+/// dynamic plugins. Call `close()` for deterministic cleanup; garbage
+/// collection performs the same cleanup as a defensive fallback.
+#[napi]
+pub struct DynamicPluginActivation {
+    close_state: Arc<DynamicPluginCloseState>,
+    report: Json,
+}
+
+type DynamicPluginTeardownResult = std::result::Result<(), String>;
+
+enum DynamicPluginCloseStatus {
+    Active(Option<CorePluginHostActivation>),
+    Closing,
+    Closed,
+}
+
+struct DynamicPluginCloseState {
+    status: StdMutex<DynamicPluginCloseStatus>,
+    completion: tokio::sync::watch::Sender<Option<DynamicPluginTeardownResult>>,
+}
+
+impl DynamicPluginCloseState {
+    fn new(activation: CorePluginHostActivation) -> Self {
+        let (completion, _) = tokio::sync::watch::channel(None);
+        Self {
+            status: StdMutex::new(DynamicPluginCloseStatus::Active(Some(activation))),
+            completion,
+        }
+    }
+
+    fn active(&self) -> bool {
+        let status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match &*status {
+            DynamicPluginCloseStatus::Active(activation) => activation.is_some(),
+            DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => false,
+        }
+    }
+
+    fn begin_close(self: &Arc<Self>, log_finalizer_error: bool) {
+        let activation = {
+            let mut status = self
+                .status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match &mut *status {
+                DynamicPluginCloseStatus::Active(activation) => {
+                    let activation = activation.take();
+                    *status = DynamicPluginCloseStatus::Closing;
+                    activation
+                }
+                DynamicPluginCloseStatus::Closing | DynamicPluginCloseStatus::Closed => None,
+            }
+        };
+        let Some(activation) = activation else {
+            return;
+        };
+
+        // Keep the activation outside the spawned closure so a thread-spawn
+        // failure cannot drop it and synchronously run teardown on the JS thread.
+        let activation = Arc::new(StdMutex::new(Some(activation)));
+        let worker_activation = Arc::clone(&activation);
+        let close_state = Arc::clone(self);
+        let spawn = std::thread::Builder::new()
+            .name("nemo-relay-node-plugin-teardown".into())
+            .spawn(move || {
+                let activation = worker_activation
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .take();
+                let result = match activation {
+                    Some(activation) => {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            activation.clear()
+                        }))
+                        .map_err(|_| "dynamic plugin teardown task panicked".to_string())
+                        .and_then(|result| result.map_err(|error| error.to_string()))
+                    }
+                    None => Err("dynamic plugin teardown task lost its activation".to_string()),
+                };
+                if log_finalizer_error && let Err(error) = &result {
+                    eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
+                }
+                close_state.finish(result);
+            });
+
+        if let Err(error) = spawn {
+            // Cleanup must never fall back to the JS thread. Retain the
+            // activation for process lifetime if no teardown thread can start.
+            if let Some(activation) = activation
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()
+            {
+                std::mem::forget(activation);
+            }
+            let error = format!("failed to start dynamic plugin teardown task: {error}");
+            if log_finalizer_error {
+                eprintln!("nemo_relay: dynamic plugin finalizer teardown failed: {error}");
+            }
+            self.finish(Err(error));
+        }
+    }
+
+    fn finish(&self, result: DynamicPluginTeardownResult) {
+        *self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = DynamicPluginCloseStatus::Closed;
+        self.completion.send_replace(Some(result));
+    }
+
+    async fn wait_for_close(&self) -> DynamicPluginTeardownResult {
+        let mut completion = self.completion.subscribe();
+        loop {
+            if let Some(result) = completion.borrow().clone() {
+                return result;
+            }
+            if completion.changed().await.is_err() {
+                return Err(
+                    "dynamic plugin teardown result channel closed unexpectedly".to_string()
+                );
+            }
+        }
+    }
+}
+
+#[napi]
+impl DynamicPluginActivation {
+    /// Return the validation report produced by activation.
+    #[napi(getter)]
+    pub fn report(&self) -> Json {
+        self.report.clone()
+    }
+
+    /// Return whether this activation handle has not begun teardown.
+    ///
+    /// `false` does not guarantee another process-wide activation can start;
+    /// failed teardown may intentionally retain the activation owner.
+    #[napi(getter)]
+    pub fn active(&self) -> napi::Result<bool> {
+        Ok(self.close_state.active())
+    }
+
+    /// Clear plugin callbacks before unloading libraries and workers.
+    ///
+    /// This method is idempotent, including when concurrent callers race to
+    /// close the same activation.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn close(&self, env: Env) -> napi::Result<JsObject> {
+        let close_state = Arc::clone(&self.close_state);
+        close_state.begin_close(false);
+        env.execute_tokio_future(
+            async move {
+                close_state
+                    .wait_for_close()
+                    .await
+                    .map_err(napi::Error::from_reason)
+            },
+            |env, _| env.get_undefined(),
+        )
+    }
+
+    /// Supply the structured disposal signature to napi-rs declaration generation.
+    ///
+    /// Module initialization installs `close()` under the actual well-known
+    /// symbol and removes this string-named declaration shim from the prototype.
+    #[napi(js_name = "[Symbol.asyncDispose]", ts_return_type = "Promise<void>")]
+    pub fn async_dispose(&self, env: Env) -> napi::Result<JsObject> {
+        self.close(env)
+    }
+}
+
+impl Drop for DynamicPluginActivation {
+    fn drop(&mut self) {
+        self.close_state.begin_close(true);
+    }
+}
+
+/// Initialize with explicitly resolved dynamic plugins.
+///
+/// `config` is layered over discovered `plugins.toml` files and may contain
+/// statically registered components; dynamic components are activated after
+/// that effective base configuration. At least one dynamic plugin is required.
+/// Static-only callers should use `initializePlugins`. The returned object owns
+/// all loaded libraries and worker processes. Its validation report is available
+/// through the `report` property.
+#[napi]
+pub async fn initialize_with_dynamic_plugins(
+    config: Json,
+    specs: Json,
+) -> napi::Result<DynamicPluginActivation> {
+    let config: PluginConfig = serde_json::from_value(config)
+        .map_err(|error| napi::Error::from_reason(format!("invalid plugin config: {error}")))?;
+    let specs: Vec<NodeDynamicPluginActivationSpec> =
+        serde_json::from_value(specs).map_err(|error| {
+            napi::Error::from_reason(format!("invalid dynamic plugin specs: {error}"))
+        })?;
+    let specs = specs.into_iter().map(Into::into).collect::<Vec<_>>();
+    let (activation, report) =
+        CorePluginHostActivation::activate_with_discovered_config(config, specs)
+            .await
+            .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    let report = serde_json::to_value(report)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+    Ok(DynamicPluginActivation {
+        close_state: Arc::new(DynamicPluginCloseState::new(activation)),
+        report,
+    })
 }
 
 /// Clear the active global plugin configuration.

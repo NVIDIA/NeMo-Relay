@@ -17,7 +17,7 @@ use nemo_relay::plugin::dynamic::{
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::config::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
+use crate::configuration::{DynamicPluginHostConfigStatus, ResolvedDynamicPluginConfig};
 use crate::error::{CliError, PluginLifecycleFailureKind};
 use crate::plugins::policy::EvaluatedDynamicPluginHostPolicy;
 

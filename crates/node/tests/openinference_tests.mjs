@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
+import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
 const { OpenInferenceSubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
@@ -32,6 +32,7 @@ describe('OpenInferenceSubscriber', () => {
       resourceAttributes: {
         'deployment.environment': 'test',
       },
+      attributeMappings: [{ key: 'openinference.metadata.tenant', alias: 'tenant.id' }],
     });
 
     const name = unique('node_openinference');
@@ -68,6 +69,13 @@ describe('OpenInferenceSubscriber', () => {
         }),
       /resourceAttributes must be an object of string values/i,
     );
+    assert.throws(
+      () =>
+        new OpenInferenceSubscriber({
+          attributeMappings: [{ key: '', alias: 'tenant.id' }],
+        }),
+      /attribute mapping key must not be blank/i,
+    );
   });
 
   it('exports scope push/pop and mark events end to end', async () => {
@@ -75,21 +83,13 @@ describe('OpenInferenceSubscriber', () => {
     const subscriber = new OpenInferenceSubscriber({
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
+      attributeMappings: [{ key: 'openinference.metadata.tenant', alias: 'tenant.id' }],
     });
 
     const name = unique('node_openinference_e2e');
     subscriber.register(name);
     try {
-      const scope = pushScope(
-        'openinference_scope',
-        ScopeType.Agent,
-        null,
-        null,
-        {
-          scope: true,
-        },
-        null,
-      );
+      const scope = pushScope('openinference_scope', ScopeType.Agent, null, null, null, null);
       event(
         'openinference_mark',
         scope,
@@ -100,7 +100,7 @@ describe('OpenInferenceSubscriber', () => {
           source: 'node',
         },
       );
-      popScope(scope);
+      popScope(scope, null, null, { tenant: 'node' });
 
       subscriber.forceFlush();
       const request = await collector.nextRequest();
@@ -111,6 +111,7 @@ describe('OpenInferenceSubscriber', () => {
       assertBodyContains(request.body, 'AGENT');
       assertBodyContains(request.body, 'metadata');
       assertBodyContains(request.body, 'openinference_mark');
+      assertOtlpStringAttribute(request.body, 'tenant.id', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

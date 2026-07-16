@@ -281,7 +281,7 @@ async fn reinitialized_cache_starts_empty() {
 
     // Runs one repeat workload against a fresh cache and returns the observed
     // hit count. Each invocation resets the global state and re-activates the
-    // cache, so `initialize_plugins` builds a brand-new in-memory store.
+    // cache, so `initialize_plugins_exact` builds a brand-new in-memory store.
     async fn run_once(subscriber: &str) -> usize {
         reset_global();
         activate_cache(bench_config()).await;

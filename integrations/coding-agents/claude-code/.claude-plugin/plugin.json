@@ -1,7 +1,7 @@
 {
   "name": "nemo-relay-plugin",
   "version": "0.6.0",
-  "description": "Claude Code hooks that forward canonical lifecycle payloads to nemo-relay.",
+  "description": "Native Relay gateway lifecycle and Claude Code hooks for complete local observability.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",
     "url": "https://github.com/NVIDIA/NeMo-Relay"
@@ -9,6 +9,7 @@
   "homepage": "https://github.com/NVIDIA/NeMo-Relay",
   "repository": "https://github.com/NVIDIA/NeMo-Relay",
   "license": "Apache-2.0",
+  "mcpServers": "./.mcp.json",
   "keywords": [
     "nemo-relay",
     "claude-code",

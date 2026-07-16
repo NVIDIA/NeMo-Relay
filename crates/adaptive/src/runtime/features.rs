@@ -393,10 +393,14 @@ impl AdaptiveRuntime {
 
         if self.config.acg.is_some()
             && let Some(backend) = self.backend.as_ref()
-            && let Err(error) =
+            && let Err(_) =
                 load_persisted_acg_state(&agent_id, backend.as_ref(), &self.hot_cache).await
         {
-            eprintln!("nemo-relay-adaptive: acg hot cache seeding failed: {error}");
+            log::warn!(
+                target: "nemo_relay.runtime",
+                event = "adaptive_acg_cache_seed_failed";
+                "Adaptive runtime could not seed the ACG hot cache"
+            );
         }
 
         let mut pending = self.pending_features(&agent_id);
@@ -432,7 +436,11 @@ impl AdaptiveRuntime {
                     guard.plan = plan;
                 }
             }
-            Err(error) => eprintln!("nemo-relay-adaptive: hot cache seeding failed: {error}"),
+            Err(_) => log::warn!(
+                target: "nemo_relay.runtime",
+                event = "adaptive_hot_cache_seed_failed";
+                "Adaptive runtime could not seed the hot cache"
+            ),
         }
     }
 
