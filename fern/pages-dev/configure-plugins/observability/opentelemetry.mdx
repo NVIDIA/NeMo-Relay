@@ -26,7 +26,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 1
+version = 2
 
 [components.config.opentelemetry]
 enabled = true
@@ -57,6 +57,7 @@ The following table describes OpenTelemetry exporter settings:
 | `enabled` | `false` | Must be `true` to construct and register the subscriber. |
 | `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration spans, parented as children when context is available, for trace-tree visibility. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
+| `attribute_mappings` | `[]` | Copies each fully qualified projected `key` to its `alias` without changing the OTLP type. Set both values to nonblank strings, and use each alias only once. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -93,6 +94,38 @@ attributes. These values match ATIF `step.extra.ancestry.function_id` and
 `step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
 the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
+
+NeMo Relay projects top-level lifecycle payload fields to typed OTLP attributes
+with dotted names. For example, `metadata = { tenant = "acme" }` becomes
+`nemo_relay.start.metadata.tenant = "acme"`.
+- Start events use the
+`nemo_relay.start.data`, `nemo_relay.start.metadata`, and
+`nemo_relay.start.input` prefixes.
+- End events use `nemo_relay.end.data`,
+`nemo_relay.end.metadata`, and `nemo_relay.end.output`.
+- Handle attributes use
+`nemo_relay.handle_attributes`. Mark data, metadata, attributes, and
+category-profile fields use the corresponding `nemo_relay.mark.*` prefixes.
+
+Scalar strings, booleans, and numbers that fit an OTLP numeric type keep their
+types. NeMo Relay emits larger unsigned integers as strings. When a top-level
+field contains an object or array, NeMo Relay emits its value as a JSON string
+at that field's dotted name. Nested `null` values remain in that string, but a
+top-level field whose value is `null` is omitted. NeMo Relay no longer emits the
+old aggregate `*_json` payload attributes.
+
+Configure an alias when a backend expects a different attribute name:
+
+```toml
+[components.config.opentelemetry]
+attribute_mappings = [
+  { key = "nemo_relay.start.metadata.tenant", alias = "tenant.id" },
+]
+```
+
+The source attribute remains in the span. If the span already contains
+`tenant.id`, NeMo Relay keeps the existing value instead of replacing it with
+the alias.
 
 Coding-agent trace roots also carry these correlation attributes:
 
@@ -185,7 +218,7 @@ void (async () => {
   version: 1,
   components: [
     observability.ComponentSpec({
-      version: 1,
+      version: 2,
       opentelemetry: observability.otlpConfig({
         enabled: true,
         transport: "http_binary",
