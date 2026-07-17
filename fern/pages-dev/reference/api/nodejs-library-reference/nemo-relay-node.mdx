@@ -314,6 +314,8 @@ export declare class LlmStream {
    * Throws if the underlying stream encountered an error.
    */
   next(): Promise<Json | null>
+  /** Stop the producer and wait for its cleanup to complete. */
+  close(): Promise<void>
 }
 ```
 
@@ -707,7 +709,7 @@ Execute a streaming LLM call end-to-end with full lifecycle management.
 
 Like `llmCallExecute`, conditional-execution guardrails run first on the raw request. Sanitize-request guardrails only affect the emitted `Start` event payload, and sanitize-response guardrails only affect the aggregated `End` event payload. Returns an `LlmStream` whose `next()` method yields response chunks incrementally. The `func` callback receives the intercepted request as JSON and its response is streamed back. Stream-level intercepts are applied to each chunk. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema.
 
-The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted and must return a JSON value representing the aggregated response.
+The optional `collector` callback is invoked with each intercepted chunk as JSON, allowing the caller to accumulate chunks for aggregation. The optional `finalizer` callback is invoked once when the stream is exhausted or closed early and must return a JSON value representing the aggregated response. Consumers that stop reading early must await `stream.close()` to wait for producer cleanup and surface cleanup errors.
 
 ```ts
 export declare function llmStreamCallExecute(name: string, request: Json, func: (arg: Json) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any | undefined | null, codecEncode?: (arg: Json) => any | undefined | null, responseCodecDecode?: (arg: Json) => any | undefined | null): Promise<LlmStream>

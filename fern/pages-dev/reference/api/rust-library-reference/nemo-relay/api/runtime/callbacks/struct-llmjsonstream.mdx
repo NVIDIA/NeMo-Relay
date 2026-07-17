@@ -1,0 +1,60 @@
+---
+title: "Struct LlmJson Stream"
+sidebar-title: "LlmJsonStream"
+description: "Stream of JSON chunks produced by the managed streaming LLM pipeline."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct LlmJsonStream { /* private fields */ }
+```
+
+Stream of JSON chunks produced by the managed streaming LLM pipeline.
+
+In addition to ordinary stream polling, managed streams provide an explicit asynchronous close operation. A successful close means the producer has released its resources; subsequent polls return no more chunks.
+
+## Implementations
+
+### `impl LlmJsonStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new&lt;S&gt;(stream: S) -&gt; Selfwhere\n    S: Stream&lt;Item = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+Wrap a stream whose producer has no asynchronous teardown work.
+
+#### `from_closeable`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_closeable&lt;S&gt;(stream: S) -&gt; Selfwhere\n    S: <a href=\"trait-llmstreaminner\">LlmStreamInner</a> + 'static,"}} /></pre>
+
+Wrap a stream that implements explicit asynchronous teardown.
+
+#### `close`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn close(&amp;mut self) -&gt; <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Stop the producer and wait for its cleanup to complete.
+
+## Trait Implementations
+
+### `impl Stream for LlmJsonStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl Stream for <a href=\"struct-llmjsonstream\">LlmJsonStream</a>"}} /></pre>
+
+#### `Item`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type Item = <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, <a href=\"../../../error/enum-flowerror\">FlowError</a>&gt;"}} /></pre>
+
+#### `poll_next`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn poll_next(\n    self: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n    cx: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/task/wake/struct.Context.html\">Context</a>&lt;'_&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/task/poll/enum.Poll.html\">Poll</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;Self::Item&gt;&gt;"}} /></pre>
+
+#### `size_hint`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn size_hint(&amp;self) -&gt; (<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>&gt;)"}} /></pre>

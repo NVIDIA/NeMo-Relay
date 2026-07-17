@@ -14,3 +14,13 @@ pub struct FfiStream { /* private fields */ }
 ```
 
 Opaque stream handle for consuming LLM streaming responses chunk by chunk. Use `nemo_relay_stream_next` to poll and `nemo_relay_stream_free` to release.
+
+## Trait Implementations
+
+### `impl Drop for FfiStream`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-ffistream\">FfiStream</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

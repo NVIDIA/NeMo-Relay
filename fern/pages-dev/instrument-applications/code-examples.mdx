@@ -146,7 +146,7 @@ let response = llm_call_execute(
 
 ## Streaming LLM Execution
 
-Use the streaming helper when subscribers need chunk collection plus one final response payload.
+Use the streaming helper when subscribers need chunk collection plus one final response payload. Natural exhaustion finalizes the collected response automatically. If your application stops reading early, explicitly close the stream in cleanup; close is idempotent, waits for producer cleanup, finalizes the partial response, and emits an interrupted end event.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -179,6 +179,12 @@ stream = await llm_stream_execute(
     chunk_json_codec=DataclassCodec(Chunk),
     response_json_codec=DataclassCodec(FinalResponse),
 )
+
+try:
+    first_chunk = await anext(stream)
+    # Stop early after deciding no more output is needed.
+finally:
+    await stream.aclose()
 ```
 </Tab>
 
@@ -213,6 +219,13 @@ const stream = await typedLlmStreamExecute(
   chunkCodec,
   responseCodec,
 );
+
+try {
+  const firstChunk = await stream.next();
+  // Stop early after deciding no more output is needed.
+} finally {
+  await stream.close();
+}
 ```
 </Tab>
 
@@ -221,19 +234,21 @@ const stream = await typedLlmStreamExecute(
 use nemo_relay::api::llm::{
     llm_stream_call_execute, LlmAttributes, LlmRequest, LlmStreamCallExecuteParams,
 };
+use nemo_relay::api::runtime::LlmJsonStream;
 use serde_json::json;
+use tokio_stream::StreamExt;
 
 let request = LlmRequest {
     headers: Default::default(),
     content: json!({"messages": [{"role": "user", "content": "hello"}]}),
 };
 
-let stream = llm_stream_call_execute(
+let mut stream = llm_stream_call_execute(
     LlmStreamCallExecuteParams::builder()
         .name("demo-provider")
         .request(request)
         .func(std::sync::Arc::new(|_req| Box::pin(async move {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"delta": "hi"}))])))
+            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({"delta": "hi"}))])))
         })))
         .collector(Box::new(|_chunk| Ok(())))
         .finalizer(Box::new(|| json!({"text": "hi"})))
@@ -241,6 +256,10 @@ let stream = llm_stream_call_execute(
         .model_name("demo-model")
         .build(),
 ).await?;
+
+let first_chunk = stream.next().await;
+// Stop early after deciding no more output is needed.
+stream.close().await?;
 ```
 </Tab>
 
