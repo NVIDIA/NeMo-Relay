@@ -37,7 +37,14 @@ fn temp_dir(prefix: &str) -> PathBuf {
 }
 
 #[cfg(feature = "atof-streaming")]
-fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+#[derive(Clone, Debug)]
+struct HttpCapture {
+    headers: String,
+    body: String,
+}
+
+#[cfg(feature = "atof-streaming")]
+fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec<HttpCapture>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let captures = Arc::new(Mutex::new(Vec::new()));
@@ -65,10 +72,10 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
                 .unwrap();
             let mut body = vec![0_u8; length];
             stream.read_exact(&mut body).unwrap();
-            thread_captures
-                .lock()
-                .unwrap()
-                .push(String::from_utf8(body).unwrap());
+            thread_captures.lock().unwrap().push(HttpCapture {
+                headers: headers.into_owned(),
+                body: String::from_utf8(body).unwrap(),
+            });
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 .unwrap();
@@ -137,7 +144,7 @@ fn start_http_status_server(
 }
 
 #[cfg(feature = "atof-streaming")]
-fn wait_for_captures(captures: &Arc<Mutex<Vec<String>>>, expected: usize) -> Vec<String> {
+fn wait_for_captures(captures: &Arc<Mutex<Vec<HttpCapture>>>, expected: usize) -> Vec<HttpCapture> {
     for _ in 0..100 {
         let snapshot = captures.lock().unwrap().clone();
         if snapshot.len() >= expected {
@@ -1118,10 +1125,61 @@ fn atof_stream_sinks_fan_out_and_teardown_all_workers() {
     for captures in [&first_captures, &second_captures] {
         let bodies = wait_for_captures(captures, 3);
         assert_eq!(bodies.len(), 3, "captured bodies: {bodies:?}");
-        let events = bodies.join("");
+        let events = bodies
+            .iter()
+            .map(|capture| capture.body.as_str())
+            .collect::<String>();
         assert!(events.contains("\"scope_category\":\"start\""));
         assert!(events.contains("\"name\":\"checkpoint\""));
         assert!(events.contains("\"scope_category\":\"end\""));
+    }
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn atof_stream_sink_header_env_is_snapshotted_at_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let variable = format!("NEMO_RELAY_TEST_ATOF_HEADER_ENV_{}", std::process::id());
+    // SAFETY: The test mutex serializes environment access for this process.
+    unsafe { std::env::set_var(&variable, "Bearer relay-499") };
+    let (url, captures) = start_http_capture_server(3);
+
+    let config = plugin_config(json!({
+        "atof": {
+            "enabled": true,
+            "sinks": [{
+                "type": "stream",
+                "url": url,
+                "transport": "http_post",
+                "header_env": {"authorization": variable.clone()}
+            }]
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    // SAFETY: The active endpoint must use the header value captured at activation.
+    unsafe { std::env::remove_var(&variable) };
+
+    let agent = push_agent("atof-header-env-agent");
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("checkpoint")
+            .parent(&agent)
+            .data(json!({"step": 1}))
+            .build(),
+    )
+    .unwrap();
+    pop(&agent);
+    clear_plugin_configuration().unwrap();
+
+    let captures = wait_for_captures(&captures, 3);
+    assert_eq!(captures.len(), 3, "captured requests: {captures:?}");
+    for capture in captures {
+        assert!(capture.headers.lines().any(|line| {
+            line.split_once(':').is_some_and(|(name, value)| {
+                name.eq_ignore_ascii_case("authorization") && value.trim() == "Bearer relay-499"
+            })
+        }));
     }
 }
 

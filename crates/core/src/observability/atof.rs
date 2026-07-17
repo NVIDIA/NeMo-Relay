@@ -644,6 +644,14 @@ struct AtofEndpointWorker {
     transport: AtofEndpointTransport,
 }
 
+/// Validated endpoint settings with headers resolved at activation.
+#[cfg(feature = "atof-streaming")]
+#[derive(Debug)]
+struct ActivatedAtofEndpoint {
+    config: AtofEndpointConfig,
+    headers: reqwest::header::HeaderMap,
+}
+
 impl AtofEndpointWorker {
     fn enqueue(&self, raw_json: String) {
         let _ = self.sender.send(EndpointMessage::Event(raw_json));
@@ -711,13 +719,13 @@ fn start_endpoint_workers(configs: &[AtofEndpointConfig]) -> Result<Vec<AtofEndp
 
 #[cfg(feature = "atof-streaming")]
 fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<AtofEndpointWorker> {
-    validate_endpoint_config(&config)?;
-    let timeout = Duration::from_millis(config.timeout_millis);
-    let transport = config.transport;
+    let endpoint = validate_endpoint_config(config)?;
+    let timeout = Duration::from_millis(endpoint.config.timeout_millis);
+    let transport = endpoint.config.transport;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     std::thread::Builder::new()
         .name(format!("nemo-relay-atof-endpoint-{index}"))
-        .spawn(move || run_endpoint_worker(index, config, rx))
+        .spawn(move || run_endpoint_worker(index, endpoint, rx))
         .map_err(|error| AtofExporterError::InvalidEndpoint(error.to_string()))?;
     log::info!(
         target: "nemo_relay.observability",
@@ -745,7 +753,7 @@ fn start_endpoint_worker(index: usize, config: AtofEndpointConfig) -> Result<Ato
 }
 
 #[cfg(feature = "atof-streaming")]
-fn validate_endpoint_config(config: &AtofEndpointConfig) -> Result<()> {
+fn validate_endpoint_config(config: AtofEndpointConfig) -> Result<ActivatedAtofEndpoint> {
     if config.url.trim().is_empty() {
         return Err(AtofExporterError::InvalidEndpoint(
             "endpoint url must be non-empty".to_string(),
@@ -771,8 +779,8 @@ fn validate_endpoint_config(config: &AtofEndpointConfig) -> Result<()> {
             url.scheme()
         )));
     }
-    resolved_header_map(&config.headers, &config.header_env)?;
-    Ok(())
+    let headers = resolved_header_map(&config.headers, &config.header_env)?;
+    Ok(ActivatedAtofEndpoint { config, headers })
 }
 
 #[cfg(feature = "atof-streaming")]
@@ -816,7 +824,7 @@ fn resolved_header_map(
 #[cfg(feature = "atof-streaming")]
 fn run_endpoint_worker(
     index: usize,
-    config: AtofEndpointConfig,
+    endpoint: ActivatedAtofEndpoint,
     rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -837,10 +845,10 @@ fn run_endpoint_worker(
         }
     };
     runtime.block_on(async move {
-        match config.transport {
-            AtofEndpointTransport::HttpPost => run_http_post_endpoint(index, config, rx).await,
-            AtofEndpointTransport::Websocket => run_websocket_endpoint(index, config, rx).await,
-            AtofEndpointTransport::Ndjson => run_ndjson_endpoint(index, config, rx).await,
+        match endpoint.config.transport {
+            AtofEndpointTransport::HttpPost => run_http_post_endpoint(index, endpoint, rx).await,
+            AtofEndpointTransport::Websocket => run_websocket_endpoint(index, endpoint, rx).await,
+            AtofEndpointTransport::Ndjson => run_ndjson_endpoint(index, endpoint, rx).await,
         }
     });
 }
@@ -848,29 +856,12 @@ fn run_endpoint_worker(
 #[cfg(feature = "atof-streaming")]
 async fn run_http_post_endpoint(
     index: usize,
-    config: AtofEndpointConfig,
+    endpoint: ActivatedAtofEndpoint,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(config.timeout_millis))
-        .default_headers(
-            match resolved_header_map(&config.headers, &config.header_env) {
-                Ok(headers) => headers,
-                Err(_) => {
-                    log::error!(
-                        target: "nemo_relay.observability",
-                        event = "endpoint_disabled",
-                        exporter = "atof",
-                        endpoint_index = index,
-                        transport = "http_post",
-                        reason = "invalid_headers";
-                        "ATOF endpoint disabled"
-                    );
-                    drain_closed(rx).await;
-                    return;
-                }
-            },
-        )
+        .timeout(Duration::from_millis(endpoint.config.timeout_millis))
+        .default_headers(endpoint.headers)
         .build()
     {
         Ok(client) => client,
@@ -892,9 +883,9 @@ async fn run_http_post_endpoint(
     while let Some(message) = rx.recv().await {
         match message {
             EndpointMessage::Event(raw_json) => {
-                let body = format!("{}\n", endpoint_event_json(&config, raw_json));
+                let body = format!("{}\n", endpoint_event_json(&endpoint.config, raw_json));
                 let result = client
-                    .post(&config.url)
+                    .post(&endpoint.config.url)
                     .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
                     .body(body)
                     .send()
@@ -941,12 +932,12 @@ async fn run_http_post_endpoint(
 #[cfg(feature = "atof-streaming")]
 async fn run_websocket_endpoint(
     index: usize,
-    config: AtofEndpointConfig,
+    endpoint: ActivatedAtofEndpoint,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
     let mut pending = std::collections::VecDeque::new();
     let mut retry = WebSocketRetryState::default();
-    let mut socket = match connect_websocket(&config).await {
+    let mut socket = match connect_websocket(&endpoint).await {
         Ok(socket) => {
             retry.record_recovered(index);
             Some(socket)
@@ -959,21 +950,36 @@ async fn run_websocket_endpoint(
     while let Some(message) = rx.recv().await {
         match message {
             EndpointMessage::Event(raw_json) => {
-                pending.push_back(endpoint_event_json(&config, raw_json));
-                let _ =
-                    drain_websocket_pending(index, &config, &mut socket, &mut pending, &mut retry)
-                        .await;
+                pending.push_back(endpoint_event_json(&endpoint.config, raw_json));
+                let _ = drain_websocket_pending(
+                    index,
+                    &endpoint,
+                    &mut socket,
+                    &mut pending,
+                    &mut retry,
+                )
+                .await;
             }
             EndpointMessage::Flush(done) => {
-                let _ =
-                    drain_websocket_pending(index, &config, &mut socket, &mut pending, &mut retry)
-                        .await;
+                let _ = drain_websocket_pending(
+                    index,
+                    &endpoint,
+                    &mut socket,
+                    &mut pending,
+                    &mut retry,
+                )
+                .await;
                 let _ = done.send(());
             }
             EndpointMessage::Close(done) => {
-                let _ =
-                    drain_websocket_pending(index, &config, &mut socket, &mut pending, &mut retry)
-                        .await;
+                let _ = drain_websocket_pending(
+                    index,
+                    &endpoint,
+                    &mut socket,
+                    &mut pending,
+                    &mut retry,
+                )
+                .await;
                 if let Some(mut ws) = socket.take() {
                     let _ = ws.close(None).await;
                 }
@@ -1046,16 +1052,16 @@ impl WebSocketRetryState {
 #[cfg(feature = "atof-streaming")]
 async fn drain_websocket_pending(
     index: usize,
-    config: &AtofEndpointConfig,
+    endpoint: &ActivatedAtofEndpoint,
     socket: &mut Option<AtofWebSocket>,
     pending: &mut std::collections::VecDeque<String>,
     retry: &mut WebSocketRetryState,
 ) -> bool {
-    let timeout = Duration::from_millis(config.timeout_millis);
+    let timeout = Duration::from_millis(endpoint.config.timeout_millis);
     let attempts_before = retry.attempts;
     match tokio::time::timeout(
         timeout,
-        drain_websocket_pending_inner(index, config, socket, pending, retry),
+        drain_websocket_pending_inner(index, endpoint, socket, pending, retry),
     )
     .await
     {
@@ -1072,14 +1078,14 @@ async fn drain_websocket_pending(
 #[cfg(feature = "atof-streaming")]
 async fn drain_websocket_pending_inner(
     index: usize,
-    config: &AtofEndpointConfig,
+    endpoint: &ActivatedAtofEndpoint,
     socket: &mut Option<AtofWebSocket>,
     pending: &mut std::collections::VecDeque<String>,
     retry: &mut WebSocketRetryState,
 ) -> bool {
     while let Some(raw_json) = pending.front().cloned() {
         if socket.is_none() {
-            match connect_websocket(config).await {
+            match connect_websocket(endpoint).await {
                 Ok(ws) => {
                     *socket = Some(ws);
                     retry.record_recovered(index);
@@ -1116,23 +1122,22 @@ async fn drain_websocket_pending_inner(
 
 #[cfg(feature = "atof-streaming")]
 async fn connect_websocket(
-    config: &AtofEndpointConfig,
+    endpoint: &ActivatedAtofEndpoint,
 ) -> std::result::Result<AtofWebSocket, String> {
-    let mut request = config
+    let mut request = endpoint
+        .config
         .url
         .as_str()
         .into_client_request()
         .map_err(|error| error.to_string())?;
-    let headers = resolved_header_map(&config.headers, &config.header_env)
-        .map_err(|error| error.to_string())?;
-    for (name, value) in headers {
+    for (name, value) in endpoint.headers.clone() {
         let Some(name) = name else {
             continue;
         };
         request.headers_mut().insert(name, value);
     }
     tokio::time::timeout(
-        Duration::from_millis(config.timeout_millis),
+        Duration::from_millis(endpoint.config.timeout_millis),
         tokio_tungstenite::connect_async(request),
     )
     .await
@@ -1144,10 +1149,10 @@ async fn connect_websocket(
 #[cfg(feature = "atof-streaming")]
 async fn run_ndjson_endpoint(
     index: usize,
-    config: AtofEndpointConfig,
+    endpoint: ActivatedAtofEndpoint,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<EndpointMessage>,
 ) {
-    let client = match build_ndjson_client(&config) {
+    let client = match build_ndjson_client(&endpoint) {
         Ok(client) => client,
         Err(_) => {
             log::error!(
@@ -1165,7 +1170,7 @@ async fn run_ndjson_endpoint(
     };
 
     let (body_tx, body) = ndjson_body_channel();
-    let url = config.url.clone();
+    let url = endpoint.config.url.clone();
     let request = tokio::spawn(async move {
         client
             .post(url)
@@ -1174,13 +1179,15 @@ async fn run_ndjson_endpoint(
             .send()
             .await
     });
-    let close_timeout = Duration::from_millis(config.timeout_millis);
+    let close_timeout = Duration::from_millis(endpoint.config.timeout_millis);
 
     while let Some(message) = rx.recv().await {
         match message {
-            EndpointMessage::Event(raw_json) => {
-                send_ndjson_event(index, &body_tx, endpoint_event_json(&config, raw_json))
-            }
+            EndpointMessage::Event(raw_json) => send_ndjson_event(
+                index,
+                &body_tx,
+                endpoint_event_json(&endpoint.config, raw_json),
+            ),
             EndpointMessage::Flush(done) => send_ndjson_flush(index, &body_tx, done),
             EndpointMessage::Close(done) => {
                 drop(body_tx);
@@ -1193,13 +1200,11 @@ async fn run_ndjson_endpoint(
 
 #[cfg(feature = "atof-streaming")]
 fn build_ndjson_client(
-    config: &AtofEndpointConfig,
+    endpoint: &ActivatedAtofEndpoint,
 ) -> std::result::Result<reqwest::Client, String> {
-    let headers = resolved_header_map(&config.headers, &config.header_env)
-        .map_err(|error| format!("disabled: {error}"))?;
     reqwest::Client::builder()
-        .connect_timeout(Duration::from_millis(config.timeout_millis))
-        .default_headers(headers)
+        .connect_timeout(Duration::from_millis(endpoint.config.timeout_millis))
+        .default_headers(endpoint.headers.clone())
         .build()
         .map_err(|error| format!("client build failed: {error}"))
 }
