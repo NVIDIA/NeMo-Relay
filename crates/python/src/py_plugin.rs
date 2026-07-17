@@ -955,8 +955,8 @@ fn initialize_with_dynamic_plugins_py<'py>(
 
 #[pyfunction(name = "clear_plugin_configuration")]
 #[pyo3(signature = () -> "None", text_signature = "() -> None")]
-fn clear_plugin_configuration_py() -> PyResult<()> {
-    clear_plugin_configuration().map_err(to_py_err)
+fn clear_plugin_configuration_py(py: Python<'_>) -> PyResult<()> {
+    py.detach(clear_plugin_configuration).map_err(to_py_err)
 }
 
 #[pyfunction(name = "active_plugin_report")]
