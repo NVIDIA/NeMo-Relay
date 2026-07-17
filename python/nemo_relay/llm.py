@@ -33,6 +33,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from nemo_relay._context import ensure_scope_stack
 from nemo_relay._native import (
     LLMRequest,
     LlmStream,
@@ -119,6 +120,7 @@ def call(
             metadata={"status": "success"},
         )
     """
+    ensure_scope_stack()
     return _native_llm_call(
         name,
         request,
@@ -169,6 +171,7 @@ def call_end(
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive
         datetimes are rejected.
     """
+    ensure_scope_stack()
     return _native_llm_call_end(
         handle,
         response,
@@ -256,6 +259,7 @@ def execute(
             response_codec=nemo_relay.codecs.OpenAIChatCodec(),
         )
     """
+    ensure_scope_stack()
     return _native_llm_call_execute(
         name,
         request,
@@ -353,6 +357,7 @@ def stream_execute(
         async for chunk in stream:
             print(chunk)
     """
+    ensure_scope_stack()
     return _native_llm_stream_call_execute(
         name,
         request,
@@ -385,6 +390,7 @@ def request_intercepts(name, request):
         This runs only the request-intercept chain. It does not execute
         guardrails, codecs, provider callbacks, or stream handling.
     """
+    ensure_scope_stack()
     return _native_llm_request_intercepts(name, request)
 
 
@@ -403,6 +409,7 @@ def conditional_execution(request):
         This helper evaluates only conditional-execution guardrails and does
         not invoke request intercepts, codecs, or provider execution.
     """
+    ensure_scope_stack()
     return _native_llm_conditional_execution(request)
 
 
