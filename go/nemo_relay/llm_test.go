@@ -1124,7 +1124,9 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	collectorStarted := make(chan struct{})
 	collectorFinished := make(chan struct{})
 	allowCollector := make(chan struct{})
-	finalized := make(chan struct{})
+	finalizerStarted := make(chan struct{})
+	finalizerFinished := make(chan struct{})
+	allowFinalizer := make(chan struct{})
 	stream, err := LlmStreamCallExecute("collector_close_order_llm", makeRequest(),
 		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
 			return json.RawMessage(`"data: {\"chunk\": 1}\n\ndata: [DONE]\n\n"`), nil
@@ -1137,11 +1139,13 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 		func() string {
 			select {
 			case <-collectorFinished:
-				close(finalized)
-				return `{"partial": true}`
+				close(finalizerStarted)
 			default:
 				panic("finalizer ran before collector completed")
 			}
+			<-allowFinalizer
+			close(finalizerFinished)
+			return `{"partial": true}`
 		},
 	)
 	if err != nil {
@@ -1154,11 +1158,16 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 		nextResult <- err
 	}()
 	<-collectorStarted
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close failed: %v", err)
+	closeResults := make(chan error, 2)
+	go func() { closeResults <- stream.Close() }()
+	go func() { closeResults <- stream.Close() }()
+	select {
+	case err := <-closeResults:
+		t.Fatalf("Close returned before collector completed: %v", err)
+	default:
 	}
 	select {
-	case <-finalized:
+	case <-finalizerStarted:
 		t.Fatal("finalizer ran before collector completed")
 	default:
 	}
@@ -1167,7 +1176,19 @@ func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	if err := <-nextResult; err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	<-finalized
+	<-finalizerStarted
+	select {
+	case err := <-closeResults:
+		t.Fatalf("Close returned before finalizer completed: %v", err)
+	default:
+	}
+	close(allowFinalizer)
+	<-finalizerFinished
+	for range []struct{}{{}, {}} {
+		if err := <-closeResults; err != nil {
+			t.Fatalf("Close failed: %v", err)
+		}
+	}
 }
 
 func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {

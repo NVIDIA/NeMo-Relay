@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"io"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -52,17 +54,48 @@ import (
 // Each stream carries its own collector and finalizer callbacks, so multiple
 // streams can operate concurrently without interfering with one another.
 type LlmStream struct {
-	nextMu    sync.Mutex
-	mu        sync.Mutex
-	ptr       *C.FfiStream
-	closed    bool
-	closing   bool
-	inFlight  int
-	idle      chan struct{}
-	closeDone chan struct{}
-	closeErr  error
-	collector CollectorFunc
-	finalizer FinalizerFunc
+	nextMu            sync.Mutex
+	mu                sync.Mutex
+	ptr               *C.FfiStream
+	closed            bool
+	closing           bool
+	inFlight          int
+	idle              chan struct{}
+	closeDone         chan struct{}
+	closeErr          error
+	callbackGoroutine uint64
+	collector         CollectorFunc
+	finalizer         FinalizerFunc
+}
+
+// currentGoroutineID identifies a callback-reentrant Close so that only that
+// callback avoids waiting for its own completion; external callers wait for
+// collector and finalizer cleanup.
+func currentGoroutineID() uint64 {
+	var stack [64]byte
+	n := runtime.Stack(stack[:], false)
+	fields := strings.Fields(string(stack[:n]))
+	if len(fields) < 2 {
+		return 0
+	}
+	id, _ := strconv.ParseUint(fields[1], 10, 64)
+	return id
+}
+
+func (s *LlmStream) beginCallback() uint64 {
+	id := currentGoroutineID()
+	s.mu.Lock()
+	s.callbackGoroutine = id
+	s.mu.Unlock()
+	return id
+}
+
+func (s *LlmStream) finishCallback(id uint64) {
+	s.mu.Lock()
+	if s.callbackGoroutine == id {
+		s.callbackGoroutine = 0
+	}
+	s.mu.Unlock()
 }
 
 func llmStreamNextResult(rc int32, chunk json.RawMessage, collector CollectorFunc, finalizer *FinalizerFunc) (json.RawMessage, error) {
@@ -150,6 +183,8 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 		collector := s.collector
 		s.mu.Unlock()
 		if collector != nil {
+			callbackID := s.beginCallback()
+			defer s.finishCallback(callbackID)
 			collector(chunk)
 		}
 		return chunk, nil
@@ -181,8 +216,14 @@ func (s *LlmStream) finishNext() {
 // are no-ops. After Close is called, any further calls to [LlmStream.Next]
 // return [io.EOF]. The finalizer runs once with any collected partial response.
 func (s *LlmStream) Close() error {
+	callerID := currentGoroutineID()
 	s.mu.Lock()
 	if s.closing {
+		if s.callbackGoroutine != 0 && s.callbackGoroutine == callerID {
+			err := s.closeErr
+			s.mu.Unlock()
+			return err
+		}
 		done := s.closeDone
 		s.mu.Unlock()
 		<-done
@@ -209,7 +250,7 @@ func (s *LlmStream) Close() error {
 	}
 
 	s.mu.Lock()
-	if s.inFlight > 0 {
+	if s.inFlight > 0 && s.callbackGoroutine != 0 && s.callbackGoroutine == callerID {
 		s.mu.Unlock()
 		// A collector can close its own stream. Finish cleanup after the callback
 		// returns instead of waiting here and deadlocking that callback.
@@ -239,12 +280,14 @@ func (s *LlmStream) finishClose(ptr *C.FfiStream, err error) {
 
 	C.nemo_relay_stream_free(ptr)
 
+	if finalizer != nil {
+		callbackID := s.beginCallback()
+		finalizer()
+		s.finishCallback(callbackID)
+	}
+
 	s.mu.Lock()
 	s.closing = false
 	close(s.closeDone)
 	s.mu.Unlock()
-
-	if finalizer != nil {
-		finalizer()
-	}
 }
