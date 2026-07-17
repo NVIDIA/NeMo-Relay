@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from nemo_relay import ScopeType, plugin, scope, subscribers
+from nemo_relay import ScopeType, plugin, scope
 from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
@@ -234,6 +234,7 @@ class TestObservabilityConfigHelpers:
         received: list[bytes] = []
         request_received = threading.Event()
         allow_response = threading.Event()
+        teardown_started = threading.Event()
 
         class CaptureHandler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -287,13 +288,20 @@ class TestObservabilityConfigHelpers:
                     },
                 )
 
-            subscribers.flush()
-            assert request_received.wait(timeout=2)
-            allow_response.set()
+            def release_response() -> None:
+                teardown_started.wait(timeout=5)
+                request_received.wait(timeout=5)
+                allow_response.set()
+
+            response_thread = threading.Thread(target=release_response, daemon=True)
+            response_thread.start()
+            teardown_started.set()
             started_at = time.monotonic()
             plugin.clear()
             cleared = True
             assert time.monotonic() - started_at < 2
+            response_thread.join(timeout=2)
+            assert not response_thread.is_alive()
 
             file_events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
             stream_events = [json.loads(body) for body in received]
