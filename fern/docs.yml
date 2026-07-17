@@ -22,8 +22,38 @@ redirects:
   destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/codec/model-pricing
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing
   destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/plugins/model-pricing
-- source: /nemo/relay/reference/api/python-library-reference/:slug*
-  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/:slug*
+- source: /nemo/relay/reference/api/python-library-reference/adaptive
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/adaptive
+- source: /nemo/relay/reference/api/python-library-reference/codecs
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/codecs
+- source: /nemo/relay/reference/api/python-library-reference/guardrails
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/guardrails
+- source: /nemo/relay/reference/api/python-library-reference/integrations
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/integrations
+- source: /nemo/relay/reference/api/python-library-reference/integrations/:slug*
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/integrations/:slug*
+- source: /nemo/relay/reference/api/python-library-reference/intercepts
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/intercepts
+- source: /nemo/relay/reference/api/python-library-reference/llm
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/llm
+- source: /nemo/relay/reference/api/python-library-reference/model-pricing
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/model-pricing
+- source: /nemo/relay/reference/api/python-library-reference/observability
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/observability
+- source: /nemo/relay/reference/api/python-library-reference/plugin
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/plugin
+- source: /nemo/relay/reference/api/python-library-reference/scope-local
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/scope-local
+- source: /nemo/relay/reference/api/python-library-reference/scope
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/scope
+- source: /nemo/relay/reference/api/python-library-reference/subscribers
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/subscribers
+- source: /nemo/relay/reference/api/python-library-reference/tools
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/tools
+- source: /nemo/relay/reference/api/python-library-reference/typed
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/typed
+- source: /nemo/relay/reference/api/python-library-reference/utils
+  destination: /nemo/relay/v0.5.0/reference/api/python-library-reference/nemo-relay/utils
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/codec/pricing/:slug*
   destination: /nemo/relay/v0.5.0/reference/api/rust-library-reference/nemo-relay/codec/model-pricing/:slug*
 - source: /nemo/relay/reference/api/rust-library-reference/nemo-relay/plugins/pricing/:slug*
