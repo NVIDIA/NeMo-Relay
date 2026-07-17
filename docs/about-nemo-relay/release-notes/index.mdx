@@ -33,6 +33,10 @@ If you're upgrading from 0.5, plan for these changes:
 - Update Rust code that exhaustively matches public enums or directly
   constructs mark types, ATOF sink types, or editor metadata types. The
   provided builders and constructors are the safest migration path.
+- Update managed LLM stream consumers that construct `LlmJsonStream` directly
+  or ignore Go `LlmStream.Close` results. Use the stream constructors and
+  explicit close methods described in the compatibility notes when exiting a
+  stream early.
 - Replace direct references to old public skill directories with the
   task-oriented `nemo-relay-install`, `nemo-relay-get-started`,
   `nemo-relay-instrument-*`, and `nemo-relay-plugin-*` entry points.
@@ -69,6 +73,10 @@ Here's what changed across the main product surfaces:
 - **Decision routing:** The opt-in experimental Switchyard plugin validates and
   routes buffered or streaming requests across OpenAI Chat Completions, OpenAI
   Responses, and Anthropic Messages.
+- **Managed LLM streams:** Explicit early close now deterministically stops the
+  producer, finalizes the partial response, and emits the interrupted end
+  event across Rust, Python, Node.js, Go, and C. Rust and Go callers have
+  source-compatibility changes; see the migration notes before upgrading.
 - **Agent skills:** The public catalog now follows task-oriented workflows for
   installation, getting started, instrumentation, plugin configuration,
   migration, and debugging. The guidance calls for installers pinned to
