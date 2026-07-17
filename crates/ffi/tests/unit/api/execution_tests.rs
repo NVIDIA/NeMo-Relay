@@ -250,6 +250,8 @@ fn test_ffi_llm_stream_execute_response_codec_defaults_and_error_paths() {
         assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 1);
         let stream_chunk = returned_json(chunk);
         assert_eq!(stream_chunk["id"], json!("chatcmpl-ffi"));
+        assert_eq!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
+        assert_eq!(nemo_relay_stream_close(stream), NemoRelayStatus::Ok);
         assert_eq!(nemo_relay_stream_next(stream, &mut chunk), 0);
         assert!(lock_unpoisoned(collected_chunks()).is_empty());
         assert_eq!(*lock_unpoisoned(finalizer_calls()), 0);

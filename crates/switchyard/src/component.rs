@@ -3,18 +3,20 @@
 
 //! Switchyard plugin configuration and Relay execution integration.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use async_stream::stream;
-use futures_util::{StreamExt, stream as futures_stream};
+use futures_util::StreamExt;
 use nemo_relay::api::event::{CategoryProfile, DataSchema, EventCategory};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::optimization::record_llm_optimization_contribution;
-use nemo_relay::api::runtime::{LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionFn, LlmJsonStream, LlmStreamExecutionFn, LlmStreamInner,
+};
 use nemo_relay::api::scope::{EmitMarkEventParams, event};
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
@@ -797,9 +799,10 @@ impl SwitchyardRuntime {
         match first {
             Some(Ok(first)) => {
                 self.record_routing_contribution(&decision, attempt, true);
-                let committed =
-                    Box::pin(futures_stream::once(async move { Ok(first) }).chain(upstream))
-                        as LlmJsonStream;
+                let committed = LlmJsonStream::from_closeable(PrefixedStream {
+                    first: Some(Ok(first)),
+                    upstream,
+                });
                 let output = if target_protocol == inbound {
                     committed
                 } else {
@@ -1661,23 +1664,133 @@ fn provider_error_summary(error: &FlowError) -> String {
     }
 }
 
+struct PrefixedStream {
+    first: Option<FlowResult<Json>>,
+    upstream: LlmJsonStream,
+}
+
+impl futures_util::Stream for PrefixedStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(first) = self.first.take() {
+            Poll::Ready(Some(first))
+        } else {
+            Pin::new(&mut self.upstream).poll_next(cx)
+        }
+    }
+}
+
+impl LlmStreamInner for PrefixedStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.first = None;
+        Box::pin(async move { this.upstream.close().await })
+    }
+}
+
+struct TerminalMarkedStream {
+    upstream: LlmJsonStream,
+    phase: &'static str,
+    rollout_mode: &'static str,
+    metadata: Json,
+    finished: bool,
+}
+
+impl futures_util::Stream for TerminalMarkedStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.finished {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut self.upstream).poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => Poll::Ready(Some(Ok(chunk))),
+            Poll::Ready(Some(Err(error))) => {
+                self.finished = true;
+                emit_terminal_error(&error, self.phase, self.rollout_mode, self.metadata.clone());
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                self.finished = true;
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl LlmStreamInner for TerminalMarkedStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        Box::pin(async move { self.get_mut().upstream.close().await })
+    }
+}
+
+struct TranslatedStream {
+    upstream: LlmJsonStream,
+    transcoder: StreamTranscoder,
+    buffered: VecDeque<FlowResult<Json>>,
+    upstream_finished: bool,
+}
+
+impl futures_util::Stream for TranslatedStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(chunk) = self.buffered.pop_front() {
+                return Poll::Ready(Some(chunk));
+            }
+            if self.upstream_finished {
+                return Poll::Ready(None);
+            }
+
+            match Pin::new(&mut self.upstream).poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => match self.transcoder.transcode(&chunk) {
+                    Ok(chunks) => self.buffered.extend(chunks.into_iter().map(Ok)),
+                    Err(error) => {
+                        self.upstream_finished = true;
+                        return Poll::Ready(Some(Err(error)));
+                    }
+                },
+                Poll::Ready(Some(Err(error))) => {
+                    self.upstream_finished = true;
+                    return Poll::Ready(Some(Err(error)));
+                }
+                Poll::Ready(None) => {
+                    self.upstream_finished = true;
+                    match self.transcoder.finish() {
+                        Ok(chunks) => self.buffered.extend(chunks.into_iter().map(Ok)),
+                        Err(error) => return Poll::Ready(Some(Err(error))),
+                    }
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl LlmStreamInner for TranslatedStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.buffered.clear();
+        this.upstream_finished = true;
+        Box::pin(async move { this.upstream.close().await })
+    }
+}
+
 fn mark_terminal_stream(
-    mut upstream: LlmJsonStream,
+    upstream: LlmJsonStream,
     phase: &'static str,
     rollout_mode: &'static str,
     metadata: Json,
 ) -> LlmJsonStream {
-    Box::pin(stream! {
-        while let Some(item) = upstream.next().await {
-            match item {
-                Ok(chunk) => yield Ok(chunk),
-                Err(error) => {
-                    emit_terminal_error(&error, phase, rollout_mode, metadata.clone());
-                    yield Err(error);
-                    return;
-                }
-            }
-        }
+    LlmJsonStream::from_closeable(TerminalMarkedStream {
+        upstream,
+        phase,
+        rollout_mode,
+        metadata,
+        finished: false,
     })
 }
 
@@ -1685,39 +1798,13 @@ fn translated_stream(
     source: WireProtocol,
     target: WireProtocol,
     effective_model: String,
-    mut upstream: LlmJsonStream,
+    upstream: LlmJsonStream,
 ) -> LlmJsonStream {
-    let mut transcoder = StreamTranscoder::new(source, target, effective_model);
-    Box::pin(stream! {
-        while let Some(item) = upstream.next().await {
-            match item {
-                Ok(chunk) => {
-                    match transcoder.transcode(&chunk) {
-                        Ok(chunks) => {
-                            for chunk in chunks {
-                                yield Ok(chunk);
-                            }
-                        }
-                        Err(error) => {
-                            yield Err(error);
-                            return;
-                        }
-                    }
-                }
-                Err(error) => {
-                    yield Err(error);
-                    return;
-                }
-            }
-        }
-        match transcoder.finish() {
-            Ok(chunks) => {
-                for chunk in chunks {
-                    yield Ok(chunk);
-                }
-            }
-            Err(error) => yield Err(error),
-        }
+    LlmJsonStream::from_closeable(TranslatedStream {
+        upstream,
+        transcoder: StreamTranscoder::new(source, target, effective_model),
+        buffered: VecDeque::new(),
+        upstream_finished: false,
     })
 }
 

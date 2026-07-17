@@ -2159,11 +2159,11 @@ fn native_stream_to_relay_stream(
     next_ctx: Option<NativeStreamNextContext>,
     callback_user_data: Option<Arc<NativeCallbackUserData>>,
 ) -> FlowResult<LlmJsonStream> {
-    Ok(Box::pin(NativeRelayLlmStream::from_raw(
+    Ok(LlmJsonStream::new(NativeRelayLlmStream::from_raw(
         raw,
         next_ctx,
         callback_user_data,
-    )?) as LlmJsonStream)
+    )?))
 }
 
 fn drop_native_stream(mut raw: NemoRelayNativeLlmStreamV1) {

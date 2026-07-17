@@ -81,6 +81,32 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	assertWrappedObservabilityConfig(t, wrapped)
 }
 
+func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *testing.T) {
+	file := NewObservabilityAtofFileSinkConfig()
+	if file.Mode != "append" {
+		t.Fatalf("file sink mode = %q, want append", file.Mode)
+	}
+	fileJSON, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal file sink: %v", err)
+	}
+	if !strings.Contains(string(fileJSON), `"type":"file"`) {
+		t.Fatalf("file sink discriminator missing: %s", fileJSON)
+	}
+
+	stream := NewObservabilityAtofStreamSinkConfig("http://localhost:8080/events")
+	if stream.Transport != "http_post" || stream.TimeoutMillis != 3000 || stream.FieldNamePolicy != "preserve" {
+		t.Fatalf("unexpected stream sink defaults: %#v", stream)
+	}
+	streamJSON, err := json.Marshal(stream)
+	if err != nil {
+		t.Fatalf("marshal stream sink: %v", err)
+	}
+	if !strings.Contains(string(streamJSON), `"type":"stream"`) {
+		t.Fatalf("stream sink discriminator missing: %s", streamJSON)
+	}
+}
+
 func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec) {
 	t.Helper()
 	if _, ok := wrapped.Config["atof"].(map[string]any); !ok {

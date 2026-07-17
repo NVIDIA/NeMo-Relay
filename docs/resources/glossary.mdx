@@ -115,7 +115,7 @@ surface are experimental unless a page says otherwise.
 
 **Finalizer**
 
-A **finalizer** is the callback used by streaming LLM helpers when the stream ends. It turns collected stream state into the response payload that sanitize-response guardrails, subscribers, and exporters can observe.
+A **finalizer** is the callback used by streaming LLM helpers when the stream ends through natural exhaustion or explicit close. It turns collected stream state into the response payload that sanitize-response guardrails, subscribers, and exporters can observe.
 
 **Global And Scope-Local Registration**
 
@@ -151,7 +151,7 @@ An **LLM call** is an instrumented model-provider invocation. Managed LLM calls 
 
 **LLM Stream**
 
-An **LLM stream** is a streaming model response managed across multiple chunks rather than a single response object. NeMo Relay captures the originating scope stack, runs stream execution intercepts, collects chunks, and finalizes the stream into a response-side event payload.
+An **LLM stream** is a streaming model response managed across multiple chunks rather than a single response object. NeMo Relay captures the originating scope stack, runs stream execution intercepts, collects chunks, and finalizes the stream into a response-side event payload. Consumers that stop early explicitly close the stream so the producer can clean up and the partial response can be finalized.
 
 **Managed Execution And Manual Lifecycle**
 

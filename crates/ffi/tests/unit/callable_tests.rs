@@ -471,10 +471,9 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         wrap_llm_stream_exec_intercept_fn(llm_exec_short_circuit_cb, std::ptr::null_mut(), None);
     let next_stream: LlmStreamExecutionNextFn = Arc::new(|_request| {
         Box::pin(async {
-            Ok(
-                Box::pin(tokio_stream::iter(vec![Ok(json!({"ignored": true}))]))
-                    as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
-            )
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::iter(vec![Ok(json!({"ignored": true}))]),
+            ))
         })
     });
     let mut intercepted_stream = runtime
@@ -487,10 +486,11 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
         wrap_llm_stream_exec_intercept_fn(llm_exec_intercept_cb, std::ptr::null_mut(), None);
     let next_stream: LlmStreamExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({
-                "model": request.content["model"].clone()
-            }))]))
-                as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::iter(vec![Ok(json!({
+                    "model": request.content["model"].clone()
+                }))]),
+            ))
         })
     });
     let mut intercepted_stream = runtime

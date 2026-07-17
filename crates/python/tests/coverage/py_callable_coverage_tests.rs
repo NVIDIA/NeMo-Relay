@@ -6,7 +6,6 @@
 use super::*;
 
 use std::ffi::CString;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use pyo3::types::PyModule;
@@ -261,6 +260,8 @@ fn async_iter_helpers_cover_stop_error_and_dropped_receiver_paths() {
         let module = load_module(
             py,
             r#"
+import asyncio
+
 class StopIter:
     def __anext__(self):
         raise StopAsyncIteration
@@ -282,6 +283,19 @@ class ValueIter:
             return self.value
         return inner()
 
+class DroppedReceiverIter:
+    def __init__(self, value):
+        self.value = value
+        self.closed = False
+
+    def __anext__(self):
+        async def inner():
+            return self.value
+        return inner()
+
+    async def aclose(self):
+        self.closed = True
+
 async def coro_value():
     return {"value": 1}
 
@@ -291,6 +305,9 @@ async def coro_stop():
 async def coro_error():
     raise RuntimeError("await boom")
 
+async def coro_cancel():
+    raise asyncio.CancelledError("user cancellation")
+
 async def coro_non_json():
     return object()
 "#,
@@ -299,9 +316,12 @@ async def coro_non_json():
         let stop_iter_cls: Py<PyAny> = module.getattr("StopIter").unwrap().unbind();
         let error_iter_cls: Py<PyAny> = module.getattr("ErrorIter").unwrap().unbind();
         let value_iter_cls: Py<PyAny> = module.getattr("ValueIter").unwrap().unbind();
+        let dropped_receiver_iter_cls: Py<PyAny> =
+            module.getattr("DroppedReceiverIter").unwrap().unbind();
         let coro_value_fn: Py<PyAny> = module.getattr("coro_value").unwrap().unbind();
         let coro_stop_fn: Py<PyAny> = module.getattr("coro_stop").unwrap().unbind();
         let coro_error_fn: Py<PyAny> = module.getattr("coro_error").unwrap().unbind();
+        let coro_cancel_fn: Py<PyAny> = module.getattr("coro_cancel").unwrap().unbind();
         let coro_non_json_fn: Py<PyAny> = module.getattr("coro_non_json").unwrap().unbind();
 
         assert!(
@@ -345,6 +365,13 @@ async def coro_non_json():
                         .contains("await boom")
                 );
                 assert!(
+                    await_async_iter_value(Python::attach(|py| coro_cancel_fn.call0(py).unwrap()))
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("cancelled")
+                );
+                assert!(
                     await_async_iter_value(Python::attach(|py| coro_non_json_fn
                         .call0(py)
                         .unwrap()))
@@ -355,20 +382,28 @@ async def coro_non_json():
                 );
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+                let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, _closed_rx) = tokio::sync::watch::channel(None);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| {
                         value_iter_cls.call1(py, (value_payload.bind(py),)).unwrap()
                     })),
                     tx,
+                    cancel_rx,
+                    closed,
                 )
                 .await;
                 assert_eq!(rx.recv().await.unwrap().unwrap(), json!({"x": 1}));
                 assert!(rx.recv().await.is_none());
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, _closed_rx) = tokio::sync::watch::channel(None);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| error_iter_cls.call0(py).unwrap())),
                     tx,
+                    cancel_rx,
+                    closed,
                 )
                 .await;
                 assert!(
@@ -382,15 +417,28 @@ async def coro_non_json():
 
                 let (tx, rx) = tokio::sync::mpsc::channel(1);
                 drop(rx);
+                let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, _closed_rx) = tokio::sync::watch::channel(None);
+                let dropped_iter = Python::attach(|py| {
+                    dropped_receiver_iter_cls
+                        .call1(py, (dropped_payload.bind(py),))
+                        .unwrap()
+                });
                 forward_async_iter(
-                    Arc::new(Python::attach(|py| {
-                        value_iter_cls
-                            .call1(py, (dropped_payload.bind(py),))
-                            .unwrap()
-                    })),
+                    Arc::new(Python::attach(|py| dropped_iter.clone_ref(py))),
                     tx,
+                    cancel_rx,
+                    closed,
                 )
                 .await;
+                assert!(Python::attach(|py| {
+                    dropped_iter
+                        .bind(py)
+                        .getattr("closed")
+                        .unwrap()
+                        .is_truthy()
+                        .unwrap()
+                }));
                 Ok(())
             })
             .unwrap();
@@ -530,10 +578,9 @@ async def collect_stream(awaitable):
                 let stream_next = PyLlmStreamNextFn {
                     inner: Arc::new(|_| {
                         Box::pin(async move {
-                            Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]))
-                                as Pin<
-                                    Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>,
-                                >)
+                            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                                tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]),
+                            ))
                         })
                     }),
                 };

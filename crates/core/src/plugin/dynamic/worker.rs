@@ -1745,7 +1745,9 @@ impl WorkerPluginCallback {
             }
             guard.finish();
         });
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(LlmJsonStream::new(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
     }
 
     fn base_request(

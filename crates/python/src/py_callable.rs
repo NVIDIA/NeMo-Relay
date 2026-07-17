@@ -23,16 +23,19 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
-    ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    LlmStreamInner, ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use serde_json::Value as Json;
 use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
@@ -120,21 +123,61 @@ fn next_async_iter_coro(async_iter: &Arc<Py<PyAny>>) -> FlowResult<Option<Py<PyA
     })
 }
 
-async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Json>> {
+fn schedule_async_iter_task(coro: Py<PyAny>) -> FlowResult<Py<PyAny>> {
+    Python::attach(|py| {
+        pyo3_async_runtimes::tokio::get_current_locals(py)
+            .and_then(|locals| {
+                let kwargs = PyDict::new(py);
+                kwargs.set_item("loop", locals.event_loop(py))?;
+                py.import("asyncio")?
+                    .call_method("ensure_future", (coro,), Some(&kwargs))
+            })
+            .map(|task| task.unbind())
+            .map_err(|e| FlowError::Internal(e.to_string()))
+    })
+}
+
+fn cancel_async_iter_task(task: &Py<PyAny>) -> FlowResult<()> {
+    Python::attach(|py| {
+        pyo3_async_runtimes::tokio::get_current_locals(py)
+            .and_then(|locals| {
+                let cancel = task.bind(py).getattr("cancel")?;
+                locals
+                    .event_loop(py)
+                    .call_method1("call_soon_threadsafe", (cancel,))
+            })
+            .map(|_| ())
+            .map_err(|error| FlowError::Internal(error.to_string()))
+    })
+}
+
+enum AsyncIterTaskResult {
+    Item(Json),
+    End,
+    Cancelled,
+}
+
+async fn await_async_iter_task_result(task: Py<PyAny>) -> FlowResult<AsyncIterTaskResult> {
     let future = Python::attach(|py| {
-        pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
+        pyo3_async_runtimes::tokio::into_future(task.into_bound(py))
             .map_err(|e| FlowError::Internal(e.to_string()))
     })?;
 
     match future.await {
         Ok(result) => Python::attach(|py| {
             py_to_json(result.bind(py))
-                .map(Some)
+                .map(AsyncIterTaskResult::Item)
                 .map_err(|e| FlowError::Internal(e.to_string()))
         }),
         Err(error) => Python::attach(|py| {
+            let cancelled_error = py
+                .import("asyncio")
+                .and_then(|asyncio| asyncio.getattr("CancelledError"))
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
             if error.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
-                Ok(None)
+                Ok(AsyncIterTaskResult::End)
+            } else if error.is_instance(py, &cancelled_error) {
+                Ok(AsyncIterTaskResult::Cancelled)
             } else {
                 Err(FlowError::Internal(error.to_string()))
             }
@@ -142,35 +185,160 @@ async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Json>> {
     }
 }
 
+#[cfg(test)]
+async fn await_async_iter_task(task: Py<PyAny>) -> FlowResult<Option<Json>> {
+    match await_async_iter_task_result(task).await? {
+        AsyncIterTaskResult::Item(value) => Ok(Some(value)),
+        AsyncIterTaskResult::End => Ok(None),
+        AsyncIterTaskResult::Cancelled => Err(FlowError::Internal(
+            "async iterator task was cancelled".into(),
+        )),
+    }
+}
+
+#[cfg(test)]
+async fn await_async_iter_value(coro: Py<PyAny>) -> FlowResult<Option<Json>> {
+    await_async_iter_task(schedule_async_iter_task(coro)?).await
+}
+
+async fn close_async_iter(async_iter: &Arc<Py<PyAny>>) -> FlowResult<()> {
+    let close = Python::attach(|py| {
+        let iter = async_iter.bind(py);
+        match iter.call_method0("aclose") {
+            Ok(close) => Ok(Some(close.unbind())),
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) => {
+                Ok(None)
+            }
+            Err(error) => Err(FlowError::Internal(error.to_string())),
+        }
+    });
+    let Some(close) = close? else {
+        return Ok(());
+    };
+    let task = schedule_async_iter_task(close)?;
+    let future = Python::attach(|py| {
+        pyo3_async_runtimes::tokio::into_future(task.into_bound(py))
+            .map_err(|error| FlowError::Internal(error.to_string()))
+    })?;
+    future
+        .await
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    Ok(())
+}
+
 async fn forward_async_iter(
     async_iter: Arc<Py<PyAny>>,
     tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    closed: tokio::sync::watch::Sender<Option<FlowResult<()>>>,
 ) {
-    loop {
+    let result = loop {
+        if *cancel.borrow() {
+            break close_async_iter(&async_iter).await;
+        }
         let next_value = match next_async_iter_coro(&async_iter) {
-            Ok(None) => break,
-            Ok(Some(coro)) => await_async_iter_value(coro).await,
+            Ok(None) => break Ok(()),
+            Ok(Some(coro)) => match schedule_async_iter_task(coro) {
+                Ok(task) => {
+                    let task_for_future = Python::attach(|py| task.clone_ref(py));
+                    let mut next_value = Box::pin(await_async_iter_task_result(task_for_future));
+                    tokio::select! {
+                        _ = cancel.changed() => {
+                            let _ = cancel_async_iter_task(&task);
+                            let next_result = next_value.await;
+                            let close_result = close_async_iter(&async_iter).await;
+                            break match next_result {
+                                Err(error) => Err(error),
+                                Ok(_) => close_result,
+                            };
+                        }
+                        value = &mut next_value => value,
+                    }
+                }
+                Err(error) => Err(error),
+            },
             Err(error) => Err(error),
         };
 
         match next_value {
-            Ok(Some(value)) => {
-                if tx.send(Ok(value)).await.is_err() {
-                    break;
+            Ok(AsyncIterTaskResult::Item(value)) => {
+                let sent = tokio::select! {
+                    _ = cancel.changed() => {
+                        break close_async_iter(&async_iter).await;
+                    }
+                    sent = tx.send(Ok(value)) => sent,
+                };
+                if sent.is_err() {
+                    break close_async_iter(&async_iter).await;
                 }
             }
-            Ok(None) => break,
+            Ok(AsyncIterTaskResult::End) => break Ok(()),
+            Ok(AsyncIterTaskResult::Cancelled) => {
+                let close_result = close_async_iter(&async_iter).await;
+                break close_result.and(Err(FlowError::Internal(
+                    "async iterator task was cancelled".into(),
+                )));
+            }
             Err(error) => {
-                let _ = tx.send(Err(error)).await;
-                break;
+                let sent = tokio::select! {
+                    _ = cancel.changed() => break close_async_iter(&async_iter).await,
+                    sent = tx.send(Err(error)) => sent,
+                };
+                if sent.is_err() {
+                    break close_async_iter(&async_iter).await;
+                }
+                break close_async_iter(&async_iter).await;
             }
         }
+    };
+    closed.send_replace(Some(result));
+}
+
+#[derive(Clone)]
+struct PythonAsyncIteratorClose {
+    cancel: tokio::sync::watch::Sender<bool>,
+    closed: tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
+}
+
+struct PythonAsyncIteratorStream {
+    receiver: ReceiverStream<FlowResult<Json>>,
+    close: PythonAsyncIteratorClose,
+}
+
+impl Stream for PythonAsyncIteratorStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.receiver).poll_next(cx)
     }
 }
 
-fn stream_from_async_iter(
-    async_iter: Py<PyAny>,
-) -> FlowResult<Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>> {
+impl Drop for PythonAsyncIteratorStream {
+    fn drop(&mut self) {
+        self.close.cancel.send_replace(true);
+    }
+}
+
+impl LlmStreamInner for PythonAsyncIteratorStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.close.cancel.send_replace(true);
+        this.receiver.close();
+        while this.receiver.as_mut().try_recv().is_ok() {}
+        let close = this.close.clone();
+        Box::pin(async move {
+            let mut closed = close.closed;
+            while closed.borrow().is_none() {
+                closed.changed().await.map_err(|_| {
+                    FlowError::Internal("Python stream cleanup task ended early".into())
+                })?;
+            }
+            closed.borrow().clone().expect("close state checked above")
+        })
+    }
+}
+
+fn stream_from_async_iter(async_iter: Py<PyAny>) -> FlowResult<LlmJsonStream> {
     let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
     let task_locals = Python::attach(|py| {
         pyo3_async_runtimes::tokio::get_current_locals(py)
@@ -178,12 +346,20 @@ fn stream_from_async_iter(
     })?;
 
     let async_iter = Arc::new(async_iter);
+    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+    let (closed, closed_rx) = tokio::sync::watch::channel(None);
     tokio::spawn(pyo3_async_runtimes::tokio::scope(task_locals, async move {
-        forward_async_iter(async_iter, tx).await;
+        forward_async_iter(async_iter, tx, cancel_rx, closed).await;
     }));
 
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>)
+    let stream = PythonAsyncIteratorStream {
+        receiver: ReceiverStream::new(rx),
+        close: PythonAsyncIteratorClose {
+            cancel,
+            closed: closed_rx,
+        },
+    };
+    Ok(LlmJsonStream::from_closeable(stream))
 }
 
 /// Wrap a Python callable `(str, Json) -> Json` for tool sanitize/intercept fns.
@@ -378,18 +554,19 @@ impl PyLlmStreamNextFn {
 
             // Drain into mpsc channel and return PyLlmStream
             let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(32);
-            tokio::spawn(async move {
-                use tokio_stream::StreamExt;
-                let mut stream = rust_stream;
-                while let Some(item) = stream.next().await {
-                    if tx.send(item).await.is_err() {
-                        break;
-                    }
-                }
-            });
+            let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+            let (closed, closed_rx) = tokio::sync::watch::channel(None);
+            tokio::spawn(crate::py_api::forward_stream_to_channel(
+                rust_stream,
+                tx,
+                cancel_rx,
+                closed,
+            ));
 
             Ok(crate::py_types::PyLlmStream {
-                receiver: tokio::sync::Mutex::new(rx),
+                receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+                cancel,
+                closed: closed_rx,
             })
         })
     }
@@ -555,13 +732,8 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
             &str,
             LlmRequest,
             LlmStreamExecutionNextFn,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = FlowResult<Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>>,
-                    > + Send,
-            >,
-        > + Send
+        ) -> Pin<Box<dyn Future<Output = FlowResult<LlmJsonStream>> + Send>>
+        + Send
         + Sync,
 > {
     let py_fn = Arc::new(py_fn);
@@ -729,15 +901,8 @@ pub fn wrap_py_llm_exec_fn(
 pub fn wrap_py_llm_stream_exec_fn(
     py_fn: Py<PyAny>,
 ) -> Box<
-    dyn Fn(
-            LlmRequest,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = FlowResult<Pin<Box<dyn Stream<Item = FlowResult<Json>> + Send>>>,
-                    > + Send,
-            >,
-        > + Send
+    dyn Fn(LlmRequest) -> Pin<Box<dyn Future<Output = FlowResult<LlmJsonStream>> + Send>>
+        + Send
         + Sync,
 > {
     let py_fn = std::sync::Arc::new(py_fn);
@@ -780,9 +945,9 @@ pub fn wrap_py_collector_fn(
 
 /// Wrap a Python callable `() -> Any` as a finalizer for streaming LLM calls.
 ///
-/// The finalizer is called once when the stream is fully consumed. Its return
-/// value is converted from a Python object to `serde_json::Value` (Json) and
-/// used as the aggregated response.
+/// The finalizer is called once when the stream is fully consumed or explicitly
+/// closed. Its return value is converted from a Python object to
+/// `serde_json::Value` (Json) and used as the aggregated response.
 pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         Python::attach(|py| {

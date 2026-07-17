@@ -82,7 +82,7 @@ impl std::fmt::Display for UpstreamFailure {
 ///
 /// Each variant represents a distinct failure mode that callers can match on
 /// to determine the appropriate recovery strategy.
-#[derive(Debug, Error)]
+#[derive(Clone, Debug, Error)]
 pub enum FlowError {
     /// A resource with the given name is already registered.
     ///

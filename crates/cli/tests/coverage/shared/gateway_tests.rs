@@ -1776,7 +1776,7 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
         .await
         .unwrap();
 
-    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+    let stream = LlmJsonStream::new(futures_util::stream::pending::<
         std::result::Result<Value, FlowError>,
     >());
     let body = client_sse_body(
@@ -1856,7 +1856,7 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
         (manager, prep)
     });
     let final_response = json!({ "output_text": "streamed final" });
-    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+    let stream = LlmJsonStream::new(futures_util::stream::pending::<
         std::result::Result<Value, FlowError>,
     >());
     let body = client_sse_body(
@@ -1934,7 +1934,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
     let session_id = prep.session_id.clone();
     let owner_subagent_id = prep.owner_subagent_id.clone();
     let final_response = json!({ "output_text": "streamed final" });
-    let stream: LlmJsonStream = Box::pin(futures_util::stream::empty::<
+    let stream = LlmJsonStream::new(futures_util::stream::empty::<
         std::result::Result<Value, FlowError>,
     >());
     let body = client_sse_body(

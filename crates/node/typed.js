@@ -195,7 +195,7 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  * @param {*} request - The LLM request object ({headers, content}).
  * @param {function(*): AsyncIterable<TChunk>} func - The streaming LLM implementation.
  * @param {function(TChunk): void} collector - Called with each typed chunk after intercepts.
- * @param {function(): TResponse} finalizer - Called once when the stream is exhausted.
+ * @param {function(): TResponse} finalizer - Called once when the stream is exhausted or closed early.
  * @param {Codec<TChunk>} chunkJsonCodec - Codec for serializing/deserializing chunks.
  * @param {Codec<TResponse>} responseJsonCodec - Codec for serializing/deserializing the final response.
  * @param {object} [options] - Optional parameters.
@@ -211,11 +211,17 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  * @returns {Promise<LlmStream>} A promise resolving to the native stream handle.
  * @remarks The JavaScript side drives async iteration and pushes each encoded
  * chunk back into the native stream bridge; the stream is always closed in the
- * `finally` path even if the source iterator throws.
+ * `finally` path even if the source iterator throws. Consumers that stop
+ * reading early must await `stream.close()` to complete producer cleanup.
  */
 async function typedLlmStreamExecute(name, request, func, collector, finalizer, ...streamArgs) {
   const [chunkJsonCodec, responseJsonCodec, options] = streamArgs;
   const opts = options || {};
+  let iterator;
+  let resolveIterator;
+  const iteratorReady = new Promise((resolve) => {
+    resolveIterator = resolve;
+  });
 
   // Push-based stream bridge: NAPI cannot resolve JS Promises from
   // call_with_return_value, so the JS side drives async generator iteration
@@ -226,11 +232,25 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     const streamId = wrapper.__nemo_relay_stream_id;
     (async () => {
       try {
-        for await (const typedChunk of func(req)) {
-          lib.pushStreamChunk(streamId, chunkJsonCodec.toJson(typedChunk));
+        iterator = func(req)[Symbol.asyncIterator]();
+        resolveIterator(iterator);
+        while (true) {
+          const { done, value: typedChunk } = await iterator.next();
+          if (done) {
+            break;
+          }
+          if (!lib.pushStreamChunk(streamId, chunkJsonCodec.toJson(typedChunk))) {
+            await iterator.return?.();
+            break;
+          }
         }
       } finally {
-        lib.endStream(streamId);
+        resolveIterator(iterator);
+        try {
+          await iterator?.return?.();
+        } finally {
+          lib.endStream(streamId);
+        }
       }
     })();
   };
@@ -245,7 +265,7 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     return collectCodecReturn(responseJsonCodec.toJson(finalizer()));
   };
 
-  return await lib.llmStreamCallExecute(
+  const stream = await lib.llmStreamCallExecute(
     name,
     request,
     jsonFunc,
@@ -260,6 +280,35 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     opts.codec ? (payload) => encodeWithCodec(opts.codec, payload) : null,
     opts.responseCodec ? (response) => decodeResponseWithCodec(opts.responseCodec, response) : null,
   );
+  const close = stream.close.bind(stream);
+  stream.close = async () => {
+    const closing = close();
+    let iteratorError;
+    try {
+      await (await iteratorReady)?.return?.();
+    } catch (error) {
+      iteratorError = error;
+    }
+    let closeError;
+    try {
+      await closing;
+    } catch (error) {
+      closeError = error;
+    }
+    if (iteratorError && closeError) {
+      throw new AggregateError(
+        [iteratorError, closeError],
+        'stream close failed during iterator cleanup and native close',
+      );
+    }
+    if (iteratorError) {
+      throw iteratorError;
+    }
+    if (closeError) {
+      throw closeError;
+    }
+  };
+  return stream;
 }
 
 module.exports = {

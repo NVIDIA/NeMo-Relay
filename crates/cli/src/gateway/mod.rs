@@ -534,7 +534,7 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
             Err(error) => yield Err(error),
         }
     };
-    Box::pin(stream)
+    LlmJsonStream::new(stream)
 }
 
 // Re-encodes a runtime JSON stream as `text/event-stream` frames for the downstream client. Event

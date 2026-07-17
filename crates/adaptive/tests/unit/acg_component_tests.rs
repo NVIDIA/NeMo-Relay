@@ -17,8 +17,7 @@ use crate::config::AcgComponentConfig;
 use crate::storage::memory::InMemoryBackend;
 use crate::storage::traits::StorageBackendDyn;
 use nemo_relay::api::llm::LlmRequest;
-use nemo_relay::api::runtime::LlmExecutionNextFn;
-use nemo_relay::api::runtime::LlmStreamExecutionNextFn;
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
@@ -646,10 +645,9 @@ async fn acg_component_stream_execution_intercept_rewrites_streaming_requests() 
     );
     let next: LlmStreamExecutionNextFn = Arc::new(|req| {
         Box::pin(async move {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(req.content)]))
-                as Pin<
-                    Box<dyn tokio_stream::Stream<Item = nemo_relay::error::Result<Json>> + Send>,
-                >)
+            Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                Ok(req.content),
+            ])))
         })
     });
 
@@ -1295,10 +1293,9 @@ async fn acg_component_stream_execution_intercept_passes_original_request_when_t
     );
     let next: LlmStreamExecutionNextFn = Arc::new(|req| {
         Box::pin(async move {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(req.content)]))
-                as Pin<
-                    Box<dyn tokio_stream::Stream<Item = nemo_relay::error::Result<Json>> + Send>,
-                >)
+            Ok(LlmJsonStream::new(tokio_stream::iter(vec![
+                Ok(req.content),
+            ])))
         })
     });
 

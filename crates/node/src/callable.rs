@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream,
     LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionNextFn,
     ToolConditionalFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
@@ -781,15 +781,8 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
             &str,
             LlmRequest,
             LlmStreamExecutionNextFn,
-        ) -> Pin<
-            Box<
-                dyn Future<
-                        Output = Result<
-                            Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>,
-                        >,
-                    > + Send,
-            >,
-        > + Send
+        ) -> Pin<Box<dyn Future<Output = Result<LlmJsonStream>> + Send>>
+        + Send
         + Sync,
 > {
     Arc::new(
@@ -818,10 +811,7 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                     value => vec![Ok(value)],
                 };
                 let stream = tokio_stream::iter(chunks);
-                Ok(Box::pin(stream)
-                    as Pin<
-                        Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>,
-                    >)
+                Ok(LlmJsonStream::new(stream))
             })
         },
     )
