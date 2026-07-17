@@ -351,7 +351,7 @@ fn run_claude_startup_probe(log_level: Option<&str>) -> String {
             command.env_remove("NEMO_RELAY_LOG");
         }
     }
-    let mut child = command.spawn().unwrap();
+    let child = ChildGuard::new(command.spawn().unwrap());
 
     let body = r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#;
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -377,8 +377,7 @@ fn run_claude_startup_probe(log_level: Option<&str>) -> String {
             }
             Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
             Err(error) => {
-                let _ = child.kill();
-                let output = wait_child_with_output(child);
+                let output = child.finish();
                 panic!(
                     "gateway did not accept the startup probe: {error}; stderr: {}",
                     String::from_utf8_lossy(&output.stderr)
@@ -389,8 +388,7 @@ fn run_claude_startup_probe(log_level: Option<&str>) -> String {
 
     let upstream_request = received.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(upstream_request.starts_with("POST /v1/messages "));
-    child.kill().unwrap();
-    String::from_utf8(wait_child_with_output(child).stderr).unwrap()
+    String::from_utf8(child.finish().stderr).unwrap()
 }
 
 #[test]
@@ -1353,6 +1351,29 @@ fn wait_child(child: &mut Child) -> ExitStatus {
             panic!("child process did not exit within 10 seconds");
         }
         thread::sleep(Duration::from_millis(20));
+    }
+}
+
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn finish(mut self) -> Output {
+        let mut child = self.0.take().unwrap();
+        let _ = child.kill();
+        wait_child_with_output(child)
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
