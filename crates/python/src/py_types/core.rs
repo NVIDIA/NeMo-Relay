@@ -22,7 +22,9 @@ use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 ///
 /// Use ``async for chunk in stream:`` to consume chunks. Each chunk is a
 /// Python object (converted from JSON). The stream automatically emits an
-/// End lifecycle event when exhausted.
+/// End lifecycle event when exhausted. When stopping early, await
+/// ``stream.aclose()`` to wait for producer cleanup and emit an interrupted
+/// End event.
 #[pyclass(name = "LlmStream")]
 pub struct PyLlmStream {
     pub receiver:
@@ -55,7 +57,9 @@ impl PyLlmStream {
         })
     }
 
-    /// Stop forwarding chunks and release the native stream.
+    /// Stop forwarding chunks, wait for producer cleanup, and release the native stream.
+    ///
+    /// This operation is idempotent and raises when producer cleanup fails.
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cancel = self.cancel.clone();
         let mut closed = self.closed.clone();

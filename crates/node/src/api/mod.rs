@@ -2191,8 +2191,10 @@ pub fn llm_call_execute_async(
 ///
 /// The optional `collector` callback is invoked with each intercepted chunk as JSON,
 /// allowing the caller to accumulate chunks for aggregation. The optional `finalizer`
-/// callback is invoked once when the stream is exhausted and must return a JSON value
-/// representing the aggregated response.
+/// callback is invoked once when the stream is exhausted or closed early and
+/// must return a JSON value representing the aggregated response. Consumers
+/// that stop reading early must await `stream.close()` to wait for producer
+/// cleanup and surface cleanup errors.
 #[allow(clippy::too_many_arguments)]
 #[napi(ts_return_type = "Promise<LlmStream>")]
 pub fn llm_stream_call_execute(

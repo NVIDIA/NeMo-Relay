@@ -913,9 +913,9 @@ pub fn wrap_py_collector_fn(
 
 /// Wrap a Python callable `() -> Any` as a finalizer for streaming LLM calls.
 ///
-/// The finalizer is called once when the stream is fully consumed. Its return
-/// value is converted from a Python object to `serde_json::Value` (Json) and
-/// used as the aggregated response.
+/// The finalizer is called once when the stream is fully consumed or explicitly
+/// closed. Its return value is converted from a Python object to
+/// `serde_json::Value` (Json) and used as the aggregated response.
 pub fn wrap_py_finalizer_fn(py_fn: Py<PyAny>) -> Box<dyn FnOnce() -> Json + Send> {
     Box::new(move || {
         Python::attach(|py| {

@@ -313,10 +313,11 @@ def stream_execute(
 
     Notes:
         ``collector`` observes the post-intercept chunk values. ``finalizer``
-        runs once at stream completion and should return a representation of
-        the full response, not the final chunk. If the caller stops consuming
-        early, call ``await stream.aclose()`` to cancel the producer and
-        release native stream resources.
+        runs once at natural stream completion or explicit close and should
+        return a representation of the full response, not the final chunk. If
+        the caller stops consuming early, call ``await stream.aclose()`` to
+        cancel the producer, finalize the partial response, and release native
+        stream resources.
 
     Example::
 

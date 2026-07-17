@@ -195,7 +195,7 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  * @param {*} request - The LLM request object ({headers, content}).
  * @param {function(*): AsyncIterable<TChunk>} func - The streaming LLM implementation.
  * @param {function(TChunk): void} collector - Called with each typed chunk after intercepts.
- * @param {function(): TResponse} finalizer - Called once when the stream is exhausted.
+ * @param {function(): TResponse} finalizer - Called once when the stream is exhausted or closed early.
  * @param {Codec<TChunk>} chunkJsonCodec - Codec for serializing/deserializing chunks.
  * @param {Codec<TResponse>} responseJsonCodec - Codec for serializing/deserializing the final response.
  * @param {object} [options] - Optional parameters.
@@ -211,7 +211,8 @@ async function typedLlmExecute(name, request, func, responseJsonCodec, options) 
  * @returns {Promise<LlmStream>} A promise resolving to the native stream handle.
  * @remarks The JavaScript side drives async iteration and pushes each encoded
  * chunk back into the native stream bridge; the stream is always closed in the
- * `finally` path even if the source iterator throws.
+ * `finally` path even if the source iterator throws. Consumers that stop
+ * reading early must await `stream.close()` to complete producer cleanup.
  */
 async function typedLlmStreamExecute(name, request, func, collector, finalizer, ...streamArgs) {
   const [chunkJsonCodec, responseJsonCodec, options] = streamArgs;

@@ -796,8 +796,9 @@ fn llm_call_execute<'py>(
 ///     func: An async callable ``(LlmRequest) -> AsyncIterator[Any]`` that returns JSON chunks.
 ///     collector: A callable ``(Any) -> None`` invoked with each intercepted chunk
 ///         (after stream execution intercepts have been applied).
-///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted.
-///         Its return value is the aggregated response (converted to JSON).
+///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted
+///         or explicitly closed. Its return value is the aggregated response
+///         (converted to JSON).
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LlmAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -806,6 +807,9 @@ fn llm_call_execute<'py>(
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.
+///
+/// Consumers that stop reading early must call ``await stream.aclose()`` to
+/// wait for producer cleanup and surface cleanup errors.
 ///
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.

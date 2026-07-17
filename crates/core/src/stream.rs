@@ -53,14 +53,17 @@ use serde_json::Map;
 ///
 /// 1. Passes each chunk to the user-supplied **collector** closure.
 ///    If the collector returns `Err`, the stream terminates with that error.
-/// 2. On stream exhaustion, calls the **finalizer** to produce an aggregated
-///    [`Json`] response, runs sanitize response guardrails on it, then emits
-///    the LLM END event.
+/// 2. On stream exhaustion or explicit close, calls the **finalizer** to
+///    produce an aggregated [`Json`] response, runs sanitize response
+///    guardrails on it, then emits the LLM END event. Explicit close marks the
+///    end event as interrupted and waits for producer cleanup.
 ///
 /// This type is returned by [`crate::api::llm::llm_stream_call_execute`] and
-/// is usually consumed as an ordinary async stream. The wrapper preserves the
-/// originating scope stack so end-of-stream bookkeeping still uses the correct
-/// scope-local middleware and subscribers even when polling happens elsewhere.
+/// is usually consumed as an ordinary async stream. Consumers that stop early
+/// should call [`LlmJsonStream::close`] to perform deterministic cleanup. The
+/// wrapper preserves the originating scope stack so end-of-stream bookkeeping
+/// still uses the correct scope-local middleware and subscribers even when
+/// polling happens elsewhere.
 pub struct LlmStreamWrapper {
     inner: LlmJsonStream,
     handle: LlmHandle,
