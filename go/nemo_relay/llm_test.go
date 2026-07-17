@@ -1048,6 +1048,78 @@ func TestLlmStreamCollectorCanClose(t *testing.T) {
 	}
 }
 
+func TestLlmStreamHelperAndReleaseCoverage(t *testing.T) {
+	chunk := json.RawMessage(`{"chunk": true}`)
+	collectorCalls := 0
+	returnedChunk, err := llmStreamNextResult(1, chunk, func(json.RawMessage) {
+		collectorCalls++
+	}, nil)
+	if err != nil || string(returnedChunk) != string(chunk) || collectorCalls != 1 {
+		t.Fatalf("chunk result = %s, %v; collector calls = %d", returnedChunk, err, collectorCalls)
+	}
+
+	finalizerCalls := 0
+	finalizer := FinalizerFunc(func() string {
+		finalizerCalls++
+		return `{}`
+	})
+	if _, err := llmStreamNextResult(0, nil, nil, &finalizer); err != io.EOF || finalizerCalls != 1 || finalizer != nil {
+		t.Fatalf("EOF result = %v; finalizer calls = %d", err, finalizerCalls)
+	}
+
+	stream, err := LlmStreamCallExecute("release_llm", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"data: [DONE]\n\n"`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf(llmStreamCallExecuteFailed, err)
+	}
+	stream.release()
+	stream.release()
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after release error = %v, want io.EOF", err)
+	}
+}
+
+func TestLlmStreamFinishCloseWaitsForInFlightWork(t *testing.T) {
+	stream, err := LlmStreamCallExecute("finish_close_wait_llm", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"data: [DONE]\n\n"`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf(llmStreamCallExecuteFailed, err)
+	}
+
+	stream.mu.Lock()
+	ptr := stream.ptr
+	stream.inFlight = 1
+	stream.idle = make(chan struct{})
+	stream.closing = true
+	stream.closeDone = make(chan struct{})
+	stream.mu.Unlock()
+
+	finished := make(chan struct{})
+	go func() {
+		stream.finishClose(ptr, nil)
+		close(finished)
+	}()
+	stream.idle <- struct{}{}
+
+	stream.mu.Lock()
+	stream.inFlight = 0
+	close(stream.idle)
+	stream.mu.Unlock()
+	<-finished
+
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after finishClose error = %v, want io.EOF", err)
+	}
+}
+
 func TestLlmStreamCloseWaitsForActiveCollectorBeforeFinalizing(t *testing.T) {
 	collectorStarted := make(chan struct{})
 	collectorFinished := make(chan struct{})

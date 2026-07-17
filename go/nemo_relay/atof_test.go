@@ -43,6 +43,33 @@ func TestNewAtofExporterConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *testing.T) {
+	file := NewAtofFileSinkConfig()
+	if file.Mode != AtofExporterModeAppend {
+		t.Fatalf("file sink mode = %q, want append", file.Mode)
+	}
+	fileJSON, err := json.Marshal(file)
+	if err != nil {
+		t.Fatalf("marshal file sink: %v", err)
+	}
+	if !strings.Contains(string(fileJSON), `"type":"file"`) {
+		t.Fatalf("file sink discriminator missing: %s", fileJSON)
+	}
+
+	stream := NewAtofStreamSinkConfig("http://localhost:8080/events")
+	if stream.Transport != AtofEndpointTransportHTTPPost || stream.TimeoutMillis != 3000 ||
+		stream.FieldNamePolicy != AtofEndpointFieldNamePolicyPreserve {
+		t.Fatalf("unexpected stream sink defaults: %#v", stream)
+	}
+	streamJSON, err := json.Marshal(stream)
+	if err != nil {
+		t.Fatalf("marshal stream sink: %v", err)
+	}
+	if !strings.Contains(string(streamJSON), `"type":"stream"`) {
+		t.Fatalf("stream sink discriminator missing: %s", streamJSON)
+	}
+}
+
 func TestAtofExporterLifecycleWritesRawJSONL(t *testing.T) {
 	dir := t.TempDir()
 	exporter, err := NewAtofExporter(AtofExporterConfig{Sink: AtofFileSinkConfig{
