@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Iterator
 
 from nemo_relay import Json
+from nemo_relay._context import ensure_scope_stack as _ensure_scope_stack
 from nemo_relay._native import (
     ScopeAttributes,
     ScopeHandle,
@@ -38,35 +39,6 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     push_scope as _native_push_scope,
 )
-
-
-def _ensure_scope_stack() -> None:
-    """Ensure the current context's scope stack is active on the Rust thread-local.
-
-    Three cases:
-
-    1. **ContextVar is set** (normal async tasks, or after ``push_node_scope``
-       installed a branch stack): always re-sync it to the Rust thread-local.
-       This is critical because concurrent async tasks share a single OS thread
-       and the thread-local may have been overwritten by another task.
-    2. **ContextVar is empty but thread-local is set** (worker threads that
-       called ``set_thread_scope_stack``): keep the thread-local as-is.
-    3. **Neither is set**: create a new scope stack via ``get_scope_stack()``.
-    """
-    import nemo_relay
-
-    # Case 1: ContextVar owns a stack — re-sync it to the Rust thread-local.
-    stack = nemo_relay._scope_stack_var.get(None)
-    if stack is not None:
-        nemo_relay._sync_thread_scope_stack(stack)
-        return
-
-    # Case 2: Worker thread with explicit set_thread_scope_stack — don't clobber.
-    if nemo_relay._native_scope_stack_active():
-        return
-
-    # Case 3: Fresh context — create and register a new stack.
-    nemo_relay.get_scope_stack()
 
 
 def get_handle() -> ScopeHandle:
@@ -285,7 +257,7 @@ def scope(
             metadata = {"otel.status_code": status_code}
             if status_message is not None:
                 metadata["otel.status_description"] = status_message
-            _native_pop_scope(pushed_handle, metadata=metadata, timestamp=end_timestamp)
+            pop(pushed_handle, metadata=metadata, timestamp=end_timestamp)
 
 
 __all__ = ["event", "get_handle", "pop", "push", "scope"]

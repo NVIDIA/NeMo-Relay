@@ -1378,7 +1378,7 @@ fn invalid_endpoint_scheme_errors_cleanly() {
 fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
     let mut headers = std::collections::HashMap::new();
     headers.insert("x-test".to_string(), "ok".to_string());
-    validate_endpoint_config(&AtofEndpointConfig {
+    validate_endpoint_config(AtofEndpointConfig {
         url: "http://127.0.0.1:9/events".into(),
         transport: AtofEndpointTransport::HttpPost,
         headers: headers.clone(),
@@ -1422,7 +1422,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
     assert!(
-        validate_endpoint_config(&empty_url)
+        validate_endpoint_config(empty_url)
             .unwrap_err()
             .to_string()
             .contains("endpoint url must be non-empty")
@@ -1437,7 +1437,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
     };
     assert!(
-        validate_endpoint_config(&zero_timeout)
+        validate_endpoint_config(zero_timeout)
             .unwrap_err()
             .to_string()
             .contains("timeout_millis")
@@ -1451,7 +1451,7 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
     bad_header_value.insert("x-test".to_string(), "bad\nvalue".to_string());
     assert!(resolved_header_map(&bad_header_value, &Default::default()).is_err());
     assert!(
-        build_ndjson_client(&AtofEndpointConfig {
+        validate_endpoint_config(AtofEndpointConfig {
             url: "http://127.0.0.1:9/events".into(),
             transport: AtofEndpointTransport::Ndjson,
             headers: bad_header_value,
@@ -1459,8 +1459,33 @@ fn endpoint_validation_rejects_empty_timeout_and_invalid_headers() {
             timeout_millis: 1,
             field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
         })
-        .unwrap_err()
-        .contains("disabled")
+        .is_err()
+    );
+}
+
+#[test]
+#[cfg(feature = "atof-streaming")]
+fn endpoint_activation_snapshots_header_env() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let variable = format!("NEMO_RELAY_TEST_ATOF_HEADER_ENV_{}", std::process::id());
+    // SAFETY: The test mutex serializes environment access for this process.
+    unsafe { std::env::set_var(&variable, "Bearer relay-499") };
+
+    let endpoint = validate_endpoint_config(AtofEndpointConfig {
+        url: "http://127.0.0.1:9/events".into(),
+        transport: AtofEndpointTransport::HttpPost,
+        headers: std::collections::HashMap::new(),
+        header_env: std::collections::HashMap::from([("authorization".into(), variable.clone())]),
+        timeout_millis: 1,
+        field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
+    })
+    .unwrap();
+
+    // SAFETY: The activated endpoint must not read this environment variable again.
+    unsafe { std::env::remove_var(&variable) };
+    assert_eq!(
+        endpoint.headers.get("authorization").unwrap(),
+        "Bearer relay-499"
     );
 }
 
@@ -1536,8 +1561,11 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             run_http_post_endpoint(
                 0,
-                AtofEndpointConfig::new(url, AtofEndpointTransport::HttpPost)
-                    .with_timeout_millis(5_000),
+                validate_endpoint_config(
+                    AtofEndpointConfig::new(url, AtofEndpointTransport::HttpPost)
+                        .with_timeout_millis(5_000),
+                )
+                .unwrap(),
                 rx,
             )
             .await;
@@ -1562,46 +1590,6 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
-fn http_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
-    enable_operational_logs();
-    let mut headers = std::collections::HashMap::new();
-    headers.insert("bad header".to_string(), "ok".to_string());
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let worker = std::thread::spawn(move || {
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            run_http_post_endpoint(
-                0,
-                AtofEndpointConfig {
-                    url: "http://127.0.0.1:9/events".into(),
-                    transport: AtofEndpointTransport::HttpPost,
-                    headers,
-                    header_env: std::collections::HashMap::new(),
-                    timeout_millis: 1,
-                    field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
-                },
-                rx,
-            )
-            .await;
-        });
-    });
-
-    tx.send(EndpointMessage::Event("{\"kind\":\"mark\"}".into()))
-        .unwrap();
-    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
-    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
-    let (close_tx, close_rx) = std::sync::mpsc::channel();
-    tx.send(EndpointMessage::Close(close_tx)).unwrap();
-    flush_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .unwrap();
-    close_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .unwrap();
-    worker.join().unwrap();
-}
-
-#[test]
-#[cfg(feature = "atof-streaming")]
 fn http_endpoint_worker_reports_request_transport_failure() {
     enable_operational_logs();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1609,11 +1597,14 @@ fn http_endpoint_worker_reports_request_transport_failure() {
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             run_http_post_endpoint(
                 0,
-                AtofEndpointConfig::new(
-                    "http://127.0.0.1:0/events",
-                    AtofEndpointTransport::HttpPost,
+                validate_endpoint_config(
+                    AtofEndpointConfig::new(
+                        "http://127.0.0.1:0/events",
+                        AtofEndpointTransport::HttpPost,
+                    )
+                    .with_timeout_millis(100),
                 )
-                .with_timeout_millis(100),
+                .unwrap(),
                 rx,
             )
             .await;
@@ -1624,44 +1615,6 @@ fn http_endpoint_worker_reports_request_transport_failure() {
         .unwrap();
     let (close_tx, close_rx) = std::sync::mpsc::channel();
     tx.send(EndpointMessage::Close(close_tx)).unwrap();
-    close_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .unwrap();
-    worker.join().unwrap();
-}
-
-#[test]
-#[cfg(feature = "atof-streaming")]
-fn ndjson_endpoint_worker_disables_invalid_headers_and_drains_control_messages() {
-    enable_operational_logs();
-    let mut headers = std::collections::HashMap::new();
-    headers.insert("bad header".to_string(), "ok".to_string());
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    let worker = std::thread::spawn(move || {
-        tokio::runtime::Runtime::new().unwrap().block_on(async {
-            run_ndjson_endpoint(
-                0,
-                AtofEndpointConfig {
-                    url: "http://127.0.0.1:9/events".into(),
-                    transport: AtofEndpointTransport::Ndjson,
-                    headers,
-                    header_env: std::collections::HashMap::new(),
-                    timeout_millis: 1,
-                    field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
-                },
-                rx,
-            )
-            .await;
-        });
-    });
-
-    let (flush_tx, flush_rx) = std::sync::mpsc::channel();
-    tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
-    let (close_tx, close_rx) = std::sync::mpsc::channel();
-    tx.send(EndpointMessage::Close(close_tx)).unwrap();
-    flush_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .unwrap();
     close_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .unwrap();
@@ -1672,23 +1625,24 @@ fn ndjson_endpoint_worker_disables_invalid_headers_and_drains_control_messages()
 #[cfg(feature = "atof-streaming")]
 fn websocket_helpers_cover_invalid_headers_and_timeout_reconnect_path() {
     enable_operational_logs();
-    let mut headers = std::collections::HashMap::new();
-    headers.insert("bad header".to_string(), "ok".to_string());
-    let config = AtofEndpointConfig {
+    let endpoint = validate_endpoint_config(AtofEndpointConfig {
         url: "ws://127.0.0.1:9/events".into(),
         transport: AtofEndpointTransport::Websocket,
-        headers,
+        headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
         timeout_millis: 1,
         field_name_policy: AtofEndpointFieldNamePolicy::Preserve,
-    };
+    })
+    .unwrap();
     tokio::runtime::Runtime::new().unwrap().block_on(async {
-        assert!(connect_websocket(&config).await.is_err());
+        assert!(connect_websocket(&endpoint).await.is_err());
 
         let mut socket = None;
         let mut pending = std::collections::VecDeque::from(["{\"kind\":\"mark\"}".to_string()]);
         let mut retry = WebSocketRetryState::default();
-        assert!(!drain_websocket_pending(0, &config, &mut socket, &mut pending, &mut retry).await);
+        assert!(
+            !drain_websocket_pending(0, &endpoint, &mut socket, &mut pending, &mut retry).await
+        );
         assert_eq!(pending.len(), 1);
         assert_eq!(retry.attempts, 1);
     });
