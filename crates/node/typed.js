@@ -289,15 +289,23 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     } catch (error) {
       iteratorError = error;
     }
+    let closeError;
     try {
       await closing;
     } catch (error) {
-      if (!iteratorError) {
-        throw error;
-      }
+      closeError = error;
+    }
+    if (iteratorError && closeError) {
+      throw new AggregateError(
+        [iteratorError, closeError],
+        'stream close failed during iterator cleanup and native close',
+      );
     }
     if (iteratorError) {
       throw iteratorError;
+    }
+    if (closeError) {
+      throw closeError;
     }
   };
   return stream;

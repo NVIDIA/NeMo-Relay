@@ -797,6 +797,7 @@ async fn stream_adapters_forward_explicit_close_to_the_upstream_stream() {
         stream.close().await.unwrap();
 
         assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+        assert!(stream.next().await.is_none());
     }
 }
 

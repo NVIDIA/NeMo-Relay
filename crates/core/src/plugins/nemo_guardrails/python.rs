@@ -1072,7 +1072,7 @@ fn local_violation(message: impl Into<String>) -> FlowError {
 struct GuardedProviderStream {
     receiver: ReceiverStream<FlowResult<Json>>,
     cancel: watch::Sender<bool>,
-    closed: watch::Receiver<Option<std::result::Result<(), String>>>,
+    closed: watch::Receiver<Option<FlowResult<()>>>,
 }
 
 impl tokio_stream::Stream for GuardedProviderStream {
@@ -1093,6 +1093,8 @@ impl LlmStreamInner for GuardedProviderStream {
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
         let this = self.get_mut();
         this.cancel.send_replace(true);
+        this.receiver.close();
+        while this.receiver.as_mut().try_recv().is_ok() {}
         let mut closed = this.closed.clone();
         Box::pin(async move {
             while closed.borrow().is_none() {
@@ -1100,11 +1102,7 @@ impl LlmStreamInner for GuardedProviderStream {
                     FlowError::Internal("guarded stream cleanup task ended early".into())
                 })?;
             }
-            closed
-                .borrow()
-                .clone()
-                .expect("close state checked above")
-                .map_err(FlowError::Internal)
+            closed.borrow().clone().expect("close state checked above")
         })
     }
 }
@@ -1118,7 +1116,7 @@ async fn forward_guarded_provider_stream(
     monitor: JoinHandle<FlowResult<()>>,
     blocked: Arc<Mutex<Option<String>>>,
     mut cancel: watch::Receiver<bool>,
-    closed: watch::Sender<Option<std::result::Result<(), String>>>,
+    closed: watch::Sender<Option<FlowResult<()>>>,
 ) {
     let mut monitor = Some(monitor);
     loop {
@@ -1178,12 +1176,7 @@ async fn forward_guarded_provider_stream(
     } else if let Some(monitor) = monitor.take() {
         let _ = send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
     }
-    closed.send_replace(Some(
-        provider_stream
-            .close()
-            .await
-            .map_err(|error| error.to_string()),
-    ));
+    closed.send_replace(Some(provider_stream.close().await));
 }
 
 async fn send_stream_monitor_error(

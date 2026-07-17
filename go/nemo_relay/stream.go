@@ -52,9 +52,15 @@ import (
 // Each stream carries its own collector and finalizer callbacks, so multiple
 // streams can operate concurrently without interfering with one another.
 type LlmStream struct {
+	nextMu    sync.Mutex
 	mu        sync.Mutex
 	ptr       *C.FfiStream
 	closed    bool
+	closing   bool
+	inFlight  int
+	idle      chan struct{}
+	closeDone chan struct{}
+	closeErr  error
 	collector CollectorFunc
 	finalizer FinalizerFunc
 }
@@ -116,22 +122,58 @@ func (s *LlmStream) release() {
 //
 // If the stream has already been closed, Next returns io.EOF.
 func (s *LlmStream) Next() (json.RawMessage, error) {
+	s.nextMu.Lock()
+	defer s.nextMu.Unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.ptr == nil {
+	if s.closed || s.closing || s.ptr == nil {
+		s.mu.Unlock()
 		return nil, io.EOF
 	}
+	ptr := s.ptr
+	s.inFlight++
+	if s.inFlight == 1 {
+		s.idle = make(chan struct{})
+	}
+	s.mu.Unlock()
 
 	var chunk *C.char
-	rc := C.nemo_relay_stream_next(s.ptr, &chunk)
+	rc := C.nemo_relay_stream_next(ptr, &chunk)
+	s.finishNext()
 
 	if rc == 1 {
 		// Chunk available
 		text := C.GoString(chunk)
 		C.nemo_relay_string_free(chunk)
-		return llmStreamNextResult(int32(rc), json.RawMessage(text), s.collector, &s.finalizer)
+		chunk := json.RawMessage(text)
+		s.mu.Lock()
+		collector := s.collector
+		s.mu.Unlock()
+		if collector != nil {
+			collector(chunk)
+		}
+		return chunk, nil
 	}
-	return llmStreamNextResult(int32(rc), nil, s.collector, &s.finalizer)
+	if rc == 0 {
+		s.mu.Lock()
+		finalizer := s.finalizer
+		s.finalizer = nil
+		s.mu.Unlock()
+		if finalizer != nil {
+			finalizer()
+		}
+		return nil, io.EOF
+	}
+	return nil, lastError()
+}
+
+func (s *LlmStream) finishNext() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight--
+	if s.inFlight == 0 {
+		close(s.idle)
+	}
 }
 
 // Close stops the producer, waits for cleanup, and releases the underlying C
@@ -140,23 +182,55 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 // return [io.EOF]. The finalizer runs once with any collected partial response.
 func (s *LlmStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.closed && s.ptr != nil {
-		runtime.SetFinalizer(s, nil)
-		status := C.nemo_relay_stream_close(s.ptr)
-		var err error
-		if status != 0 {
-			err = lastError()
-		}
-		C.nemo_relay_stream_free(s.ptr)
-		s.ptr = nil
-		s.closed = true
-		s.collector = nil
-		if s.finalizer != nil {
-			s.finalizer()
-			s.finalizer = nil
-		}
+	if s.closed || s.ptr == nil {
+		err := s.closeErr
+		s.mu.Unlock()
 		return err
 	}
-	return nil
+	if s.closing {
+		done := s.closeDone
+		s.mu.Unlock()
+		<-done
+		s.mu.Lock()
+		err := s.closeErr
+		s.mu.Unlock()
+		return err
+	}
+	s.closing = true
+	s.closeDone = make(chan struct{})
+	ptr := s.ptr
+	runtime.SetFinalizer(s, nil)
+	s.mu.Unlock()
+
+	status := C.nemo_relay_stream_close(ptr)
+	var err error
+	if status != 0 {
+		err = lastError()
+	}
+
+	s.mu.Lock()
+	for s.inFlight > 0 {
+		idle := s.idle
+		s.mu.Unlock()
+		<-idle
+		s.mu.Lock()
+	}
+	s.ptr = nil
+	s.closed = true
+	s.collector = nil
+	finalizer := s.finalizer
+	s.finalizer = nil
+	s.mu.Unlock()
+
+	C.nemo_relay_stream_free(ptr)
+	if finalizer != nil {
+		finalizer()
+	}
+
+	s.mu.Lock()
+	s.closeErr = err
+	s.closing = false
+	close(s.closeDone)
+	s.mu.Unlock()
+	return err
 }

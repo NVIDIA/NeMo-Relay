@@ -260,6 +260,8 @@ fn async_iter_helpers_cover_stop_error_and_dropped_receiver_paths() {
         let module = load_module(
             py,
             r#"
+import asyncio
+
 class StopIter:
     def __anext__(self):
         raise StopAsyncIteration
@@ -303,6 +305,9 @@ async def coro_stop():
 async def coro_error():
     raise RuntimeError("await boom")
 
+async def coro_cancel():
+    raise asyncio.CancelledError("user cancellation")
+
 async def coro_non_json():
     return object()
 "#,
@@ -316,6 +321,7 @@ async def coro_non_json():
         let coro_value_fn: Py<PyAny> = module.getattr("coro_value").unwrap().unbind();
         let coro_stop_fn: Py<PyAny> = module.getattr("coro_stop").unwrap().unbind();
         let coro_error_fn: Py<PyAny> = module.getattr("coro_error").unwrap().unbind();
+        let coro_cancel_fn: Py<PyAny> = module.getattr("coro_cancel").unwrap().unbind();
         let coro_non_json_fn: Py<PyAny> = module.getattr("coro_non_json").unwrap().unbind();
 
         assert!(
@@ -357,6 +363,13 @@ async def coro_non_json():
                         .unwrap_err()
                         .to_string()
                         .contains("await boom")
+                );
+                assert!(
+                    await_async_iter_value(Python::attach(|py| coro_cancel_fn.call0(py).unwrap()))
+                        .await
+                        .unwrap_err()
+                        .to_string()
+                        .contains("cancelled")
                 );
                 assert!(
                     await_async_iter_value(Python::attach(|py| coro_non_json_fn

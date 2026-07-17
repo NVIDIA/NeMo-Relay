@@ -1683,7 +1683,9 @@ impl futures_util::Stream for PrefixedStream {
 
 impl LlmStreamInner for PrefixedStream {
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        Box::pin(async move { self.get_mut().upstream.close().await })
+        let this = self.get_mut();
+        this.first = None;
+        Box::pin(async move { this.upstream.close().await })
     }
 }
 
@@ -1770,7 +1772,10 @@ impl futures_util::Stream for TranslatedStream {
 
 impl LlmStreamInner for TranslatedStream {
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        Box::pin(async move { self.get_mut().upstream.close().await })
+        let this = self.get_mut();
+        this.buffered.clear();
+        this.upstream_finished = true;
+        Box::pin(async move { this.upstream.close().await })
     }
 }
 

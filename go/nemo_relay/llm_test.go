@@ -1022,6 +1022,32 @@ func TestLlmStreamConcurrentCloseIsSafe(t *testing.T) {
 	}
 }
 
+func TestLlmStreamCollectorCanClose(t *testing.T) {
+	var stream *LlmStream
+	var closeErr error
+	stream, closeErr = LlmStreamCallExecute("collector_close_llm", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"data: {\"chunk\": 1}\n\ndata: [DONE]\n\n"`), nil
+		},
+		func(json.RawMessage) {
+			closeErr = stream.Close()
+		},
+		nil,
+	)
+	if closeErr != nil {
+		t.Fatalf(llmStreamCallExecuteFailed, closeErr)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if closeErr != nil {
+		t.Fatalf("Close from collector failed: %v", closeErr)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after collector Close error = %v, want io.EOF", err)
+	}
+}
+
 func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
 	request := makeRequest()
 	finalizerCalls := 0
