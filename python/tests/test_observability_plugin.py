@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
+import time
 import typing
 
 import pytest
@@ -27,6 +30,55 @@ from nemo_relay.observability import (
 
 if typing.TYPE_CHECKING:
     from pathlib import Path
+
+
+class _AtofCaptureServer(http.server.ThreadingHTTPServer):
+    requests: list[tuple[dict[str, str], bytes]]
+    request_event: threading.Event
+
+
+class _AtofCaptureHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802
+        content_length = int(self.headers.get("content-length", "0"))
+        server = typing.cast(_AtofCaptureServer, self.server)
+        server.requests.append((dict(self.headers.items()), self.rfile.read(content_length)))
+        server.request_event.set()
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: ARG002
+        return
+
+
+class _AtofCapture:
+    server: "_AtofCaptureServer"
+    thread: threading.Thread
+
+    def __enter__(self) -> _AtofCapture:
+        self.server = _AtofCaptureServer(("127.0.0.1", 0), _AtofCaptureHandler)
+        self.server.requests = []
+        self.server.request_event = threading.Event()
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def wait_for_requests(self, expected: int, timeout: float = 5.0) -> list[tuple[dict[str, str], bytes]]:
+        deadline = time.monotonic() + timeout
+        while len(self.server.requests) < expected:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"timed out waiting for {expected} ATOF requests"
+            self.server.request_event.wait(remaining)
+            self.server.request_event.clear()
+        return self.server.requests
 
 
 class TestObservabilityConfigHelpers:
@@ -130,6 +182,48 @@ class TestObservabilityConfigHelpers:
         endpoint = AtofEndpointConfig("http://localhost:8080/events", "websocket")
         assert endpoint.transport == "websocket"
         assert endpoint.name is None
+
+    async def test_atof_stream_sink_snapshots_header_env(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        variable = "NEMO_RELAY_TEST_ATOF_HEADER_ENV"
+        credential = "Bearer relay-499"
+        monkeypatch.setenv(variable, credential)
+
+        with _AtofCapture() as capture:
+            config = ObservabilityConfig(
+                atof=AtofConfig(
+                    enabled=True,
+                    sinks=[
+                        AtofStreamSinkConfig(
+                            url=capture.url,
+                            transport="http_post",
+                            header_env={"authorization": variable},
+                        )
+                    ],
+                )
+            )
+            report = await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
+            assert report["diagnostics"] == []
+            monkeypatch.delenv(variable)
+
+            try:
+                with scope.scope("python-header-env-agent", ScopeType.Agent) as handle:
+                    scope.event("python-header-env-mark", handle=handle, data={"step": 1})
+            finally:
+                plugin.clear()
+            requests = capture.wait_for_requests(3)
+
+        assert len(requests) == 3
+        payload = b"".join(body for _, body in requests).decode()
+        assert '"scope_category":"start"' in payload
+        assert '"name":"python-header-env-mark"' in payload
+        assert '"scope_category":"end"' in payload
+        for headers, _ in requests:
+            authorization = next(value for name, value in headers.items() if name.lower() == "authorization")
+            assert authorization == credential
+        assert credential not in json.dumps(report)
+        assert credential not in caplog.text
 
     def test_http_storage_config_serializes_headers(self):
         s3 = S3StorageConfig(bucket="archive")
