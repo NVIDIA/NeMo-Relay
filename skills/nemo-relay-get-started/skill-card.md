@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers who are new to NeMo Relay and want to quickly evaluate it by following the least-complex try-now path for their existing environment, whether through the CLI, a maintained framework integration, or direct language-level instrumentation. <br>
+Developers and engineers new to NeMo Relay who want to try the framework, select the simplest applicable quick-start path, and verify initial observable value before production setup. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -35,7 +35,7 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Skill Output: <br>
-**Output Type(s):** [Shell commands, Configuration instructions] <br>
+**Output Type(s):** [Shell commands, Configuration instructions, Analysis] <br>
 **Output Format:** [Markdown with inline bash code blocks] <br>
 **Output Parameters:** [1D] <br>
 **Other Properties Related to Output:** [None] <br>
@@ -46,9 +46,6 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 
-## Evaluation Tasks: <br>
-Evaluated against 15 evaluation tasks (14 positive skill-activation, 1 negative) in the astra-sandbox environment via NVSkills-Eval external profile. <br>
-
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
 - Security: Checks whether skill-assisted execution avoids unsafe behavior such as secret leakage, destructive commands, or unauthorized access. <br>
@@ -57,28 +54,19 @@ Reported benchmark dimensions: <br>
 - Effectiveness: Checks whether the agent performs measurably better with the skill than without it. <br>
 - Efficiency: Checks whether the agent uses fewer tokens and avoids redundant work. <br>
 
-Underlying evaluation signals used in this run: <br>
-- `security`: Checks for unsafe operations, secret leakage, and unauthorized access. <br>
-- `skill_execution`: Verifies that the agent loaded the expected skill and workflow. <br>
-- `skill_efficiency`: Checks routing quality, decoy avoidance, and redundant tool usage. <br>
-- `accuracy`: Grades final-answer correctness against the reference answer. <br>
-- `goal_accuracy`: Checks whether the overall user task completed successfully. <br>
-- `behavior_check`: Verifies expected behavior steps, including safety expectations. <br>
-- `token_efficiency`: Compares token usage with and without the skill. <br>
-
 
 
 ## Evaluation Results: <br>
 | Dimension | Num | `claude-code` | `codex` |
 |---|---:|---:|---:|
-| Security | 8 | 97% (+0%) | 97% (+10%) |
-| Correctness | 8 | 89% (+61%) | 76% (+38%) |
-| Discoverability | 8 | 82% (+50%) | 74% (+35%) |
-| Effectiveness | 8 | 74% (+50%) | 65% (+32%) |
-| Efficiency | 8 | 72% (+34%) | 68% (+29%) |
+| Security | N/A | N/A | N/A |
+| Correctness | N/A | N/A | N/A |
+| Discoverability | N/A | N/A | N/A |
+| Effectiveness | N/A | N/A | N/A |
+| Efficiency | N/A | N/A | N/A |
 
 ## Skill Version(s): <br>
-0.6.0-alpha.20260715 (source: git tag) <br>
+0.7.0-alpha.20260717 (source: git tag) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>
