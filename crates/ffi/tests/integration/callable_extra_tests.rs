@@ -168,7 +168,9 @@ fn test_callable_extra_trampoline_and_helper_paths() {
     let empty_next: LlmStreamExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
             assert_eq!(request.content, Json::Null);
-            Ok(Box::pin(tokio_stream::empty()) as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                tokio_stream::empty(),
+            ))
         })
     });
     let mut empty_stream = runtime

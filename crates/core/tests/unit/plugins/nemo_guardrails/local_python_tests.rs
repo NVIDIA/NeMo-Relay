@@ -464,7 +464,7 @@ async fn stream_monitor_records_blocked_message() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
-    let provider_stream: LlmJsonStream = Box::pin(tokio_stream::iter(vec![Ok(json!({
+    let provider_stream = LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
         "choices": [{"delta": {"content": "blocked"}}],
     }))]));
     let (text_tx, mut text_rx) = mpsc::channel::<Option<String>>(8);
@@ -483,6 +483,8 @@ async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
         }
         Ok(())
     });
+    let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+    let (closed, _closed_rx) = tokio::sync::watch::channel(None);
 
     forward_guarded_provider_stream(
         provider_stream,
@@ -491,6 +493,8 @@ async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
         chunk_tx,
         monitor,
         blocked,
+        cancel_rx,
+        closed,
     )
     .await;
 

@@ -182,7 +182,7 @@ impl RemoteBackendRuntime {
         let (tx, rx) = mpsc::channel(16);
         self.spawn_stream_decoder(response, status, parent.clone(), tx);
 
-        Ok(Box::pin(ReceiverStream::new(rx)) as LlmJsonStream)
+        Ok(LlmJsonStream::new(ReceiverStream::new(rx)))
     }
 
     fn emit_remote_start(&self, parent: &Option<ScopeHandle>, stream: bool) {

@@ -554,13 +554,13 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             })
             .func(Arc::new(|request| {
                 Box::pin(async move {
-                    Ok(Box::pin(tokio_stream::iter(vec![
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
                         Ok(json!({
                             "stream_chunk": 1,
                             "request": request.content,
                         })),
                         Ok(json!({ "stream_chunk": 2 })),
-                    ])) as LlmJsonStream)
+                    ])))
                 })
             }))
             .collector(Box::new(move |chunk| {
