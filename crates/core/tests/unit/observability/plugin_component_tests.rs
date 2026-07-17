@@ -78,33 +78,35 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
 }
 
 #[cfg(all(feature = "atof-streaming", feature = "object-store"))]
-fn start_http_status_server(status: &'static str) -> (String, std::thread::JoinHandle<()>) {
+fn start_http_status_server(
+    status: &'static str,
+) -> (String, std::thread::JoinHandle<std::io::Result<()>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let server = std::thread::spawn(move || {
-        listener.set_nonblocking(true).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let server = std::thread::spawn(move || -> std::io::Result<()> {
+        listener.set_nonblocking(true)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let (mut stream, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     if std::time::Instant::now() >= deadline {
-                        return;
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "test HTTP server did not receive a request",
+                        ));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                Err(_) => return,
+                Err(error) => return Err(error),
             }
         };
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
-            .unwrap();
+        stream.set_nonblocking(false)?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
         while !request.ends_with(b"\r\n\r\n") {
-            if stream.read_exact(&mut byte).is_err() {
-                return;
-            }
+            stream.read_exact(&mut byte)?;
             request.push(byte[0]);
         }
         let headers = String::from_utf8_lossy(&request);
@@ -118,17 +120,18 @@ fn start_http_status_server(status: &'static str) -> (String, std::thread::JoinH
             })
             .and_then(|value| value.parse::<usize>().ok());
         let Some(length) = length else {
-            return;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "test HTTP request did not include Content-Length",
+            ));
         };
         let mut body = vec![0_u8; length];
-        if stream.read_exact(&mut body).is_err() {
-            return;
-        }
+        stream.read_exact(&mut body)?;
         write!(
             stream,
             "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        )
-        .unwrap();
+        )?;
+        stream.flush()
     });
     (url, server)
 }
@@ -1160,9 +1163,19 @@ fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
         .unwrap();
 
         let result = storage.put("trajectory.json", "session", b"{}");
-        assert_eq!(result.is_ok(), succeeds);
         drop(storage);
-        server.join().unwrap();
+        server
+            .join()
+            .unwrap()
+            .expect("test HTTP server should handle the upload");
+        if succeeds {
+            result.expect("HTTP storage upload should accept a success response");
+        } else {
+            assert!(
+                result.is_err(),
+                "HTTP storage upload should reject a {status} response"
+            );
+        }
     }
 }
 
