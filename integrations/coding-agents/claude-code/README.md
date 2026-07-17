@@ -42,6 +42,8 @@ when each turn has a real prompt input and assistant output. Known startup
 probes, uncorrelatable late stop hooks, and other lifecycle-only noise are
 excluded from exported user traces so they do not appear as synthetic `null`,
 `user: test`, or `idle_timeout` turns.
+The gateway records suppressed startup probes as debug-level
+`observability_bypassed` events when debug or trace logging is enabled.
 
 ## Transparent Setup
 

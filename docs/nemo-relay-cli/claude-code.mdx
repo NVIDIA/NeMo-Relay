@@ -182,6 +182,8 @@ when each span has a real `UserPromptSubmit` payload and assistant output. NeMo
 Relay excludes the known Claude Code startup/preflight probe and late
 uncorrelatable lifecycle hooks from exported user traces so they do not appear
 as synthetic `null`, `user: test`, `idle_timeout`, or lifecycle-only turns.
+The gateway records suppressed startup probes as debug-level
+`observability_bypassed` events when debug or trace logging is enabled.
 
 ## Smoke Test
 

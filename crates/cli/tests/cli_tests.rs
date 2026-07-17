@@ -312,15 +312,21 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
 }
 
 #[test]
-fn cli_claude_startup_probe_bypass_emits_no_warning() {
-    let default_stderr = run_claude_startup_probe();
+fn cli_claude_startup_probe_bypass_is_debug_only() {
+    let default_stderr = run_claude_startup_probe(None);
     assert!(
         !default_stderr.contains(" WARN ") && !default_stderr.contains("observability_bypassed"),
-        "startup probe bypass should not emit a warning: {default_stderr}"
+        "startup probe bypass should not be logged by default: {default_stderr}"
+    );
+
+    let debug_stderr = run_claude_startup_probe(Some("debug"));
+    assert!(
+        debug_stderr.contains(" DEBUG ") && debug_stderr.contains("observability_bypassed"),
+        "startup probe bypass should be logged at debug level: {debug_stderr}"
     );
 }
 
-fn run_claude_startup_probe() -> String {
+fn run_claude_startup_probe(log_level: Option<&str>) -> String {
     let temp = tempfile::tempdir().unwrap();
     let probe = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = probe.local_addr().unwrap();
@@ -333,11 +339,18 @@ fn run_claude_startup_probe() -> String {
         .arg(&upstream_url)
         .env("HOME", temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
-        .env_remove("NEMO_RELAY_LOG")
         .env_remove("NEMO_RELAY_LOG_STDERR_FORMAT")
         .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    match log_level {
+        Some(level) => {
+            command.env("NEMO_RELAY_LOG", level);
+        }
+        None => {
+            command.env_remove("NEMO_RELAY_LOG");
+        }
+    }
     let mut child = command.spawn().unwrap();
 
     let body = r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#;
