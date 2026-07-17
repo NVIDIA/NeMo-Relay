@@ -220,8 +220,10 @@ fn test_py_api_forward_stream_to_channel_exits_when_receiver_is_dropped() {
         ]));
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         drop(rx);
+        let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+        let (closed, _closed_rx) = tokio::sync::watch::channel(false);
 
-        crate::py_api::forward_stream_to_channel(stream, tx).await;
+        crate::py_api::forward_stream_to_channel(stream, tx, cancel_rx, closed).await;
     });
 }
 

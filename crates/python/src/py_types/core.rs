@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use pyo3::prelude::*;
 
 use super::{
@@ -23,7 +25,10 @@ use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
 /// End lifecycle event when exhausted.
 #[pyclass(name = "LlmStream")]
 pub struct PyLlmStream {
-    pub receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>,
+    pub receiver:
+        Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>>,
+    pub cancel: tokio::sync::watch::Sender<bool>,
+    pub closed: tokio::sync::watch::Receiver<bool>,
 }
 
 #[pymethods]
@@ -33,18 +38,10 @@ impl PyLlmStream {
     }
 
     pub(crate) fn __anext__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        // We need to get a reference to the receiver inside the tokio Mutex.
-        // Since PyLlmStream is behind a PyRef (shared), we use tokio::sync::Mutex.
-        let receiver_ptr = &self.receiver
-            as *const tokio::sync::Mutex<
-                tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>,
-            >;
-        // SAFETY: The PyLlmStream outlives this future because Python holds a reference to it.
-        // The tokio Mutex ensures exclusive access to the receiver.
-        let receiver_ref = unsafe { &*receiver_ptr };
+        let receiver = Arc::clone(&self.receiver);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut guard = receiver_ref.lock().await;
+            let mut guard = receiver.lock().await;
             let next_item = guard.recv().await;
             match next_item {
                 None => Err(PyErr::new::<pyo3::exceptions::PyStopAsyncIteration, _>(
@@ -56,6 +53,30 @@ impl PyLlmStream {
                 )),
             }
         })
+    }
+
+    /// Stop forwarding chunks and release the native stream.
+    fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let cancel = self.cancel.clone();
+        let mut closed = self.closed.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            cancel.send_replace(true);
+            while !*closed.borrow() {
+                closed.changed().await.map_err(|_| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "stream close task ended before releasing the native stream",
+                    )
+                })?;
+            }
+            Ok(())
+        })
+    }
+}
+
+impl Drop for PyLlmStream {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
     }
 }
 

@@ -819,8 +819,10 @@ fn to_py_err_and_forward_stream_to_channel_cover_private_helpers() {
             Ok(json!({"chunk": 2})),
         ]));
         let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+        let (closed, _closed_rx) = tokio::sync::watch::channel(false);
 
-        forward_stream_to_channel(stream, tx).await;
+        forward_stream_to_channel(stream, tx, cancel_rx, closed).await;
 
         assert_eq!(rx.recv().await.unwrap().unwrap(), json!({"chunk": 1}));
         assert_eq!(rx.recv().await.unwrap().unwrap(), json!({"chunk": 2}));

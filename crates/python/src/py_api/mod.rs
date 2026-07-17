@@ -100,12 +100,30 @@ fn py_annotated_llm_response(
 pub(crate) async fn forward_stream_to_channel(
     mut stream: RustJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    closed: tokio::sync::watch::Sender<bool>,
 ) {
-    while let Some(item) = stream.next().await {
-        if tx.send(item).await.is_err() {
+    loop {
+        if *cancel.borrow() {
             break;
         }
+        let item = tokio::select! {
+            _ = cancel.changed() => break,
+            item = stream.next() => item,
+        };
+        let Some(item) = item else {
+            break;
+        };
+        tokio::select! {
+            _ = cancel.changed() => break,
+            result = tx.send(item) => {
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
     }
+    closed.send_replace(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -861,10 +879,19 @@ fn llm_stream_call_execute<'py>(
 
                 // Spawn a tokio task that drains the Rust stream into an mpsc channel
                 let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
-                tokio::spawn(forward_stream_to_channel(rust_stream, tx));
+                let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, closed_rx) = tokio::sync::watch::channel(false);
+                tokio::spawn(forward_stream_to_channel(
+                    rust_stream,
+                    tx,
+                    cancel_rx,
+                    closed,
+                ));
 
                 Ok(PyLlmStream {
-                    receiver: tokio::sync::Mutex::new(rx),
+                    receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+                    cancel,
+                    closed: closed_rx,
                 })
             })
             .await

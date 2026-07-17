@@ -355,20 +355,24 @@ async def coro_non_json():
                 );
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+                let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| {
                         value_iter_cls.call1(py, (value_payload.bind(py),)).unwrap()
                     })),
                     tx,
+                    cancel_rx,
                 )
                 .await;
                 assert_eq!(rx.recv().await.unwrap().unwrap(), json!({"x": 1}));
                 assert!(rx.recv().await.is_none());
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+                let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| error_iter_cls.call0(py).unwrap())),
                     tx,
+                    cancel_rx,
                 )
                 .await;
                 assert!(
@@ -382,6 +386,7 @@ async def coro_non_json():
 
                 let (tx, rx) = tokio::sync::mpsc::channel(1);
                 drop(rx);
+                let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| {
                         value_iter_cls
@@ -389,6 +394,7 @@ async def coro_non_json():
                             .unwrap()
                     })),
                     tx,
+                    cancel_rx,
                 )
                 .await;
                 Ok(())
