@@ -534,7 +534,8 @@ class TestLLMStreaming:
         assert await anext(stream) == {"token": "first"}
 
         await asyncio.wait_for(stream.aclose(), timeout=1)
-        await asyncio.wait_for(producer_closed.wait(), timeout=1)
+        assert producer_closed.is_set()
+        await asyncio.wait_for(stream.aclose(), timeout=1)
         with pytest.raises(StopAsyncIteration):
             await asyncio.wait_for(anext(stream), timeout=1)
 

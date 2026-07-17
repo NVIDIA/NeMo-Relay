@@ -7,12 +7,10 @@
 
 #![allow(clippy::await_holding_lock)]
 
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use serde_json::json;
-use tokio_stream::Stream;
 
 use nemo_relay::api::event::{Event, PendingMarkSpec, ScopeCategory};
 use nemo_relay::api::llm::{
@@ -329,9 +327,9 @@ fn noop_exec_fn() -> LlmExecutionNextFn {
 fn noop_stream_exec_fn() -> LlmStreamExecutionNextFn {
     Arc::new(|_req| {
         Box::pin(async {
-            let stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> =
-                Box::pin(futures::stream::once(async { Ok(json!({"chunk": 1})) }));
-            Ok(stream)
+            Ok(LlmJsonStream::new(futures::stream::once(async {
+                Ok(json!({"chunk": 1}))
+            })))
         })
     })
 }
@@ -596,11 +594,7 @@ async fn test_stream_codec_rejects_raw_content_mutation_before_lifecycle() {
     let called = provider_called.clone();
     let provider: LlmStreamExecutionNextFn = Arc::new(move |_request| {
         *called.lock().unwrap() = true;
-        Box::pin(async {
-            let stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> =
-                Box::pin(futures::stream::empty());
-            Ok(stream)
-        })
+        Box::pin(async { Ok(LlmJsonStream::new(futures::stream::empty())) })
     });
     let (codec, _, _) = make_tracking_codec("stream_codec_raw_read_only");
     let result = llm_stream_call_execute(
@@ -1710,10 +1704,9 @@ async fn managed_buffered_and_streaming_close_price_the_committed_route_not_resp
                     assert!(record_llm_optimization_contribution(
                         routed_model_contribution()
                     ));
-                    Ok(
-                        Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": "done"}))]))
-                            as LlmJsonStream,
-                    )
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                        "chunk": "done"
+                    }))])))
                 })
             }))
             .collector(Box::new(|_| Ok(())))

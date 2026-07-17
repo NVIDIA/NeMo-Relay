@@ -28,7 +28,7 @@ pub struct PyLlmStream {
     pub receiver:
         Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>>,
     pub cancel: tokio::sync::watch::Sender<bool>,
-    pub closed: tokio::sync::watch::Receiver<bool>,
+    pub closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
 }
 
 #[pymethods]
@@ -59,17 +59,22 @@ impl PyLlmStream {
     fn aclose<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cancel = self.cancel.clone();
         let mut closed = self.closed.clone();
+        let receiver = Arc::clone(&self.receiver);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             cancel.send_replace(true);
-            while !*closed.borrow() {
+            while closed.borrow().is_none() {
                 closed.changed().await.map_err(|_| {
                     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                         "stream close task ended before releasing the native stream",
                     )
                 })?;
             }
-            Ok(())
+            let result = closed.borrow().clone().expect("close state checked above");
+            let mut receiver = receiver.lock().await;
+            receiver.close();
+            while receiver.try_recv().is_ok() {}
+            result.map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)
         })
     }
 }

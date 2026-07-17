@@ -227,7 +227,9 @@ async function typedLlmStreamExecute(name, request, func, collector, finalizer, 
     (async () => {
       try {
         for await (const typedChunk of func(req)) {
-          lib.pushStreamChunk(streamId, chunkJsonCodec.toJson(typedChunk));
+          if (!lib.pushStreamChunk(streamId, chunkJsonCodec.toJson(typedChunk))) {
+            break;
+          }
         }
       } finally {
         lib.endStream(streamId);

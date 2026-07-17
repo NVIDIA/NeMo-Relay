@@ -797,9 +797,9 @@ impl SwitchyardRuntime {
         match first {
             Some(Ok(first)) => {
                 self.record_routing_contribution(&decision, attempt, true);
-                let committed =
-                    Box::pin(futures_stream::once(async move { Ok(first) }).chain(upstream))
-                        as LlmJsonStream;
+                let committed = LlmJsonStream::new(Box::pin(
+                    futures_stream::once(async move { Ok(first) }).chain(upstream),
+                ));
                 let output = if target_protocol == inbound {
                     committed
                 } else {
@@ -1667,7 +1667,7 @@ fn mark_terminal_stream(
     rollout_mode: &'static str,
     metadata: Json,
 ) -> LlmJsonStream {
-    Box::pin(stream! {
+    LlmJsonStream::new(Box::pin(stream! {
         while let Some(item) = upstream.next().await {
             match item {
                 Ok(chunk) => yield Ok(chunk),
@@ -1678,7 +1678,7 @@ fn mark_terminal_stream(
                 }
             }
         }
-    })
+    }))
 }
 
 fn translated_stream(
@@ -1688,7 +1688,7 @@ fn translated_stream(
     mut upstream: LlmJsonStream,
 ) -> LlmJsonStream {
     let mut transcoder = StreamTranscoder::new(source, target, effective_model);
-    Box::pin(stream! {
+    LlmJsonStream::new(Box::pin(stream! {
         while let Some(item) = upstream.next().await {
             match item {
                 Ok(chunk) => {
@@ -1718,7 +1718,7 @@ fn translated_stream(
             }
             Err(error) => yield Err(error),
         }
-    })
+    }))
 }
 
 #[cfg(test)]

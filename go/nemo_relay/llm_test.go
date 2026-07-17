@@ -974,13 +974,51 @@ func TestLlmStreamCloseIsIdempotent(t *testing.T) {
 		t.Fatalf(llmStreamCallExecuteFailed, err)
 	}
 
-	stream.Close()
-	stream.Close()
-	stream.Close()
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close failed: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close failed: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("third Close failed: %v", err)
+	}
 
 	_, err = stream.Next()
 	if err != io.EOF {
 		t.Fatalf("expected io.EOF after close, got %v", err)
+	}
+}
+
+func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
+	request := makeRequest()
+	finalizerCalls := 0
+	stream, err := LlmStreamCallExecute("close_partial_llm", request,
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			chunks := `data: {"chunk": 1}` + "\n\n" +
+				`data: {"chunk": 2}` + "\n\n" +
+				`data: [DONE]` + "\n\n"
+			return json.RawMessage(`"` + strings.ReplaceAll(chunks, `"`, `\"`) + `"`), nil
+		},
+		nil, func() string {
+			finalizerCalls++
+			return `{"partial": true}`
+		},
+	)
+	if err != nil {
+		t.Fatalf(llmStreamCallExecuteFailed, err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first stream chunk failed: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	if finalizerCalls != 1 {
+		t.Fatalf("finalizer calls = %d, want 1", finalizerCalls)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want io.EOF", err)
 	}
 }
 

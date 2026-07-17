@@ -10,6 +10,7 @@ package nemo_relay
 typedef struct FfiStream FfiStream;
 
 extern int32_t nemo_relay_stream_next(FfiStream* stream, char** out_chunk);
+extern int32_t nemo_relay_stream_close(FfiStream* stream);
 extern void nemo_relay_stream_free(FfiStream* stream);
 extern void nemo_relay_string_free(char* ptr);
 */
@@ -84,7 +85,7 @@ func newLlmStream(ptr *C.FfiStream, collector CollectorFunc, finalizer Finalizer
 		finalizer: finalizer,
 	}
 	runtime.SetFinalizer(s, func(s *LlmStream) {
-		s.Close()
+		_ = s.Close()
 	})
 	return s
 }
@@ -116,19 +117,26 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 	return llmStreamNextResult(int32(rc), nil, s.collector, &s.finalizer)
 }
 
-// Close releases the underlying C stream resources. It is safe to call Close
-// multiple times; subsequent calls are no-ops. After Close is called, any
-// further calls to [LlmStream.Next] return [io.EOF].
-//
-// If the stream has not been fully consumed, the finalizer (if provided) will
-// NOT be called. Callers should consume the stream to completion or explicitly
-// handle finalization if needed before closing early.
-func (s *LlmStream) Close() {
+// Close stops the producer, waits for cleanup, and releases the underlying C
+// stream resources. It is safe to call Close multiple times; subsequent calls
+// are no-ops. After Close is called, any further calls to [LlmStream.Next]
+// return [io.EOF]. The finalizer runs once with any collected partial response.
+func (s *LlmStream) Close() error {
 	if !s.closed && s.ptr != nil {
+		status := C.nemo_relay_stream_close(s.ptr)
+		var err error
+		if status != 0 {
+			err = lastError()
+		}
 		C.nemo_relay_stream_free(s.ptr)
 		s.ptr = nil
 		s.closed = true
 		s.collector = nil
-		s.finalizer = nil
+		if s.finalizer != nil {
+			s.finalizer()
+			s.finalizer = nil
+		}
+		return err
 	}
+	return nil
 }

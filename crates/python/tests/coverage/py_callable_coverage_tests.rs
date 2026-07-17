@@ -6,7 +6,6 @@
 use super::*;
 
 use std::ffi::CString;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use pyo3::types::PyModule;
@@ -356,12 +355,14 @@ async def coro_non_json():
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel(2);
                 let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, _closed_rx) = tokio::sync::watch::channel(None);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| {
                         value_iter_cls.call1(py, (value_payload.bind(py),)).unwrap()
                     })),
                     tx,
                     cancel_rx,
+                    closed,
                 )
                 .await;
                 assert_eq!(rx.recv().await.unwrap().unwrap(), json!({"x": 1}));
@@ -369,10 +370,12 @@ async def coro_non_json():
 
                 let (tx, mut rx) = tokio::sync::mpsc::channel(1);
                 let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, _closed_rx) = tokio::sync::watch::channel(None);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| error_iter_cls.call0(py).unwrap())),
                     tx,
                     cancel_rx,
+                    closed,
                 )
                 .await;
                 assert!(
@@ -387,6 +390,7 @@ async def coro_non_json():
                 let (tx, rx) = tokio::sync::mpsc::channel(1);
                 drop(rx);
                 let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, _closed_rx) = tokio::sync::watch::channel(None);
                 forward_async_iter(
                     Arc::new(Python::attach(|py| {
                         value_iter_cls
@@ -395,6 +399,7 @@ async def coro_non_json():
                     })),
                     tx,
                     cancel_rx,
+                    closed,
                 )
                 .await;
                 Ok(())
@@ -536,10 +541,9 @@ async def collect_stream(awaitable):
                 let stream_next = PyLlmStreamNextFn {
                     inner: Arc::new(|_| {
                         Box::pin(async move {
-                            Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]))
-                                as Pin<
-                                    Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>,
-                                >)
+                            Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                                tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]),
+                            ))
                         })
                     }),
                 };

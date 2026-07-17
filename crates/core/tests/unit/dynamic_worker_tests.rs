@@ -550,9 +550,7 @@ async fn callback_stream_transport_error_surfaces_to_host_stream() {
             "stream_transport_error",
             "model",
             valid_llm_request(),
-            Arc::new(|_request| {
-                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
-            }),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
         .expect("host stream should be returned");
@@ -605,9 +603,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
             "stream_receiver_drop",
             "model",
             valid_llm_request(),
-            Arc::new(|_request| {
-                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
-            }),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
         .expect("host stream should be returned");
@@ -962,9 +958,7 @@ async fn dropping_host_stream_sends_explicit_worker_cancellation() {
             "cancel_stream",
             "model",
             valid_llm_request(),
-            Arc::new(|_request| {
-                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
-            }),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
         .expect("host stream should be returned");
@@ -1502,9 +1496,9 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     let stream_continuation = state
         .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
-                    "stream item failed".into(),
-                ))])) as LlmJsonStream)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
+                    FlowError::Internal("stream item failed".into()),
+                )])))
             })
         })))
         .expect("stream continuation should insert");
@@ -1541,7 +1535,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
 
     let stream_continuation = state
         .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
-            Box::pin(async move { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
+            Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })
         })))
         .expect("stream continuation should insert");
     let invalid_stream_request = match service

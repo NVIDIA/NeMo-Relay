@@ -291,7 +291,7 @@ impl LocalGuardrailsRuntime {
             .await;
         });
 
-        Ok(Box::pin(ReceiverStream::new(chunk_rx)) as LlmJsonStream)
+        Ok(LlmJsonStream::new(ReceiverStream::new(chunk_rx)))
     }
 
     fn codec(&self) -> FlowResult<&LocalGuardrailsCodec> {

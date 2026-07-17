@@ -15,7 +15,9 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -775,9 +777,7 @@ impl Plugin for HeaderPlugin {
                             }
                             chunks.push(Ok(chunk));
                         }
-                        let stream = Box::pin(tokio_stream::iter(chunks))
-                            as Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>>;
-                        Ok(stream)
+                        Ok(LlmJsonStream::new(tokio_stream::iter(chunks)))
                     })
                 }),
             )?;
@@ -853,10 +853,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
     let llm_stream_func: LlmStreamExecutionNextFn = Arc::new(|_req: LlmRequest| {
         Box::pin(async move {
             let chunks = vec![Ok(json!({"streamed": true}))];
-            Ok(Box::pin(tokio_stream::iter(chunks))
-                as Pin<
-                    Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>,
-                >)
+            Ok(LlmJsonStream::new(tokio_stream::iter(chunks)))
         })
     });
     let collected = Arc::new(StdMutex::new(Vec::new()));

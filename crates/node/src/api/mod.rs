@@ -16,7 +16,8 @@ use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::{Context, Poll};
 
 use chrono::{DateTime, Utc};
 use napi::bindgen_prelude::*;
@@ -25,13 +26,14 @@ use napi::{JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use serde::Deserialize;
 use serde_json::Value as Json;
-use tokio_stream::StreamExt;
+use tokio_stream::{Stream, StreamExt};
 
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+    EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
+    ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
@@ -333,17 +335,43 @@ fn build_openinference_config(
 static NEXT_STREAM_ID: AtomicU64 = AtomicU64::new(0);
 
 type StreamSender = tokio::sync::mpsc::UnboundedSender<FlowResult<Json>>;
-type RustJsonStream = std::pin::Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>>;
+type RustJsonStream = LlmJsonStream;
 
-static STREAM_CHANNELS: std::sync::LazyLock<StdMutex<HashMap<u64, StreamSender>>> =
-    std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
-
-fn register_stream_channel(id: u64, tx: StreamSender) {
-    STREAM_CHANNELS.lock().unwrap().insert(id, tx);
+struct StreamChannel {
+    sender: StreamSender,
+    cancelled: AtomicBool,
+    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
 }
 
-fn remove_stream_channel(id: u64) {
-    STREAM_CHANNELS.lock().unwrap().remove(&id);
+static STREAM_CHANNELS: std::sync::LazyLock<StdMutex<HashMap<u64, Arc<StreamChannel>>>> =
+    std::sync::LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn register_stream_channel(
+    id: u64,
+    tx: StreamSender,
+) -> tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>> {
+    let (closed, closed_rx) = tokio::sync::watch::channel(None);
+    STREAM_CHANNELS.lock().unwrap().insert(
+        id,
+        Arc::new(StreamChannel {
+            sender: tx,
+            cancelled: AtomicBool::new(false),
+            closed,
+        }),
+    );
+    closed_rx
+}
+
+fn finish_stream_channel(id: u64, result: std::result::Result<(), String>) {
+    if let Some(channel) = STREAM_CHANNELS.lock().unwrap().remove(&id) {
+        channel.closed.send_replace(Some(result));
+    }
+}
+
+fn cancel_stream_channel(id: u64) {
+    if let Some(channel) = STREAM_CHANNELS.lock().unwrap().get(&id) {
+        channel.cancelled.store(true, Ordering::Release);
+    }
 }
 
 fn ensure_stream_callback_queued(id: u64, status: napi::Status) -> FlowResult<()> {
@@ -351,7 +379,12 @@ fn ensure_stream_callback_queued(id: u64, status: napi::Status) -> FlowResult<()
         return Ok(());
     }
 
-    remove_stream_channel(id);
+    finish_stream_channel(
+        id,
+        Err(format!(
+            "failed to queue JS stream producer callback: {status:?}"
+        )),
+    );
     Err(FlowError::Internal(format!(
         "failed to queue JS stream producer callback: {status:?}",
     )))
@@ -360,11 +393,71 @@ fn ensure_stream_callback_queued(id: u64, status: napi::Status) -> FlowResult<()
 async fn forward_stream_to_channel(
     mut stream: RustJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<Json>>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    closed: tokio::sync::watch::Sender<Option<std::result::Result<(), String>>>,
 ) {
-    while let Some(item) = stream.next().await {
-        if tx.send(item).await.is_err() {
+    loop {
+        if *cancel.borrow() {
             break;
         }
+        let item = tokio::select! {
+            _ = cancel.changed() => break,
+            item = stream.next() => item,
+        };
+        let Some(item) = item else {
+            break;
+        };
+        tokio::select! {
+            _ = cancel.changed() => break,
+            result = tx.send(item) => {
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    closed.send_replace(Some(
+        stream.close().await.map_err(|error| error.to_string()),
+    ));
+}
+
+struct NodePushStream {
+    receiver: tokio_stream::wrappers::UnboundedReceiverStream<FlowResult<Json>>,
+    stream_id: u64,
+    closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
+}
+
+impl Stream for NodePushStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.receiver).poll_next(cx)
+    }
+}
+
+impl Drop for NodePushStream {
+    fn drop(&mut self) {
+        cancel_stream_channel(self.stream_id);
+    }
+}
+
+impl LlmStreamInner for NodePushStream {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let stream_id = self.stream_id;
+        let mut closed = self.get_mut().closed.clone();
+        Box::pin(async move {
+            cancel_stream_channel(stream_id);
+            while closed.borrow().is_none() {
+                closed.changed().await.map_err(|_| {
+                    FlowError::Internal("JS stream cleanup task ended early".into())
+                })?;
+            }
+            closed
+                .borrow()
+                .clone()
+                .expect("close state checked above")
+                .map_err(FlowError::Internal)
+        })
     }
 }
 
@@ -373,8 +466,8 @@ async fn forward_stream_to_channel(
 #[napi]
 pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
     let id = stream_id as u64;
-    if let Some(tx) = STREAM_CHANNELS.lock().unwrap().get(&id) {
-        tx.send(Ok(chunk)).is_ok()
+    if let Some(channel) = STREAM_CHANNELS.lock().unwrap().get(&id) {
+        !channel.cancelled.load(Ordering::Acquire) && channel.sender.send(Ok(chunk)).is_ok()
     } else {
         false
     }
@@ -385,7 +478,7 @@ pub fn push_stream_chunk(stream_id: f64, chunk: Json) -> bool {
 #[napi]
 pub fn end_stream(stream_id: f64) {
     let id = stream_id as u64;
-    remove_stream_channel(id);
+    finish_stream_channel(id, Ok(()));
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -2143,7 +2236,7 @@ pub fn llm_stream_call_execute(
     let default_fn: LlmStreamExecutionNextFn = std::sync::Arc::new(move |req: LlmRequest| {
         let stream_id = NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        register_stream_channel(stream_id, tx);
+        let closed = register_stream_channel(stream_id, tx);
 
         // Serialize the LlmRequest to JSON and wrap with streamId so JS can extract both
         let req_json = serde_json::to_value(&req).unwrap_or(Json::Null);
@@ -2159,11 +2252,11 @@ pub fn llm_stream_call_execute(
         Box::pin(async move {
             ensure_stream_callback_queued(stream_id, call_status)?;
 
-            let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
-            Ok(Box::pin(stream)
-                as std::pin::Pin<
-                    Box<dyn tokio_stream::Stream<Item = FlowResult<Json>> + Send>,
-                >)
+            Ok(LlmJsonStream::from_closeable(NodePushStream {
+                receiver: tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+                stream_id,
+                closed,
+            }))
         })
     });
 
@@ -2197,10 +2290,19 @@ pub fn llm_stream_call_execute(
                         .map_err(to_napi_err)?;
 
                     let (tx, rx) = tokio::sync::mpsc::channel(32);
-                    tokio::spawn(forward_stream_to_channel(rust_stream, tx));
+                    let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                    let (closed, closed_rx) = tokio::sync::watch::channel(None);
+                    tokio::spawn(forward_stream_to_channel(
+                        rust_stream,
+                        tx,
+                        cancel_rx,
+                        closed,
+                    ));
 
                     Ok(LlmStream {
                         receiver: tokio::sync::Mutex::new(rx),
+                        cancel,
+                        closed: closed_rx,
                     })
                 })
                 .await

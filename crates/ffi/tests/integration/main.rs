@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, Too
 use nemo_relay::api::scope::{ScopeAttributes, ScopeHandle, ScopeType};
 use nemo_relay::api::tool::{ToolAttributes, ToolHandle};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
-use nemo_relay::error::{FlowError, Result};
+use nemo_relay::error::FlowError;
 use nemo_relay_ffi::api::*;
 use nemo_relay_ffi::callable::*;
 use nemo_relay_ffi::convert::*;
@@ -19,9 +19,7 @@ use nemo_relay_ffi::types::*;
 use nemo_relay_ffi::{api, convert, error};
 use serde_json::{Value as Json, json};
 use std::ffi::{CStr, CString};
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use tokio_stream::Stream;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 

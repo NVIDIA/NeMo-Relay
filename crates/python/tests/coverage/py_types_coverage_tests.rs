@@ -787,7 +787,7 @@ async def next_item(stream):
             tx_ok.blocking_send(Ok(json!({"chunk": 1}))).unwrap();
             drop(tx_ok);
             let (cancel_ok, _cancel_ok_rx) = tokio::sync::watch::channel(false);
-            let (_closed_ok, closed_ok_rx) = tokio::sync::watch::channel(true);
+            let (_closed_ok, closed_ok_rx) = tokio::sync::watch::channel(Some(Ok(())));
             let stream_ok = pyo3::Py::new(
                 py,
                 PyLlmStream {
@@ -824,7 +824,7 @@ async def next_item(stream):
                 .unwrap();
             drop(tx_err);
             let (cancel_err, _cancel_err_rx) = tokio::sync::watch::channel(false);
-            let (_closed_err, closed_err_rx) = tokio::sync::watch::channel(true);
+            let (_closed_err, closed_err_rx) = tokio::sync::watch::channel(Some(Ok(())));
             let stream_err = pyo3::Py::new(
                 py,
                 PyLlmStream {
@@ -849,7 +849,7 @@ async def next_item(stream):
             let (tx_done, rx_done) = tokio::sync::mpsc::channel(1);
             drop(tx_done);
             let (cancel_done, _cancel_done_rx) = tokio::sync::watch::channel(false);
-            let (_closed_done, closed_done_rx) = tokio::sync::watch::channel(true);
+            let (_closed_done, closed_done_rx) = tokio::sync::watch::channel(Some(Ok(())));
             let stream_done = pyo3::Py::new(
                 py,
                 PyLlmStream {

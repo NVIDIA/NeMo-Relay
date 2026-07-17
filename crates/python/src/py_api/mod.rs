@@ -13,7 +13,9 @@ use std::sync::Arc;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
@@ -40,8 +42,7 @@ use crate::py_types::{
     PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
 };
 
-pub(crate) type RustJsonStream =
-    std::pin::Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<serde_json::Value>> + Send>>;
+pub(crate) type RustJsonStream = LlmJsonStream;
 
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
@@ -101,7 +102,7 @@ pub(crate) async fn forward_stream_to_channel(
     mut stream: RustJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
-    closed: tokio::sync::watch::Sender<bool>,
+    closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
 ) {
     loop {
         if *cancel.borrow() {
@@ -123,7 +124,9 @@ pub(crate) async fn forward_stream_to_channel(
             }
         }
     }
-    closed.send_replace(true);
+    closed.send_replace(Some(
+        stream.close().await.map_err(|error| error.to_string()),
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -880,7 +883,7 @@ fn llm_stream_call_execute<'py>(
                 // Spawn a tokio task that drains the Rust stream into an mpsc channel
                 let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
                 let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
-                let (closed, closed_rx) = tokio::sync::watch::channel(false);
+                let (closed, closed_rx) = tokio::sync::watch::channel(None);
                 tokio::spawn(forward_stream_to_channel(
                     rust_stream,
                     tx,

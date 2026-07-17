@@ -19,6 +19,8 @@ use serde_json::Value as Json;
 #[napi]
 pub struct LlmStream {
     pub(crate) receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<Json>>>,
+    pub(crate) cancel: tokio::sync::watch::Sender<bool>,
+    pub(crate) closed: tokio::sync::watch::Receiver<Option<std::result::Result<(), String>>>,
 }
 
 #[napi]
@@ -36,5 +38,28 @@ impl LlmStream {
             Some(Ok(value)) => Ok(Some(value)),
             Some(Err(e)) => Err(napi::Error::from_reason(e.to_string())),
         }
+    }
+
+    /// Stop the producer and wait for its cleanup to complete.
+    #[napi]
+    pub async fn close(&self) -> Result<()> {
+        self.cancel.send_replace(true);
+        let mut closed = self.closed.clone();
+        while closed.borrow().is_none() {
+            closed.changed().await.map_err(|_| {
+                napi::Error::from_reason("stream close task ended before releasing the producer")
+            })?;
+        }
+        let result = closed.borrow().clone().expect("close state checked above");
+        let mut receiver = self.receiver.lock().await;
+        receiver.close();
+        while receiver.try_recv().is_ok() {}
+        result.map_err(napi::Error::from_reason)
+    }
+}
+
+impl Drop for LlmStream {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
     }
 }

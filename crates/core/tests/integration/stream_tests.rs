@@ -5,15 +5,18 @@
 
 #![allow(clippy::await_holding_lock)]
 
+use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle, LlmRequest};
 use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::optimization::LlmOptimizationRecorder;
-use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::{LlmJsonStream, LlmStreamInner, NemoRelayContextState};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::error::FlowError;
@@ -51,8 +54,41 @@ fn make_optimized_llm_handle(name: &str, producer: &str) -> (LlmHandle, LlmOptim
     (handle, recorder)
 }
 
-fn make_stream(items: Vec<Result<Json>>) -> Pin<Box<dyn Stream<Item = Result<Json>> + Send>> {
-    Box::pin(tokio_stream::iter(items))
+fn make_stream(items: Vec<Result<Json>>) -> LlmJsonStream {
+    LlmJsonStream::new(tokio_stream::iter(items))
+}
+
+struct CloseTrackingStream {
+    stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
+    close_calls: Arc<AtomicUsize>,
+    close_error: Option<String>,
+    closed: bool,
+}
+
+impl Stream for CloseTrackingStream {
+    type Item = Result<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.closed {
+            Poll::Ready(None)
+        } else {
+            self.stream.as_mut().poll_next(cx)
+        }
+    }
+}
+
+impl LlmStreamInner for CloseTrackingStream {
+    fn close(mut self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        self.closed = true;
+        self.close_calls.fetch_add(1, Ordering::SeqCst);
+        let close_error = self.close_error.clone();
+        Box::pin(async move {
+            match close_error {
+                Some(message) => Err(FlowError::Internal(message)),
+                None => Ok(()),
+            }
+        })
+    }
 }
 
 fn captured_snapshot<T: Clone>(items: &Arc<Mutex<Vec<T>>>) -> Vec<T> {
@@ -106,6 +142,93 @@ async fn test_stream_wrapper_basic_chunks() {
 }
 
 #[tokio::test]
+async fn explicit_close_finalizes_once_and_exhausts_the_managed_stream() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "explicit_close_finalizes_once",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let finalizer_calls = Arc::new(AtomicUsize::new(0));
+    let finalizer_count = Arc::clone(&finalizer_calls);
+    let inner = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::iter(vec![
+            Ok(json!({"chunk": "first"})),
+            Ok(json!({"chunk": "unread"})),
+        ])),
+        close_calls: Arc::clone(&close_calls),
+        close_error: None,
+        closed: false,
+    });
+    let wrapper = LlmStreamWrapper::new(
+        inner,
+        make_llm_handle("explicit-close"),
+        Box::new(|_| Ok(())),
+        Box::new(move || {
+            finalizer_count.fetch_add(1, Ordering::SeqCst);
+            json!({"partial": true})
+        }),
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    assert_eq!(stream.next().await.unwrap().unwrap()["chunk"], "first");
+    stream.close().await.unwrap();
+    stream.close().await.unwrap();
+
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(finalizer_calls.load(Ordering::SeqCst), 1);
+    assert!(stream.next().await.is_none());
+
+    flush_subscribers().unwrap();
+    let end_events = events.lock().unwrap();
+    assert_eq!(
+        end_events.iter().filter(|event| is_llm_end(event)).count(),
+        1
+    );
+    assert!(deregister_subscriber("explicit_close_finalizes_once").unwrap());
+}
+
+#[tokio::test]
+async fn explicit_close_caches_cleanup_errors() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let close_calls = Arc::new(AtomicUsize::new(0));
+    let inner = LlmJsonStream::from_closeable(CloseTrackingStream {
+        stream: Box::pin(tokio_stream::empty()),
+        close_calls: Arc::clone(&close_calls),
+        close_error: Some("producer cleanup failed".into()),
+        closed: false,
+    });
+    let wrapper = LlmStreamWrapper::new(
+        inner,
+        make_llm_handle("explicit-close-error"),
+        Box::new(|_| Ok(())),
+        Box::new(|| Json::Null),
+        None,
+        None,
+        None,
+    );
+    let mut stream = LlmJsonStream::from_closeable(wrapper);
+
+    for _ in 0..2 {
+        let error = stream.close().await.expect_err("close should fail");
+        assert!(error.to_string().contains("producer cleanup failed"));
+    }
+    assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
 async fn test_stream_wrapper_passthrough() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -132,7 +255,7 @@ async fn test_stream_wrapper_empty_stream() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
 
-    let inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>> = Box::pin(tokio_stream::empty());
+    let inner = LlmJsonStream::new(tokio_stream::empty());
     let handle = make_llm_handle("test_llm");
     let (collector, finalizer, _collected) = make_collector_finalizer();
     let mut wrapper = LlmStreamWrapper::new(inner, handle, collector, finalizer, None, None, None);
