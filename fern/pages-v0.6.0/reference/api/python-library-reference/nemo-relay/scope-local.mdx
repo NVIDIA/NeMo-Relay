@@ -1,0 +1,257 @@
+---
+title: "nemo_relay.scope_local"
+sidebar-title: "scope_local"
+description: "Scope-local middleware and subscriber registration."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/scope_local.py`.
+
+Module `nemo_relay.scope_local`.
+
+Scope-local middleware and subscriber registration.
+
+## Functions
+
+### `register_mark_sanitize`
+
+```python
+def register_mark_sanitize(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local mark event sanitizer.
+
+### `deregister_mark_sanitize`
+
+```python
+def deregister_mark_sanitize(scope_handle, name)
+```
+
+Remove a scope-local mark event sanitizer.
+
+### `register_scope_sanitize_start`
+
+```python
+def register_scope_sanitize_start(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local sanitizer for scope start events.
+
+### `deregister_scope_sanitize_start`
+
+```python
+def deregister_scope_sanitize_start(scope_handle, name)
+```
+
+Remove a scope-local scope-start event sanitizer.
+
+### `register_scope_sanitize_end`
+
+```python
+def register_scope_sanitize_end(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local sanitizer for scope end events.
+
+### `deregister_scope_sanitize_end`
+
+```python
+def deregister_scope_sanitize_end(scope_handle, name)
+```
+
+Remove a scope-local scope-end event sanitizer.
+
+### `register_tool_sanitize_request`
+
+```python
+def register_tool_sanitize_request(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local tool sanitize-request guardrail.
+
+### `deregister_tool_sanitize_request`
+
+```python
+def deregister_tool_sanitize_request(scope_handle, name)
+```
+
+Remove a scope-local tool sanitize-request guardrail.
+
+### `register_tool_sanitize_response`
+
+```python
+def register_tool_sanitize_response(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local tool sanitize-response guardrail.
+
+### `deregister_tool_sanitize_response`
+
+```python
+def deregister_tool_sanitize_response(scope_handle, name)
+```
+
+Remove a scope-local tool sanitize-response guardrail.
+
+### `register_tool_conditional_execution`
+
+```python
+def register_tool_conditional_execution(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local tool conditional-execution guardrail.
+
+### `deregister_tool_conditional_execution`
+
+```python
+def deregister_tool_conditional_execution(scope_handle, name)
+```
+
+Remove a scope-local tool conditional-execution guardrail.
+
+### `register_tool_request`
+
+```python
+def register_tool_request(scope_handle, name, priority, break_chain, fn)
+```
+
+Register a scope-local tool request intercept.
+
+### `deregister_tool_request`
+
+```python
+def deregister_tool_request(scope_handle, name)
+```
+
+Remove a scope-local tool request intercept.
+
+### `register_tool_execution`
+
+```python
+def register_tool_execution(scope_handle, name, priority, fn)
+```
+
+Register scope-local middleware around tool execution.
+
+### `deregister_tool_execution`
+
+```python
+def deregister_tool_execution(scope_handle, name)
+```
+
+Remove a scope-local tool execution intercept.
+
+### `register_llm_sanitize_request`
+
+```python
+def register_llm_sanitize_request(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local LLM sanitize-request guardrail.
+
+### `deregister_llm_sanitize_request`
+
+```python
+def deregister_llm_sanitize_request(scope_handle, name)
+```
+
+Remove a scope-local LLM sanitize-request guardrail.
+
+### `register_llm_sanitize_response`
+
+```python
+def register_llm_sanitize_response(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local LLM sanitize-response guardrail.
+
+### `deregister_llm_sanitize_response`
+
+```python
+def deregister_llm_sanitize_response(scope_handle, name)
+```
+
+Remove a scope-local LLM sanitize-response guardrail.
+
+### `register_llm_conditional_execution`
+
+```python
+def register_llm_conditional_execution(scope_handle, name, priority, guardrail)
+```
+
+Register a scope-local LLM conditional-execution guardrail.
+
+### `deregister_llm_conditional_execution`
+
+```python
+def deregister_llm_conditional_execution(scope_handle, name)
+```
+
+Remove a scope-local LLM conditional-execution guardrail.
+
+### `register_llm_request`
+
+```python
+def register_llm_request(scope_handle, name, priority, break_chain, fn)
+```
+
+Register a scope-local LLM request intercept.
+
+### `deregister_llm_request`
+
+```python
+def deregister_llm_request(scope_handle, name)
+```
+
+Remove a scope-local LLM request intercept.
+
+### `register_llm_execution`
+
+```python
+def register_llm_execution(scope_handle, name, priority, fn)
+```
+
+Register scope-local middleware around non-streaming LLM execution.
+
+### `deregister_llm_execution`
+
+```python
+def deregister_llm_execution(scope_handle, name)
+```
+
+Remove a scope-local LLM execution intercept.
+
+### `register_llm_stream_execution`
+
+```python
+def register_llm_stream_execution(scope_handle, name, priority, fn)
+```
+
+Register scope-local middleware around streaming LLM execution.
+
+### `deregister_llm_stream_execution`
+
+```python
+def deregister_llm_stream_execution(scope_handle, name)
+```
+
+Remove a scope-local streaming LLM execution intercept.
+
+### `register_subscriber`
+
+```python
+def register_subscriber(scope_handle, name, callback)
+```
+
+Register an event subscriber that is active only for `scope_handle`.
+
+### `deregister_subscriber`
+
+```python
+def deregister_subscriber(scope_handle, name)
+```
+
+Remove a scope-local event subscriber.
+

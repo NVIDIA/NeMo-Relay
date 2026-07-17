@@ -1,0 +1,121 @@
+---
+title: "nemo-relay-plugin"
+sidebar-title: "nemo-relay-plugin"
+description: "Stable native plugin ABI and Rust authoring helpers for NeMo Relay."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Stable native plugin ABI and Rust authoring helpers for NeMo Relay.
+
+This crate intentionally does not depend on the `nemo-relay` runtime crate. Native plugins built with it communicate with a host through versioned C-compatible tables and host-owned string handles.
+
+## Macros
+
+- [nemo_relay_plugin](/reference/api/rust-library-reference/nemo-relay-plugin/macro-nemo-relay-plugin): Exports a concrete plugin constructor as a native plugin entry symbol body.
+
+## Structs
+
+- [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay-plugin/struct-annotatedllmrequest): Structured view of an LLM request, produced by a Codec from opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequest) content.
+- [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-plugin/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
+- [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
+- [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
+- [DataSchema](/reference/api/rust-library-reference/nemo-relay-plugin/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
+- [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
+- [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
+- [LlmAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmattributes): Bitflags that modify LLM-call behavior and observability.
+- [LlmNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmnext): Typed continuation passed to LLM execution intercepts.
+- [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
+- [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
+- [LlmOptimizationModel](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationmodel): Model identity used for counterfactual and effective pricing.
+- [LlmOptimizationModelTransition](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationmodeltransition): A model change proposed or applied by an optimizer.
+- [LlmOptimizationSummary](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationsummary): Close-time accounting attached to the normalized LLM response.
+- [LlmOptimizationTokenImpact](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationtokenimpact): Shared token evidence that Relay can aggregate without understanding a plugin payload.
+- [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmoptimizationtokens): Token quantities retained independently from pricing arithmetic.
+- [LlmRequest](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequest): JSON-shaped LLM request payload passed through the runtime.
+- [LlmRequestInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequestinterceptoutcome): Result of an LLM request intercept that can schedule lifecycle marks.
+- [LlmStream](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmstream): Host- or plugin-owned stream returned across the native LLM stream ABI.
+- [LlmStreamNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmstreamnext): Typed continuation passed to LLM stream execution intercepts.
+- [NemoRelayNativeHostApiV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv1): Versioned host API table passed to native plugin entry symbols.
+- [NemoRelayNativeLlmStreamV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmstreamv1): Native LLM JSON stream handle table.
+- [NemoRelayNativePluginContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativeplugincontext): Opaque plugin registration context borrowed from the host during registration.
+- [NemoRelayNativePluginV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativepluginv1): Versioned plugin descriptor returned by native plugin entry symbols.
+- [NemoRelayNativeScopeHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativescopehandle): Opaque host-owned scope handle.
+- [NemoRelayNativeScopeStack](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativescopestack): Opaque host-owned scope stack handle.
+- [NemoRelayNativeScopeStackBinding](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativescopestackbinding): Opaque host-owned captured scope-stack binding.
+- [NemoRelayNativeString](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativestring): Opaque host-owned UTF-8 string or JSON byte buffer.
+- [PendingMarkSpec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pendingmarkspec): Mark requested by middleware for materialization by a lifecycle owner.
+- [PluginContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-plugincontext): Borrowed safe wrapper around a host plugin registration context.
+- [PluginRuntime](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime): Cloneable high-level runtime handle for host APIs available to native plugins.
+- [ScopeAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopeattributes): Bitflags that modify scope behavior and observability.
+- [ScopeGuard](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopeguard): RAII guard for a host scope opened by [`PluginRuntime::scope`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime).
+- [ScopeHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopehandle): Host-owned scope handle returned by native scope APIs.
+- [ScopeStack](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopestack): Host-owned isolated scope stack returned by native scope-stack APIs.
+- [ScopeStackBinding](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopestackbinding): Captured thread-local scope-stack binding.
+- [ThreadScopeStackGuard](/reference/api/rust-library-reference/nemo-relay-plugin/struct-threadscopestackguard): RAII guard that restores the previous thread-local scope stack on drop.
+- [ToolAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolattributes): Bitflags that modify tool-call behavior and observability.
+- [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
+- [ToolNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolnext): Typed continuation passed to tool execution intercepts.
+
+## Enums
+
+- [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-plugin/enum-diagnosticlevel): Diagnostic severity returned by plugin validation.
+- [Event](/reference/api/rust-library-reference/nemo-relay-plugin/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
+- [HandleAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.
+- [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmoptimizationevidencequality): Whether token evidence was observed directly or estimated.
+- [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmoptimizationsummarystatus): Completeness of close-time optimization accounting.
+- [NemoRelayNativeScopeType](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativescopetype): Scope category used by native plugins when opening scopes.
+- [NemoRelayStatus](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus): Status codes returned by stable native ABI functions.
+- [ScopeCategory](/reference/api/rust-library-reference/nemo-relay-plugin/enum-scopecategory): Agent Trajectory Observability Format (ATOF) lifecycle phase for a scope event.
+- [ScopeType](/reference/api/rust-library-reference/nemo-relay-plugin/enum-scopetype): Semantic category attached to a scope lifecycle span.
+
+## Constants
+
+- [NEMO_RELAY_NATIVE_ABI_VERSION](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version): Native plugin ABI version supported by this crate.
+
+## Traits
+
+- [LlmOptimizationPayload](/reference/api/rust-library-reference/nemo-relay-plugin/trait-llmoptimizationpayload): Trait implemented by typed plugin payloads embedded in an optimization contribution.
+- [NativePlugin](/reference/api/rust-library-reference/nemo-relay-plugin/trait-nativeplugin): Trait implemented by Rust native plugins.
+
+## Functions
+
+- [capture_scope_stack_thread](/reference/api/rust-library-reference/nemo-relay-plugin/fn-capture-scope-stack-thread): Captures the current thread-local scope-stack binding.
+- [create_scope_stack](/reference/api/rust-library-reference/nemo-relay-plugin/fn-create-scope-stack): Creates a new independent scope stack.
+- [current_scope](/reference/api/rust-library-reference/nemo-relay-plugin/fn-current-scope): Retrieves the current scope handle.
+- [emit_mark](/reference/api/rust-library-reference/nemo-relay-plugin/fn-emit-mark): Emits a mark event under the current scope.
+- [export_plugin](/reference/api/rust-library-reference/nemo-relay-plugin/fn-export-plugin): Initializes a native plugin descriptor for a Rust SDK plugin value.
+- [pop_scope](/reference/api/rust-library-reference/nemo-relay-plugin/fn-pop-scope): Pops a scope and emits its end event.
+- [push_scope](/reference/api/rust-library-reference/nemo-relay-plugin/fn-push-scope): Pushes a scope and emits its start event.
+
+## Type Aliases
+
+- [Json](/reference/api/rust-library-reference/nemo-relay-plugin/type-json): Type alias for [`serde_json::Value`](https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html), used as the universal JSON representation throughout NeMo Relay APIs.
+- [LlmJsonStream](/reference/api/rust-library-reference/nemo-relay-plugin/type-llmjsonstream): Synchronous JSON chunk stream used by native LLM stream intercept helpers.
+- [NemoRelayNativeEventSanitizeCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeeventsanitizecb): Native event observability-field sanitizer callback.
+- [NemoRelayNativeEventSubscriberCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeeventsubscribercb): Native event subscriber callback.
+- [NemoRelayNativeFreeFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativefreefn): Optional destructor for user data captured by native callbacks.
+- [NemoRelayNativeJsonCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativejsoncb): Native JSON transform callback for LLM response sanitizers.
+- [NemoRelayNativeLlmConditionalCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmconditionalcb): Native LLM conditional-execution callback.
+- [NemoRelayNativeLlmExecutionCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmexecutioncb): Native LLM execution intercept callback.
+- [NemoRelayNativeLlmNextFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmnextfn): Runtime-provided continuation for LLM execution intercepts.
+- [NemoRelayNativeLlmRequestCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmrequestcb): Native LLM request transform callback for request sanitizers.
+- [NemoRelayNativeLlmRequestInterceptCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmrequestinterceptcb): Native LLM request intercept callback.
+- [NemoRelayNativeLlmStreamCancelFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmstreamcancelfn): Optional native stream cancellation callback.
+- [NemoRelayNativeLlmStreamDropFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmstreamdropfn): Optional native stream destructor callback.
+- [NemoRelayNativeLlmStreamExecutionCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmstreamexecutioncb): Native LLM stream execution intercept callback.
+- [NemoRelayNativeLlmStreamNextFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmstreamnextfn): Runtime-provided continuation for LLM stream execution intercepts.
+- [NemoRelayNativeLlmStreamPollFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativellmstreampollfn): Native stream poll callback.
+- [NemoRelayNativePluginDropFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativeplugindropfn): Native plugin drop callback.
+- [NemoRelayNativePluginEntry](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativepluginentry): Native entry symbol type loaded by the host.
+- [NemoRelayNativePluginRegisterFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativepluginregisterfn): Native plugin registration callback.
+- [NemoRelayNativePluginValidateFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativepluginvalidatefn): Native plugin validation callback.
+- [NemoRelayNativeToolConditionalCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativetoolconditionalcb): Native tool conditional-execution callback.
+- [NemoRelayNativeToolExecutionCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativetoolexecutioncb): Native tool execution intercept callback.
+- [NemoRelayNativeToolJsonCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativetooljsoncb): Native JSON transform callback for tool request/response sanitizers and tool request intercepts.
+- [NemoRelayNativeToolNextFn](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativetoolnextfn): Runtime-provided continuation for tool execution intercepts.
+- [NemoRelayNativeWithScopeStackCb](/reference/api/rust-library-reference/nemo-relay-plugin/type-nemorelaynativewithscopestackcb): Native callback executed while a host scope stack is temporarily active.
+- [Result](/reference/api/rust-library-reference/nemo-relay-plugin/type-result): Result type used by the Rust native plugin SDK.

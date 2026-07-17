@@ -1,0 +1,22 @@
+---
+title: "Function llm_attributes_to_strings"
+sidebar-title: "llm_attributes_to_strings"
+description: "Convert LLM bitflags into ATOF attributes."
+position: 13
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn llm_attributes_to_strings(attributes: <a href=\"../llm/struct-llmattributes\">LlmAttributes</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;"}} /></pre>
+
+Convert LLM bitflags into ATOF attributes.
+
+## Parameters
+
+- `attributes`: LLM attribute bitflags.
+
+## Returns
+
+Canonical lowercase ATOF attribute strings for the provided bitflags.

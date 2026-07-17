@@ -1,0 +1,38 @@
+---
+title: "Struct Scope Handle"
+sidebar-title: "ScopeHandle"
+description: "Host-owned scope handle returned by native scope APIs."
+position: 35
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ScopeHandle<'a> { /* private fields */ }
+```
+
+Host-owned scope handle returned by native scope APIs.
+
+## Implementations
+
+### `impl<'a> ScopeHandle<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'a&gt;"}} /></pre>
+
+#### `as_ptr`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_ptr(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>"}} /></pre>
+
+Returns the raw ABI pointer.
+
+## Trait Implementations
+
+### `impl Drop for ScopeHandle<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-scopehandle\">ScopeHandle</a>&lt;'_&gt;"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

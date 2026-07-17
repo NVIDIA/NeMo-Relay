@@ -1,0 +1,161 @@
+---
+title: "nemo_relay.observability"
+sidebar-title: "observability"
+description: "Observability plugin configuration helpers."
+position: 9
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/observability.pyi`.
+
+Module `nemo_relay.observability`.
+
+Observability plugin configuration helpers.
+
+## Classes
+
+### `ConfigPolicy`
+
+Policy for unsupported observability configuration.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this policy to the canonical JSON object shape.
+
+### `AtofStreamSinkConfig`
+
+Stream sink for raw ATOF events.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this ATOF stream sink to the canonical JSON object shape.
+
+### `AtofConfig`
+
+Multi-sink raw ATOF export settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this ATOF config to the canonical JSON object shape.
+
+### `AtofFileSinkConfig`
+
+Filesystem destination for raw ATOF JSONL events.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+### `S3StorageConfig`
+
+S3-compatible remote storage settings for ATIF trajectory upload.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this S3 storage config to the canonical JSON object shape.
+
+### `HttpStorageConfig`
+
+HTTP endpoint settings for ATIF trajectory upload.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this HTTP storage config to the canonical JSON object shape.
+
+### `AtifConfig`
+
+Per-top-level-agent ATIF file export settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this ATIF config to the canonical JSON object shape.
+
+### `OtlpConfig`
+
+Shared OpenTelemetry/OpenInference OTLP export settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this OTLP config to the canonical JSON object shape.
+
+### `ObservabilityConfig`
+
+Canonical config document for the top-level observability component.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this observability config to the canonical JSON object shape.
+
+### `ComponentSpec`
+
+Top-level observability component wrapper.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this component to the canonical plugin shape.
+
+## Type Aliases And Constants
+
+- `AtofEndpointConfig`
+- `MarkProjection`
+- `OBSERVABILITY_PLUGIN_KIND`
+

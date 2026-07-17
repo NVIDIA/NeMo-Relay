@@ -1,0 +1,172 @@
+---
+title: "Language Binding Plugins"
+description: "Build in-process, code-driven NeMo Relay plugins in Rust, Python, or Node.js."
+position: 2
+---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide to build an in-process, code-driven plugin in Rust, Python, or
+Node.js. The application registers the plugin kind with the loaded language
+binding, then initializes it with the same component configuration model used
+by built-in plugins.
+
+This model does not load a shared library or start a worker process. For those
+models, use [Native Dynamic Plugins (Rust)](/build-plugins/dynamic-plugins/native-dynamic/about),
+[gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about), or [gRPC
+Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about).
+
+## What You Build
+
+Define the plugin's purpose, stable kind name, configuration boundary, runtime
+surfaces, and activation lifecycle. Then use the focused guides to validate and
+register the resulting plugin contract.
+
+<Note>
+NeMo Relay plugin configuration keys use `snake_case` in every language and file
+format. Node.js helper function names are `camelCase`, but the objects passed to
+`plugin.initialize(...)` use the same canonical `snake_case` keys as Python,
+Rust, JSON, and TOML plugin configuration.
+
+</Note>
+
+## Before You Start
+
+You need:
+
+- A reusable behavior that belongs outside one application call site.
+- A stable plugin kind name.
+- A JSON-compatible config shape.
+- A decision about which runtime surfaces the plugin installs.
+- A teardown plan for tests and applications that need to clear active configuration.
+
+## Plugin Shape and Requirements
+
+A plugin needs a stable shape before operators can activate it from config:
+
+| Requirement | Why It Matters |
+|---|---|
+| Stable `kind` | The plugin registry uses this string to match config to implementation. |
+| JSON-compatible config | Config must move across Python, Node.js, Rust, files, tests, and deployment systems. |
+| Validation hook | Operators need diagnostics before runtime behavior changes. |
+| Registration hook | Register runtime behavior through `PluginContext` so Relay can qualify names and roll back failed setup. |
+| Runtime ownership | The plugin should clearly own subscribers, middleware, or a small bundle of related surfaces. |
+
+Keep runtime objects out of config. Create provider clients, callbacks, file
+handles, caches, and credentials in plugin code, or resolve them from safe
+references during registration.
+
+## What a Plugin Can Install
+
+A plugin can install one or more of these runtime surfaces:
+
+- **Subscribers:** Event subscribers.
+- **Event sanitizers:** Mark, scope-start, and scope-end observability-field
+  sanitizers.
+- **Tool middleware:** Sanitize-request and sanitize-response guardrails,
+  conditional-execution guardrails, request intercepts, and execution
+  intercepts.
+- **LLM middleware:** Sanitize-request and sanitize-response guardrails,
+  conditional-execution guardrails, request intercepts, execution intercepts,
+  and stream execution intercepts.
+
+Start with one surface. Add a bundle only when one configuration document clearly controls related behavior, such as a subscriber plus the request intercepts needed to add correlation metadata.
+
+## Registration Lifecycle
+
+The diagram below shows how plugin configuration turns into registered runtime behavior.
+
+<MermaidStyles />
+
+```mermaid
+flowchart TB
+    Kind[Plugin kind<br/>registered once]
+    Config[Plugin config<br/>version + components + policy]
+    Validate{{Validate component config}}
+    Diagnostics[/Structured diagnostics/]
+    Initialize[Initialize enabled components]
+    Context[PluginContext<br/>component-scoped registrar]
+    Runtime[Runtime registrations<br/>subscribers + middleware]
+    Rollback[Rollback partial setup<br/>if initialization fails]
+
+    Kind --> Validate
+    Config --> Validate
+    Validate --> Diagnostics
+    Validate -->|valid or warning-only| Initialize
+    Initialize --> Context
+    Context --> Runtime
+    Initialize -->|error| Rollback
+    Context -->|registration error| Rollback
+```
+
+The lifecycle works in stages. Register the plugin kind, validate component
+config, and initialize enabled components. `PluginContext` installs runtime
+behavior. If registration fails partway through, Relay rolls back the partial
+setup.
+
+## Keep the First Plugin Small
+
+The easiest first plugin is one of these:
+
+- A subscriber-oriented plugin that exports events.
+- A request-intercept plugin that adds one provider header.
+- A sanitize guardrail plugin that redacts one field family.
+- A policy plugin that registers one conditional-execution guardrail.
+
+Avoid a first plugin that combines unrelated subscribers, request transforms, and
+policy checks. Multi-surface bundles are useful later, but they need stronger
+validation and rollout controls. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration)
+when you need Adaptive behavior.
+
+## Minimal Config Contract
+
+The top-level config document has `version`, `components`, and `policy`. Each
+component chooses a plugin kind and passes component-local JSON configuration to
+that plugin. The following document shows the complete shape:
+
+```json
+{
+  "version": 1,
+  "components": [
+    {
+      "kind": "header-plugin",
+      "enabled": true,
+      "config": {
+        "header_name": "x-tenant",
+        "value": "tenant-a"
+      }
+    }
+  ],
+  "policy": {
+    "unknown_component": "warn",
+    "unknown_field": "warn",
+    "unsupported_value": "error"
+  }
+}
+```
+
+Use this document as the boundary between operator intent and plugin implementation. Keep business logic in the plugin code, not in the config parser.
+
+## Design Checklist
+
+Before you write the plugin implementation, answer these questions:
+
+- What is the stable plugin `kind`?
+- What runtime surface does it install first?
+- Which config fields are required?
+- Which fields are safe to expose as JSON?
+- What diagnostic should appear when each required field is missing?
+- What should happen when the component is disabled?
+- What should happen when registration fails halfway through?
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Define validation behavior with [Validate Plugin Configuration](/build-plugins/language-binding/validate-configuration).
+- Register runtime behavior with [Register Plugin Behavior](/build-plugins/language-binding/register-behavior).
+- Add rollout controls with [Design Plugin Configuration](/build-plugins/language-binding/advanced-configuration).
+- Review complete examples in [Code Examples](/build-plugins/language-binding/code-examples).

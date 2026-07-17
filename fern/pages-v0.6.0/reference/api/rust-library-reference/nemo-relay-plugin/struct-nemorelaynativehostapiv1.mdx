@@ -1,0 +1,190 @@
+---
+title: "Struct Nemo Relay Native Host ApiV1"
+sidebar-title: "NemoRelayNativeHostApiV1"
+description: "Versioned host API table passed to native plugin entry symbols."
+position: 22
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[repr(C)]pub struct NemoRelayNativeHostApiV1 &#123;Show 37 fields\n    pub abi_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub struct_size: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub relay_version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    pub string_new: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>, len: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>, out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub string_data: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u8.html\">u8</a>,\n    pub string_len: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub string_free: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>),\n    pub last_error_clear: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(),\n    pub last_error_set: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(message: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>),\n    pub plugin_context_register_subscriber: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, cb: <a href=\"type-nemorelaynativeeventsubscribercb\">NemoRelayNativeEventSubscriberCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_tool_sanitize_request_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativetooljsoncb\">NemoRelayNativeToolJsonCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_tool_sanitize_response_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativetooljsoncb\">NemoRelayNativeToolJsonCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_tool_conditional_execution_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativetoolconditionalcb\">NemoRelayNativeToolConditionalCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_tool_request_intercept: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>, cb: <a href=\"type-nemorelaynativetooljsoncb\">NemoRelayNativeToolJsonCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_tool_execution_intercept: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativetoolexecutioncb\">NemoRelayNativeToolExecutionCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_llm_sanitize_request_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativellmrequestcb\">NemoRelayNativeLlmRequestCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_llm_sanitize_response_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativejsoncb\">NemoRelayNativeJsonCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_llm_conditional_execution_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativellmconditionalcb\">NemoRelayNativeLlmConditionalCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_llm_request_intercept: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>, cb: <a href=\"type-nemorelaynativellmrequestinterceptcb\">NemoRelayNativeLlmRequestInterceptCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_llm_execution_intercept: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativellmexecutioncb\">NemoRelayNativeLlmExecutionCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_llm_stream_execution_intercept: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativellmstreamexecutioncb\">NemoRelayNativeLlmStreamExecutionCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_handle_free: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(handle: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>),\n    pub scope_get_current: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_push: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, scope_type: <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>, parent: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>, attributes: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>, data_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, metadata_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, input_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>, out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_pop: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(handle: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>, output_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, metadata_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub emit_mark: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, parent: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopehandle\">NemoRelayNativeScopeHandle</a>, data_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, metadata_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, timestamp_unix_micros: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i64.html\">i64</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_stack_create: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_stack_free: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stack: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>),\n    pub scope_stack_set_thread: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stack: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_stack_capture_thread: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopestackbinding\">NemoRelayNativeScopeStackBinding</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_stack_restore_thread: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(binding: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopestackbinding\">NemoRelayNativeScopeStackBinding</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub scope_stack_binding_free: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(binding: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativescopestackbinding\">NemoRelayNativeScopeStackBinding</a>),\n    pub scope_stack_active: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>() -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub scope_stack_with_current: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(stack: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativescopestack\">NemoRelayNativeScopeStack</a>, cb: <a href=\"type-nemorelaynativewithscopestackcb\">NemoRelayNativeWithScopeStackCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_mark_sanitize_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativeeventsanitizecb\">NemoRelayNativeEventSanitizeCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_scope_sanitize_start_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativeeventsanitizecb\">NemoRelayNativeEventSanitizeCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n    pub plugin_context_register_scope_sanitize_end_guardrail: unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(ctx: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>, name: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>, priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>, cb: <a href=\"type-nemorelaynativeeventsanitizecb\">NemoRelayNativeEventSanitizeCb</a>, user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>,\n&#125;"}} /></pre>
+
+Versioned host API table passed to native plugin entry symbols.
+
+## Fields
+
+### `abi_version: u32`
+
+ABI version implemented by this table.
+
+### `struct_size: usize`
+
+Size of this struct as seen by the host.
+
+### `relay_version: *const c_char`
+
+Null-terminated host Relay version string.
+
+### `string_new: unsafe extern "C" fn(data: *const u8, len: usize, out: *mut *mut NemoRelayNativeString) -> NemoRelayStatus`
+
+Allocates a host-owned string from UTF-8 bytes.
+
+### `string_data: unsafe extern "C" fn(value: *const NemoRelayNativeString) -> *const u8`
+
+Returns the string data pointer for a host-owned string.
+
+### `string_len: unsafe extern "C" fn(value: *const NemoRelayNativeString) -> usize`
+
+Returns the byte length for a host-owned string.
+
+### `string_free: unsafe extern "C" fn(value: *mut NemoRelayNativeString)`
+
+Frees a host-owned string.
+
+### `last_error_clear: unsafe extern "C" fn()`
+
+Clears the host thread-local native ABI error message.
+
+### `last_error_set: unsafe extern "C" fn(message: *const NemoRelayNativeString)`
+
+Sets the host thread-local native ABI error message.
+
+### `plugin_context_register_subscriber: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, cb: NemoRelayNativeEventSubscriberCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an event subscriber through the plugin context.
+
+### `plugin_context_register_tool_sanitize_request_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeToolJsonCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a tool sanitize-request guardrail through the plugin context.
+
+### `plugin_context_register_tool_sanitize_response_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeToolJsonCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a tool sanitize-response guardrail through the plugin context.
+
+### `plugin_context_register_tool_conditional_execution_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeToolConditionalCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a tool conditional-execution guardrail through the plugin context.
+
+### `plugin_context_register_tool_request_intercept: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, break_chain: bool, cb: NemoRelayNativeToolJsonCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a tool request intercept through the plugin context.
+
+### `plugin_context_register_tool_execution_intercept: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeToolExecutionCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a tool execution intercept through the plugin context.
+
+### `plugin_context_register_llm_sanitize_request_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeLlmRequestCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an LLM sanitize-request guardrail through the plugin context.
+
+### `plugin_context_register_llm_sanitize_response_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeJsonCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an LLM sanitize-response guardrail through the plugin context.
+
+### `plugin_context_register_llm_conditional_execution_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeLlmConditionalCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an LLM conditional-execution guardrail through the plugin context.
+
+### `plugin_context_register_llm_request_intercept: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, break_chain: bool, cb: NemoRelayNativeLlmRequestInterceptCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an LLM request intercept through the plugin context.
+
+### `plugin_context_register_llm_execution_intercept: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeLlmExecutionCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an LLM execution intercept through the plugin context.
+
+### `plugin_context_register_llm_stream_execution_intercept: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeLlmStreamExecutionCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers an LLM stream execution intercept through the plugin context.
+
+### `scope_handle_free: unsafe extern "C" fn(handle: *mut NemoRelayNativeScopeHandle)`
+
+Frees a host-owned scope handle.
+
+### `scope_get_current: unsafe extern "C" fn(out: *mut *mut NemoRelayNativeScopeHandle) -> NemoRelayStatus`
+
+Retrieves the current scope handle from the active stack.
+
+### `scope_push: unsafe extern "C" fn(name: *const NemoRelayNativeString, scope_type: NemoRelayNativeScopeType, parent: *const NemoRelayNativeScopeHandle, attributes: u32, data_json: *const NemoRelayNativeString, metadata_json: *const NemoRelayNativeString, input_json: *const NemoRelayNativeString, timestamp_unix_micros: *const i64, out: *mut *mut NemoRelayNativeScopeHandle) -> NemoRelayStatus`
+
+Pushes a scope, emits its start event, and returns its handle.
+
+### `scope_pop: unsafe extern "C" fn(handle: *const NemoRelayNativeScopeHandle, output_json: *const NemoRelayNativeString, metadata_json: *const NemoRelayNativeString, timestamp_unix_micros: *const i64) -> NemoRelayStatus`
+
+Pops a scope handle, emits its end event, and clears scope-local registrations.
+
+### `emit_mark: unsafe extern "C" fn(name: *const NemoRelayNativeString, parent: *const NemoRelayNativeScopeHandle, data_json: *const NemoRelayNativeString, metadata_json: *const NemoRelayNativeString, timestamp_unix_micros: *const i64) -> NemoRelayStatus`
+
+Emits a mark event under the current or provided parent scope.
+
+### `scope_stack_create: unsafe extern "C" fn(out: *mut *mut NemoRelayNativeScopeStack) -> NemoRelayStatus`
+
+Creates a new independent scope stack with its own root scope.
+
+### `scope_stack_free: unsafe extern "C" fn(stack: *mut NemoRelayNativeScopeStack)`
+
+Frees a host-owned scope stack handle.
+
+### `scope_stack_set_thread: unsafe extern "C" fn(stack: *const NemoRelayNativeScopeStack) -> NemoRelayStatus`
+
+Binds a scope stack to the current OS thread.
+
+### `scope_stack_capture_thread: unsafe extern "C" fn(out: *mut *mut NemoRelayNativeScopeStackBinding) -> NemoRelayStatus`
+
+Captures the current thread-local scope-stack binding.
+
+### `scope_stack_restore_thread: unsafe extern "C" fn(binding: *mut NemoRelayNativeScopeStackBinding) -> NemoRelayStatus`
+
+Restores and frees a captured thread-local scope-stack binding.
+
+### `scope_stack_binding_free: unsafe extern "C" fn(binding: *mut NemoRelayNativeScopeStackBinding)`
+
+Frees a captured thread-local binding without restoring it.
+
+### `scope_stack_active: unsafe extern "C" fn() -> bool`
+
+Returns whether the current context has an explicitly active scope stack.
+
+### `scope_stack_with_current: unsafe extern "C" fn(stack: *const NemoRelayNativeScopeStack, cb: NemoRelayNativeWithScopeStackCb, user_data: *mut c_void) -> NemoRelayStatus`
+
+Runs a callback with the provided scope stack visible to host runtime APIs.
+
+### `plugin_context_register_mark_sanitize_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeEventSanitizeCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a mark event sanitizer through the plugin context.
+
+### `plugin_context_register_scope_sanitize_start_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeEventSanitizeCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a scope-start event sanitizer through the plugin context.
+
+### `plugin_context_register_scope_sanitize_end_guardrail: unsafe extern "C" fn(ctx: *mut NemoRelayNativePluginContext, name: *const NemoRelayNativeString, priority: i32, cb: NemoRelayNativeEventSanitizeCb, user_data: *mut c_void, free_fn: NemoRelayNativeFreeFn) -> NemoRelayStatus`
+
+Registers a scope-end event sanitizer through the plugin context.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeHostApiV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for NemoRelayNativeHostApiV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
+
+### `impl Send for NemoRelayNativeHostApiV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
+
+### `impl Sync for NemoRelayNativeHostApiV1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>

@@ -1,0 +1,378 @@
+---
+title: "Coding Agent Installation"
+description: "Install and manage persistent NeMo Relay integrations for Claude Code, Codex, and Hermes Agent."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Install a persistent integration when you want Claude Code, Codex, or Hermes
+Agent to load NeMo Relay without a `nemo-relay` wrapper command. Claude Code
+and Codex use their normal plugin systems. Hermes uses the same native MCP
+lifecycle through its user configuration without a marketplace plugin.
+
+Each persistent integration forwards the lifecycle signals that its host
+exposes, including agent, subagent, tool, prompt, compaction, and stop events
+where available. Model-provider routing sends LLM traffic through the local
+NeMo Relay gateway. Hooks alone cannot capture complete LLM request and response
+spans.
+
+All three integrations share the same lifecycle gateway. Provider traffic joins
+that gateway when routing is configured for the host:
+
+```text
+Codex / Claude Code / Hermes Agent
+  |-> Relay MCP lifecycle client -------> shared Relay gateway
+  |-> generated lifecycle hooks --------> shared Relay gateway
+  \-> provider route (when configured) -> shared Relay gateway -> model provider
+```
+
+Each agent starts its own lightweight MCP stdio process. Those processes share
+one compatible gateway. Generated lifecycle hooks use `hook-forward` to deliver
+their canonical payloads to that same gateway.
+
+## Requirements
+
+Install `nemo-relay` and ensure that it is available on `PATH` or `%PATH%`.
+The installer does not download a second Relay binary, install a daemon, or
+require an integration-local executable.
+
+The selected coding-agent CLI must also be available at a supported version:
+
+- Claude Code 2.1.121 or newer through `claude`.
+- `codex-cli` 0.143.0 or newer through `codex`.
+- Hermes Agent 0.18.2 or newer through `hermes`.
+
+Relay checks the selected CLI version before modifying agent configuration.
+Prerelease, malformed, and older versions are rejected consistently by install,
+doctor, and transparent launch paths.
+
+## Install a Persistent Integration
+
+Run the command for the coding-agent integration that you want to install:
+
+```bash
+nemo-relay install claude-code
+nemo-relay install codex
+nemo-relay install hermes
+```
+
+Install every supported host detected on the machine:
+
+```bash
+nemo-relay install all
+```
+
+`install all` selects only supported agents whose CLI is present. It fails if
+Claude Code, Codex, and Hermes Agent are all absent.
+
+Use `--dry-run` to preview the operation without changing host configuration.
+For Claude Code and Codex, the preview includes marketplace paths and host
+commands. For Hermes, it shows the user configuration path:
+
+```bash
+nemo-relay install codex --dry-run
+```
+
+For Claude Code and Codex, use `--install-dir` when you need a non-default
+marketplace location. Hermes always updates its user configuration. The default
+plugin directory is platform-specific:
+
+| Platform | Default Plugin Install Directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/nemo-relay/plugins` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/nemo-relay/plugins` |
+| Windows | `%LOCALAPPDATA%\nemo-relay\plugins` |
+
+Relay serializes install, force-install, rollback, and uninstall operations for
+each user and host, even when two operations name different install
+directories. If another operation is still active after a short wait, Relay
+stops with a timeout instead of changing host-wide plugin state concurrently.
+
+## What Install Changes
+
+For Claude Code and Codex, `nemo-relay install` writes a local marketplace named
+`nemo-relay-local`, then registers the generated `nemo-relay-plugin` package
+with the selected host.
+
+For Claude Code, `nemo-relay install claude-code` registers the local
+marketplace, installs `nemo-relay-plugin@nemo-relay-local` at user scope, and
+enables provider routing through the local NeMo Relay sidecar. Relay preserves
+existing Claude authentication and model settings and backs them up only when
+it adds the provider route. The plugin also declares the native
+`nemo-relay mcp` lifecycle client.
+
+For Codex, `nemo-relay install codex` registers the local marketplace, installs
+`nemo-relay-plugin@nemo-relay-local`, enables Codex hooks, and configures the
+`nemo-relay-openai` provider alias at `http://127.0.0.1:47632`. The plugin's
+`hooks/hooks.json` is the sole persistent Relay hook source. The installer uses
+the Codex app-server API to select hooks by plugin ID, exact canonical command,
+and event definition. It never trusts unrelated user, project, or plugin hooks.
+If Codex does not discover exactly one enabled and trusted handler for every
+generated event—`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+`PermissionRequest`, `SubagentStart`, `SubagentStop`, `Stop`, `PreCompact`, and
+`PostCompact`—installation restores the previous Codex config, legacy hooks,
+Relay backup files, and every original targeted trust entry. These 10 events are
+the complete supported Codex 0.143 plugin hook schema; Relay does not generate
+undiscoverable `PostToolUseFailure`, `Notification`, or `SessionEnd` handlers.
+Upgrade removes legacy Relay groups from
+`~/.codex/hooks.json` while preserving unrelated hooks.
+
+For Hermes, `nemo-relay install hermes` adds the Relay MCP server, canonical
+hooks, exact hook trust, and environment references to
+`$HERMES_HOME/config.yaml`, or `~/.hermes/config.yaml` when `HERMES_HOME` is
+unset. Relay applies these changes in one transaction and preserves unrelated
+Hermes configuration. Refer to the
+[Hermes Agent guide](/nemo-relay-cli/hermes).
+
+On Windows, generated hooks use the built-in Windows PowerShell encoded-command
+format. This avoids quoting and metacharacter differences between the Codex,
+Claude Code, and Hermes command runners. The encoded payload contains only the
+canonical `nemo-relay.exe` path and `hook-forward` arguments. PowerShell starts
+that Rust binary directly and preserves its standard input, standard output,
+standard error, and exit code. The MCP client and gateway remain Rust-native,
+and both install and doctor verify the generated command and event ownership.
+
+Start a new Codex CLI process after installation. Restart the Codex desktop app
+if it was already running so it reloads the provider and hook configuration.
+
+### Shared Gateway Lifecycle
+
+Claude Code, Codex, and configured Hermes processes use the same
+`nemo-relay mcp` lifecycle client. Before reading MCP protocol frames, it starts
+or reuses a detached native sidecar on `127.0.0.1:47632`. The client verifies
+Relay identity, version, protocol readiness, and effective user-level
+configuration, then heartbeats the sidecar every 30 seconds. Concurrent
+processes from any host share the gateway. After the final MCP client closes,
+the sidecar exits after 300 idle seconds by default. If the gateway exits while
+MCP stdio is open, the client performs one coordinated restart and fails if
+recovery does not succeed. Relay reports a port conflict for a foreign process
+instead of accepting it merely because it returned HTTP 200.
+
+Health and readiness responses include a per-process instance ID. A per-user
+startup lock serializes launch and recovery, while a small recovery record lets
+overlapping MCP clients share the same restart attempt. The gateway tracks its
+own activity, idle shutdown, and authenticated ownership-record cleanup.
+
+Codex marks the MCP server as required, so the captured turn waits for verified
+gateway readiness. Claude Code 2.1.121 or newer uses `alwaysLoad`, which blocks
+session startup until the MCP connection is ready. Hermes starts MCP discovery
+asynchronously, so its first lifecycle hook can arrive before MCP is ready.
+Installed MCP entries and `hook-forward` commands carry both the generation-file
+path and the immutable identity expected at that path. This prevents a host
+process with cached plugin configuration from adopting a replacement
+installation after `--force`. Persistent hooks wait for the MCP-owned gateway,
+verify it on the same connection used for delivery, and send the canonical
+payload once. They never start or recover the gateway, and Relay does not retry
+after payload transmission begins. The MCP server advertises no tools in any
+host.
+
+### Hook Delivery and Upgrade Safety
+
+Before contacting the gateway, Relay rejects a fixed-endpoint `hook-forward`
+command that lacks a valid installer-owned generation fence. It uses the
+configured hook failure policy. This prevents a legacy hook retained by a host
+process from reviving a retired installation. If install or uninstall reports a
+missing or invalid generation marker, follow its cleanup instructions: close
+the host and standalone `nemo-relay mcp` processes, remove the stale
+registration and state it identifies, and then run the requested `--force`
+command.
+
+Transparent hooks embed their process-private gateway URL and never recover a
+persistent gateway, so they do not need this fence. Source plugins and custom
+automation can use `--forward-only` to contact an existing gateway without a
+fence. That mode waits for an authenticated, configuration-compatible Relay
+gateway and rejects foreign or incompatible listeners before it sends the
+payload. Authentication and delivery use the same TCP connection, so a process
+that replaces the listener after a health probe cannot receive lifecycle data.
+The mode never launches or recovers Relay.
+
+Relay cannot guarantee exactly-once delivery if the gateway fails after it
+accepts a request. It does not keep a durable hook outbox or deduplication
+journal. The opt-in end-to-end tests verify exactly-once lifecycle output for
+the healthy and cold-start paths they exercise, not for arbitrary crashes
+between request acceptance and response delivery.
+
+On Windows, Relay requests Job Object breakaway when the host job permits it.
+When breakaway is unavailable and the host permits nested assignment, the
+gateway remains scoped to the host job and can exit before the normal idle reuse
+window. If the host rejects nested assignment, persistent bootstrap stops and
+explains the conflict instead of running without process-tree cleanup
+guarantees.
+
+The compatibility fingerprint covers resolved provider, exporter, dynamic
+plugin, and relevant environment settings without exposing their values in the
+health response. For Claude Code and Codex,
+`nemo-relay install <host> --force` rotates the immutable MCP and hook generation
+identity, then uses a private ownership token to stop the shared fixed-endpoint
+gateway as one serialized operation. Ownership is keyed by endpoint rather than
+host, so an upgrade from any installed host can retire a gateway that another
+host originally started.
+
+Relay leaves custom managed endpoints untouched and never sends its shutdown
+token to an unrelated listener. Hermes installation rotates its MCP generation
+fence in the same transaction.
+
+### Configuration and Credentials
+
+Persistent mode resolves only system and user Relay configuration and starts in
+the user configuration directory. Project `.nemo-relay` layers remain available
+through transparent `nemo-relay run` invocations. Each host passes environment
+settings to MCP differently:
+
+- Codex stores variable names—not values—for provider credentials, Relay
+  runtime, OpenTelemetry, AWS, proxies, certificates, approved prefixes, and
+  credential variables referenced by user observability configuration.
+- Claude Code supplies its normal plugin MCP environment.
+- Hermes stores `${VARIABLE_NAME}` references for the standard allowlist,
+  custom variables that you have already approved, and credential names
+  referenced by user observability configuration.
+
+Relay treats unresolved self-references as unset before parsing its command
+line. Rerun `nemo-relay install hermes --force` after you add a custom approved
+name or change a credential name referenced by the configuration.
+
+The long-lived managed sidecar injects a forwarded provider credential only when
+a request carries provider authorization or Relay's private per-user client
+proof. The Codex installer writes a domain-separated HMAC proof into the
+managed provider's `http_headers`; Relay stores the resulting Codex config with
+an owner-only mode on Unix or protected owner/System DACL on Windows before the
+temporary file becomes visible. Relay validates and removes that header before
+middleware, observability, or upstream forwarding. The underlying HMAC key
+remains in Relay's owner-only bootstrap state. Claude Code and Hermes send
+their normal provider authorization. A foreign loopback caller cannot spend
+the sidecar's forwarded credentials. Foreground `nemo-relay --bind` use retains
+environment-key injection for explicit local proxy workflows.
+
+## Diagnose
+
+Run the command for the installed integration that you want to diagnose:
+
+```bash
+nemo-relay doctor --plugin claude-code
+nemo-relay doctor --plugin codex
+nemo-relay doctor --plugin hermes
+nemo-relay doctor --plugin all
+```
+
+`nemo-relay doctor` includes every persistent integration it finds. It checks
+generated marketplace and plugin files where applicable, the Relay binary and
+hook support, agent version, registration, provider routing, hooks, and sidecar
+readiness assumptions. For Codex, doctor also asks the Codex app-server whether
+each exact Relay-generated hook is trusted and enabled. JSON output includes
+`checks.codex_hooks_trusted` and a
+`codex_hook_trust` object that groups trusted, untrusted, modified, disabled,
+missing, or duplicated required hooks. A stopped Codex sidecar is informational;
+the required plugin MCP starts it before the captured turn. Doctor also reports
+newly required forwarded environment names and recommends
+`nemo-relay install codex --force`.
+
+For Claude Code, doctor also validates version 2.1.121 or newer, the generated
+`alwaysLoad` MCP server, and its generation marker. A stopped sidecar remains
+informational because the next MCP process starts it. Persistent hooks wait for
+that MCP-owned gateway instead of starting it themselves.
+
+For Hermes, doctor validates Hermes Agent 0.18.2 or newer. It reads the Relay
+executable from the managed Hermes MCP entry, verifies that exact executable
+supports both `mcp` and `hook-forward`, and then checks every hook and trust
+pair, the generation marker, and environment references. Top-level
+`nemo-relay doctor` discovers this managed state directly from the Hermes user
+configuration; an `[agents.hermes]` Relay configuration block is not required.
+
+Use the focused plugin doctor when diagnosing one host or an installation that
+uses a custom directory:
+
+```bash
+nemo-relay doctor --plugin codex --install-dir /path/to/plugins
+```
+
+If an installed integration is incomplete, doctor reports the failed check and
+suggests `nemo-relay install <host> --force`. Agents without a persistent
+installation remain informational, so transparent-run setup does not require
+one.
+
+## Uninstall
+
+Run the command for the installed integration that you want to remove:
+
+```bash
+nemo-relay uninstall claude-code
+nemo-relay uninstall codex
+nemo-relay uninstall hermes
+nemo-relay uninstall all
+```
+
+Uninstall removes Codex provider configuration and trust for the exact plugin
+hooks before unregistering the plugin, while Codex can still report its hook
+metadata. It then removes the host registration and marketplace. Claude Code
+provider routing is restored from the Relay backup. Unrelated user hooks and
+configuration remain unchanged. Hermes uninstall removes only Relay-owned MCP,
+hook, trust, and generation state.
+
+## Compatibility and Migration
+
+These integrations now require Codex 0.143.0, Claude Code 2.1.121, or Hermes
+Agent 0.18.2 at minimum. Relay rejects prerelease or malformed version output.
+If you configured an opaque wrapper, its `--version` output must identify the
+selected host. Interactive `nemo-relay config hermes` now owns only
+transparent-wrapper configuration; use `nemo-relay install hermes` and
+`nemo-relay uninstall hermes` for persistent Hermes state.
+
+The MCP bootstrap is now host-neutral. Generated Codex, Claude Code, and Hermes
+configuration invokes `nemo-relay mcp`; the removed `--agent` option no longer
+parses. Existing fenced installations can be refreshed with
+`nemo-relay install <host> --force`. Relay refuses to replace an older MCP
+installation without a valid generation marker because a cached host process
+might still be running. In that case, follow the manual cleanup steps in the
+error before you retry the forced install.
+
+This release removes the internal `nemo-relay plugin-shim` command. Refresh a
+fenced generated installation with `nemo-relay install <host> --force`; use the
+manual cleanup described above when its generation marker is missing. For
+custom automation, use these supported replacements:
+
+| Removed Internal Command | Supported Replacement |
+| --- | --- |
+| `nemo-relay plugin-shim hook <agent>` | `nemo-relay hook-forward <agent> --forward-only` with the canonical lifecycle payload on standard input and an existing gateway |
+| `nemo-relay plugin-shim serve` | `nemo-relay mcp` for host-managed lifecycle, or `nemo-relay --bind <address>` to run a gateway directly |
+| `nemo-relay plugin-shim install <agent>` | `nemo-relay install <host>` |
+| `nemo-relay plugin-shim uninstall <agent>` | `nemo-relay uninstall <host>` |
+| `nemo-relay plugin-shim provider claude enable` | `nemo-relay install claude-code` |
+| `nemo-relay plugin-shim provider claude restore` | `nemo-relay uninstall claude-code` |
+| `nemo-relay plugin-shim provider claude status` | `nemo-relay doctor --plugin claude-code` |
+| `nemo-relay plugin-shim doctor <agent>` | `nemo-relay doctor --plugin <host>` |
+
+Persistent generated hook commands include the fixed gateway URL. Transparent
+wrapper hooks embed their dynamic gateway URL, while the process environment
+lets an installed plugin MCP authenticate, borrow, and monitor that exact
+gateway. Transparent hook delivery authenticates the wrapper gateway before
+writing its lifecycle payload. When a transparent run uses a recognizable
+wrapper command, such as `npx codex`, Relay checks the host version through that
+wrapper. Opaque custom wrappers remain supported when the configured command
+emits the selected host's canonical version output in response to `--version`.
+Install and doctor enforce the same minimum-version policy.
+
+Hermes setup uses the same public install, doctor, and uninstall commands as
+Claude Code and Codex. `nemo-relay config hermes` configures Relay's transparent
+wrapper only; it no longer mutates Hermes user configuration. Use
+`nemo-relay install hermes` for the persistent host integration.
+
+## Source Marketplace Discovery
+
+This repository also contains source marketplace manifests for development and
+validation:
+
+- `.claude-plugin/marketplace.json`
+- `.agents/plugins/marketplace.json`
+
+Those manifests are useful when validating host plugin metadata from a source
+checkout. For end-user setup, use `nemo-relay install <host>`. For Claude Code
+and Codex, the command generates the local marketplace, registers the host
+plugin, and performs the required provider and hook setup. Source manifests do
+not provide Codex's complete provider, environment-forwarding, and
+verified-trust workflow.
+
+Do not keep a source-installed plugin and the generated plugin active for the
+same host. Both can forward the same lifecycle payload and produce duplicate
+events. Remove the source-installed plugin before you use the generated install.

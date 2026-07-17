@@ -1,0 +1,31 @@
+---
+title: "Module request"
+sidebar-title: "request"
+description: "Re-exported normalized LLM request data types."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Re-exported normalized LLM request data types.
+
+## Structs
+
+- [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest): Structured view of an LLM request, produced by a Codec from opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) content.
+- [FunctionCall](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-functioncall): A function call within a tool call.
+- [FunctionDefinition](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-functiondefinition): A function definition within a tool definition.
+- [GenerationParams](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-generationparams): Normalized generation parameters across providers.
+- [OpenAiImageUrl](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-openaiimageurl): OpenAI image URL payload.
+- [ToolCall](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-toolcall): A tool call requested by the assistant.
+- [ToolChoiceFunction](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-toolchoicefunction): A specific tool choice that forces a named function.
+- [ToolChoiceFunctionName](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-toolchoicefunctionname): The name component of a specific tool choice.
+- [ToolDefinition](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-tooldefinition): A tool definition (function schema) available to the model.
+
+## Enums
+
+- [ContentPart](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-contentpart): A single content part within a multimodal message.
+- [Message](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-message): A single message in a conversation, tagged by role.
+- [MessageContent](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-messagecontent): Message content: either a plain string or multimodal parts array.
+- [ToolChoice](/reference/api/rust-library-reference/nemo-relay/codec/request/enum-toolchoice): Tool choice control: how the model should use available tools.

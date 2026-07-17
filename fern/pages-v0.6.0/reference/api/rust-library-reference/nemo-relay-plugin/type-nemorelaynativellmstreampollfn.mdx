@@ -1,0 +1,16 @@
+---
+title: "Type Alias Nemo Relay Native LlmStream Poll Fn"
+sidebar-title: "NemoRelayNativeLlmStreamPollFn"
+description: "Native stream poll callback."
+position: 76
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayNativeLlmStreamPollFn = unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, out_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativestring\">NemoRelayNativeString</a>) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>;"}} /></pre>
+
+Native stream poll callback.
+
+Return [`NemoRelayStatus::Ok`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus) with `out_json` set for one chunk, [`NemoRelayStatus::StreamEnd`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus) with `out_json` null at end of stream, or an error status for stream failure.

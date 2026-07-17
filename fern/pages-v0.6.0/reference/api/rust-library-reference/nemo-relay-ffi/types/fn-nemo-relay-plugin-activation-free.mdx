@@ -1,0 +1,20 @@
+---
+title: "Function nemo_relay_plugin_activation_free"
+sidebar-title: "nemo_relay_plugin_activation_free"
+description: "Free a dynamic plugin activation handle previously returned by `nemo_relay_initialize_with_dynamic_plugins`."
+position: 55
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_plugin_activation_free(\n    ptr: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-ffipluginactivation\">FfiPluginActivation</a>,\n)"}} /></pre>
+
+Free a dynamic plugin activation handle previously returned by `nemo_relay_initialize_with_dynamic_plugins`.
+
+Any activation that has not already been explicitly cleared is cleaned up best-effort by its Rust destructor before the allocation is released. The caller's handle is set to null before cleanup, making repeated calls through the same handle variable safe when they are sequential.
+
+## Safety
+
+`ptr` must be null or point to a writable activation-handle variable whose value is null or was returned by `nemo_relay_initialize_with_dynamic_plugins`. The caller must ensure that no operation, including `nemo_relay_plugin_activation_clear`, accesses the activation concurrently with this call and that no operation can use the handle after this call begins.

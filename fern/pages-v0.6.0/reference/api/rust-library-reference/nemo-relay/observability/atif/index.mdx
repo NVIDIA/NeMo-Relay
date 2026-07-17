@@ -1,0 +1,52 @@
+---
+title: "Module atif"
+sidebar-title: "atif"
+description: "Agent Trajectory Interchange Format (ATIF) exporter."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Agent Trajectory Interchange Format (ATIF) exporter.
+
+This module provides types and an exporter that collects lifecycle events from the NeMo Relay runtime and converts them into ATIF trajectories conforming to the ATIF v1.7 schema.
+
+## Overview
+
+The [`AtifExporter`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter) registers as an event subscriber, collects all events, and can export them as an [`AtifTrajectory`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory) via [`AtifExporter::export`](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter).
+
+## Event-to-Step Mapping
+
+The core conversion from NeMo Relay events to ATIF steps follows these rules:
+
+- NeMo Relay Event | ATIF Step | Notes
+- LLM Start | `user` step | Messages extracted from LlmRequest
+- LLM End | `agent` step | Response content, tool_calls promoted
+- Tool Start | *(skipped)* | tool_calls come from LLM End instead
+- Tool End | agent observation | Correlated by `source_call_id`
+- Mark | *(skipped)* | Point-in-time telemetry is not a step
+- Scope Start/End | *(skipped)* | Structural events, not trajectory
+
+The exporter serializes the full collected event stream into a single ATIF trajectory.
+
+## Structs
+
+- [AtifAgentInfo](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifagentinfo): Information about the agent that produced the trajectory.
+- [AtifAncestry](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifancestry): Lineage node identifying a callable within an ATIF step.
+- [AtifExporter](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifexporter): Collects lifecycle events and exports them as ATIF trajectories.
+- [AtifFinalMetrics](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiffinalmetrics): Aggregate statistics for the entire trajectory (ATIF final_metrics).
+- [AtifInvocationInfo](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifinvocationinfo): Invocation timing and correlation metadata for one execution occurrence.
+- [AtifMetrics](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifmetrics): Token usage and cost metrics for a single step.
+- [AtifObservation](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifobservation): Observation results from tool execution.
+- [AtifObservationResult](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifobservationresult): A single observation result from a tool call.
+- [AtifStep](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifstep): A single step in an ATIF trajectory.
+- [AtifStepExtra](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifstepextra): Lineage payload serialized into ATIF `Step.extra`.
+- [AtifSubagentTrajectoryRef](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atifsubagenttrajectoryref): Reference to a delegated subagent trajectory.
+- [AtifToolCall](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftoolcall): A tool call made by the agent.
+- [AtifTrajectory](/reference/api/rust-library-reference/nemo-relay/observability/atif/struct-atiftrajectory): A complete ATIF trajectory.
+
+## Constants
+
+- [ATIF_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay/observability/atif/constant-atif-schema-version): The ATIF schema version string embedded in all exported trajectories.

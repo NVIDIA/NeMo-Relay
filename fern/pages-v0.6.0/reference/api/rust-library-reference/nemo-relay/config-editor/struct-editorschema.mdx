@@ -1,0 +1,51 @@
+---
+title: "Struct Editor Schema"
+sidebar-title: "EditorSchema"
+slug: "/reference/api/rust-library-reference/nemo-relay/config_editor/struct-editorschema"
+description: "Static editor metadata for one configuration struct."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct EditorSchema &#123;\n    pub fields: &amp;'static [<a href=\"struct-editorfieldspec\">EditorFieldSpec</a>],\n&#125;"}} /></pre>
+
+Static editor metadata for one configuration struct.
+
+## Fields
+
+### `fields: &'static [EditorFieldSpec]`
+
+Ordered editor fields.
+
+## Implementations
+
+### `impl EditorSchema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+#### `field`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn field(self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-editorfieldspec\">EditorFieldSpec</a>&gt;"}} /></pre>
+
+Finds a field by serialized name.
+
+## Trait Implementations
+
+### `impl Clone for EditorSchema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-editorschema\">EditorSchema</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Copy for EditorSchema`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"struct-editorschema\">EditorSchema</a>"}} /></pre>

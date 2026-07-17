@@ -1,0 +1,60 @@
+---
+title: "Module runtime"
+sidebar-title: "runtime"
+description: "Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime state, callbacks, and scope-stack helpers."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime state, callbacks, and scope-stack helpers.
+
+## Re-exports
+
+- `pub use callbacks::EventSanitizeFn;`
+- `pub use callbacks::EventSubscriberFn;`
+- `pub use callbacks::LlmCollectorFn;`
+- `pub use callbacks::LlmConditionalFn;`
+- `pub use callbacks::LlmExecutionFn;`
+- `pub use callbacks::LlmExecutionNextFn;`
+- `pub use callbacks::LlmFinalizerFn;`
+- `pub use callbacks::LlmJsonStream;`
+- `pub use callbacks::LlmRequestInterceptFn;`
+- `pub use callbacks::LlmSanitizeRequestFn;`
+- `pub use callbacks::LlmSanitizeResponseFn;`
+- `pub use callbacks::LlmStreamExecutionFn;`
+- `pub use callbacks::LlmStreamExecutionNextFn;`
+- `pub use callbacks::ToolConditionalFn;`
+- `pub use callbacks::ToolExecutionFn;`
+- `pub use callbacks::ToolExecutionNextFn;`
+- `pub use callbacks::ToolInterceptFn;`
+- `pub use callbacks::ToolSanitizeFn;`
+- `pub use global::global_context;`
+- `pub use scope_stack::ScopeStack;`
+- `pub use scope_stack::ScopeStackHandle;`
+- `pub use scope_stack::TASK_SCOPE_STACK;`
+- `pub use scope_stack::ThreadScopeStackBinding;`
+- `pub use scope_stack::capture_thread_scope_stack;`
+- `pub use scope_stack::create_scope_stack;`
+- `pub use scope_stack::current_scope_stack;`
+- `pub use scope_stack::propagate_scope_to_thread;`
+- `pub use scope_stack::restore_thread_scope_stack;`
+- `pub use scope_stack::scope_stack_active;`
+- `pub use scope_stack::set_thread_scope_stack;`
+- `pub use scope_stack::sync_thread_scope_stack;`
+- `pub use scope_stack::task_scope_push;`
+- `pub use scope_stack::task_scope_remove;`
+- `pub use scope_stack::task_scope_top;`
+- `pub use scope_stack::with_scope_stack;`
+- `pub use state::NemoRelayContextState;`
+- `pub use subscriber_dispatcher::flush_subscribers;`
+
+## Modules
+
+- [callbacks](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks): Callback type aliases used by the runtime middleware pipeline.
+- [global](/reference/api/rust-library-reference/nemo-relay/api/runtime/global): Process-global access to the shared runtime context state.
+- [scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack): Scope stack storage and propagation helpers.
+- [state](/reference/api/rust-library-reference/nemo-relay/api/runtime/state): Process-global runtime state and middleware-chain builders.
+- [subscriber_dispatcher](/reference/api/rust-library-reference/nemo-relay/api/runtime/subscriber_dispatcher): Asynchronous subscriber delivery for native targets.

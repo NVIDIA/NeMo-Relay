@@ -1,0 +1,138 @@
+---
+title: "Enum Dynamic Plugin Check State"
+sidebar-title: "DynamicPluginCheckState"
+description: "High-level verification state for one validation axis."
+position: 32
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub enum DynamicPluginCheckState {
+    Unknown,
+    Valid,
+    Invalid,
+}
+```
+
+High-level verification state for one validation axis.
+
+## Variants
+
+### `Unknown`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unknown"}} /></pre>
+
+No verification result is currently known.
+
+### `Valid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Valid"}} /></pre>
+
+Verification passed.
+
+### `Invalid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Invalid"}} /></pre>
+
+Verification failed.
+
+## Trait Implementations
+
+### `impl Clone for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(__deserializer: __D) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;Self, __D::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl<'_derivative_strum> From<&'_derivative_strum DynamicPluginCheckState> for &'static str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'_derivative_strum&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;&amp;'_derivative_strum <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>&gt; for &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(x: &amp;'_derivative_strum <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+### `impl From<DynamicPluginCheckState> for &'static str`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>&gt; for &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(x: <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+### `impl Hash for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `hash`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+
+#### `hash_slice`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl PartialEq for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(&amp;self, __serializer: __S) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;__S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, __S::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>
+
+### `impl Copy for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+### `impl Eq for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>
+
+### `impl StructuralPartialEq for DynamicPluginCheckState`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-dynamicplugincheckstate\">DynamicPluginCheckState</a>"}} /></pre>

@@ -1,0 +1,41 @@
+---
+title: "nemo_relay.subscribers"
+sidebar-title: "subscribers"
+description: "Global event subscriber registration."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `python/nemo_relay/subscribers.py`.
+
+Module `nemo_relay.subscribers`.
+
+Global event subscriber registration.
+
+## Functions
+
+### `register`
+
+```python
+def register(name: str, callback: 'Callable[[Event], None]') -> None
+```
+
+Register a global event subscriber.
+
+### `deregister`
+
+```python
+def deregister(name: str) -> bool
+```
+
+Remove a previously registered global subscriber.
+
+### `flush`
+
+```python
+def flush() -> None
+```
+
+Wait for subscriber callbacks already queued by native event emission.
+

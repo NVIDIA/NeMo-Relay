@@ -1,0 +1,52 @@
+---
+title: "Trait LlmCodec"
+sidebar-title: "LlmCodec"
+description: "A bidirectional translator between opaque `LlmRequest` content and structured `AnnotatedLlmRequest`."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmCodec: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> &#123;\n    // Required methods\n    fn decode(&amp;self, request: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;;\n    fn encode(\n        &amp;self,\n        annotated: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n        original: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>,\n    ) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>&gt;;\n&#125;"}} /></pre>
+
+A bidirectional translator between opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest) content and structured [`AnnotatedLlmRequest`](/reference/api/rust-library-reference/nemo-relay/codec/request/struct-annotatedllmrequest).
+
+Codecs are implemented by framework integrations and provider adapters because each SDK has its own request format. A codec is supplied per call by the caller; the built-in provider codecs can also be selected from a raw payload via [`crate::codec::resolve`](/reference/api/rust-library-reference/nemo-relay/codec/resolve).
+
+## Design
+
+- **Synchronous**: `decode`/`encode` are pure data transforms (JSON restructuring), not I/O operations. This matches existing guardrails and request intercepts.
+- **`Send + Sync`**: Required because [`NemoRelayContextState`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate) is behind `Arc<RwLock<>>` and accessed from async contexts.
+- **Trait object**: Codecs are registered at runtime by callers or bindings, so the Rust core cannot know concrete types at compile time. Store as `Arc<dyn LlmCodec>`.
+
+## Required Methods
+
+#### `decode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn decode(&amp;self, request: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;"}} /></pre>
+
+Parse opaque request content into structured form.
+
+#### `encode`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn encode(\n    &amp;self,\n    annotated: &amp;<a href=\"../request/struct-annotatedllmrequest\">AnnotatedLlmRequest</a>,\n    original: &amp;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../api/llm/struct-llmrequest\">LlmRequest</a>&gt;"}} /></pre>
+
+Merge structured changes back into the opaque request.
+
+The `original` parameter is the pre-intercept [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay/api/llm/struct-llmrequest), used to preserve fields that the Codec does not structurally model. Implementations MUST use merge-not-replace semantics: overlay structured changes onto the original content, do not construct a fresh content object.
+
+## Implementors
+
+### `impl LlmCodec for AnthropicMessagesCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmcodec\">LlmCodec</a> for <a href=\"../anthropic/struct-anthropicmessagescodec\">AnthropicMessagesCodec</a>"}} /></pre>
+
+### `impl LlmCodec for OpenAIChatCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmcodec\">LlmCodec</a> for <a href=\"../openai_chat/struct-openaichatcodec\">OpenAIChatCodec</a>"}} /></pre>
+
+### `impl LlmCodec for OpenAIResponsesCodec`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmcodec\">LlmCodec</a> for <a href=\"../openai_responses/struct-openairesponsescodec\">OpenAIResponsesCodec</a>"}} /></pre>

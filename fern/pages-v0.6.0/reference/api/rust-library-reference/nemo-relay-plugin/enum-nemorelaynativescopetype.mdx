@@ -1,0 +1,150 @@
+---
+title: "Enum Nemo Relay Native Scope Type"
+sidebar-title: "NemoRelayNativeScopeType"
+description: "Scope category used by native plugins when opening scopes."
+position: 47
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+#[repr(i32)]pub enum NemoRelayNativeScopeType {
+    Agent = 0,
+    Function = 1,
+    Tool = 2,
+    Llm = 3,
+    Retriever = 4,
+    Embedder = 5,
+    Reranker = 6,
+    Guardrail = 7,
+    Evaluator = 8,
+    Custom = 9,
+    Unknown = 10,
+}
+```
+
+Scope category used by native plugins when opening scopes.
+
+## Variants
+
+### `Agent = 0`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Agent = 0"}} /></pre>
+
+Top-level agent scope.
+
+### `Function = 1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Function = 1"}} /></pre>
+
+Generic function scope.
+
+### `Tool = 2`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Tool = 2"}} /></pre>
+
+Tool invocation scope.
+
+### `Llm = 3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Llm = 3"}} /></pre>
+
+LLM call scope.
+
+### `Retriever = 4`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retriever = 4"}} /></pre>
+
+Retriever scope.
+
+### `Embedder = 5`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Embedder = 5"}} /></pre>
+
+Embedder scope.
+
+### `Reranker = 6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Reranker = 6"}} /></pre>
+
+Reranker scope.
+
+### `Guardrail = 7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Guardrail = 7"}} /></pre>
+
+Guardrail evaluation scope.
+
+### `Evaluator = 8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Evaluator = 8"}} /></pre>
+
+Evaluator scope.
+
+### `Custom = 9`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Custom = 9"}} /></pre>
+
+User-defined custom scope.
+
+### `Unknown = 10`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unknown = 10"}} /></pre>
+
+Unknown or unspecified scope type.
+
+## Trait Implementations
+
+### `impl Clone for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl From<ScopeType> for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-scopetype\">ScopeType</a>&gt; for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"enum-scopetype\">ScopeType</a>) -&gt; Self"}} /></pre>
+
+### `impl PartialEq for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Copy for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+### `impl Eq for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>
+
+### `impl StructuralPartialEq for NemoRelayNativeScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-nemorelaynativescopetype\">NemoRelayNativeScopeType</a>"}} /></pre>

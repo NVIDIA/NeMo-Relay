@@ -1,0 +1,38 @@
+---
+title: "Struct Thread Scope Stack Guard"
+sidebar-title: "ThreadScopeStackGuard"
+description: "RAII guard that restores the previous thread-local scope stack on drop."
+position: 38
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ThreadScopeStackGuard<'a> { /* private fields */ }
+```
+
+RAII guard that restores the previous thread-local scope stack on drop.
+
+## Implementations
+
+### `impl ThreadScopeStackGuard<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-threadscopestackguard\">ThreadScopeStackGuard</a>&lt;'_&gt;"}} /></pre>
+
+#### `restore`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn restore(self) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Restores the previous thread-local scope stack immediately.
+
+## Trait Implementations
+
+### `impl Drop for ThreadScopeStackGuard<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-threadscopestackguard\">ThreadScopeStackGuard</a>&lt;'_&gt;"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

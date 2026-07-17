@@ -1,0 +1,24 @@
+---
+title: "Function nemo_relay_scope_stack_capture_thread"
+sidebar-title: "nemo_relay_scope_stack_capture_thread"
+description: "Capture the current thread-local scope stack binding."
+position: 142
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_scope_stack_capture_thread(\n    out: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffithreadscopestackbinding\">FfiThreadScopeStackBinding</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Capture the current thread-local scope stack binding.
+
+The returned binding must be restored with `nemo_relay_scope_stack_restore_thread`.
+
+## Parameters
+
+- `out`: On success, receives a heap-allocated binding handle.
+
+## Safety
+
+`out` must be a valid, non-null pointer.

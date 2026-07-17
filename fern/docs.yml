@@ -110,6 +110,10 @@ products:
     path: ./versions/dev.yml
     slug: dev
     availability: beta
+  - display-name: v0.6.0
+    path: ./versions/v0.6.0.yml
+    slug: v0.6.0
+    availability: beta
   - display-name: v0.5.0
     path: ./versions/v0.5.0.yml
     slug: v0.5.0

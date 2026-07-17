@@ -1,0 +1,88 @@
+---
+title: "gRPC Worker Plugin Concepts"
+description: "Choose and package local gRPC worker plugins for NeMo Relay."
+position: 12
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Worker dynamic plugins run outside the Relay process and install subscribers,
+guardrails, and intercepts through the stable `grpc-v1` protocol. The host
+starts the local worker, validates its component configuration, receives a
+declarative registration plan, and installs proxy callbacks.
+
+## Choose a Worker Runtime
+
+Choose the runtime that matches the artifact you distribute:
+
+- Use `python` for a `module:function` entrypoint in a Relay-managed Python
+  environment. Include `source.manifest_root`, then run `nemo-relay plugins
+  add` so Relay can create and retain the required environment.
+- Use `rust` for a manifest-relative or absolute Rust executable.
+- Use `command` for another manifest-relative or absolute local executable that
+  implements `grpc-v1`.
+
+All worker runtimes receive the same local endpoint and activation credentials.
+The process boundary isolates crashes and dependencies, but it does not create a
+security sandbox.
+
+## Manifest
+
+Use the following worker manifest:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "acme.policy"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+manifest_root = "."
+artifact = "acme_policy/worker.py"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+runtime = "python"
+entrypoint = "acme_policy.worker:main"
+```
+
+Set `compat.worker_protocol` to `grpc-v1` and include `plugin_worker` in the
+capability list. Refer to [Choose a Worker Runtime](#choose-a-worker-runtime)
+for the runtime-specific `load` and `source` requirements.
+
+The worker receives its activation ID, plugin ID, worker and host endpoints,
+and a local activation token through environment variables. Do not start the
+worker directly during normal operation. The host supplies these values.
+
+## Registration and Trust
+
+Workers return declarative registrations. Relay owns registry mutation,
+namespacing, rollback, and deregistration. Relay DTOs use `JsonEnvelope`
+values, while protobuf handles control flow.
+
+Run `nemo-relay plugins add` and `nemo-relay plugins validate` to evaluate the
+configured host policy and artifact trust evidence. Refer to [Configure
+Discoverable Plugins](/configure-plugins/discoverable-plugins) for the
+operator-side lifecycle and validation flow.
+
+## Next Steps
+
+- Refer to [gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about)
+  or [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
+  for complete language-specific authoring workflows.
+- Refer to [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
+  when you implement `grpc-v1` without an SDK.

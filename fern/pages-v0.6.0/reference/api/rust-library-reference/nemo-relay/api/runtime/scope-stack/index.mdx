@@ -1,0 +1,43 @@
+---
+title: "Module scope_stack"
+sidebar-title: "scope_stack"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack"
+description: "Scope stack storage and propagation helpers."
+position: 40
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Scope stack storage and propagation helpers.
+
+The runtime tracks the current scope hierarchy through a shared [`ScopeStack`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-scopestack) stored in task-local or thread-local state. Advanced callers can use this module to inspect the active scope chain or propagate scope context into worker threads.
+
+## Structs
+
+- [ScopeStack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-scopestack): Mutable stack of active scopes plus their scope-local registries.
+- [ThreadScopeStackBinding](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/struct-threadscopestackbinding): Captured thread-local scope stack binding.
+
+## Statics
+
+- [TASK_SCOPE_STACK](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/static-task-scope-stack): Task-local scope stack handle used by async execution contexts.
+
+## Functions
+
+- [capture_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-capture-thread-scope-stack): Capture the current thread-local scope stack binding.
+- [create_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-create-scope-stack): Create a new scope stack handle with an implicit root scope.
+- [current_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-current-scope-stack): Return the scope stack visible to the current execution context.
+- [propagate_scope_to_thread](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-propagate-scope-to-thread): Capture the current scope stack handle for use in another thread.
+- [restore_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-restore-thread-scope-stack): Restore a previously captured thread-local scope stack binding.
+- [scope_stack_active](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-scope-stack-active): Report whether the current context has an explicitly active scope stack.
+- [set_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-set-thread-scope-stack): Install an explicit scope stack for the current thread.
+- [sync_thread_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-sync-thread-scope-stack): Synchronize the thread-local scope stack without marking it explicit.
+- [task_scope_push](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-task-scope-push): Push a scope handle onto the active stack.
+- [task_scope_remove](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-task-scope-remove): Remove a scope handle from the active stack.
+- [task_scope_top](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-task-scope-top): Clone the current top-most scope handle from the active stack.
+- [with_scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-with-scope-stack): Run a synchronous callback with `handle` as the visible scope stack.
+
+## Type Aliases
+
+- [ScopeStackHandle](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/type-scopestackhandle): Shared handle type for the runtime scope stack.

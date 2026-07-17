@@ -1,0 +1,25 @@
+---
+title: "Function current_scope_stack"
+sidebar-title: "current_scope_stack"
+slug: "/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/fn-current-scope-stack"
+description: "Return the scope stack visible to the current execution context."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn current_scope_stack() -&gt; <a href=\"type-scopestackhandle\">ScopeStackHandle</a>"}} /></pre>
+
+Return the scope stack visible to the current execution context.
+
+This resolves task-local scope state first and otherwise falls back to the current thread-local scope stack handle.
+
+## Returns
+
+The active [`ScopeStackHandle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack/type-scopestackhandle) for the current async task or thread.
+
+## Notes
+
+When no explicit thread-local stack has been installed yet, the default per-thread root-only stack is returned.

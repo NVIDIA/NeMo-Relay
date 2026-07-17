@@ -1,0 +1,18 @@
+---
+title: "Function init_logging"
+sidebar-title: "init_logging"
+description: "Installs process-wide operational logging from resolved config."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn init_logging(config: &amp;<a href=\"struct-loggingconfig\">LoggingConfig</a>) -&gt; <a href=\"../error/type-result\">Result</a>&lt;<a href=\"struct-loggingruntime\">LoggingRuntime</a>&gt;"}} /></pre>
+
+Installs process-wide operational logging from resolved config.
+
+Stderr is always enabled. Explicit file sinks fail startup if they cannot be opened.
+
+Verbosity comes from [`LoggingConfig::level`](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingconfig): records below that minimum severity are discarded. Dropping the returned [`LoggingRuntime`](/reference/api/rust-library-reference/nemo-relay/logging/struct-loggingruntime) flushes sinks and detaches this logger from the process-global `log` proxy when it is still installed.

@@ -1,0 +1,53 @@
+---
+title: "Module model_pricing"
+sidebar-title: "model_pricing"
+slug: "/reference/api/rust-library-reference/nemo-relay/codec/model_pricing"
+description: "Data-driven LLM model pricing used to layer cost estimates onto usage."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Data-driven LLM model pricing used to layer cost estimates onto usage.
+
+Model pricing is deliberately separate from response normalization so adding providers, aliases, or cache-accounting rules does not require editing [`AnnotatedLlmResponse`](/reference/api/rust-library-reference/nemo-relay/codec/response/struct-annotatedllmresponse).
+
+## Structs
+
+- [ModelPricing](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-modelpricing): Per-token model pricing expressed in USD per one million tokens.
+- [PricingCatalog](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-pricingcatalog): Collection of model pricing entries.
+- [PricingConfig](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-pricingconfig): Runtime model pricing resolver configuration.
+- [PricingResolver](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-pricingresolver): Ordered model pricing lookup chain.
+- [PromptCachePricing](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-promptcachepricing): Prompt-cache accounting rules for a model pricing entry.
+- [TokenPricingRates](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-tokenpricingrates): Token rates expressed as USD per one million tokens.
+- [TokenRateTier](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/struct-tokenratetier): A model pricing tier selected by prompt/input token count.
+
+## Enums
+
+- [CacheReadAccounting](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-cachereadaccounting): How cache-read tokens relate to prompt token counts in provider usage.
+- [PricingCatalogError](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-pricingcatalogerror): Errors produced while parsing or validating a model pricing catalog.
+- [PricingSourceConfig](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-pricingsourceconfig): Declarative model pricing source supported by Relay configuration.
+- [PricingUnit](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-pricingunit): Billing unit represented by a model pricing entry.
+- [RateScheduleApplication](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-ratescheduleapplication): How a selected rate-schedule tier applies to billable usage.
+- [TokenRateSchedule](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/enum-tokenrateschedule): Data-driven token rate schedule for model pricing with request thresholds.
+
+## Traits
+
+- [PricingSource](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/trait-pricingsource): Pluggable model pricing source interface.
+
+## Functions
+
+- [active_pricing_resolver](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-active-pricing-resolver): Returns the active process-wide model pricing resolver.
+- [attach_estimated_cost](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-attach-estimated-cost): Adds a model pricing estimate to a normalized response when cost is missing.
+- [attach_estimated_cost_for_provider](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-attach-estimated-cost-for-provider): Adds a provider-aware model pricing estimate to a normalized response when cost is missing.
+- [estimate_cost](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-estimate-cost): Estimates USD cost for a model/usage pair when model pricing is known.
+- [estimate_cost_for_provider](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-estimate-cost-for-provider): Estimates USD cost for a provider/model pair when model pricing is known.
+- [estimate_cost_with_catalog](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-estimate-cost-with-catalog): Estimates USD cost using the provided catalog.
+- [estimate_cost_with_provider](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-estimate-cost-with-provider): Estimates USD cost using the provided catalog and provider/model pair.
+- [infer_model_provider](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-infer-model-provider): Infers a provider/route value for a decoded model.
+- [pricing_for_model](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-pricing-for-model): Returns known model pricing for a model ID.
+- [pricing_for_provider](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-pricing-for-provider): Returns known model pricing for a provider/model pair.
+- [reset_active_pricing_resolver](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-reset-active-pricing-resolver): Restores the active process-wide model pricing resolver to an empty resolver.
+- [set_active_pricing_resolver](/reference/api/rust-library-reference/nemo-relay/codec/model_pricing/fn-set-active-pricing-resolver): Replaces the active process-wide model pricing resolver.

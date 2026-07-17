@@ -1,0 +1,55 @@
+---
+title: "Configure Plugins"
+sidebar-title: "About"
+description: "Configure built-in and discoverable NeMo Relay plugins with plugins.toml."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this section to configure plugin behavior that Relay loads for a process.
+The runtime discovers and layers `plugins.toml` for direct Rust, Python, and
+Node.js integrations as well as for the `nemo-relay` CLI gateway.
+
+Choose the path that matches your goal:
+
+| Goal | Start here |
+| --- | --- |
+| Configure a built-in Relay component | Choose the component guide below. Use `plugins.toml` or the binding API. |
+| Add a plugin someone else packaged | [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins) |
+| Create a reusable plugin | [Build Plugins](/build-plugins/about) |
+
+## Built-in Plugins
+
+Relay ships these first-party components. Configure them as `[[components]]`
+entries in `plugins.toml`.
+
+- [Observability](/configure-plugins/observability/about) exports ATOF, ATIF,
+  OpenTelemetry, or OpenInference data.
+- [Adaptive](/configure-plugins/adaptive/about) configures adaptive runtime
+  behavior.
+- [NeMo Guardrails](/configure-plugins/nemo-guardrails/about) installs
+  Guardrails-backed policy checks.
+- [PII Redaction](/configure-plugins/pii-redaction/about) sanitizes sensitive
+  data in observability payloads.
+- [Switchyard (Experimental)](/configure-plugins/switchyard/about) routes
+  requests using decisions from a separately running Switchyard Decision API
+  service.
+- [Model Pricing](/configure-plugins/model-pricing) configures catalog sources
+  for cost estimates on managed LLM responses.
+
+## Guides
+
+Follow the guides below to configure plugins.
+
+- [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+  explains runtime `plugins.toml` discovery, precedence, merging, and CLI
+  editing.
+- [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
+  explains manifest-backed native and worker plugin installation, validation,
+  trust policy, and activation.
+
+Use [Build Plugins](/build-plugins/about) only when you are authoring the
+plugin itself. It covers generic plugin components, manifests, native ABI
+plugins, Python workers, and the `grpc-v1` protocol.

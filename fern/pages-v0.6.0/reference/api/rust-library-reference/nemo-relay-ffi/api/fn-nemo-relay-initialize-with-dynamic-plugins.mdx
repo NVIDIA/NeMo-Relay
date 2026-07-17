@@ -1,0 +1,38 @@
+---
+title: "Function nemo_relay_initialize_with_dynamic_plugins"
+sidebar-title: "nemo_relay_initialize_with_dynamic_plugins"
+description: "Load and activate dynamic plugins as one owned transaction."
+position: 50
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "#[unsafe(no_mangle)]pub unsafe extern \"C\" fn nemo_relay_initialize_with_dynamic_plugins(\n    config_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    dynamic_plugins_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n    out_activation: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"../types/struct-ffipluginactivation\">FfiPluginActivation</a>,\n    out_report_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>,\n) -&gt; <a href=\"../error/enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Load and activate dynamic plugins as one owned transaction.
+
+**Experimental:** this API needs a production consumer before its lifecycle contract is considered stable.
+
+Relay discovers `plugins.toml` once during this startup call and layers `config_json` over the discovered configuration. Explicit values take precedence where both sources configure the same setting. Static components from the resolved configuration initialize before components appended by the dynamic plugins. Configuration files are not watched or reloaded. `dynamic_plugins_json` must contain at least one explicit dynamic-plugin activation specification; use `nemo_relay_initialize_plugins` for a static-only configuration.
+
+The explicit configuration uses this JSON shape:
+
+```rust
+{"version":1,"components":[{"kind":"static.kind","enabled":true,"config":{}}]}
+```
+
+Dynamic plugin specifications use this JSON shape:
+
+```rust
+[{"plugin_id":"example","kind":"rust_dynamic","manifest_ref":"/absolute/path/relay-plugin.toml","config":{}}]
+```
+
+`kind` must be `rust_dynamic` or `worker`. `environment_ref` is optional and applies only to worker plugins. `manifest_ref` is resolved by the embedding application; this API does not discover installed plugins.
+
+On success, the caller owns `out_activation` and must clear and free it with `nemo_relay_plugin_activation_clear` and `nemo_relay_plugin_activation_free`. `out_report_json` is a library-owned C string and must be released with `nemo_relay_string_free`.
+
+## Safety
+
+Both input pointers must reference valid, null-terminated C strings. `out_activation` and `out_report_json` must be valid, non-null, non-overlapping output pointers.

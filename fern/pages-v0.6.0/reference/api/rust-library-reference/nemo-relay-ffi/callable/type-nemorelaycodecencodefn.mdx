@@ -1,0 +1,32 @@
+---
+title: "Type Alias Nemo Relay Codec Encode Fn"
+sidebar-title: "NemoRelayCodecEncodeFn"
+description: "Nullable version of `NemoRelayCodecEncodeCb` for use as an optional parameter in FFI execute functions. Pass null to indicate no codec."
+position: 23
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type NemoRelayCodecEncodeFn = <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, annotated_json: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>, original_request: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/primitives/type.c_char.html\">c_char</a>&gt;;"}} /></pre>
+
+Nullable version of [`NemoRelayCodecEncodeCb`](/reference/api/rust-library-reference/nemo-relay-ffi/callable/type-nemorelaycodecencodecb) for use as an optional parameter in FFI execute functions. Pass null to indicate no codec.
+
+## Aliased Type
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum NemoRelayCodecEncodeFn &#123;\n    None,\n    Some(unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i8.html\">i8</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i8.html\">i8</a>),\n&#125;"}} /></pre>
+
+## Variants
+
+### `None`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "None"}} /></pre>
+
+No value.
+
+### `Some(unsafe extern "C" fn(*mut c_void, *const i8, *const FfiLLMRequest) -> *mut i8)`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Some(unsafe extern \"C\" <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.fn.html\">fn</a>(<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i8.html\">i8</a>, <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*const </a><a href=\"../types/struct-ffillmrequest\">FfiLLMRequest</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i8.html\">i8</a>)"}} /></pre>
+
+Some value of type `T`.

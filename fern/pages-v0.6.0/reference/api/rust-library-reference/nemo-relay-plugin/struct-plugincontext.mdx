@@ -1,0 +1,288 @@
+---
+title: "Struct Plugin Context"
+sidebar-title: "PluginContext"
+description: "Borrowed safe wrapper around a host plugin registration context."
+position: 31
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PluginContext<'a> { /* private fields */ }
+```
+
+Borrowed safe wrapper around a host plugin registration context.
+
+## Implementations
+
+### `impl<'a> PluginContext<'a>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'a&gt; <a href=\"struct-plugincontext\">PluginContext</a>&lt;'a&gt;"}} /></pre>
+
+#### `from_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn from_raw(\n    host: &amp;'a <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>,\n    raw: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"struct-nemorelaynativeplugincontext\">NemoRelayNativePluginContext</a>,\n) -&gt; Self"}} /></pre>
+
+Creates a plugin context wrapper from raw ABI parts.
+
+##### Safety
+
+`host` and `raw` must remain valid for the lifetime of this wrapper.
+
+#### `host_api`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn host_api(&amp;self) -&gt; &amp;'a <a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>"}} /></pre>
+
+Returns the host ABI table backing this registration context.
+
+#### `runtime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+Returns a cloneable high-level runtime handle.
+
+#### `register_subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_subscriber&lt;F&gt;(&amp;mut self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, callback: F) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>) + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed event subscriber callback.
+
+#### `register_mark_sanitize_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_mark_sanitize_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed mark event sanitizer.
+
+#### `register_scope_sanitize_start_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_start_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed scope-start event sanitizer.
+
+#### `register_scope_sanitize_end_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_end_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed scope-end event sanitizer.
+
+#### `register_tool_sanitize_request_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_sanitize_request_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed tool sanitize-request guardrail.
+
+#### `register_tool_sanitize_response_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_sanitize_response_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed tool sanitize-response guardrail.
+
+#### `register_tool_conditional_execution_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_conditional_execution_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed tool conditional-execution guardrail.
+
+#### `register_tool_request_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_request_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"type-json\">Json</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed tool request intercept.
+
+#### `register_tool_execution_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_execution_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: for&lt;'next&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>, <a href=\"struct-toolnext\">ToolNext</a>&lt;'next&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed tool execution intercept.
+
+The callback returns a [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome). Calling [`ToolNext::call`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolnext) continues the chain and returns only the raw downstream result JSON; Relay retains downstream pending marks.
+
+#### `register_llm_sanitize_request_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_request_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"struct-llmrequest\">LlmRequest</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed LLM sanitize-request guardrail.
+
+#### `register_llm_sanitize_response_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_response_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed LLM sanitize-response guardrail.
+
+#### `register_llm_conditional_execution_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_conditional_execution_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed LLM conditional-execution guardrail.
+
+#### `register_llm_request_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed LLM request intercept.
+
+#### `register_llm_execution_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_execution_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: for&lt;'next&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmnext\">LlmNext</a>&lt;'next&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"type-json\">Json</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed LLM execution intercept.
+
+#### `register_llm_stream_execution_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_stream_execution_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;where\n    F: for&lt;'next&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmstreamnext\">LlmStreamNext</a>&lt;'next&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"type-llmjsonstream\">LlmJsonStream</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a typed LLM stream execution intercept.
+
+Native ABI v1 represents stream execution as one JSON result. The host wraps that result as a one-chunk stream.
+
+#### `register_subscriber_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_subscriber_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    cb: <a href=\"type-nemorelaynativeeventsubscribercb\">NemoRelayNativeEventSubscriberCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw event subscriber callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_mark_sanitize_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_mark_sanitize_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativeeventsanitizecb\">NemoRelayNativeEventSanitizeCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw mark event sanitizer callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_scope_sanitize_start_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_scope_sanitize_start_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativeeventsanitizecb\">NemoRelayNativeEventSanitizeCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw scope-start event sanitizer callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_scope_sanitize_end_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_scope_sanitize_end_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativeeventsanitizecb\">NemoRelayNativeEventSanitizeCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw scope-end event sanitizer callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_tool_sanitize_request_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_tool_sanitize_request_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativetooljsoncb\">NemoRelayNativeToolJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw tool sanitize-request guardrail callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_tool_sanitize_response_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_tool_sanitize_response_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativetooljsoncb\">NemoRelayNativeToolJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw tool sanitize-response guardrail callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_tool_conditional_execution_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_tool_conditional_execution_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativetoolconditionalcb\">NemoRelayNativeToolConditionalCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw tool conditional-execution guardrail callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_tool_request_intercept_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_tool_request_intercept_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    cb: <a href=\"type-nemorelaynativetooljsoncb\">NemoRelayNativeToolJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw tool request intercept callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_tool_execution_intercept_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_tool_execution_intercept_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativetoolexecutioncb\">NemoRelayNativeToolExecutionCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw tool execution intercept callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_llm_sanitize_request_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_sanitize_request_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmrequestcb\">NemoRelayNativeLlmRequestCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw LLM sanitize-request guardrail callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_llm_sanitize_response_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_sanitize_response_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativejsoncb\">NemoRelayNativeJsonCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw LLM sanitize-response guardrail callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_llm_conditional_execution_guardrail_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_conditional_execution_guardrail_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmconditionalcb\">NemoRelayNativeLlmConditionalCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw LLM conditional-execution guardrail callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_llm_request_intercept_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_request_intercept_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    cb: <a href=\"type-nemorelaynativellmrequestinterceptcb\">NemoRelayNativeLlmRequestInterceptCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw LLM request intercept callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_llm_execution_intercept_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_execution_intercept_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmexecutioncb\">NemoRelayNativeLlmExecutionCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw LLM execution intercept callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.
+
+#### `register_llm_stream_execution_intercept_raw`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub unsafe fn register_llm_stream_execution_intercept_raw(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    cb: <a href=\"type-nemorelaynativellmstreamexecutioncb\">NemoRelayNativeLlmStreamExecutionCb</a>,\n    user_data: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.pointer.html\">*mut </a><a href=\"https://doc.rust-lang.org/1.96.1/core/ffi/enum.c_void.html\">c_void</a>,\n    free_fn: <a href=\"type-nemorelaynativefreefn\">NemoRelayNativeFreeFn</a>,\n) -&gt; <a href=\"enum-nemorelaystatus\">NemoRelayStatus</a>"}} /></pre>
+
+Registers a raw LLM stream execution intercept callback.
+
+##### Safety
+
+`cb`, `user_data`, and `free_fn` must remain valid for every host callback invocation until the host deregisters the callback or calls `free_fn`. `free_fn` must match the allocation behind `user_data`.

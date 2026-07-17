@@ -1,0 +1,19 @@
+---
+title: "Module adaptive_hints_intercept"
+sidebar-title: "adaptive_hints_intercept"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept"
+description: "AdaptiveHintsIntercept: opt-in LLM request intercept that injects AgentHints from HotCache trie."
+position: 25
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+AdaptiveHintsIntercept: opt-in LLM request intercept that injects AgentHints from HotCache trie.
+
+This module provides [`AdaptiveHintsIntercept`](/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept/struct-adaptivehintsintercept), which builds [`AgentHints`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/metadata/struct-agenthints) from the prediction trie in [`HotCache`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/cache/struct-hotcache) and injects them into LLM request headers as a request intercept. AdaptiveHintsIntercept is opt-in and synchronously transforms the [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay-types/api/llm/struct-llmrequest) before it reaches the callable.
+
+## Structs
+
+- [AdaptiveHintsIntercept](/reference/api/rust-library-reference/nemo-relay-adaptive/adaptive_hints_intercept/struct-adaptivehintsintercept): Opt-in LLM request intercept that injects [`AgentHints`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/metadata/struct-agenthints) into request headers from the prediction trie in [`HotCache`](/reference/api/rust-library-reference/nemo-relay-adaptive/types/cache/struct-hotcache).

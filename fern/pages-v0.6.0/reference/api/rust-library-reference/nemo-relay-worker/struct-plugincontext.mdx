@@ -1,0 +1,142 @@
+---
+title: "Struct Plugin Context"
+sidebar-title: "PluginContext"
+description: "Registration context passed to `WorkerPlugin::register`."
+position: 18
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct PluginContext { /* private fields */ }
+```
+
+Registration context passed to [`WorkerPlugin::register`](/reference/api/rust-library-reference/nemo-relay-worker/trait-workerplugin).
+
+## Implementations
+
+### `impl PluginContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-plugincontext\">PluginContext</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new() -&gt; Self"}} /></pre>
+
+Creates an empty worker registration context.
+
+#### `with_runtime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_runtime(runtime: <a href=\"struct-pluginruntime\">PluginRuntime</a>) -&gt; Self"}} /></pre>
+
+Creates an empty worker registration context with a host runtime handle.
+
+#### `runtime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn runtime(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-pluginruntime\">PluginRuntime</a>&gt;"}} /></pre>
+
+Returns the host runtime handle for event and scope operations.
+
+#### `register_subscriber`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_subscriber&lt;F&gt;(&amp;mut self, name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, callback: F)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>) + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers an event subscriber.
+
+#### `register_mark_sanitize_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_mark_sanitize_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a mark event sanitizer.
+
+#### `register_scope_sanitize_start_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_start_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a scope-start event sanitizer.
+
+#### `register_scope_sanitize_end_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_scope_sanitize_end_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"enum-event\">Event</a>, <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a>) -&gt; <a href=\"struct-eventsanitizefields\">EventSanitizeFields</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a scope-end event sanitizer.
+
+#### `register_tool_sanitize_request_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_sanitize_request_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a tool sanitize-request guardrail.
+
+#### `register_tool_sanitize_response_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_sanitize_response_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a tool sanitize-response guardrail.
+
+#### `register_tool_conditional_execution_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_conditional_execution_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, &amp;<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a tool conditional-execution guardrail.
+
+#### `register_tool_request_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_request_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"type-json\">Json</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers a tool request intercept.
+
+#### `register_tool_execution_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_tool_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"type-json\">Json</a>, <a href=\"struct-toolnext\">ToolNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+Registers a tool execution intercept.
+
+The callback returns a [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolexecutioninterceptoutcome). Calling [`ToolNext::call`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolnext) continues the chain and returns only the raw downstream result JSON; Relay retains downstream pending marks.
+
+#### `register_llm_sanitize_request_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_request_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"struct-llmrequest\">LlmRequest</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers an LLM sanitize-request guardrail.
+
+#### `register_llm_sanitize_response_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_sanitize_response_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(<a href=\"type-json\">Json</a>) -&gt; <a href=\"type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers an LLM sanitize-response guardrail.
+
+#### `register_llm_conditional_execution_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_conditional_execution_guardrail&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"struct-llmrequest\">LlmRequest</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers an LLM conditional-execution guardrail.
+
+#### `register_llm_request_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_request_intercept&lt;F&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    break_chain: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-annotatedllmrequest\">AnnotatedLlmRequest</a>&gt;) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-llmrequestinterceptoutcome\">LlmRequestInterceptOutcome</a>&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,"}} /></pre>
+
+Registers an LLM request intercept.
+
+#### `register_llm_execution_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmnext\">LlmNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+Registers an LLM execution intercept.
+
+#### `register_llm_stream_execution_intercept`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_llm_stream_execution_intercept&lt;F, Fut&gt;(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: F,\n)where\n    F: <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"struct-llmrequest\">LlmRequest</a>, <a href=\"struct-llmstreamnext\">LlmStreamNext</a>) -&gt; Fut + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> + 'static,\n    Fut: <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"type-result\">Result</a>&lt;<a href=\"type-jsonstream\">JsonStream</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'static,"}} /></pre>
+
+Registers an LLM stream execution intercept.
+
+## Trait Implementations
+
+### `impl Default for PluginContext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"struct-plugincontext\">PluginContext</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; Self"}} /></pre>

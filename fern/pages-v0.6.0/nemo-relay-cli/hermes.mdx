@@ -1,0 +1,229 @@
+---
+title: "Hermes Agent"
+description: "Configure Hermes to start and share the native NeMo Relay gateway through MCP."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+NeMo Relay can observe Hermes through a persistent integration or a transparent
+run. The persistent integration uses the Hermes native studio MCP support to own a
+shared Relay gateway at `127.0.0.1:47632`. Shell hooks forward the Hermes native
+session, subagent, tool, and model lifecycle payloads to that gateway. If you
+also point the Hermes provider at the gateway, Relay observes the model requests
+and responses.
+
+The MCP process manages gateway lifetime through a shared lifecycle lease. You
+do not need a separate service manager, wrapper process, Node.js runtime, or
+Python bootstrap component.
+
+Use persistent capture for ordinary `hermes` commands. Use a transparent run
+when you need project-specific Relay configuration or an isolated gateway for
+one Hermes process.
+
+## Install Persistent Capture
+
+Install the user-level integration:
+
+```bash
+nemo-relay install hermes
+```
+
+Installation requires Hermes Agent 0.18.2 or newer. NeMo Relay checks the
+installed Hermes CLI before it changes any files.
+
+Relay preserves unrelated Hermes settings and updates the Relay-owned portions
+of the user configuration. Hermes reads this configuration from
+`$HERMES_HOME/config.yaml`, or `~/.hermes/config.yaml` when `HERMES_HOME` is
+unset. This location is user-owned even when you choose project-scoped Relay
+configuration.
+
+The MCP server name `nemo-relay` is reserved for the Relay-managed entry. If
+that name already belongs to another command, installation stops without
+rewriting the config. Rename or remove the conflicting entry, then retry.
+
+The installer makes the following changes:
+
+- Adds `mcp_servers.nemo-relay`, which runs the canonical absolute
+  `nemo-relay` executable with the `mcp` argument.
+- Binds the shared gateway to `127.0.0.1:47632` and adds a private generation
+  marker that prevents stale MCP clients and hooks from using a replacement
+  installation.
+- Installs one Relay handler for each supported Hermes lifecycle event.
+- Records each exact event and command pair in
+  `shell-hooks-allowlist.json`.
+- Migrates a complete legacy Relay entry, removing its old hook commands and
+  approvals while preserving unrelated hooks, MCP servers, approvals, and
+  Hermes settings.
+
+NeMo Relay writes the Hermes config, allowlist, and generation marker as one
+verified transaction. If a write or verification fails, it rolls those files
+back to their original state. It also locks concurrent integration updates so
+they cannot overwrite one another.
+
+After installation, run the integration doctor:
+
+```bash
+nemo-relay doctor --plugin hermes
+```
+
+The doctor checks the Hermes version, Relay executable, MCP entry, lifecycle
+hooks, trust records, generation marker, and forwarded environment names.
+
+The generated MCP entry always forwards the standard Relay, OpenTelemetry, AWS,
+proxy, certificate, and provider credential variable names. It writes each one
+as a `${VARIABLE_NAME}` reference instead of copying a secret value into Hermes
+configuration. Before parsing the MCP command line, Relay treats an unresolved
+self-reference as unset. If you later add a custom `NEMO_RELAY_`, `OTEL_`, or
+`AWS_` variable or change the name of a credential variable referenced by
+plugin configuration, run `nemo-relay install hermes --force` to refresh the
+MCP environment.
+
+## Gateway Lifecycle
+
+Hermes launches `nemo-relay mcp` as a long-lived stdio MCP server. The server
+does not expose tools. Before it answers the MCP initialization request, it
+starts or joins a gateway and verifies the Relay identity, version, bootstrap
+protocol, and effective persistent configuration.
+
+Hermes starts MCP discovery in the background, so an early lifecycle hook can
+arrive before the MCP process finishes acquiring the gateway. The installed
+hook waits for that MCP-owned gateway, verifies it, and forwards the original
+payload once. It never launches or recovers Relay.
+
+Concurrent Hermes, Claude Code, and Codex MCP clients can share one compatible
+gateway. Each open client keeps a liveness lease by heartbeating the gateway. A
+startup lock and recovery record let overlapping clients coordinate one
+restart. If the replacement fails again, the MCP clients exit with an error.
+When no MCP clients or active sessions remain, the gateway exits after 300
+seconds of inactivity by default. Set `NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS` to a
+different positive timeout in seconds before setup and launch.
+
+Persistent MCP mode reads only system and user Relay configuration. It does not
+load a project's `.nemo-relay` layer. Use transparent run mode for
+project-specific Relay configuration.
+
+NeMo Relay removes or replaces Hermes MCP entries, hooks, and approvals only
+when it can identify them as managed. A current MCP entry must use the expected
+executable, `mcp` argument, shared bind, and generation marker. A legacy entry
+must use the same canonical Relay executable in its MCP entry and complete hook
+set. NeMo Relay preserves partial or manual lookalike entries. Rename or remove
+a conflicting manual `mcp_servers.nemo-relay` entry before installation.
+
+## Route Model Traffic
+
+Hermes API hooks can provide sanitized model request and response data. Route
+provider traffic through Relay when you also need direct gateway observation
+of the provider exchange.
+
+For an OpenAI-compatible provider, point Hermes at the shared Relay gateway:
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:47632/v1
+```
+
+In your user-level Relay configuration, set the real upstream separately so
+Relay does not route requests back to itself:
+
+```toml
+[upstream]
+openai_base_url = "https://api.openai.com/v1"
+```
+
+When Hermes uses the Messages API instead, set
+`ANTHROPIC_BASE_URL=http://127.0.0.1:47632` and configure Relay's
+`upstream.anthropic_base_url` with the real provider address. The installer does
+not change Hermes provider settings because they are provider-specific and
+user-owned.
+
+## Lifecycle Hook Coverage
+
+Relay installs these Hermes hooks:
+
+- Session: `on_session_start`, `on_session_end`, `on_session_finalize`, and
+  `on_session_reset`.
+- Model: `pre_api_request`, `post_api_request`, `api_request_error`,
+  `pre_llm_call`, and `post_llm_call`.
+- Tool: `pre_tool_call` and `post_tool_call`.
+- Subagent: `subagent_start` and `subagent_stop`.
+
+Relay records Hermes `skill_view` pre-tool calls as observed `skill.load` marks.
+Each mark stores the skill name in `data.skill_name` and records the detection
+source and tool name in metadata. It does not retain a skill path.
+
+The API-request hooks are authoritative for hook-backed model lifecycle.
+`pre_llm_call` and `post_llm_call` remain private correlation hints. Gateway
+routing is a separate observation path. If API-request hooks and gateway
+routing are both active for the same provider call, exported data can contain a
+hook-observed span and a gateway-observed span for that call.
+
+## Transparent Run
+
+Use the wrapper for project-specific Relay configuration or an isolated
+per-process gateway:
+
+```bash
+nemo-relay hermes
+nemo-relay hermes -- chat --provider custom
+```
+
+This mode starts a gateway on an OS-assigned loopback port and exports
+`NEMO_RELAY_GATEWAY_URL` to Hermes. NeMo Relay creates a process-private
+`HERMES_HOME` overlay, removes any Relay-managed fixed MCP entry, and injects
+temporary hooks. The overlay points Hermes's custom provider at the dynamic
+gateway, and the wrapper sets `OPENAI_BASE_URL` to the same address. It links
+the rest of the active Hermes profile state instead of copying it.
+
+The user configuration is never rewritten, so a transparent Hermes process and
+a bare Hermes process cannot see each other's temporary hooks. NeMo Relay
+removes the overlay after the wrapped process exits. On Windows, profile
+directories use non-privileged directory junctions rather than symbolic links,
+so this does not require Developer Mode or elevation.
+
+Inspect the launch without changing files or starting Hermes:
+
+```bash
+nemo-relay run --agent hermes --dry-run --print -- hermes
+```
+
+## Remove the Integration
+
+Remove the Relay-owned Hermes MCP, hooks, trust, and generation state with:
+
+```bash
+nemo-relay uninstall hermes
+```
+
+Unrelated Hermes configuration remains unchanged. The interactive
+`nemo-relay config hermes` and `nemo-relay config --reset hermes` commands
+manage only transparent-run configuration. Use `install` and `uninstall` to
+manage the persistent Hermes MCP, hooks, and trust records.
+
+## Validate End-to-End Capture
+
+When a compatible Hermes CLI is installed, run the opt-in cold-start test:
+
+```bash
+just test-hermes-mcp-e2e
+```
+
+The test uses isolated home directories and a local model provider. It runs 10
+cold one-shot sessions and two concurrent sessions. It then checks provider
+authorization, shared gateway lifetime, exactly-once model and turn scopes,
+session isolation, balanced ATOF output, hook trust, and final port release.
+This opt-in test is not part of the required Rust CI suite.
+
+## Troubleshoot
+
+If Hermes reports that the MCP server failed to start, run
+`nemo-relay doctor --plugin hermes` to check the installation and inspect any
+reported configuration or endpoint error. If the doctor passes, inspect the
+Hermes error for a gateway startup or bind failure. Detached gateways do not
+create persistent log files. NeMo Relay rejects a foreign listener on
+`127.0.0.1:47632` instead of adopting it.
+
+If lifecycle events appear but direct model spans do not, check whether the
+Hermes provider base URL points at Relay. If model spans attach to the parent
+instead of a subagent, preserve Hermes correlation identifiers such as
+`task_id`, `turn_id`, `api_request_id`, and `tool_call_id` in the hook payloads.

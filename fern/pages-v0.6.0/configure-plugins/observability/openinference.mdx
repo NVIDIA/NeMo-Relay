@@ -1,0 +1,396 @@
+---
+title: "OpenInference"
+description: "Configure OpenInference-oriented OTLP tracing for NeMo Relay events."
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use the `openinference` section when you want NeMo Relay lifecycle events
+exported as OTLP trace spans with OpenInference-oriented semantics.
+
+OpenInference export maps model-centric payloads directly into trace
+attributes. Scope, tool, and LLM start inputs become `input.value`. End outputs
+become `output.value`. LLM usage metadata maps to token-count attributes when
+provider responses include usage information. For LLM spans, NeMo Relay emits
+flattened request and response message attributes from typed codec annotations
+and supported replay request/response payloads. Typed codec annotations also
+provide tool schema, finish-reason, and invocation-parameter attributes when
+those fields are available.
+
+## `plugins.toml` Example
+
+Add the following OpenInference exporter configuration to `plugins.toml`:
+
+```toml
+version = 1
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 2
+
+[components.config.openinference]
+enabled = true
+transport = "http_binary"
+endpoint = "http://localhost:6006/v1/traces"
+service_name = "agent-service"
+service_namespace = "nemo"
+service_version = "1.0.0"
+instrumentation_scope = "nemo-relay-openinference"
+timeout_millis = 3000
+
+[components.config.openinference.headers]
+authorization = "Bearer <token>"
+
+[components.config.openinference.resource_attributes]
+"deployment.environment" = "dev"
+```
+
+This configuration registers a plugin-owned OpenInference subscriber and sends
+OpenInference-style OTLP spans to Phoenix or another compatible backend.
+
+## Fields
+
+OpenInference uses the same OTLP section shape as
+[OpenTelemetry](/configure-plugins/observability/opentelemetry):
+
+| Field | Default | Notes |
+|---|---|---|
+| `enabled` | `false` | Must be `true` to construct and register the subscriber. |
+| `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration OpenInference `TOOL` spans, parented as children when context is available. |
+| `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
+| `attribute_mappings` | `[]` | Copies each fully qualified projected `key` to its `alias` without changing the OTLP type. Set both values to nonblank strings, and use each alias only once. |
+| `transport` | `http_binary` | `http_binary` or `grpc`. |
+| `endpoint` | Exporter default | OTLP endpoint. |
+| `headers` | `{}` | String-to-string exporter headers. |
+| `resource_attributes` | `{}` | String-to-string OTLP resource attributes. |
+| `service_name` | `nemo-relay` | `service.name` resource attribute. |
+| `service_namespace` | Omitted | Optional `service.namespace`. |
+| `service_version` | Omitted | Optional `service.version`. |
+| `instrumentation_scope` | Omitted | Optional instrumentation scope name. |
+| `timeout_millis` | `3000` | Export timeout. |
+
+## Expected Output
+
+The backend should show OpenInference-oriented spans for scopes, tools, and LLM
+calls grouped by root scope. LLM usage metadata appears as token counters when
+provider responses include usage information. LLM request and response
+messages, system prompts, and model-emitted tool calls are emitted as
+flattened OpenInference attributes when available from codec annotations or
+supported replay request/response payloads. Tool schemas, finish reasons,
+and invocation parameters are emitted when typed codec annotations supply
+them. Exported LLM attributes exclude request headers and other non-observable
+transport metadata.
+
+The default `inherit` projection preserves exporter-native mark handling: a
+mark with an active parent span is a span event, while an orphan mark is a
+standalone zero-duration mark span. `mark_projection = "event"` explicitly
+selects that representation. With `mark_projection = "tool"`, each eligible
+mark becomes a zero-duration span (a child span when parent context is
+available) with `openinference.span.kind = "TOOL"` and the original mark
+payload, category, profile, timestamp, and parent identifiers retained as
+attributes. High-volume `llm.chunk` marks retain exporter-native handling by
+default and when excluded from tool projection.
+
+Add other event names to `mark_exclude_names` for a backend to keep those
+marks in exporter-native form rather than visible tool children. The exclusion
+list affects only tool projection; it does not remove mark payload or metadata.
+Set `mark_exclude_names = []` to disable the default `llm.chunk` exclusion.
+
+Each lifecycle span includes `nemo_relay.uuid` and `nemo_relay.parent_uuid`
+attributes. These values match ATIF `step.extra.ancestry.function_id` and
+`step.extra.ancestry.parent_id` for the same events. For plugin-managed ATIF,
+the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
+Backend-native `trace_id` and `span_id` values are not written into ATIF.
+
+Coding-agent trace roots also carry `session.id`, optional `user.id`, and
+`nemo_relay.session.instance_id`. The first value is the logical harness
+session ID, while the Relay instance ID is the existing root scope UUID shared
+by trace roots from one runtime session instance. These fields are root-only:
+filter matching roots first, then use the OpenInference backend's `trace_id` to
+select child rows. OpenInference and generic OpenTelemetry export generate
+independent trace and span IDs, but retain the same Relay instance ID and
+`nemo_relay.uuid` values. The `session.start` mark carries the same correlation
+fields whether represented as a span event or an orphan zero-duration span.
+
+LLM token counts appear as `llm.token_count.prompt`, `llm.token_count.completion`,
+`llm.token_count.total`, and `llm.token_count.prompt_details.cache_read`/`cache_write`.
+Cost appears as USD-denominated `llm.cost.total`. Refer to
+[Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
+for the full mapping.
+
+NeMo Relay projects top-level lifecycle payload fields to typed OTLP attributes
+with dotted names. Non-LLM start metadata and all end metadata use the
+`openinference.metadata` prefix, so `metadata = { tenant = "acme" }` becomes
+`openinference.metadata.tenant = "acme"`. Non-LLM start events use
+`nemo_relay.start.data`, `nemo_relay.start.input`, and
+`nemo_relay.handle_attributes`. End events use `nemo_relay.end.data` and
+`nemo_relay.end.output`. LLM start events use OpenInference semantic input
+attributes instead of those generic start projections, and their final metadata
+comes from the end event. Mark data, metadata, attributes, and category-profile
+fields use the corresponding `nemo_relay.mark.*` prefixes.
+
+Scalar strings, booleans, and numbers that fit an OTLP numeric type keep their
+types. NeMo Relay emits larger unsigned integers as strings. When a top-level
+field contains an object or array, NeMo Relay emits its value as a JSON string
+at that field's dotted name. Nested `null` values remain in that string, but a
+top-level field whose value is `null` is omitted. NeMo Relay no longer emits the
+old aggregate `*_json` payload attributes. The exporter still keeps the
+OpenInference `metadata` JSON-string attribute for backend compatibility.
+
+Configure an alias when a backend expects a different attribute name:
+
+```toml
+[components.config.openinference]
+attribute_mappings = [
+  { key = "openinference.metadata.tenant", alias = "tenant.id" },
+]
+```
+
+The source attribute remains in the span. If the span already contains
+`tenant.id`, NeMo Relay keeps the existing value instead of replacing it with
+the alias.
+
+Redact sensitive event payloads with sanitize guardrails before production
+export.
+
+## Plugin Configuration
+
+Use plugin configuration when the application should let NeMo Relay own the
+OpenInference subscriber lifecycle. The following examples configure and
+activate the OpenInference exporter through each supported language binding.
+
+`validate()` checks only the supplied in-memory object. `initialize()` also
+layers discovered `plugins.toml` configuration. For effective file-backed
+validation, refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+and run the gateway with the same configuration path that production uses.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+
+from nemo_relay import plugin
+from nemo_relay.observability import ComponentSpec, ObservabilityConfig, OtlpConfig
+
+config = plugin.PluginConfig(
+    components=[
+        ComponentSpec(
+            ObservabilityConfig(
+                openinference=OtlpConfig(
+                    enabled=True,
+                    transport="http_binary",
+                    endpoint="http://localhost:6006/v1/traces",
+                    service_name="agent-service",
+                    service_namespace="nemo",
+                    service_version="1.0.0",
+                    instrumentation_scope="nemo-relay-openinference",
+                    resource_attributes={"deployment.environment": "dev"},
+                    headers={"authorization": "Bearer <token>"},
+                )
+            )
+        )
+    ]
+)
+
+report = plugin.validate(config)
+if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
+    raise RuntimeError(report["diagnostics"])
+
+async def main():
+    await plugin.initialize(config)
+    try:
+        # Run instrumented application work here.
+        pass
+    finally:
+        plugin.clear()
+
+asyncio.run(main())
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const plugin = require("nemo-relay-node/plugin");
+const observability = require("nemo-relay-node/observability");
+
+void (async () => {
+  await plugin.initialize({
+  version: 1,
+  components: [
+    observability.ComponentSpec({
+      version: 2,
+      openinference: observability.otlpConfig({
+        enabled: true,
+        transport: "http_binary",
+        endpoint: "http://localhost:6006/v1/traces",
+        service_name: "agent-service",
+        service_namespace: "nemo",
+        service_version: "1.0.0",
+        instrumentation_scope: "nemo-relay-openinference",
+        resource_attributes: {
+          "deployment.environment": "dev",
+        },
+        headers: {
+          authorization: "Bearer <token>",
+        },
+      }),
+    }),
+  ],
+  });
+
+  try {
+    // Run instrumented application work here.
+  } finally {
+    plugin.clear();
+  }
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+use nemo_relay::observability::plugin_component::{
+    ComponentSpec, ObservabilityConfig, OtlpSectionConfig,
+};
+use nemo_relay::plugin::{
+    clear_plugin_configuration, initialize_plugins, validate_plugin_config, PluginConfig,
+};
+
+let component = ComponentSpec::new(ObservabilityConfig {
+    openinference: Some(OtlpSectionConfig {
+        enabled: true,
+        transport: "http_binary".into(),
+        endpoint: Some("http://localhost:6006/v1/traces".into()),
+        service_name: "agent-service".into(),
+        service_namespace: Some("nemo".into()),
+        service_version: Some("1.0.0".into()),
+        instrumentation_scope: Some("nemo-relay-openinference".into()),
+        resource_attributes: [("deployment.environment".into(), "dev".into())].into(),
+        headers: [("authorization".into(), "Bearer <token>".into())].into(),
+        ..OtlpSectionConfig::default()
+    }),
+    ..ObservabilityConfig::default()
+});
+
+let config = PluginConfig {
+    version: 1,
+    components: vec![component.into()],
+    policy: Default::default(),
+};
+
+let report = validate_plugin_config(&config);
+assert!(!report.has_errors());
+
+let _active = initialize_plugins(config).await?;
+
+// Run instrumented application work here.
+
+clear_plugin_configuration()?;
+Ok(())
+}
+```
+
+</Tab>
+
+</Tabs>
+
+## Manual API
+
+Use the manual subscriber API when you need an explicit subscriber name or
+direct `force_flush` control.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import OpenInferenceConfig, OpenInferenceSubscriber
+
+config = OpenInferenceConfig()
+config.transport = "http_binary"
+config.endpoint = "http://localhost:6006/v1/traces"
+config.service_name = "agent-service"
+config.set_resource_attribute("deployment.environment", "dev")
+
+subscriber = OpenInferenceSubscriber(config)
+subscriber.register("openinference-exporter")
+
+# Run instrumented application work here.
+
+subscriber.force_flush()
+subscriber.deregister("openinference-exporter")
+subscriber.shutdown()
+```
+
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const { OpenInferenceSubscriber } = require("nemo-relay-node");
+
+const subscriber = new OpenInferenceSubscriber({
+  transport: "http_binary",
+  endpoint: "http://localhost:6006/v1/traces",
+  serviceName: "agent-service",
+  resourceAttributes: {
+    "deployment.environment": "dev",
+  },
+});
+subscriber.register("openinference-exporter");
+
+try {
+  // Run instrumented application work here.
+
+  subscriber.forceFlush();
+} finally {
+  subscriber.deregister("openinference-exporter");
+  subscriber.shutdown();
+}
+```
+
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::openinference::{
+    OpenInferenceConfig, OpenInferenceSubscriber,
+};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = OpenInferenceConfig::new()
+        .with_service_name("agent-service")
+        .with_endpoint("http://localhost:6006/v1/traces")
+        .with_resource_attribute("deployment.environment", "dev");
+    let subscriber = OpenInferenceSubscriber::new(config)?;
+    subscriber.register("openinference-exporter")?;
+
+    // Run instrumented application work here.
+
+    subscriber.force_flush()?;
+    let _ = subscriber.deregister("openinference-exporter")?;
+    subscriber.shutdown()?;
+    Ok(())
+}
+```
+
+</Tab>
+
+</Tabs>
+
+## Common Configuration and Runtime Issues
+
+- `transport` is not `http_binary` or `grpc`.
+- Headers or resource attributes are not string-to-string maps.
+- The OpenInference feature is unavailable in the current build or target.
+- Tool and LLM calls do not use managed helpers, so spans contain only scope
+  lifecycle data.

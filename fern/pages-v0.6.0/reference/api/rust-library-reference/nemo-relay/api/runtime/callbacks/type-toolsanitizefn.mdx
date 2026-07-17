@@ -1,0 +1,31 @@
+---
+title: "Type Alias Tool Sanitize Fn"
+sidebar-title: "ToolSanitizeFn"
+description: "Sanitize a tool request payload before the runtime records it."
+position: 18
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub type ToolSanitizeFn = <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/function/trait.Fn.html\">Fn</a>(&amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>, <a href=\"../../../json/type-json\">Json</a>) -&gt; <a href=\"../../../json/type-json\">Json</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a>&gt;;"}} /></pre>
+
+Sanitize a tool request payload before the runtime records it.
+
+Tool sanitize callbacks are used only for observability payloads. They can rewrite the JSON arguments recorded on tool-start events without changing the caller-owned request that is passed to the tool implementation.
+
+## Parameters
+
+- First argument: Tool name associated with the request payload.
+- Second argument: JSON payload to sanitize for observability.
+
+## Returns
+
+Sanitized JSON payload for the emitted event.
+
+## Aliased Type
+
+```rust
+pub struct ToolSanitizeFn { /* private fields */ }
+```

@@ -1,0 +1,592 @@
+---
+title: "Plugin Helpers"
+description: "Plugin configuration, validation, activation, and registration helpers."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/plugin.d.ts`.
+
+Import from `nemo-relay-node/plugin`.
+
+Plugin configuration, validation, activation, and registration helpers.
+
+## Interfaces
+
+### `ConfigPolicy`
+
+Plugin-level policy for unknown or unsupported plugin configuration.
+
+```ts
+export interface ConfigPolicy {
+  unknown_component?: UnsupportedBehavior;
+  unknown_field?: UnsupportedBehavior;
+  unsupported_value?: UnsupportedBehavior;
+}
+```
+
+### `ConfigDiagnostic`
+
+One validation or compatibility diagnostic produced by the plugin system.
+
+```ts
+export interface ConfigDiagnostic {
+  level: 'warning' | 'error';
+  code: string;
+  component?: string;
+  field?: string;
+  message: string;
+}
+```
+
+### `ConfigReport`
+
+Validation or activation report for a plugin configuration.
+
+```ts
+export interface ConfigReport {
+  diagnostics: ConfigDiagnostic[];
+}
+```
+
+### `ComponentSpec` interface
+
+One top-level plugin component.
+
+```ts
+export interface ComponentSpec {
+  kind: string;
+  enabled?: boolean;
+  config?: Record<string, Json>;
+}
+```
+
+### `PluginConfig`
+
+Canonical plugin configuration document.
+
+```ts
+export interface PluginConfig {
+  version?: number;
+  components?: Array<{
+    kind: string;
+    enabled?: boolean;
+    config?: Record<string, Json>;
+  }>;
+  policy?: ConfigPolicy;
+}
+```
+
+### `DynamicPluginActivationSpec`
+
+Explicitly resolved dynamic plugin load and component configuration.
+
+```ts
+export interface DynamicPluginActivationSpec {
+  pluginId: string;
+  kind: DynamicPluginKind;
+  manifestRef: string;
+  environmentRef?: string | null;
+  config?: Record<string, Json>;
+}
+```
+
+### `DynamicPluginActivation`
+
+Owns one process-wide dynamic plugin host activation.
+
+```ts
+export interface DynamicPluginActivation extends AsyncDisposable {
+  /** Validation report produced by the successful activation. */
+  readonly report: ConfigReport;
+  /**
+   * Whether this activation handle has not begun teardown. `false` does not
+   * guarantee another process-wide activation can start after failed teardown.
+   */
+  readonly active: boolean;
+  /** Clear callbacks before unloading libraries and workers. Idempotent. */
+  close(): Promise<void>;
+  /** Delegate structured `await using` cleanup to `close()`. */
+  [Symbol.asyncDispose](): Promise<void>;
+}
+```
+
+### `PendingMarkSpec`
+
+A mark Relay materializes under a managed lifecycle.
+
+```ts
+export interface PendingMarkSpec {
+  name: string;
+  category?: string | null;
+  categoryProfile?: Json;
+  data?: Json;
+  metadata?: Json;
+}
+```
+
+### `LlmOptimizationDataSchema`
+
+Schema tag attached to an opaque optimization contribution payload.
+
+```ts
+export interface LlmOptimizationDataSchema {
+  name: string;
+  version: string;
+}
+```
+
+### `LlmOptimizationModel`
+
+Model identity retained for counterfactual pricing and downstream repricing.
+
+```ts
+export interface LlmOptimizationModel {
+  model: string;
+  provider?: string;
+}
+```
+
+### `LlmOptimizationModelTransition`
+
+Baseline and effective model identities for a routing optimization.
+
+```ts
+export interface LlmOptimizationModelTransition {
+  baseline?: LlmOptimizationModel;
+  effective?: LlmOptimizationModel;
+}
+```
+
+### `LlmOptimizationTokens`
+
+Explicit token evidence, independent from a pricing catalog.
+
+```ts
+export interface LlmOptimizationTokens {
+  /** Token counts must be non-negative JavaScript safe integers. */
+  prompt_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  completion_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  cache_read_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  cache_write_tokens?: number;
+  /** Token counts must be non-negative JavaScript safe integers. */
+  total_tokens?: number;
+}
+```
+
+### `LlmOptimizationTokenImpact`
+
+Baseline, effective, and saved token evidence for one optimization.
+
+```ts
+export interface LlmOptimizationTokenImpact {
+  baseline?: LlmOptimizationTokens;
+  effective?: LlmOptimizationTokens;
+  saved?: LlmOptimizationTokens;
+  quality?: 'observed' | 'estimated';
+  estimation_method?: string;
+}
+```
+
+### `LlmOptimizationContribution`
+
+One plugin's optimization evidence.
+
+`kind` is deliberately an open string so new optimizer categories round-trip without a Relay release. Unknown top-level fields are retained by the wire contract and represented by this interface's JSON extension surface.
+
+```ts
+export interface LlmOptimizationContribution {
+  id?: string;
+  /** Relay ordering must remain within JavaScript's safe-integer range. */
+  sequence?: number;
+  producer: string;
+  kind: 'input_compression' | 'model_routing' | (string & {});
+  applied: boolean;
+  model_transition?: LlmOptimizationModelTransition;
+  token_impact?: LlmOptimizationTokenImpact;
+  payload_schema?: LlmOptimizationDataSchema;
+  payload?: Json;
+  [key: string]: Json | undefined;
+}
+```
+
+### `LlmRequestInterceptOutcome`
+
+Canonical result returned by an LLM request intercept.
+
+```ts
+export interface LlmRequestInterceptOutcome {
+  request: Json;
+  annotated?: Json | null;
+  pendingMarks?: PendingMarkSpec[];
+  optimizationContributions?: LlmOptimizationContribution[];
+}
+```
+
+### `ToolExecutionInterceptOutcome`
+
+Canonical result returned by a tool execution intercept.
+
+`result` is passed to the remaining middleware and application. `pendingMarks` are Relay-owned lifecycle metadata emitted after the tool-end event and are not included in the application-visible result.
+
+```ts
+export interface ToolExecutionInterceptOutcome {
+  result: Json;
+  pendingMarks?: PendingMarkSpec[];
+}
+```
+
+### `PluginContext`
+
+Component-scoped registration context passed to plugin handlers.
+
+```ts
+export interface PluginContext {
+  /** Register an infallible event subscriber for this component. */
+  registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /** Register a mark event sanitizer for this component. */
+  registerMarkSanitizeGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a scope-start event sanitizer for this component. */
+  registerScopeSanitizeStartGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a scope-end event sanitizer for this component. */
+  registerScopeSanitizeEndGuardrail(
+    name: string,
+    priority: number,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+  ): void;
+  /** Register a tool sanitize-request guardrail for this component. */
+  registerToolSanitizeRequestGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => Json,
+  ): void;
+  /** Register a tool sanitize-response guardrail for this component. */
+  registerToolSanitizeResponseGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, result: Json) => Json,
+  ): void;
+  /** Register a tool conditional-execution guardrail for this component. */
+  registerToolConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (name: string, args: Json) => string | null,
+  ): void;
+  /** Register an LLM sanitize-request guardrail for this component. */
+  registerLlmSanitizeRequestGuardrail(name: string, priority: number, callback: (request: Json) => Json): void;
+  /** Register an LLM sanitize-response guardrail for this component. */
+  registerLlmSanitizeResponseGuardrail(name: string, priority: number, callback: (response: Json) => Json): void;
+  /** Register an LLM conditional-execution guardrail for this component. */
+  registerLlmConditionalExecutionGuardrail(
+    name: string,
+    priority: number,
+    callback: (request: Json) => string | null,
+  ): void;
+  /** Register an LLM request intercept for this component. */
+  registerLlmRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome,
+  ): void;
+  /** Register an LLM execution intercept for this component. */
+  registerLlmExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>,
+  ): void;
+  /** Register an LLM streaming execution intercept for this component. */
+  registerLlmStreamExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      request: Json,
+      next: (request: Json) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+  ): void;
+  /** Register a tool request intercept for this component. */
+  registerToolRequestIntercept(
+    name: string,
+    priority: number,
+    breakChain: boolean,
+    callback: (name: string, args: Json) => Json,
+  ): void;
+  /**
+   * Register tool execution middleware that returns a canonical outcome.
+   * The `next` callback resolves to the raw downstream result.
+   */
+  registerToolExecutionIntercept(
+    name: string,
+    priority: number,
+    callback: (
+      args: Json,
+      next: (args: Json) => Json | Promise<Json>,
+    ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
+  ): void;
+}
+```
+
+### `Plugin`
+
+Plugin callback contract.
+
+```ts
+export interface Plugin {
+  /** Validate one component-local config object. */
+  validate?(pluginConfig: Record<string, Json>): ConfigDiagnostic[] | null | undefined;
+  /**
+   * Install middleware and subscribers for one component instance.
+   *
+   * Throwing aborts the current initialization and triggers rollback.
+   */
+  register(pluginConfig: Record<string, Json>, context: PluginContext): void;
+}
+```
+
+## Functions
+
+### `defaultConfig`
+
+Create an empty plugin configuration.
+
+Returns the canonical top-level config shape with `version = 1` and no configured components so callers can build a document incrementally before validating or activating it.
+
+**Returns**
+
+A new `PluginConfig` object ready for mutation or validation.
+
+**Remarks**
+
+Mutating the returned object does not affect runtime state until it is passed to `initialize`.
+
+```ts
+export declare function defaultConfig(): PluginConfig;
+```
+
+### `ComponentSpec` function
+
+Create a plugin component entry for a plugin config document.
+
+Packages a plugin kind, component-local config, and enablement flag into the object shape expected by `PluginConfig.components`.
+
+**Parameters**
+
+- `kind`: Registered plugin kind to reference.
+- `config`: Component-local config passed to plugin hooks.
+- `options`: Optional component-level flags.
+
+**Returns**
+
+A `ComponentSpec` ready to insert into a plugin config.
+
+**Remarks**
+
+Setting `options.enabled = false` preserves the component for validation while skipping runtime registration during `initialize`.
+
+```ts
+export declare function ComponentSpec(
+  kind: string,
+  config?: Record<string, Json>,
+  options?: {
+    enabled?: boolean;
+```
+
+### `validate`
+
+Validate a plugin configuration without activating it.
+
+Runs the same config validation pipeline used by initialization while leaving the active plugin registry and runtime configuration unchanged.
+
+**Parameters**
+
+- `config`: Candidate plugin configuration document.
+
+**Returns**
+
+A structured validation report with diagnostics.
+
+**Remarks**
+
+Use this to surface warnings or incompatibilities before replacing the active plugin configuration.
+
+```ts
+export declare function validate(config: PluginConfig): ConfigReport;
+```
+
+### `initialize`
+
+Validate and activate a plugin configuration.
+
+Replaces the current active config, invokes each enabled component's registration hooks, and resolves with the final activation report.
+
+**Parameters**
+
+- `config`: Plugin configuration document to activate.
+
+**Returns**
+
+A promise resolving to the activation report.
+
+**Remarks**
+
+Partial plugin registration is rolled back if activation fails, and the promise rejects with the underlying validation or setup error.
+
+```ts
+export declare function initialize(config: PluginConfig): Promise<ConfigReport>;
+```
+
+### `initializeWithDynamicPlugins`
+
+Initialize with explicitly resolved dynamic plugins.
+
+The returned object owns loaded libraries and worker processes. Keep it alive while plugin callbacks may run and call `close()` for deterministic teardown. Garbage collection is a defensive fallback only.
+
+**Parameters**
+
+- `config`: Base configuration layered over discovered `plugins.toml` files.
+- `specs`: Non-empty explicit manifest and component configuration for each plugin.
+
+**Returns**
+
+The owned activation and its validation report.
+
+**Remarks**
+
+File-configured static components initialize before dynamic components. Use `initialize()` for a static-only configuration.
+
+```ts
+export declare function initializeWithDynamicPlugins(
+  config: PluginConfig,
+  specs: DynamicPluginActivationSpec[],
+): Promise<DynamicPluginActivation>;
+```
+
+### `clear`
+
+Clear the active plugin configuration.
+
+Removes the currently active component registrations while leaving plugin kinds in the registry so they can be reused by a later initialization call.
+
+**Returns**
+
+Nothing.
+
+**Remarks**
+
+Registered plugin kinds remain available after the active config is cleared.
+
+```ts
+export declare function clear(): void;
+```
+
+### `report`
+
+Return the last successfully activated plugin report.
+
+Exposes the most recent activation report emitted by the native plugin system without triggering validation or registration work.
+
+**Returns**
+
+The last activation report, if one exists.
+
+**Remarks**
+
+This returns `null` until `initialize` succeeds at least once in the current process.
+
+```ts
+export declare function report(): ConfigReport | null;
+```
+
+### `listKinds`
+
+List registered plugin kinds.
+
+Returns the plugin kind identifiers currently known to the global registry so callers can inspect what can be referenced from plugin configs.
+
+**Returns**
+
+The registered plugin kind names.
+
+**Remarks**
+
+The list reflects registry state only; it does not indicate whether a plugin kind is currently active in the runtime configuration.
+
+```ts
+export declare function listKinds(): string[];
+```
+
+### `register`
+
+Register a plugin kind with JavaScript validation and registration hooks.
+
+Adapts the higher-level `Plugin` object contract to the native callback shape expected by the Node binding.
+
+**Parameters**
+
+- `pluginKind`: Unique plugin kind identifier to register.
+- `plugin`: Plugin implementation with `validate` and `register` hooks.
+
+**Returns**
+
+Nothing.
+
+**Remarks**
+
+Omitting `plugin.validate` makes the plugin permissive during validation; `plugin.register` still runs later during `initialize`.
+
+```ts
+export declare function register(pluginKind: string, plugin: Plugin): void;
+```
+
+### `deregister`
+
+Remove a previously registered plugin kind.
+
+Deletes the plugin kind from the registry so future config validation and initialization calls can no longer reference it.
+
+**Parameters**
+
+- `pluginKind`: Registered plugin kind identifier to remove.
+
+**Returns**
+
+`true` when a plugin kind was removed, otherwise `false`.
+
+**Remarks**
+
+Active runtime registrations remain until `clear()` or the next successful `initialize(...)`.
+
+```ts
+export declare function deregister(pluginKind: string): boolean;
+```
+
+## Type Aliases
+
+### `UnsupportedBehavior`
+
+Policy behavior for unsupported configuration.
+
+```ts
+export type UnsupportedBehavior = 'ignore' | 'warn' | 'error';
+```
+
+### `DynamicPluginKind`
+
+Execution lane for a dynamically loaded Relay plugin.
+
+```ts
+export type DynamicPluginKind = 'rust_dynamic' | 'worker';
+```
+

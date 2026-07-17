@@ -1,0 +1,214 @@
+---
+title: "Adding Scopes and Marks"
+description: ""
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide when you want NeMo Relay to identify one agent run, request, workflow, or operation before you instrument individual tool and LLM calls.
+
+## What You Build
+
+You will create an active scope, emit named mark events inside that scope, and validate that subscribers can observe the lifecycle. The result is a small trace boundary that later tool calls, LLM calls, middleware, and exporters can attach to.
+
+Scopes give emitted work ownership. Marks record point-in-time checkpoints inside that ownership boundary.
+
+## Before You Start
+
+Complete one binding Quick Start guide first:
+
+- [Python Quick Start](/getting-started/quick-start/python)
+- [Node.js Quick Start](/getting-started/quick-start/nodejs)
+- [Rust Quick Start](/getting-started/quick-start/rust)
+
+You should know which application boundary should own the trace. Common scope boundaries include:
+
+- One HTTP request
+- One agent run
+- One workflow step
+- One background job
+- One tenant-isolated experiment
+
+## Integration Pattern
+
+Follow this sequence to keep framework work attached to the expected runtime context.
+
+1. Choose the scope boundary that owns the work.
+2. Register a temporary subscriber while validating instrumentation.
+3. Push or enter the scope before tool and LLM work begins.
+4. Emit marks for important checkpoints that are not full nested calls.
+5. Close the scope when the request, agent run, or workflow ends.
+6. Confirm that the subscriber sees scope start, mark, and scope end events.
+
+## Minimal Example
+
+The examples below create one `agent-run` scope and emit two marks.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import nemo_relay
+
+def log_event(event) -> None:
+    print(f"{event.kind} {event.name}")
+
+nemo_relay.subscribers.register("scope-check", log_event)
+
+try:
+    with nemo_relay.scope.scope(
+        "agent-run",
+        nemo_relay.ScopeType.Agent,
+        input={"request_id": "req-123"},
+    ) as handle:
+        nemo_relay.scope.event("planning-started", handle=handle, data={"step": 1})
+        nemo_relay.scope.event("planning-finished", handle=handle, data={"step": 2})
+finally:
+    nemo_relay.subscribers.flush()
+    nemo_relay.subscribers.deregister("scope-check")
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const {
+  ScopeType,
+  deregisterSubscriber,
+  event,
+  registerSubscriber,
+  flushSubscribers,
+  withScope,
+} = require("nemo-relay-node");
+
+async function main() {
+  registerSubscriber("scope-check", (runtimeEvent) => {
+    console.log(`${runtimeEvent.kind} ${runtimeEvent.name}`);
+  });
+
+  try {
+    await withScope(
+      "agent-run",
+      ScopeType.Agent,
+      async (handle) => {
+        event("planning-started", handle, { step: 1 }, null);
+        event("planning-finished", handle, { step: 2 }, null);
+      },
+      null,
+      null,
+      null,
+      null,
+      { request_id: "req-123" },
+    );
+  } finally {
+    flushSubscribers();
+    await new Promise((resolve) => setImmediate(resolve));
+    deregisterSubscriber("scope-check");
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::scope::{
+    self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
+};
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use serde_json::json;
+use std::sync::Arc;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    register_subscriber(
+        "scope-check",
+        Arc::new(|event| {
+            println!("{} {}", event.kind(), event.name());
+        }),
+    )?;
+
+    let handle = scope::push_scope(
+        PushScopeParams::builder()
+            .name("agent-run")
+            .scope_type(ScopeType::Agent)
+            .attributes(ScopeAttributes::empty())
+            .input(json!({"request_id": "req-123"}))
+            .build(),
+    )?;
+
+    scope::event(
+        EmitMarkEventParams::builder()
+            .name("planning-started")
+            .parent(&handle)
+            .data(json!({"step": 1}))
+            .build(),
+    )?;
+    scope::event(
+        EmitMarkEventParams::builder()
+            .name("planning-finished")
+            .parent(&handle)
+            .data(json!({"step": 2}))
+            .build(),
+    )?;
+
+    scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
+    flush_subscribers()?;
+    let _ = deregister_subscriber("scope-check")?;
+    Ok(())
+}
+```
+</Tab>
+
+</Tabs>
+
+## When to Add Marks
+
+Use marks for checkpoints that should appear in the event stream but do not wrap a callback:
+
+- Request accepted
+- Plan created
+- Memory loaded
+- Routing decision made
+- Final answer assembled
+- Retry scheduled
+
+Use a nested scope instead of a mark when the work has a meaningful start and end boundary, child work, or a duration that matters.
+
+## Validate the Integration
+
+Check that the subscriber prints:
+
+- One scope start event for `agent-run`
+- One mark event for `planning-started`
+- One mark event for `planning-finished`
+- One scope end event for `agent-run`
+
+Native subscribers are delivered asynchronously. Flush subscribers before
+validating printed or captured output. In Node.js, also wait one event-loop tick
+after `flushSubscribers()` so queued JavaScript callbacks can run.
+
+If marks appear outside the intended trace, pass the active scope handle explicitly or make sure the mark is emitted while the scope is active.
+
+## Production Checklist
+
+Use this checklist before running the pattern in production traffic.
+
+- Keep scope names stable enough for filtering and dashboards.
+- Use marks for business checkpoints, not verbose debug logging.
+- Include only JSON-compatible `data`, `metadata`, `input`, and `output` payloads.
+- Do not attach sensitive payloads unless a mark or scope
+  [event sanitizer](/reference/event-sanitizers) removes them before subscriber
+  and exporter delivery.
+- Propagate the active scope stack when work crosses thread or worker boundaries.
+
+## Next Steps
+
+Use these links to continue from this workflow into the next related task.
+
+- Add tool instrumentation with [Instrument a Tool Call](/instrument-applications/instrument-tool-call).
+- Add model-provider instrumentation with [Instrument an LLM Call](/instrument-applications/instrument-llm-call).
+- Use [Code Examples](/instrument-applications/code-examples#scope-and-context-helpers) for explicit scope-stack propagation helpers.

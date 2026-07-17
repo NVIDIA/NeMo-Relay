@@ -1,0 +1,46 @@
+---
+title: "Struct Worker Plugin Activation"
+sidebar-title: "WorkerPluginActivation"
+description: "Owns gRPC worker processes registered into the plugin registry."
+position: 28
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct WorkerPluginActivation { /* private fields */ }
+```
+
+Owns gRPC worker processes registered into the plugin registry.
+
+Dropping this value deregisters worker plugin kinds and shuts down worker processes. Clear active plugin configuration before dropping it so runtime callbacks cannot outlive the worker activation.
+
+## Implementations
+
+### `impl WorkerPluginActivation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-workerpluginactivation\">WorkerPluginActivation</a>"}} /></pre>
+
+#### `is_empty`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_empty(&amp;self) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Returns `true` when no worker plugins were loaded.
+
+#### `clear`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn clear(self)"}} /></pre>
+
+Consumes the activation; deregistration runs from `Drop`.
+
+## Trait Implementations
+
+### `impl Drop for WorkerPluginActivation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-workerpluginactivation\">WorkerPluginActivation</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>

@@ -1,0 +1,31 @@
+---
+title: "Module tool"
+sidebar-title: "tool"
+description: "Tool lifecycle helpers and managed execution entry points."
+position: 8
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Tool lifecycle helpers and managed execution entry points.
+
+## Structs
+
+- [CreateToolHandleParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-createtoolhandleparams): Builder parameters for [`NemoRelayContextState::create_tool_handle`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+- [EndToolHandleParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-endtoolhandleparams): Builder parameters for [`NemoRelayContextState::build_tool_end_event`](/reference/api/rust-library-reference/nemo-relay/api/runtime/state/struct-nemorelaycontextstate).
+- [ToolAttributes](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolattributes): Bitflags that modify tool-call behavior and observability.
+- [ToolCallEndParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolcallendparams): Builder parameters for [`tool_call_end`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-end).
+- [ToolCallExecuteParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolcallexecuteparams): Builder parameters for [`tool_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-execute).
+- [ToolCallParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolcallparams): Builder parameters for [`tool_call`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call).
+- [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
+- [ToolHandle](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolhandle): Runtime-owned handle identifying an active or completed tool call.
+
+## Functions
+
+- [tool_call](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call): Start a manual tool lifecycle span.
+- [tool_call_end](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-end): Finish a manual tool lifecycle span.
+- [tool_call_execute](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-execute): Execute a tool call through the managed middleware pipeline.
+- [tool_conditional_execution](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-conditional-execution): Run only the tool conditional-execution guardrail chain.
+- [tool_request_intercepts](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-request-intercepts): Run only the tool request-intercept chain.

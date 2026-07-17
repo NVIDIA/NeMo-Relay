@@ -1,0 +1,32 @@
+---
+title: "Module observability"
+sidebar-title: "observability"
+description: "Optional observability integrations for NeMo Relay Core."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Optional observability integrations for NeMo Relay Core.
+
+## Modules
+
+- [atif](/reference/api/rust-library-reference/nemo-relay/observability/atif): Agent Trajectory Interchange Format (ATIF) exporter.
+- [atof](/reference/api/rust-library-reference/nemo-relay/observability/atof): Agent Trajectory Observability Format (ATOF) JSONL exporter support for NeMo Flow.
+- [openinference](/reference/api/rust-library-reference/nemo-relay/observability/openinference): OpenInference subscriber support for NeMo Relay.
+- [otel](/reference/api/rust-library-reference/nemo-relay/observability/otel): OpenTelemetry subscriber support for NeMo Relay.
+- [plugin_component](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component): Built-in observability plugin component.
+
+## Structs
+
+- [OtlpAttributeMapping](/reference/api/rust-library-reference/nemo-relay/observability/struct-otlpattributemapping): Copies a projected OTLP attribute to a second attribute name.
+
+## Enums
+
+- [MarkProjection](/reference/api/rust-library-reference/nemo-relay/observability/enum-markprojection): Export representation for point-in-time mark events.
+
+## Functions
+
+- [validate_attribute_mappings](/reference/api/rust-library-reference/nemo-relay/observability/fn-validate-attribute-mappings): Validates OTLP attribute mappings shared by exporter configuration surfaces.

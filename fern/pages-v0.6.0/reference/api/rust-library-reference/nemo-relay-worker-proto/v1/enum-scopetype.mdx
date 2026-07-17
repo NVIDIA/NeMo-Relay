@@ -1,0 +1,243 @@
+---
+title: "Enum Scope Type"
+sidebar-title: "ScopeType"
+description: "API documentation for the Rust `ScopeType` enum in crate `nemo_relay_worker_proto`."
+position: 45
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+#[repr(i32)]pub enum ScopeType {
+    Unspecified = 0,
+    Agent = 1,
+    Function = 2,
+    Tool = 3,
+    Llm = 4,
+    Retriever = 5,
+    Embedder = 6,
+    Reranker = 7,
+    Guardrail = 8,
+    Evaluator = 9,
+    Custom = 10,
+    Unknown = 11,
+}
+```
+
+## Variants
+
+### `Unspecified = 0`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unspecified = 0"}} /></pre>
+
+### `Agent = 1`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Agent = 1"}} /></pre>
+
+### `Function = 2`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Function = 2"}} /></pre>
+
+### `Tool = 3`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Tool = 3"}} /></pre>
+
+### `Llm = 4`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Llm = 4"}} /></pre>
+
+### `Retriever = 5`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Retriever = 5"}} /></pre>
+
+### `Embedder = 6`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Embedder = 6"}} /></pre>
+
+### `Reranker = 7`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Reranker = 7"}} /></pre>
+
+### `Guardrail = 8`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Guardrail = 8"}} /></pre>
+
+### `Evaluator = 9`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Evaluator = 9"}} /></pre>
+
+### `Custom = 10`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Custom = 10"}} /></pre>
+
+### `Unknown = 11`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Unknown = 11"}} /></pre>
+
+## Implementations
+
+### `impl ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `is_valid`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn is_valid(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+Returns `true` if `value` is a variant of `ScopeType`.
+
+#### `from_i32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_i32(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-scopetype\">ScopeType</a>&gt;"}} /></pre>
+
+Converts an `i32` to a `ScopeType`, or `None` if `value` is not a valid variant.
+
+### `impl ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `as_str_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn as_str_name(&amp;self) -&gt; &amp;'static <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>"}} /></pre>
+
+String value of the enum field names used in the ProtoBuf definition.
+
+The values are not transformed in any way and thus are considered stable (if the ProtoBuf definition does not change) and safe for programmatic use.
+
+#### `from_str_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn from_str_name(value: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;Self&gt;"}} /></pre>
+
+Creates an enum from field names used in the ProtoBuf definition.
+
+## Trait Implementations
+
+### `impl Clone for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
+
+### `impl Default for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html\">Default</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `default`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/default/trait.Default.html#tymethod.default\">default</a>() -&gt; <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+### `impl From<ScopeType> for i32`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"enum-scopetype\">ScopeType</a>&gt; for <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(value: <a href=\"enum-scopetype\">ScopeType</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>"}} /></pre>
+
+### `impl Hash for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html\">Hash</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `hash`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#tymethod.hash\">hash</a>&lt;__H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>&gt;(&amp;self, state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut __H</a>)"}} /></pre>
+
+#### `hash_slice`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hash.html#method.hash_slice\">hash_slice</a>&lt;H&gt;(data: &amp;[Self], state: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;mut H</a>)where\n    H: <a href=\"https://doc.rust-lang.org/1.96.1/core/hash/trait.Hasher.html\">Hasher</a>,\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl Ord for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html\">Ord</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `cmp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#tymethod.cmp\">cmp</a>(&amp;self, other: &amp;<a href=\"enum-scopetype\">ScopeType</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/enum.Ordering.html\">Ordering</a>"}} /></pre>
+
+#### `max`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#method.max\">max</a>(self, other: Self) -&gt; Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `min`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#method.min\">min</a>(self, other: Self) -&gt; Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+#### `clamp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Ord.html#method.clamp\">clamp</a>(self, min: Self, max: Self) -&gt; Selfwhere\n    Self: <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sized.html\">Sized</a>,"}} /></pre>
+
+### `impl PartialEq for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"enum-scopetype\">ScopeType</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl PartialOrd for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html\">PartialOrd</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `partial_cmp`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#tymethod.partial_cmp\">partial_cmp</a>(&amp;self, other: &amp;<a href=\"enum-scopetype\">ScopeType</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/enum.Ordering.html\">Ordering</a>&gt;"}} /></pre>
+
+#### `lt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.lt\">lt</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `le`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.le\">le</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `gt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.gt\">gt</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ge`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialOrd.html#method.ge\">ge</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl TryFrom<i32> for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html\">TryFrom</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>&gt; for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+#### `Error`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "type <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#associatedtype.Error\">Error</a> = <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.UnknownEnumValue.html\">UnknownEnumValue</a>"}} /></pre>
+
+#### `try_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.TryFrom.html#tymethod.try_from\">try_from</a>(value: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"enum-scopetype\">ScopeType</a>, <a href=\"https://docs.rs/prost/0.14.3/prost/error/struct.UnknownEnumValue.html\">UnknownEnumValue</a>&gt;"}} /></pre>
+
+### `impl Copy for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Copy.html\">Copy</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+### `impl Eq for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.Eq.html\">Eq</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>
+
+### `impl StructuralPartialEq for ScopeType`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.StructuralPartialEq.html\">StructuralPartialEq</a> for <a href=\"enum-scopetype\">ScopeType</a>"}} /></pre>

@@ -1,0 +1,42 @@
+---
+title: "Struct Tool Next"
+sidebar-title: "ToolNext"
+description: "Continuation handle for tool execution intercepts."
+position: 21
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct ToolNext { /* private fields */ }
+```
+
+Continuation handle for tool execution intercepts.
+
+## Implementations
+
+### `impl ToolNext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-toolnext\">ToolNext</a>"}} /></pre>
+
+#### `call`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn call(&amp;self, value: <a href=\"type-json\">Json</a>) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"type-json\">Json</a>&gt;"}} /></pre>
+
+Calls the remaining tool execution chain.
+
+## Trait Implementations
+
+### `impl Clone for ToolNext`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-toolnext\">ToolNext</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-toolnext\">ToolNext</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>

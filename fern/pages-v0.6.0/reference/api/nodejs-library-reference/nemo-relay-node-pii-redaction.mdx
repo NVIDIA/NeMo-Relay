@@ -1,0 +1,134 @@
+---
+title: "nemo-relay-node/pii_redaction"
+description: "Declarations exported by `nemo-relay-node/pii_redaction`."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `crates/node/pii_redaction.d.ts`.
+
+Import from `nemo-relay-node/pii_redaction`.
+
+Declarations exported by `nemo-relay-node/pii_redaction`.
+
+## Interfaces
+
+### `ConfigPolicy`
+
+```ts
+export interface ConfigPolicy {
+  unknown_component?: 'ignore' | 'warn' | 'error' | string;
+  unknown_field?: 'ignore' | 'warn' | 'error' | string;
+  unsupported_value?: 'ignore' | 'warn' | 'error' | string;
+}
+```
+
+### `BuiltinConfig`
+
+```ts
+export interface BuiltinConfig {
+  action?: 'remove' | 'redact' | 'regex_replace' | 'hash' | 'mask' | string;
+  target_paths?: string[];
+  pattern?: string;
+  detector?: string;
+  replacement?: string;
+  mask_char?: string;
+  unmasked_prefix?: number;
+  unmasked_suffix?: number;
+}
+```
+
+### `LocalModelConfig`
+
+```ts
+export interface LocalModelConfig {
+  backend?: string;
+  model_id?: string;
+  detector_profile?: string;
+  allow_network?: boolean;
+  max_latency_ms?: number;
+}
+```
+
+### `Config`
+
+```ts
+export interface Config {
+  version?: number;
+  mode?: 'builtin' | 'local_model' | string;
+  input?: boolean;
+  output?: boolean;
+  tool_input?: boolean;
+  tool_output?: boolean;
+  mark?: boolean;
+  priority?: number;
+  codec?: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | string;
+  builtin?: BuiltinConfig;
+  local?: LocalModelConfig;
+  policy?: ConfigPolicy;
+}
+```
+
+### `ComponentSpec` interface
+
+```ts
+export interface ComponentSpec {
+  kind: 'pii_redaction';
+  enabled?: boolean;
+  config: Config;
+}
+```
+
+## Functions
+
+### `defaultConfig`
+
+Create a default PII redaction component config.
+
+```ts
+export declare function defaultConfig(): Config;
+```
+
+### `builtinConfig`
+
+Create deterministic built-in redaction backend settings with defaults applied.
+
+```ts
+export declare function builtinConfig(config?: BuiltinConfig): BuiltinConfig;
+```
+
+### `localModelConfig`
+
+Create future local-model backend settings with defaults applied.
+
+```ts
+export declare function localModelConfig(config?: LocalModelConfig): LocalModelConfig;
+```
+
+### `ComponentSpec` function
+
+Wrap PII redaction config as a top-level plugin component.
+
+```ts
+export declare function ComponentSpec(
+  config: Config,
+  options?: {
+    enabled?: boolean;
+```
+
+## Constants
+
+### `PII_REDACTION_PLUGIN_KIND`
+
+Top-level plugin kind used by the built-in PII redaction component.
+
+```ts
+export declare const PII_REDACTION_PLUGIN_KIND: 'pii_redaction';
+```
+
+## Re-exports
+
+- `ConfigDiagnostic`
+- `ConfigReport`
+
