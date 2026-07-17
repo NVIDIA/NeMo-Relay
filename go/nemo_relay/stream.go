@@ -139,7 +139,7 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 
 	var chunk *C.char
 	rc := C.nemo_relay_stream_next(ptr, &chunk)
-	s.finishNext()
+	defer s.finishNext()
 
 	if rc == 1 {
 		// Chunk available
@@ -182,16 +182,16 @@ func (s *LlmStream) finishNext() {
 // return [io.EOF]. The finalizer runs once with any collected partial response.
 func (s *LlmStream) Close() error {
 	s.mu.Lock()
-	if s.closed || s.ptr == nil {
-		err := s.closeErr
-		s.mu.Unlock()
-		return err
-	}
 	if s.closing {
 		done := s.closeDone
 		s.mu.Unlock()
 		<-done
 		s.mu.Lock()
+		err := s.closeErr
+		s.mu.Unlock()
+		return err
+	}
+	if s.closed || s.ptr == nil {
 		err := s.closeErr
 		s.mu.Unlock()
 		return err
@@ -209,12 +209,27 @@ func (s *LlmStream) Close() error {
 	}
 
 	s.mu.Lock()
+	if s.inFlight > 0 {
+		s.mu.Unlock()
+		// A collector can close its own stream. Finish cleanup after the callback
+		// returns instead of waiting here and deadlocking that callback.
+		go s.finishClose(ptr, err)
+		return err
+	}
+	s.mu.Unlock()
+	s.finishClose(ptr, err)
+	return err
+}
+
+func (s *LlmStream) finishClose(ptr *C.FfiStream, err error) {
+	s.mu.Lock()
 	for s.inFlight > 0 {
 		idle := s.idle
 		s.mu.Unlock()
 		<-idle
 		s.mu.Lock()
 	}
+	s.closeErr = err
 	s.ptr = nil
 	s.closed = true
 	s.collector = nil
@@ -223,14 +238,13 @@ func (s *LlmStream) Close() error {
 	s.mu.Unlock()
 
 	C.nemo_relay_stream_free(ptr)
-	if finalizer != nil {
-		finalizer()
-	}
 
 	s.mu.Lock()
-	s.closeErr = err
 	s.closing = false
 	close(s.closeDone)
 	s.mu.Unlock()
-	return err
+
+	if finalizer != nil {
+		finalizer()
+	}
 }
