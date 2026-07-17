@@ -990,6 +990,38 @@ func TestLlmStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLlmStreamConcurrentCloseIsSafe(t *testing.T) {
+	stream, err := LlmStreamCallExecute("concurrent_close_llm", makeRequest(),
+		func(nativeJSON json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`"data: [DONE]\n\n"`), nil
+		},
+		nil, nil,
+	)
+	if err != nil {
+		t.Fatalf(llmStreamCallExecuteFailed, err)
+	}
+
+	var wait sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			errs <- stream.Close()
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Close failed: %v", err)
+		}
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after concurrent Close error = %v, want io.EOF", err)
+	}
+}
+
 func TestLlmStreamCloseFinalizesPartialResponse(t *testing.T) {
 	request := makeRequest()
 	finalizerCalls := 0

@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io"
 	"runtime"
+	"sync"
 )
 
 // LlmStream wraps a streaming LLM response returned by [LlmStreamCallExecute].
@@ -45,12 +46,13 @@ import (
 //	    fmt.Print(chunk)
 //	}
 //
-// The stream is not safe for concurrent use. If not closed explicitly, the
+// Calls to Next and Close are synchronized. If not closed explicitly, the
 // underlying C resources are freed automatically by a Go runtime finalizer.
 //
 // Each stream carries its own collector and finalizer callbacks, so multiple
 // streams can operate concurrently without interfering with one another.
 type LlmStream struct {
+	mu        sync.Mutex
 	ptr       *C.FfiStream
 	closed    bool
 	collector CollectorFunc
@@ -84,10 +86,23 @@ func newLlmStream(ptr *C.FfiStream, collector CollectorFunc, finalizer Finalizer
 		collector: collector,
 		finalizer: finalizer,
 	}
-	runtime.SetFinalizer(s, func(s *LlmStream) {
-		_ = s.Close()
-	})
+	runtime.SetFinalizer(s, (*LlmStream).release)
 	return s
+}
+
+// release frees the native handle without waiting for producer cleanup or
+// invoking user callbacks. Explicit Close owns deterministic cleanup.
+func (s *LlmStream) release() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ptr == nil {
+		return
+	}
+	C.nemo_relay_stream_free(s.ptr)
+	s.ptr = nil
+	s.closed = true
+	s.collector = nil
+	s.finalizer = nil
 }
 
 // Next returns the next chunk from the stream as a JSON value. It returns
@@ -101,6 +116,8 @@ func newLlmStream(ptr *C.FfiStream, collector CollectorFunc, finalizer Finalizer
 //
 // If the stream has already been closed, Next returns io.EOF.
 func (s *LlmStream) Next() (json.RawMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || s.ptr == nil {
 		return nil, io.EOF
 	}
@@ -122,7 +139,10 @@ func (s *LlmStream) Next() (json.RawMessage, error) {
 // are no-ops. After Close is called, any further calls to [LlmStream.Next]
 // return [io.EOF]. The finalizer runs once with any collected partial response.
 func (s *LlmStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !s.closed && s.ptr != nil {
+		runtime.SetFinalizer(s, nil)
 		status := C.nemo_relay_stream_close(s.ptr)
 		var err error
 		if status != 0 {

@@ -61,7 +61,7 @@ fn make_stream(items: Vec<Result<Json>>) -> LlmJsonStream {
 struct CloseTrackingStream {
     stream: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
     close_calls: Arc<AtomicUsize>,
-    close_error: Option<String>,
+    close_error: Option<FlowError>,
     closed: bool,
 }
 
@@ -82,12 +82,25 @@ impl LlmStreamInner for CloseTrackingStream {
         self.closed = true;
         self.close_calls.fetch_add(1, Ordering::SeqCst);
         let close_error = self.close_error.clone();
-        Box::pin(async move {
-            match close_error {
-                Some(message) => Err(FlowError::Internal(message)),
-                None => Ok(()),
-            }
-        })
+        Box::pin(async move { close_error.map_or(Ok(()), Err) })
+    }
+}
+
+struct DropTrackingStream {
+    drops: Arc<AtomicUsize>,
+}
+
+impl Stream for DropTrackingStream {
+    type Item = Result<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Pending
+    }
+}
+
+impl Drop for DropTrackingStream {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -206,7 +219,7 @@ async fn explicit_close_caches_cleanup_errors() {
     let inner = LlmJsonStream::from_closeable(CloseTrackingStream {
         stream: Box::pin(tokio_stream::empty()),
         close_calls: Arc::clone(&close_calls),
-        close_error: Some("producer cleanup failed".into()),
+        close_error: Some(FlowError::NotFound("producer cleanup failed".into())),
         closed: false,
     });
     let wrapper = LlmStreamWrapper::new(
@@ -223,8 +236,22 @@ async fn explicit_close_caches_cleanup_errors() {
     for _ in 0..2 {
         let error = stream.close().await.expect_err("close should fail");
         assert!(error.to_string().contains("producer cleanup failed"));
+        assert!(matches!(error, FlowError::NotFound(_)));
     }
     assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn default_stream_close_drops_the_wrapped_stream() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut stream = LlmJsonStream::new(DropTrackingStream {
+        drops: Arc::clone(&drops),
+    });
+
+    stream.close().await.unwrap();
+
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(stream.next().await.is_none());
 }
 

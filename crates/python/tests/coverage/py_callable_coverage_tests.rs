@@ -281,6 +281,19 @@ class ValueIter:
             return self.value
         return inner()
 
+class DroppedReceiverIter:
+    def __init__(self, value):
+        self.value = value
+        self.closed = False
+
+    def __anext__(self):
+        async def inner():
+            return self.value
+        return inner()
+
+    async def aclose(self):
+        self.closed = True
+
 async def coro_value():
     return {"value": 1}
 
@@ -298,6 +311,8 @@ async def coro_non_json():
         let stop_iter_cls: Py<PyAny> = module.getattr("StopIter").unwrap().unbind();
         let error_iter_cls: Py<PyAny> = module.getattr("ErrorIter").unwrap().unbind();
         let value_iter_cls: Py<PyAny> = module.getattr("ValueIter").unwrap().unbind();
+        let dropped_receiver_iter_cls: Py<PyAny> =
+            module.getattr("DroppedReceiverIter").unwrap().unbind();
         let coro_value_fn: Py<PyAny> = module.getattr("coro_value").unwrap().unbind();
         let coro_stop_fn: Py<PyAny> = module.getattr("coro_stop").unwrap().unbind();
         let coro_error_fn: Py<PyAny> = module.getattr("coro_error").unwrap().unbind();
@@ -391,17 +406,26 @@ async def coro_non_json():
                 drop(rx);
                 let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
                 let (closed, _closed_rx) = tokio::sync::watch::channel(None);
+                let dropped_iter = Python::attach(|py| {
+                    dropped_receiver_iter_cls
+                        .call1(py, (dropped_payload.bind(py),))
+                        .unwrap()
+                });
                 forward_async_iter(
-                    Arc::new(Python::attach(|py| {
-                        value_iter_cls
-                            .call1(py, (dropped_payload.bind(py),))
-                            .unwrap()
-                    })),
+                    Arc::new(Python::attach(|py| dropped_iter.clone_ref(py))),
                     tx,
                     cancel_rx,
                     closed,
                 )
                 .await;
+                assert!(Python::attach(|py| {
+                    dropped_iter
+                        .bind(py)
+                        .getattr("closed")
+                        .unwrap()
+                        .is_truthy()
+                        .unwrap()
+                }));
                 Ok(())
             })
             .unwrap();

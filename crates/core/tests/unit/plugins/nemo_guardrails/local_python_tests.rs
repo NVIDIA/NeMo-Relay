@@ -483,6 +483,8 @@ async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
         }
         Ok(())
     });
+    let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+    let (closed, _closed_rx) = tokio::sync::watch::channel(None);
 
     forward_guarded_provider_stream(
         provider_stream,
@@ -491,6 +493,8 @@ async fn guarded_provider_stream_reports_block_after_forwarded_chunks() {
         chunk_tx,
         monitor,
         blocked,
+        cancel_rx,
+        closed,
     )
     .await;
 

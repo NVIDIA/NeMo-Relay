@@ -75,7 +75,7 @@ pub struct LlmStreamWrapper {
     subscribers: Vec<EventSubscriberFn>,
     chunk_index: u64,
     ended: bool,
-    close_result: Option<std::result::Result<(), String>>,
+    close_result: Option<Result<()>>,
 }
 
 impl LlmStreamWrapper {
@@ -350,21 +350,15 @@ impl LlmStreamInner for LlmStreamWrapper {
         let this = self.get_mut();
         Box::pin(async move {
             if let Some(result) = &this.close_result {
-                return result
-                    .as_ref()
-                    .map(|_| ())
-                    .map_err(|message| crate::error::FlowError::Internal(message.clone()));
+                return result.clone();
             }
             let result = this.inner.close().await;
             this.finish();
-            let cached = result.map_err(|error| error.to_string());
-            this.close_result = Some(cached);
+            this.close_result = Some(result.clone());
             this.close_result
                 .as_ref()
                 .expect("close result was just stored")
-                .as_ref()
-                .map(|_| ())
-                .map_err(|message| crate::error::FlowError::Internal(message.clone()))
+                .clone()
         })
     }
 }

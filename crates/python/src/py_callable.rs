@@ -164,7 +164,13 @@ async fn await_async_iter_task(task: Py<PyAny>) -> FlowResult<Option<Json>> {
                 .map_err(|e| FlowError::Internal(e.to_string()))
         }),
         Err(error) => Python::attach(|py| {
-            if error.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py) {
+            let cancelled_error = py
+                .import("asyncio")
+                .and_then(|asyncio| asyncio.getattr("CancelledError"))
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+            if error.is_instance_of::<pyo3::exceptions::PyStopAsyncIteration>(py)
+                || error.is_instance(py, &cancelled_error)
+            {
                 Ok(None)
             } else {
                 Err(FlowError::Internal(error.to_string()))
@@ -222,8 +228,12 @@ async fn forward_async_iter(
                     tokio::select! {
                         _ = cancel.changed() => {
                             let _ = cancel_async_iter_task(&task);
-                            let _ = next_value.await;
-                            break close_async_iter(&async_iter).await;
+                            let next_result = next_value.await;
+                            let close_result = close_async_iter(&async_iter).await;
+                            break match next_result {
+                                Err(error) => Err(error),
+                                Ok(_) => close_result,
+                            };
                         }
                         value = &mut next_value => value,
                     }

@@ -257,8 +257,7 @@ impl LlmJsonStream {
     {
         Self {
             inner: Box::pin(DefaultLlmStream {
-                stream: Box::pin(stream),
-                closed: false,
+                stream: Some(Box::pin(stream)),
             }),
         }
     }
@@ -294,8 +293,7 @@ pub trait LlmStreamInner: Stream<Item = Result<Json>> + Send {
 }
 
 struct DefaultLlmStream<S> {
-    stream: Pin<Box<S>>,
-    closed: bool,
+    stream: Option<Pin<Box<S>>>,
 }
 
 impl<S> Stream for DefaultLlmStream<S>
@@ -306,10 +304,10 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        if this.closed {
-            return Poll::Ready(None);
+        match this.stream.as_mut() {
+            Some(stream) => stream.as_mut().poll_next(cx),
+            None => Poll::Ready(None),
         }
-        this.stream.as_mut().poll_next(cx)
     }
 }
 
@@ -318,7 +316,7 @@ where
     S: Stream<Item = Result<Json>> + Send,
 {
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        self.get_mut().closed = true;
+        self.get_mut().stream.take();
         Box::pin(async { Ok(()) })
     }
 }
