@@ -577,7 +577,7 @@ async def initialize_plugins(module, config):
 
             let active = active_plugin_report_py(py).unwrap();
             assert!(!active.bind(py).is_none());
-            clear_plugin_configuration_py().unwrap();
+            clear_plugin_configuration_py(py).unwrap();
             assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
 
             let failing_config = crate::convert::json_to_py(
