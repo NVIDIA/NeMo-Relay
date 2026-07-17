@@ -18,7 +18,7 @@ local checkout.
 Use the published crates when you are consuming a release:
 
 ```bash
-cargo add nemo-relay@0.6.0
+cargo add nemo-relay@0.7.0
 cargo add serde_json
 cargo add tokio --features macros,rt-multi-thread
 ```
@@ -27,7 +27,7 @@ Install the published NeMo Relay CLI separately when you need coding-agent hook
 and LLM gateway observability:
 
 ```bash
-cargo install nemo-relay-cli@0.6.0
+cargo install nemo-relay-cli@0.7.0
 ```
 
 ### Install from the Repository
@@ -47,7 +47,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 - `nemo-relay-adaptive` is a companion crate for adaptive runtime primitives and
   Redis-backed learning components when you need adaptive behavior later, but it
   is not required for this minimal direct-runtime example.
-- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.6.0`
+- `nemo-relay-cli` is a binary crate. Use `cargo install nemo-relay-cli@0.7.0`
   when you need the NeMo Relay CLI.
 
 ## Run One Scope, One Tool Call, and One LLM Call

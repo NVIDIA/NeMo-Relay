@@ -1,6 +1,6 @@
 {
   "name": "nemo-relay-plugin",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Native Relay gateway lifecycle and Codex hooks for complete local observability.",
   "author": {
     "name": "NVIDIA Corporation and Affiliates",

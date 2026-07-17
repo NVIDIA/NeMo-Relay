@@ -8,7 +8,7 @@ backend-path = ["."]
 
 [project]
 name = "nemo-relay-plugin"
-version = "0.6.0"
+version = "0.7.0"
 description = "Python SDK for NeMo Relay dynamic worker plugins."
 readme = "README.md"
 requires-python = ">=3.11"
