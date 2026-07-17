@@ -99,16 +99,6 @@ async fn run_managed_gateway(
     if prep.bypass_managed_pipeline {
         let session_id = prep.session_id.clone();
         let session_finish = prep.session_finish;
-        let model = prep.model_name.as_deref().unwrap_or("<unknown>");
-        log::warn!(
-            target: "nemo_relay.gateway",
-            event = "observability_bypassed",
-            session_id = session_id.as_str(),
-            provider = prep.provider_name.as_str(),
-            model = model,
-            reason = "startup_probe";
-            "Managed observability was bypassed for a startup probe"
-        );
         state
             .sessions
             .finish_gateway_call(&session_id, session_finish)
