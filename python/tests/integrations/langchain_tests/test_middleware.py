@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -242,6 +242,77 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
     round_tripped = payload_to_model_request(model_request, encoded)
 
     assert round_tripped.messages[0].content == "hello from intercept"
+
+
+def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(model_request: ModelRequest[Any]):
+    from nemo_relay.integrations.langchain._serialization import (
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    ChatNVIDIA = pytest.importorskip("langchain_nvidia_ai_endpoints").ChatNVIDIA
+    original_model = ChatNVIDIA.model_construct(default_headers={"x-existing": "existing", "x-shared": "provider"})
+    original = model_request.override(model=original_model)
+    relay_request = nemo_relay.LLMRequest(
+        {
+            "x-dynamo-session-id": "session-1",
+            "x-shared": "relay",
+            "x-json": {"enabled": True},
+        },
+        model_request_to_payload("mock-model", original),
+    )
+
+    converted = payload_to_model_request(original, relay_request)
+
+    assert converted.model is not original_model
+    assert cast(Any, converted.model).default_headers == {
+        "x-existing": "existing",
+        "x-shared": "relay",
+        "x-dynamo-session-id": "session-1",
+        "x-json": '{"enabled":true}',
+    }
+    assert original_model.default_headers == {"x-existing": "existing", "x-shared": "provider"}
+    assert converted.model_settings == {"temperature": 1.0}
+
+
+def test_payload_to_model_request_leaves_chat_nvidia_model_unchanged_without_relay_headers(
+    model_request: ModelRequest[Any],
+):
+    from nemo_relay.integrations.langchain._serialization import (
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    ChatNVIDIA = pytest.importorskip("langchain_nvidia_ai_endpoints").ChatNVIDIA
+    original_model = ChatNVIDIA.model_construct(default_headers={"x-existing": "existing"})
+    original = model_request.override(model=original_model)
+    converted = payload_to_model_request(
+        original,
+        nemo_relay.LLMRequest({}, model_request_to_payload("mock-model", original)),
+    )
+
+    assert converted.model is original_model
+    assert converted.model_settings == {"temperature": 1.0}
+
+
+def test_payload_to_model_request_keeps_generic_model_headers_in_model_settings(model_request: ModelRequest[Any]):
+    from nemo_relay.integrations.langchain._serialization import (
+        model_request_to_payload,
+        payload_to_model_request,
+    )
+
+    relay_request = nemo_relay.LLMRequest(
+        {"x-relay-header": "value"},
+        model_request_to_payload("mock-model", model_request),
+    )
+
+    converted = payload_to_model_request(model_request, relay_request)
+
+    assert converted.model is model_request.model
+    assert converted.model_settings == {
+        "temperature": 1.0,
+        "extra_headers": {"x-relay-header": "value"},
+    }
 
 
 def test_langchain_model_response_codec_decodes_text_and_tool_calls():

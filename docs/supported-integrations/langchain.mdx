@@ -88,6 +88,10 @@ final_message = result["messages"][-1]
 print(f"Final response: {final_message.content}")
 ```
 
+When the agent uses `ChatNVIDIA`, NeMo Relay forwards request headers, including
+Dynamo session lineage, as HTTP headers. They are not added to the NIM request
+body.
+
 ## Verify the Integration
 
 The integration works correctly when:

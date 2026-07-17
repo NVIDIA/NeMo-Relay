@@ -235,6 +235,23 @@ def model_request_to_payload(model_name: str | None, request: ModelRequest[Any])
     return payload
 
 
+def _chat_nvidia_with_relay_headers(model: Any, headers: dict[str, Any]) -> Any | None:
+    """Return a per-request ChatNVIDIA model carrying Relay headers over HTTP."""
+    try:
+        from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    except ImportError:
+        return None
+
+    if not isinstance(model, ChatNVIDIA):
+        return None
+
+    relay_headers = {
+        key: value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+        for key, value in headers.items()
+    }
+    return model.model_copy(update={"default_headers": {**model.default_headers, **relay_headers}})
+
+
 def payload_to_model_request(
     original: ModelRequest[Any],
     llm_request: LLMRequest,
@@ -264,8 +281,12 @@ def payload_to_model_request(
         extra_headers = {}
 
     if len(llm_request.headers) > 0:
-        extra_headers.update(llm_request.headers)
-        overrides["model_settings"]["extra_headers"] = extra_headers
+        model_with_headers = _chat_nvidia_with_relay_headers(original.model, llm_request.headers)
+        if model_with_headers is not None:
+            overrides["model"] = model_with_headers
+        else:
+            extra_headers.update(llm_request.headers)
+            overrides["model_settings"]["extra_headers"] = extra_headers
 
     if "tool_choice" in llm_request.content:
         overrides["tool_choice"] = llm_request.content["tool_choice"]
