@@ -249,7 +249,11 @@ def _chat_nvidia_with_relay_headers(model: Any, headers: dict[str, Any]) -> Any 
         key: value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
         for key, value in headers.items()
     }
-    return model.model_copy(update={"default_headers": {**model.default_headers, **relay_headers}})
+    relay_header_names = {key.lower() for key in relay_headers}
+    default_headers = {
+        key: value for key, value in model.default_headers.items() if key.lower() not in relay_header_names
+    }
+    return model.model_copy(update={"default_headers": {**default_headers, **relay_headers}})
 
 
 def payload_to_model_request(

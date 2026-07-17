@@ -251,7 +251,7 @@ def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(m
     )
 
     ChatNVIDIA = pytest.importorskip("langchain_nvidia_ai_endpoints").ChatNVIDIA
-    original_model = ChatNVIDIA.model_construct(default_headers={"x-existing": "existing", "x-shared": "provider"})
+    original_model = ChatNVIDIA.model_construct(default_headers={"x-existing": "existing", "X-Shared": "provider"})
     original = model_request.override(model=original_model)
     relay_request = nemo_relay.LLMRequest(
         {
@@ -271,7 +271,7 @@ def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(m
         "x-dynamo-session-id": "session-1",
         "x-json": '{"enabled":true}',
     }
-    assert original_model.default_headers == {"x-existing": "existing", "x-shared": "provider"}
+    assert original_model.default_headers == {"x-existing": "existing", "X-Shared": "provider"}
     assert converted.model_settings == {"temperature": 1.0}
 
 
