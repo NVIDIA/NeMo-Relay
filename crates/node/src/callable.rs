@@ -106,7 +106,11 @@ pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Re
     const value = fn(...args);
     return { ok: true, value: value === undefined ? null : value };
   } catch (error) {
-    return { ok: false, error: String(error?.message ?? error) };
+    let message = 'JavaScript callback threw';
+    try {
+      message = String(error?.message ?? error);
+    } catch {}
+    return { ok: false, error: message };
   }
 })"#,
     )?;
