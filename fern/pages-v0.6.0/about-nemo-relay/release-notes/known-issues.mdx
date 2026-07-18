@@ -81,6 +81,28 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
 
 ### Compatibility and Migration Notes
 
+#### Update Managed LLM Stream Consumers
+
+<Warning>
+Managed LLM streams now have one explicit close contract across bindings. When
+you stop consuming a stream before natural exhaustion, close it so Relay can
+stop the producer, finalize the partial response, and emit the interrupted end
+event. Natural exhaustion is unchanged.
+
+Rust `LlmJsonStream` is no longer the former boxed-stream type alias. Replace
+direct construction and alias-dependent type usage with `LlmJsonStream::new` or
+`LlmJsonStream::from_closeable`; call `stream.close().await` on early exit. Go
+`LlmStream.Close` now returns an `error`, so update call sites to handle its
+result. Python keeps `await stream.aclose()`, Node.js provides
+`await stream.close()`, and C callers can call `nemo_relay_stream_close` before
+`nemo_relay_stream_free`.
+
+The [Rust Library Reference](/reference/api/rust-library-reference) documents
+the current Rust API. Go and raw C FFI remain experimental and source-first.
+PR [#465](https://github.com/NVIDIA/NeMo-Relay/pull/465) introduced the unified
+close behavior.
+</Warning>
+
 #### Reinstall Coding-Agent Integrations
 
 <Warning>
@@ -248,7 +270,7 @@ name. Use `nemo-relay-install` and `nemo-relay-get-started` for setup;
 `nemo-relay-plugin-observability` and `nemo-relay-plugin-adaptive-tuning`
 skills for exporter and adaptive workflows.
 
-The [NeMo Relay User Skills](https://github.com/NVIDIA/NeMo-Relay/blob/0.6.0-rc.1/skills/README.md)
+The [NeMo Relay User Skills](https://github.com/NVIDIA/NeMo-Relay/blob/0.6.0-rc.2/skills/README.md)
 catalog lists the current paths and task routing. PR
 [#407](https://github.com/NVIDIA/NeMo-Relay/pull/407) reorganized the catalog.
 </Warning>

@@ -1,0 +1,28 @@
+---
+title: "Trait LlmStream Inner"
+sidebar-title: "LlmStreamInner"
+description: "Internal close-aware stream implementation."
+position: 14
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub trait LlmStreamInner: Stream&lt;Item = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"../../../json/type-json\">Json</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> &#123;\n    // Required method\n    fn close(\n        self: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n    ) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + '_&gt;&gt;;\n&#125;"}} /></pre>
+
+Internal close-aware stream implementation.
+
+## Required Methods
+
+#### `close`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn close(\n    self: <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;&amp;mut Self&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../../../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + '_&gt;&gt;"}} /></pre>
+
+Stop the producer and wait for cleanup. Implementations must be idempotent.
+
+## Implementors
+
+### `impl LlmStreamInner for LlmStreamWrapper`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"trait-llmstreaminner\">LlmStreamInner</a> for <a href=\"../../../stream/struct-llmstreamwrapper\">LlmStreamWrapper</a>"}} /></pre>

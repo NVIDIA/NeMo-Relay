@@ -166,6 +166,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_scope_stack_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-create): Create a new isolated scope stack with its own root scope.
 - [nemo_relay_scope_stack_restore_thread](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-restore-thread): Restore and free a captured thread-local scope stack binding.
 - [nemo_relay_scope_stack_set_thread](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-scope-stack-set-thread): Bind an isolated scope stack to the current OS thread.
+- [nemo_relay_stream_close](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-close): Stop a stream producer and wait for cleanup to complete.
 - [nemo_relay_stream_free](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-free): Free a stream handle and release its resources.
 - [nemo_relay_stream_next](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-stream-next): Poll the next chunk from a streaming LLM response. Blocks until a chunk is available.
 - [nemo_relay_tool_call](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-tool-call): Begin a manual tool call lifecycle span.
