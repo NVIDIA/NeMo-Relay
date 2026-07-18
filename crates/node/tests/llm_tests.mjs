@@ -491,6 +491,34 @@ describe('LLM guardrails', () => {
     }
   });
 
+  it('conditional guardrail throws a catchable error without terminating Node', async () => {
+    registerLlmConditionalExecutionGuardrail('node_llm_cond_throw', 10, () => {
+      throw new Error('llm guardrail boom');
+    });
+    try {
+      await assert.rejects(
+        () =>
+          llmCallExecute('llm_cond_throw', makeNative(), () => ({ should_not: 'run' }), null, null, null, null, null),
+        /llm guardrail boom/i,
+      );
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_throw');
+
+      const result = await llmCallExecute(
+        'llm_after_guardrail_throw',
+        makeNative(),
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterLlmConditionalExecutionGuardrail('node_llm_cond_throw');
+    }
+  });
+
   it('conditional guardrail (block)', () => {
     registerLlmConditionalExecutionGuardrail('node_llm_block', 10, (request) => 'blocked');
     deregisterLlmConditionalExecutionGuardrail('node_llm_block');
@@ -574,6 +602,33 @@ describe('LLM intercepts', () => {
     );
     assert.equal(result.saw_intercepted, true);
     deregisterLlmRequestIntercept('node_llm_req_mod');
+  });
+
+  it('request intercept throws a catchable error without terminating Node', async () => {
+    registerLlmRequestIntercept('node_llm_req_throw', 10, false, () => {
+      throw new Error('llm request intercept boom');
+    });
+    try {
+      await assert.rejects(
+        () =>
+          llmCallExecute('llm_req_throw', makeNative(), () => ({ should_not: 'run' }), null, null, null, null, null),
+        /llm request intercept boom/i,
+      );
+      deregisterLlmRequestIntercept('node_llm_req_throw');
+      const result = await llmCallExecute(
+        'llm_after_request_intercept_throw',
+        makeNative(),
+        () => ({ ok: true }),
+        null,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterLlmRequestIntercept('node_llm_req_throw');
+    }
   });
 
   it('request intercept rejects malformed return values', async () => {
