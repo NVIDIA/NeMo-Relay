@@ -1,15 +1,15 @@
 # Evaluation Report
 
-Evaluation of the `nemo-relay-get-started` skill before publication through NVSkills-Eval.
+Evaluation of the `nemo-relay-get-started` skill before publication through Skill Evaluator.
 
-This benchmark summarizes 3-Tier Evaluation from NVSkills-Eval results for the skill. The goal is to document whether the skill is safe, discoverable, effective, and useful for agents before it is published for broader workflow use.
+This benchmark summarizes 3-Tier Evaluation from Skill Evaluator results for the skill. The goal is to document whether the skill is safe, discoverable, effective, and useful for agents before it is published for broader workflow use.
 
 ## Evaluation Summary
 
 - Skill: `nemo-relay-get-started`
-- Evaluation date: 2026-07-15
-- NVSkills-Eval profile: `external`
-- Environment: `astra-sandbox`
+- Evaluation date: 2026-07-20
+- Skill Evaluator profile: `external`
+- Environment: `k8s-sandbox`
 - Dataset: 15 evaluation tasks
 - Attempts per task: 1
 - Pass threshold: 50%
@@ -17,8 +17,8 @@ This benchmark summarizes 3-Tier Evaluation from NVSkills-Eval results for the s
 
 ## Agents Used
 
-- `claude-code`
-- `codex`
+- Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`)
+- Codex (`openai/openai/gpt-5.5`)
 
 ## Metrics Used
 
@@ -38,7 +38,6 @@ Underlying evaluation signals used in this run:
 - `accuracy` (Accuracy): grades final-answer correctness against the reference answer.
 - `goal_accuracy` (Goal Accuracy): checks whether the overall user task completed successfully.
 - `behavior_check` (Behavior Check): verifies expected behavior steps, including safety expectations.
-- `token_efficiency` (Token Efficiency): compares token usage with and without the skill.
 
 ## Test Tasks
 
@@ -52,19 +51,19 @@ Task composition is derived from the evaluation dataset when possible. Entries w
 
 ## Results
 
-| Dimension | Num | `claude-code` | `codex` |
+| Dimension | Num | Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`) | Codex (`openai/openai/gpt-5.5`) |
 |---|---:|---:|---:|
-| Security | 8 | 97% (+0%) | 97% (+10%) |
-| Correctness | 8 | 89% (+61%) | 76% (+38%) |
-| Discoverability | 8 | 82% (+50%) | 74% (+35%) |
-| Effectiveness | 8 | 74% (+50%) | 65% (+32%) |
-| Efficiency | 8 | 72% (+34%) | 68% (+29%) |
+| Security | 15 | 93% (+3%) | 77% (-7%) |
+| Correctness | 15 | 89% (+61%) | 89% (+27%) |
+| Discoverability | 15 | 94% (+44%) | 87% (+40%) |
+| Effectiveness | 15 | 69% (+33%) | 74% (+24%) |
+| Efficiency | 15 | 76% (+38%) | 74% (+42%) |
 
 Score values show skill-assisted performance. Values in parentheses show uplift versus the no-skill baseline when baseline data is available.
 
 ## Tier 1: Static Validation Summary
 
-Tier 1 validation passed with observations. NVSkills-Eval ran 1 checks and found 3 total findings.
+Tier 1 validation passed with observations. Skill Evaluator ran 1 checks and found 3 total findings.
 
 Top findings:
 
@@ -78,4 +77,4 @@ This tier was not run or did not produce findings in this report.
 
 ## Publication Recommendation
 
-The skill is suitable to proceed toward NVSkills-Eval publication based on this benchmark. Skill owners should keep this file with the skill and refresh it when the evaluation dataset, skill behavior, or target agents materially change.
+The skill is suitable to proceed toward Skill Evaluator publication based on this benchmark. Skill owners should keep this file with the skill and refresh it when the evaluation dataset, skill behavior, or target agents materially change.
