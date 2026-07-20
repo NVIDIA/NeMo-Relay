@@ -66,7 +66,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		httpStorage,
 	}
 	otlp := NewObservabilityOtlpConfig()
-	if otlp.Enabled || otlp.MarkProjection != ObservabilityMarkProjectionInherit || len(otlp.MarkExcludeNames) != 1 || otlp.MarkExcludeNames[0] != "llm.chunk" || otlp.Transport != "http_binary" || otlp.ServiceName != "nemo-relay" || otlp.TimeoutMillis != 3000 {
+	if otlp.Enabled || otlp.MarkProjection != ObservabilityMarkProjectionInherit || len(otlp.MarkExcludeNames) != 1 || otlp.MarkExcludeNames[0] != "llm.chunk" || otlp.SemanticConvention != OpenTelemetrySemanticConventionGeneric || otlp.CaptureContent || otlp.Transport != "http_binary" || otlp.ServiceName != "nemo-relay" || otlp.TimeoutMillis != 3000 {
 		t.Fatalf("unexpected OTLP defaults: %#v", otlp)
 	}
 	otlp.MarkProjection = ObservabilityMarkProjectionTool

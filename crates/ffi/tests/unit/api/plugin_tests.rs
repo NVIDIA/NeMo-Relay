@@ -1510,6 +1510,46 @@ fn test_ffi_typed_attribute_mapping_constructors_validate_and_accept_mappings() 
             NemoRelayStatus::InvalidArg
         );
 
+        let gen_ai = cstring("gen_ai");
+        let invalid_semantic_convention = cstring("future");
+        assert_eq!(
+            nemo_relay_otel_subscriber_create_with_options(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                valid.as_ptr(),
+                gen_ai.as_ptr(),
+                true,
+                &mut otel,
+            ),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(otel);
+        assert_eq!(
+            nemo_relay_otel_subscriber_create_with_options(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                invalid_semantic_convention.as_ptr(),
+                false,
+                &mut otel,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
         let mut openinference = ptr::null_mut();
         assert_eq!(
             nemo_relay_openinference_subscriber_create_with_attribute_mappings(

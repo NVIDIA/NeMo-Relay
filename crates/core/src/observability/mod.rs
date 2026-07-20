@@ -44,6 +44,8 @@ pub(crate) mod manual;
 pub mod openinference;
 #[cfg(feature = "otel")]
 pub mod otel;
+#[cfg(feature = "otel")]
+mod otel_genai;
 pub mod plugin_component;
 
 /// Export representation for point-in-time mark events.

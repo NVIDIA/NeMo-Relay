@@ -212,6 +212,14 @@ fn editor_schema_tracks_observability_config_types() {
         .expect("openinference editor schema");
     let headers = otlp.field("headers").expect("headers field");
     assert_eq!(headers.kind, EditorFieldKind::StringMap);
+    let semantic_convention = otlp
+        .field("semantic_convention")
+        .expect("semantic convention field");
+    assert_eq!(semantic_convention.kind, EditorFieldKind::Enum);
+    let capture_content = otlp
+        .field("capture_content")
+        .expect("content capture field");
+    assert_eq!(capture_content.kind, EditorFieldKind::Boolean);
 
     let attribute_mappings = otlp
         .field("attribute_mappings")
@@ -368,6 +376,8 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_eq!(otlp.mark_projection, MarkProjection::Inherit);
     assert_eq!(otlp.mark_exclude_names, vec!["llm.chunk"]);
     assert!(otlp.attribute_mappings.is_empty());
+    assert_eq!(otlp.semantic_convention, "generic");
+    assert!(!otlp.capture_content);
     assert_eq!(otlp.transport, "http_binary");
     assert_eq!(otlp.service_name, "nemo-relay");
     assert_eq!(otlp.timeout_millis, 3_000);
@@ -396,6 +406,14 @@ fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
     }))
     .unwrap();
     assert_eq!(mappings.attribute_mappings.len(), 1);
+
+    let genai: OtlpSectionConfig = serde_json::from_value(json!({
+        "semantic_convention": "gen_ai",
+        "capture_content": true
+    }))
+    .unwrap();
+    assert_eq!(genai.semantic_convention, "gen_ai");
+    assert!(genai.capture_content);
 
     let otlp: OtlpSectionConfig = serde_json::from_value(json!({
         "mark_projection": "tool"
@@ -434,6 +452,29 @@ fn mark_projection_parses_for_otlp_and_rejects_unknown_values() {
     assert!(report.diagnostics.iter().any(|diagnostic| diagnostic.code
         == "observability.invalid_plugin_config"
         && diagnostic.message.contains("unknown variant `span`")));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "opentelemetry": {"semantic_convention": "future"}
+    })));
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("semantic_convention")
+            && diagnostic.message.contains("generic")
+            && diagnostic.message.contains("gen_ai")
+    }));
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "openinference": {"semantic_convention": "gen_ai", "capture_content": true}
+    })));
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.component.as_deref() == Some("openinference")
+            && diagnostic.field.as_deref() == Some("semantic_convention")
+    }));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.component.as_deref() == Some("openinference")
+            && diagnostic.field.as_deref() == Some("capture_content")
+    }));
 
     let report = validate_plugin_config(&plugin_config(json!({
         "atif": {"mark_projection": "tool"}
@@ -508,6 +549,8 @@ fn schema_contains_every_supported_observability_option() {
         "mark_projection",
         "mark_exclude_names",
         "attribute_mappings",
+        "semantic_convention",
+        "capture_content",
         "tool_definitions",
         "extra",
         "filename_template",
@@ -544,6 +587,11 @@ fn schema_contains_every_supported_observability_option() {
         &schema,
         "mark_projection",
         &["inherit", "event", "tool"]
+    ));
+    assert!(schema_property_has_enum(
+        &schema,
+        "semantic_convention",
+        &["generic", "gen_ai"]
     ));
     assert!(schema_property_has_default(
         &schema,

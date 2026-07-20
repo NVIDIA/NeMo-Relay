@@ -574,6 +574,8 @@ class TestOpenTelemetryTypes:
         assert config.service_name == "nemo-relay"
         assert config.instrumentation_scope == "nemo-relay-otel"
         assert config.timeout_millis == 3000
+        assert config.semantic_convention == "generic"
+        assert config.capture_content is False
         assert config.headers == {}
         assert config.resource_attributes == {}
 
@@ -583,6 +585,8 @@ class TestOpenTelemetryTypes:
         config.service_version = "1.0.0"
         config.instrumentation_scope = "py-tests"
         config.timeout_millis = 1250
+        config.semantic_convention = "gen_ai"
+        config.capture_content = True
         config.set_header("authorization", "Bearer token")
         config.set_resource_attribute("deployment.environment", "test")
 
@@ -636,6 +640,11 @@ class TestOpenTelemetryTypes:
         with pytest.raises(ValueError, match="transport must be"):
             OpenTelemetrySubscriber(bad)
 
+        bad_semantic_convention = OpenTelemetryConfig()
+        setattr(bad_semantic_convention, "semantic_convention", "future")
+        with pytest.raises(ValueError, match="semantic_convention must be"):
+            OpenTelemetrySubscriber(bad_semantic_convention)
+
     def test_subscriber_exports_scope_and_mark_events_end_to_end(self):
         with _OtelCollector() as collector:
             source = "python-é" * 20
@@ -666,6 +675,29 @@ class TestOpenTelemetryTypes:
                 assert request["headers"]["content-type"] == "application/x-protobuf"
                 assert request["body"]
                 assert _otlp_string_attribute("tenant.id", source) in request["body"]
+            finally:
+                subscriber.deregister(subscriber_name)
+                subscriber.shutdown()
+
+    def test_subscriber_exports_opt_in_genai_projection(self):
+        with _OtelCollector() as collector:
+            config = OpenTelemetryConfig()
+            config.endpoint = collector.endpoint
+            config.service_name = "py-genai-agent"
+            config.semantic_convention = "gen_ai"
+
+            subscriber = OpenTelemetrySubscriber(config)
+            subscriber_name = f"py_otel_genai_{uuid4().hex}"
+            subscriber.register(subscriber_name)
+            try:
+                handle = scope.push("planner", ScopeType.Agent)
+                scope.pop(handle)
+                subscriber.force_flush()
+
+                request = collector.wait_for_request()
+                assert _otlp_string_attribute("gen_ai.operation.name", "invoke_agent") in request["body"]
+                assert _otlp_string_attribute("gen_ai.agent.name", "planner") in request["body"]
+                assert _otlp_string_attribute("nemo_relay.otel.semantic_convention", "1.37+") in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

@@ -39,6 +39,7 @@ switchyard-translation = "0.1.0"
 nemo-relay-ffi = { version = "0.7.0", path = "crates/ffi" }
 nemo-relay-cli = { version = "0.7.0", path = "crates/cli" }
 opentelemetry = { version = "0.31", default-features = false }
+opentelemetry-semantic-conventions = { version = "0.31", default-features = false, features = ["semconv_experimental"] }
 opentelemetry_sdk = { version = "0.31", default-features = false }
 uuid = "=1.18.1"
 

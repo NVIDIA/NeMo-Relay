@@ -45,6 +45,12 @@ func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 	if config.Timeout != 3*time.Second {
 		t.Fatalf("expected default timeout 3s, got %v", config.Timeout)
 	}
+	if config.SemanticConvention != OpenTelemetrySemanticConventionGeneric {
+		t.Fatalf("expected generic semantic convention, got %q", config.SemanticConvention)
+	}
+	if config.CaptureContent {
+		t.Fatal("expected content capture to be disabled")
+	}
 	if config.Headers == nil || len(config.Headers) != 0 {
 		t.Fatalf("expected empty headers map, got %#v", config.Headers)
 	}
@@ -67,6 +73,8 @@ func TestOpenTelemetrySubscriberLifecycle(t *testing.T) {
 		Key:   "nemo_relay.start.data.tenant",
 		Alias: otelTenantAttributeAlias,
 	}}
+	config.SemanticConvention = OpenTelemetrySemanticConventionGenAI
+	config.CaptureContent = true
 
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
@@ -108,6 +116,15 @@ func TestOpenTelemetrySubscriberRejectsInvalidAttributeMapping(t *testing.T) {
 
 	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
 		t.Fatal("expected invalid attribute mapping error")
+	}
+}
+
+func TestOpenTelemetrySubscriberRejectsInvalidSemanticConvention(t *testing.T) {
+	config := NewOpenTelemetryConfig()
+	config.SemanticConvention = OpenTelemetrySemanticConvention("future")
+
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected invalid semantic convention error")
 	}
 }
 

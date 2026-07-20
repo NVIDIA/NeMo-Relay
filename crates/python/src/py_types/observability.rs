@@ -440,6 +440,10 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) instrumentation_scope: String,
     #[pyo3(get, set)]
     pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) semantic_convention: String,
+    #[pyo3(get, set)]
+    pub(crate) capture_content: bool,
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
     pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
@@ -463,7 +467,17 @@ impl PyOpenTelemetryConfig {
             }
         }
         .with_instrumentation_scope(self.instrumentation_scope.clone())
-        .with_timeout(Duration::from_millis(self.timeout_millis));
+        .with_timeout(Duration::from_millis(self.timeout_millis))
+        .with_semantic_convention(match self.semantic_convention.as_str() {
+            "generic" => nemo_relay::observability::otel::OpenTelemetrySemanticConvention::Generic,
+            "gen_ai" => nemo_relay::observability::otel::OpenTelemetrySemanticConvention::GenAi,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "semantic_convention must be 'generic' or 'gen_ai', got {other:?}"
+                )));
+            }
+        })
+        .with_content_capture(self.capture_content);
 
         if let Some(endpoint) = &self.endpoint {
             config = config.with_endpoint(endpoint.clone());
@@ -497,6 +511,8 @@ impl PyOpenTelemetryConfig {
             service_version: None,
             instrumentation_scope: "nemo-relay-otel".to_string(),
             timeout_millis: 3_000,
+            semantic_convention: "generic".to_string(),
+            capture_content: false,
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
             attribute_mappings: Vec::new(),
@@ -558,8 +574,8 @@ impl PyOpenTelemetryConfig {
 
     pub(crate) fn __repr__(&self) -> String {
         format!(
-            "<OpenTelemetryConfig transport={:?} endpoint={:?}>",
-            self.transport, self.endpoint
+            "<OpenTelemetryConfig transport={:?} semantic_convention={:?} endpoint={:?}>",
+            self.transport, self.semantic_convention, self.endpoint
         )
     }
 }

@@ -162,8 +162,10 @@ do not use, or set their `enabled` fields to `false`.
   `adaptive`.
 - `config.plugins.components[].config.atif` writes ATIF trajectory JSON files.
   Set `output_directory` to the directory where OpenClaw should write files.
-- `config.plugins.components[].config.opentelemetry` sends generic OTLP spans to
-  an OpenTelemetry collector when `enabled` is `true`.
+- `config.plugins.components[].config.opentelemetry` sends OTLP spans to an
+  OpenTelemetry collector when `enabled` is `true`. Generic Relay semantics are
+  the default; set `semantic_convention` to `gen_ai` for the OpenTelemetry GenAI
+  1.37 or newer projection.
 - `config.plugins.components[].config.openinference` sends OpenInference OTLP
   spans to Phoenix or another OpenInference-compatible collector when `enabled`
   is `true`.

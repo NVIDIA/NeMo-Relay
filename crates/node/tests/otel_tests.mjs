@@ -33,6 +33,8 @@ describe('OpenTelemetrySubscriber', () => {
         'deployment.environment': 'test',
       },
       attributeMappings: [{ key: 'nemo_relay.start.data.tenant', alias: 'tenant.id' }],
+      semanticConvention: 'gen_ai',
+      captureContent: true,
     });
 
     const name = uniqueId('node_otel');
@@ -44,6 +46,13 @@ describe('OpenTelemetrySubscriber', () => {
   });
 
   it('rejects invalid config values', () => {
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          semanticConvention: 'future',
+        }),
+      /semanticConvention must be/i,
+    );
     assert.throws(
       () =>
         new OpenTelemetrySubscriber({
@@ -108,6 +117,32 @@ describe('OpenTelemetrySubscriber', () => {
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
       assert.ok(request.body.length > 0);
       assertOtlpStringAttribute(request.body, 'tenant.id', 'node');
+    } finally {
+      subscriber.deregister(name);
+      subscriber.shutdown();
+      await collector.close();
+    }
+  });
+
+  it('exports the opt-in GenAI projection through the existing OTLP transport', async () => {
+    const collector = await startCollector();
+    const subscriber = new OpenTelemetrySubscriber({
+      endpoint: collector.endpoint,
+      serviceName: 'node-genai-agent',
+      semanticConvention: 'gen_ai',
+    });
+
+    const name = uniqueId('node_otel_genai');
+    subscriber.register(name);
+    try {
+      const scope = pushScope('planner', ScopeType.Agent, null, null, null, null);
+      popScope(scope);
+      subscriber.forceFlush();
+
+      const request = await collector.nextRequest();
+      assertOtlpStringAttribute(request.body, 'gen_ai.operation.name', 'invoke_agent');
+      assertOtlpStringAttribute(request.body, 'gen_ai.agent.name', 'planner');
+      assertOtlpStringAttribute(request.body, 'nemo_relay.otel.semantic_convention', '1.37+');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

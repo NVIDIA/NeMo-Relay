@@ -20,6 +20,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::otel_genai;
 use super::{
     MarkProjection, OtlpAttributeMapping, apply_attribute_mappings, attribute_mapping_aliases,
     attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
@@ -42,6 +43,7 @@ use opentelemetry::{Context, KeyValue};
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
@@ -91,6 +93,18 @@ pub enum OtlpTransport {
     Grpc,
 }
 
+/// Semantic convention projection used for OpenTelemetry spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum OpenTelemetrySemanticConvention {
+    /// Preserve Relay's generic OpenTelemetry span names and attributes.
+    #[default]
+    Generic,
+    /// Project supported scopes using OpenTelemetry GenAI semantic conventions 1.37 or newer.
+    GenAi,
+}
+
 /// Configuration for the OpenTelemetry subscriber.
 #[derive(Debug, Clone)]
 pub struct OpenTelemetryConfig {
@@ -104,6 +118,8 @@ pub struct OpenTelemetryConfig {
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
     attribute_mappings: Vec<OtlpAttributeMapping>,
+    semantic_convention: OpenTelemetrySemanticConvention,
+    capture_content: bool,
     timeout: Duration,
     transport: OtlpTransport,
 }
@@ -121,6 +137,8 @@ impl Default for OpenTelemetryConfig {
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
+            semantic_convention: OpenTelemetrySemanticConvention::Generic,
+            capture_content: false,
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
         }
@@ -229,6 +247,24 @@ impl OpenTelemetryConfig {
         self.attribute_mappings = mappings.into_iter().collect();
         self
     }
+
+    /// Selects the span semantic convention projection.
+    pub fn with_semantic_convention(
+        mut self,
+        semantic_convention: OpenTelemetrySemanticConvention,
+    ) -> Self {
+        self.semantic_convention = semantic_convention;
+        self
+    }
+
+    /// Enables sensitive GenAI content attributes after Relay sanitization.
+    ///
+    /// Content capture is disabled by default. This setting only affects the
+    /// [`OpenTelemetrySemanticConvention::GenAi`] projection.
+    pub fn with_content_capture(mut self, capture_content: bool) -> Self {
+        self.capture_content = capture_content;
+        self
+    }
 }
 
 /// OpenTelemetry-backed NeMo Relay subscriber.
@@ -280,6 +316,8 @@ impl OpenTelemetrySubscriber {
             config.mark_projection,
             config.mark_exclude_names,
             config.attribute_mappings,
+            config.semantic_convention,
+            config.capture_content,
         ))
     }
 
@@ -294,6 +332,8 @@ impl OpenTelemetrySubscriber {
             MarkProjection::default(),
             default_mark_exclude_names(),
             Vec::new(),
+            OpenTelemetrySemanticConvention::Generic,
+            false,
         )
     }
 
@@ -309,6 +349,8 @@ impl OpenTelemetrySubscriber {
             mark_projection,
             default_mark_exclude_names(),
             Vec::new(),
+            OpenTelemetrySemanticConvention::Generic,
+            false,
         )
     }
 
@@ -329,6 +371,8 @@ impl OpenTelemetrySubscriber {
             mark_projection,
             mark_exclude_names.into_iter().map(Into::into).collect(),
             Vec::new(),
+            OpenTelemetrySemanticConvention::Generic,
+            false,
         )
     }
 
@@ -366,6 +410,29 @@ impl OpenTelemetrySubscriber {
             options.mark_projection,
             options.mark_exclude_names,
             options.attribute_mappings,
+            OpenTelemetrySemanticConvention::Generic,
+            false,
+        ))
+    }
+
+    /// Builds a subscriber from a tracer provider with generic and semantic projection options.
+    pub fn from_tracer_provider_with_semantic_convention(
+        provider: SdkTracerProvider,
+        instrumentation_scope: impl Into<String>,
+        options: OpenTelemetrySubscriberOptions,
+        semantic_convention: OpenTelemetrySemanticConvention,
+        capture_content: bool,
+    ) -> Result<Self> {
+        validate_attribute_mappings(&options.attribute_mappings)
+            .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
+        Ok(Self::from_tracer_provider_with_scope(
+            provider,
+            instrumentation_scope.into(),
+            options.mark_projection,
+            options.mark_exclude_names,
+            options.attribute_mappings,
+            semantic_convention,
+            capture_content,
         ))
     }
 
@@ -375,6 +442,8 @@ impl OpenTelemetrySubscriber {
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
         attribute_mappings: Vec<OtlpAttributeMapping>,
+        semantic_convention: OpenTelemetrySemanticConvention,
+        capture_content: bool,
     ) -> Self {
         let processor = Arc::new(Mutex::new(
             OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
@@ -383,6 +452,8 @@ impl OpenTelemetrySubscriber {
                 mark_projection,
                 mark_exclude_names,
                 attribute_mappings,
+                semantic_convention,
+                capture_content,
             ),
         ));
         let processor_for_callback = Arc::clone(&processor);
@@ -567,6 +638,8 @@ struct OtelEventProcessor {
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
     attribute_mappings: Vec<OtlpAttributeMapping>,
+    semantic_convention: OpenTelemetrySemanticConvention,
+    capture_content: bool,
 }
 
 impl OtelEventProcessor {
@@ -602,6 +675,8 @@ impl OtelEventProcessor {
             mark_projection,
             mark_exclude_names,
             Vec::new(),
+            OpenTelemetrySemanticConvention::Generic,
+            false,
         )
     }
 
@@ -611,6 +686,8 @@ impl OtelEventProcessor {
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
         attribute_mappings: Vec<OtlpAttributeMapping>,
+        semantic_convention: OpenTelemetrySemanticConvention,
+        capture_content: bool,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope);
         Self {
@@ -622,6 +699,8 @@ impl OtelEventProcessor {
             mark_projection,
             mark_exclude_names,
             attribute_mappings,
+            semantic_convention,
+            capture_content,
         }
     }
 
@@ -645,19 +724,61 @@ impl OtelEventProcessor {
             .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
     }
 
+    fn span_name(&self, event: &Event) -> String {
+        if self.semantic_convention == OpenTelemetrySemanticConvention::GenAi
+            && otel_genai::supports(event)
+        {
+            otel_genai::span_name(event)
+        } else {
+            span_name(event)
+        }
+    }
+
+    fn span_kind(&self, event: &Event) -> SpanKind {
+        if self.semantic_convention == OpenTelemetrySemanticConvention::GenAi
+            && otel_genai::supports(event)
+        {
+            otel_genai::span_kind(event)
+        } else {
+            span_kind(event)
+        }
+    }
+
+    fn start_attributes(&self, event: &Event) -> Vec<KeyValue> {
+        if self.semantic_convention == OpenTelemetrySemanticConvention::GenAi
+            && otel_genai::supports(event)
+        {
+            otel_genai::start_attributes(event, self.capture_content)
+        } else {
+            start_attributes(event)
+        }
+    }
+
+    fn end_attributes(&self, event: &Event) -> Vec<KeyValue> {
+        if self.semantic_convention == OpenTelemetrySemanticConvention::GenAi
+            && otel_genai::supports(event)
+        {
+            let mut attributes = otel_genai::end_attributes(event, self.capture_content);
+            push_end_accounting_attributes(&mut attributes, event);
+            attributes
+        } else {
+            end_attributes(event)
+        }
+    }
+
     fn process_start(&mut self, event: &Event) {
         self.remove_completed_span_context(event.uuid());
         let parent_context = self.parent_context(event);
         let is_trace_root = !parent_context.span().span_context().is_valid();
         let mut span = self
             .tracer
-            .span_builder(span_name(event))
-            .with_kind(span_kind(event))
+            .span_builder(self.span_name(event))
+            .with_kind(self.span_kind(event))
             .with_start_time(to_system_time(*event.timestamp()))
             .with_trace_id(relay_trace_id(event.uuid()))
             .with_span_id(relay_span_id(event.uuid()))
             .start_with_context(&self.tracer, &parent_context);
-        let mut attributes = start_attributes(event);
+        let mut attributes = self.start_attributes(event);
         if is_trace_root {
             push_session_identity_attributes(&mut attributes, event);
         }
@@ -681,7 +802,7 @@ impl OtelEventProcessor {
         self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
 
         super::set_span_status_from_event_metadata(&mut active_span.span, event);
-        let mut attributes = end_attributes(event);
+        let mut attributes = self.end_attributes(event);
         if !self.attribute_mappings.is_empty() {
             let mut projected_attributes = active_span.projected_attributes;
             projected_attributes.extend(attributes.iter().cloned());
@@ -866,6 +987,11 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.data", event.data());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_end_accounting_attributes(&mut attributes, event);
+    attributes
+}
+
+fn push_end_accounting_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if event
         .category()
         .is_some_and(|category| category.as_str() == "llm")
@@ -877,9 +1003,8 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     if let Some(response) = event.annotated_response()
         && let Some(summary) = response.optimization_summary.as_ref()
     {
-        push_optimization_attributes(&mut attributes, summary);
+        push_optimization_attributes(attributes, summary);
     }
-    attributes
 }
 
 fn push_optimization_attributes(
@@ -960,7 +1085,7 @@ fn mark_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-fn common_attributes(event: &Event) -> Vec<KeyValue> {
+pub(super) fn common_attributes(event: &Event) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new("nemo_relay.uuid", event.uuid().to_string()),
         KeyValue::new(

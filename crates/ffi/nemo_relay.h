@@ -1362,6 +1362,29 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_attribute_mappings(const 
                                                                           struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates a new OpenTelemetry subscriber with projection and content-capture options.
+ *
+ * `semantic_convention` accepts `generic` (the default) or `gen_ai`.
+ * `capture_content` only affects the `gen_ai` projection and operates on sanitized events.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_options(const char *transport,
+                                                               const char *endpoint,
+                                                               const char *headers_json,
+                                                               const char *resource_attributes_json,
+                                                               const char *service_name,
+                                                               const char *service_namespace,
+                                                               const char *service_version,
+                                                               const char *instrumentation_scope,
+                                                               uint64_t timeout_millis,
+                                                               const char *attribute_mappings_json,
+                                                               const char *semantic_convention,
+                                                               bool capture_content,
+                                                               struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Registers the OpenTelemetry subscriber as an event subscriber.
  *
  * # Safety

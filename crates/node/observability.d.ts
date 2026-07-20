@@ -71,6 +71,10 @@ export interface OtlpConfig {
   mark_projection?: 'inherit' | 'event' | 'tool';
   mark_exclude_names?: string[];
   attribute_mappings?: OtlpAttributeMapping[];
+  /** OpenTelemetry-only semantic projection. OpenInference supports `generic`. */
+  semantic_convention?: 'generic' | 'gen_ai';
+  /** OpenTelemetry-only capture of sanitized GenAI content. */
+  capture_content?: boolean;
   transport?: 'http_binary' | 'grpc' | string;
   endpoint?: string;
   headers?: Record<string, string>;

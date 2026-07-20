@@ -96,6 +96,8 @@ class TestObservabilityConfigHelpers:
             "mark_projection": "inherit",
             "mark_exclude_names": ["llm.chunk"],
             "attribute_mappings": [],
+            "semantic_convention": "generic",
+            "capture_content": False,
             "transport": "http_binary",
             "headers": {},
             "resource_attributes": {},
@@ -103,6 +105,9 @@ class TestObservabilityConfigHelpers:
             "timeout_millis": 3000,
         }
         assert OtlpConfig(mark_projection="tool").to_dict()["mark_projection"] == "tool"
+        assert (
+            OtlpConfig(semantic_convention="gen_ai", capture_content=True).to_dict()["semantic_convention"] == "gen_ai"
+        )
 
         wrapped = ComponentSpec(ObservabilityConfig(atof=AtofConfig())).to_dict()
         assert wrapped["kind"] == OBSERVABILITY_PLUGIN_KIND

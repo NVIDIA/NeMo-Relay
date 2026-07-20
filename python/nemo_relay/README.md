@@ -48,7 +48,8 @@ The Python package provides the following capabilities:
   responses, and execution, plus mark and scope event sanitizers for `data`,
   `category_profile`, and `metadata`.
 - **Subscribers and exporters**: Event consumers for observability and
-  diagnostics.
+  diagnostics, including generic OpenTelemetry and the opt-in OpenTelemetry
+  GenAI 1.37 or newer projection.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.
 - **Shared Rust runtime semantics**: Python behavior aligned with the Rust

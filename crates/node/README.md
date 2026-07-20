@@ -49,7 +49,8 @@ The Node.js package provides the following capabilities:
   plus mark and scope event sanitizers for `data`, `categoryProfile`, and
   `metadata`.
 - **Observability exporters**: Subscriber and exporter support for common
-  runtime telemetry flows.
+  runtime telemetry flows, including generic OpenTelemetry and the opt-in
+  OpenTelemetry GenAI 1.37 or newer projection.
 - **Additional entry points**: `nemo-relay-node/typed`,
   `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
   `nemo-relay-node/observability`.

@@ -42,6 +42,7 @@ object-store = [
 otel = [
     "dep:opentelemetry",
     "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
     "dep:opentelemetry_sdk",
     "dep:reqwest",
     "dep:tonic",
@@ -87,6 +88,7 @@ tokio-stream = { version = "0.1", default-features = false, features = ["sync"] 
 typed-builder = "0.23.2"
 futures-util = { version = "0.3", optional = true }
 opentelemetry = { workspace = true, features = ["trace"], optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, features = ["trace"], optional = true }
 openinference-semantic-conventions = { version = "0.1.1", optional = true }
 libloading = "0.8"
