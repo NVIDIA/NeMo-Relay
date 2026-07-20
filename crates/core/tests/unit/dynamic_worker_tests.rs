@@ -1041,7 +1041,7 @@ async fn install_registrations_covers_registry_error_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn installed_fail_open_callbacks_preserve_original_values() {
+async fn installed_callbacks_apply_surface_specific_fallbacks() {
     struct RuntimeCleanup {
         registrations: Option<PluginRegistrationContext>,
     }
@@ -1116,8 +1116,9 @@ async fn installed_fail_open_callbacks_preserve_original_values() {
 
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
-            .name("fail-open-event")
+            .name("fallback-event")
             .data(json!({"preserved": true}))
+            .metadata(json!({"preserved": true}))
             .build(),
         None,
         None,
@@ -1138,11 +1139,10 @@ async fn installed_fail_open_callbacks_preserve_original_values() {
             &state.scope_sanitize_end_guardrails,
         ] {
             let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
-            assert_eq!(
-                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries)
-                    .data(),
-                event.data()
-            );
+            let sanitized =
+                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries);
+            assert_eq!(sanitized.data(), None);
+            assert_eq!(sanitized.metadata(), None);
         }
 
         let entries = state.tool_sanitize_request_entries(&[]);

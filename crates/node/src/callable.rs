@@ -600,7 +600,7 @@ pub fn wrap_js_event_sanitize_fn(
                 record_callback_error(format!(
                     "nemo_relay: failed to serialize JS event sanitizer context: {error}"
                 ));
-                return fields.clone();
+                return CoreEventSanitizeFields::default();
             }
         };
         let js_fields = EventSanitizeFields {
@@ -627,7 +627,7 @@ pub fn wrap_js_event_sanitize_fn(
             record_callback_error(format!(
                 "nemo_relay: failed to queue JS event sanitizer callback: {status:?}"
             ));
-            return fields.clone();
+            return CoreEventSanitizeFields::default();
         }
         let sanitized = (|| -> Result<_> {
             let result =
@@ -656,7 +656,7 @@ pub fn wrap_js_event_sanitize_fn(
             Ok(sanitized) => sanitized,
             Err(error) => {
                 record_callback_error(error.to_string());
-                fields.clone()
+                CoreEventSanitizeFields::default()
             }
         }
     })

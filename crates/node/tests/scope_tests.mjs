@@ -333,14 +333,14 @@ describe('Events', () => {
 
 describe('Subscribers', () => {
   it('register and deregister', () => {
-    registerSubscriber('node_sub_1', () => { });
+    registerSubscriber('node_sub_1', () => {});
     const removed = deregisterSubscriber('node_sub_1');
     assert.equal(removed, true);
   });
 
   it('duplicate subscriber fails', () => {
-    registerSubscriber('node_dup_sub', () => { });
-    assert.throws(() => registerSubscriber('node_dup_sub', () => { }));
+    registerSubscriber('node_dup_sub', () => {});
+    assert.throws(() => registerSubscriber('node_dup_sub', () => {}));
     deregisterSubscriber('node_dup_sub');
   });
 

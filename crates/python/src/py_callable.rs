@@ -1043,28 +1043,28 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                 Ok(value) => value,
                 Err(error) => {
                     eprintln!("nemo_relay: failed to convert event sanitizer context: {error}");
-                    return fields.clone();
+                    return EventSanitizeFields::default();
                 }
             };
             let fields_json = match serde_json::to_value(&fields) {
                 Ok(value) => value,
                 Err(error) => {
                     eprintln!("nemo_relay: failed to serialize event sanitizer fields: {error}");
-                    return fields.clone();
+                    return EventSanitizeFields::default();
                 }
             };
             let py_fields = match json_to_py(py, &fields_json) {
                 Ok(value) => value,
                 Err(error) => {
                     eprintln!("nemo_relay: failed to convert event sanitizer fields: {error}");
-                    return fields.clone();
+                    return EventSanitizeFields::default();
                 }
             };
             let result = match py_fn.call1(py, (py_event, py_fields)) {
                 Ok(value) => value,
                 Err(error) => {
                     eprintln!("nemo_relay: Python event sanitizer callable failed: {error}");
-                    return fields.clone();
+                    return EventSanitizeFields::default();
                 }
             };
             py_to_json(result.bind(py))
@@ -1074,7 +1074,7 @@ pub fn wrap_py_event_sanitize_fn(py_fn: Py<PyAny>) -> EventSanitizeFn {
                     eprintln!(
                         "nemo_relay: event sanitizer must return data, category_profile, and metadata fields"
                     );
-                    fields.clone()
+                    EventSanitizeFields::default()
                 })
         })
     })

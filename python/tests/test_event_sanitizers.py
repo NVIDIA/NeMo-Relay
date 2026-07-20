@@ -56,20 +56,21 @@ def test_global_mark_sanitizers_order_convert_fields_and_remove_values(capture_e
     assert calls == [("checkpoint", {"secret": "raw"}), ("mark", {"stage": "first"})]
 
 
-def test_invalid_mark_sanitizer_result_fails_open(capture_events):
+def test_mark_sanitizer_exception_clears_observability_fields(capture_events):
     _capture_name, events = capture_events
-    guardrails.register_mark_sanitize(
-        "python-mark-invalid",
-        0,
-        cast(nemo_relay.EventSanitizeGuardrail, lambda _event, _fields: "invalid"),
-    )
+
+    def raises(_event: nemo_relay.Event, _fields: EventSanitizeFields) -> EventSanitizeFields:
+        raise RuntimeError("sanitize boom")
+
+    guardrails.register_mark_sanitize("python-mark-raises", 0, raises)
     try:
         scope.event("checkpoint", data={"kept": True})
         subscribers.flush()
     finally:
-        guardrails.deregister_mark_sanitize("python-mark-invalid")
+        guardrails.deregister_mark_sanitize("python-mark-raises")
 
-    assert events[-1].data == {"kept": True}
+    assert events[-1].data is None
+    assert events[-1].metadata is None
 
 
 def test_scope_start_and_end_sanitizers_cover_category_profile(capture_events):
