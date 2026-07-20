@@ -719,7 +719,7 @@ export declare function llmStreamCallExecute(name: string, request: Json, func: 
 
 Register an event sanitize guardrail.
 
-The callback must be synchronous. If it throws, Relay preserves the current event fields and records the error for `getLastCallbackError()`.
+The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
 
 ```ts
 export declare function registerMarkSanitizeGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
@@ -735,7 +735,7 @@ export declare function deregisterMarkSanitizeGuardrail(name: string): boolean
 
 Register an event sanitize guardrail.
 
-The callback must be synchronous. If it throws, Relay preserves the current event fields and records the error for `getLastCallbackError()`.
+The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
 
 ```ts
 export declare function registerScopeSanitizeStartGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
@@ -751,7 +751,7 @@ export declare function deregisterScopeSanitizeStartGuardrail(name: string): boo
 
 Register an event sanitize guardrail.
 
-The callback must be synchronous. If it throws, Relay preserves the current event fields and records the error for `getLastCallbackError()`.
+The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
 
 ```ts
 export declare function registerScopeSanitizeEndGuardrail(name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
@@ -1017,7 +1017,7 @@ export declare function flushSubscribers(): void
 
 Register a scope-local event sanitize guardrail.
 
-The callback must be synchronous. If it throws, Relay preserves the current event fields and records the error for `getLastCallbackError()`.
+The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
 
 ```ts
 export declare function scopeRegisterMarkSanitizeGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
@@ -1033,7 +1033,7 @@ export declare function scopeDeregisterMarkSanitizeGuardrail(scopeUuid: string, 
 
 Register a scope-local event sanitize guardrail.
 
-The callback must be synchronous. If it throws, Relay preserves the current event fields and records the error for `getLastCallbackError()`.
+The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
 
 ```ts
 export declare function scopeRegisterScopeSanitizeStartGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
@@ -1049,7 +1049,7 @@ export declare function scopeDeregisterScopeSanitizeStartGuardrail(scopeUuid: st
 
 Register a scope-local event sanitize guardrail.
 
-The callback must be synchronous. If it throws, Relay preserves the current event fields and records the error for `getLastCallbackError()`.
+The callback must be synchronous. Callback, serialization, conversion, or invalid-result failures clear the event fields and record the error for `getLastCallbackError()`.
 
 ```ts
 export declare function scopeRegisterScopeSanitizeEndGuardrail(scopeUuid: string, name: string, priority: number, guardrail: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields): void
