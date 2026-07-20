@@ -15,6 +15,9 @@ Decision API. It adds routing-aware LLM execution intercepts to the Relay
 runtime while preserving Relay ownership of provider credentials, target
 bindings, dispatch, retries, fallbacks, and observability.
 
+NeMo Relay 0.6.0 uses a separately running Switchyard Decision API from the
+`topic/nemo-relay-integration` branch.
+
 Install it from crates.io, or build it from the NeMo Relay source checkout with
 the optional CLI feature while the Switchyard Decision API contract and
 service/library boundary are still evolving.
@@ -79,9 +82,7 @@ The current service setup is documented in
 the pinned topic-branch commit, local configuration, compatibility smoke test,
 and trajectory workflow.
 
-Translation is already in-process through Switchyard's Rust translation
-library. A future in-process `DecisionProvider` can replace the HTTP Decision API
-call without changing the Relay-owned dispatch and observability boundary.
+Translation runs in-process through Switchyard's Rust translation library.
 
 ## Configuration and Registration
 
@@ -118,6 +119,7 @@ outside tracked configuration files.
 
 For more information, refer to the following resources:
 
+- [Switchyard 0.6.0 setup and validation guide](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/about)
+- [Switchyard configuration reference](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/configuration)
 - [Switchyard integration examples](../../examples/switchyard/README.md)
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
 - [Switchyard repository](https://github.com/NVIDIA-NeMo/Switchyard)
