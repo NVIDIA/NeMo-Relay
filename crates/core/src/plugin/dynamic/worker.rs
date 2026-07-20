@@ -1060,12 +1060,12 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::ScopeSanitizeEndGuardrail => {
                     let instance = Arc::new(self.clone_for_callback());
                     let callback_name = name.clone();
-                    let callback = Arc::new(move |event: &Event, fields: EventSanitizeFields| {
+                    let callback = Arc::new(move |event: &Event, _fields: EventSanitizeFields| {
                         instance
                             .invoke_event_sanitize(&callback_name, surface, event)
                             .unwrap_or_else(|_| {
                                 instance.log_callback_fallback(&callback_name, surface);
-                                fields
+                                EventSanitizeFields::default()
                             })
                     });
                     match surface {

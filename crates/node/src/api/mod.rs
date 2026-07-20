@@ -1350,7 +1350,7 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
                     record_callback_error(format!(
                         "nemo_relay: failed to serialize JS event sanitizer context: {error}"
                     ));
-                    return fields;
+                    return nemo_relay::api::event::EventSanitizeFields::default();
                 }
             };
             let sanitized = (|| -> FlowResult<_> {
@@ -1381,7 +1381,7 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
                 Ok(sanitized) => sanitized,
                 Err(error) => {
                     record_callback_error(error.to_string());
-                    fields
+                    nemo_relay::api::event::EventSanitizeFields::default()
                 }
             }
         } else {
@@ -2382,8 +2382,9 @@ macro_rules! napi_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         /// Register an event sanitize guardrail.
         ///
-        /// The callback must be synchronous. If it throws, Relay preserves the current event
-        /// fields and records the error for `getLastCallbackError()`.
+        /// The callback must be synchronous. Callback, serialization, conversion, or
+        /// invalid-result failures clear the event fields and record the error for
+        /// `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -2863,8 +2864,9 @@ macro_rules! napi_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         /// Register a scope-local event sanitize guardrail.
         ///
-        /// The callback must be synchronous. If it throws, Relay preserves the current event
-        /// fields and records the error for `getLastCallbackError()`.
+        /// The callback must be synchronous. Callback, serialization, conversion, or
+        /// invalid-result failures clear the event fields and record the error for
+        /// `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
             env: Env,
