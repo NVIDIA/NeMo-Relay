@@ -98,16 +98,7 @@ fn derive_key_parts(annotated_request: &AnnotatedLlmRequest) -> AcgKeyParts<'_> 
         } else {
             short_hash(&tool_fingerprint).to_string()
         },
-        response_format_hash: response_format_fingerprint
-            .as_deref()
-            .map(|fingerprint| {
-                if has_stable_scaffold {
-                    fingerprint
-                } else {
-                    short_hash(fingerprint)
-                }
-            })
-            .map(str::to_string),
+        response_format_hash: response_format_fingerprint,
         has_stable_scaffold,
     }
 }

@@ -164,17 +164,14 @@ pub(crate) fn profile_prefix_fingerprint(
         .count();
     // Conservatively bind deeper prefixes to the complete request because the
     // normalized IR does not retain a lossless provider-prefix representation.
-    let request_fingerprint = (prefix_length > scaffold_length)
-        .then_some(observation.source_request_hash.as_deref())
-        .flatten();
+    let request_fingerprint = if prefix_length > scaffold_length {
+        observation.source_request_hash.as_deref()?
+    } else {
+        "stable-scaffold"
+    };
 
     Some(sha256_hex(
-        &[
-            learning_key,
-            &prefix_fingerprint,
-            request_fingerprint.unwrap_or("stable-scaffold"),
-        ]
-        .join("\n"),
+        &[learning_key, &prefix_fingerprint, request_fingerprint].join("\n"),
     ))
 }
 

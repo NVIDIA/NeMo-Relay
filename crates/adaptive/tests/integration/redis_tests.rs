@@ -515,28 +515,38 @@ async fn redis_integration_persists_scaffold_profile_across_backend_restart() {
         content: MessageContent::Text("Plan a different task".to_string()),
         name: None,
     };
+    let hot_cache = empty_hot_cache();
 
     for request in [first, second] {
         learner
             .process_run(
                 &sample_run_with_request(agent_id, request),
                 &backend,
-                &empty_hot_cache(),
+                &hot_cache,
             )
             .await
             .unwrap();
     }
+    let learning_key = {
+        let guard = hot_cache.read().unwrap();
+        assert_eq!(guard.acg_profiles.len(), 1);
+        guard.acg_profiles.keys().next().unwrap().clone()
+    };
     drop(backend);
 
     let restarted = RedisBackend::new("redis://127.0.0.1/", prefix)
         .await
         .unwrap();
     let observations = restarted
-        .load_observations(agent_id)
+        .load_observations(&learning_key)
         .await
         .unwrap()
         .unwrap();
-    let stability = restarted.load_stability(agent_id).await.unwrap().unwrap();
+    let stability = restarted
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(observations.len(), 2);
     assert_eq!(stability.total_observations, 2);

@@ -119,3 +119,17 @@ fn stability_internal_deserializes_persisted_state_without_a_prefix_fingerprint(
 
     assert_eq!(restored.stable_prefix_fingerprint, None);
 }
+
+#[test]
+fn profile_fingerprint_requires_source_hash_beyond_the_scaffold() {
+    let mut observation = prompt(vec![
+        block("system-0", 0, "stable policy"),
+        block("user-1", 1, "stable task"),
+    ]);
+    observation.blocks[1].role = PromptRole::User;
+
+    assert_eq!(
+        profile_prefix_fingerprint(&observation, 2, "learning-key"),
+        None
+    );
+}
