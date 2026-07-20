@@ -16,8 +16,7 @@ runtime while preserving Relay ownership of provider credentials, target
 bindings, dispatch, retries, fallbacks, and observability.
 
 NeMo Relay 0.6.0 uses a separately running Switchyard Decision API from the
-`topic/nemo-relay-integration` branch. The in-process `libsy` decision design
-is part of the NeMo Relay 0.7 work and does not apply to NeMo Relay 0.6.0.
+`topic/nemo-relay-integration` branch.
 
 Install it from crates.io, or build it from the NeMo Relay source checkout with
 the optional CLI feature while the Switchyard Decision API contract and
@@ -83,9 +82,7 @@ The current service setup is documented in
 the pinned topic-branch commit, local configuration, compatibility smoke test,
 and trajectory workflow.
 
-Translation is already in-process through Switchyard's Rust translation
-library. A future in-process `DecisionProvider` can replace the HTTP Decision API
-call without changing the Relay-owned dispatch and observability boundary.
+Translation runs in-process through Switchyard's Rust translation library.
 
 ## Configuration and Registration
 

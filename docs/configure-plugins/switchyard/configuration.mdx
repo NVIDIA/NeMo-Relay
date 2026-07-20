@@ -8,8 +8,7 @@ position: 2
 SPDX-License-Identifier: Apache-2.0 */}
 
 > **Experimental NeMo Relay 0.6.0 integration:** This release calls a separately
-> running Switchyard Decision API. The in-process `libsy` design is part of the
-> NeMo Relay 0.7 work and does not apply to NeMo Relay 0.6.0.
+> running Switchyard Decision API.
 
 Start with the
 [Switchyard 0.6.0 setup and validation guide](./about.mdx)
@@ -345,9 +344,7 @@ Consider the following experimental limitations before adopting the plugin:
   [`8f9db9a6`](https://github.com/NVIDIA-NeMo/Switchyard/commit/8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8)
   on `topic/nemo-relay-integration`. Testing another revision is deliberate and
   can expose contract drift.
-- The Decision API and service/library boundary are experimental. The
-  in-process Decision Provider work targets NeMo Relay 0.7 and is not part of
-  NeMo Relay 0.6.0.
+- The Decision API and service/library boundary are experimental.
 - Nonportable provider extensions in configurations that can translate across
   protocols, malformed decisions, service failures, pre-dispatch translation
   failures, buffered-response translation failures, and target drift fail open

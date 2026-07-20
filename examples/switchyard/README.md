@@ -12,7 +12,6 @@ manual, local validation workflows rather than production startup orchestration.
 For the canonical architecture, setup, configuration, validation, and troubleshooting workflow,
 refer to the
 [Switchyard 0.6.0 setup and validation guide](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/about).
-NeMo Relay 0.6.0 does not use the in-process `libsy` decision design planned for NeMo Relay 0.7.
 
 ## Required Switchyard Revision
 
