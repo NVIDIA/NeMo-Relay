@@ -128,21 +128,35 @@ impl SseEventDecoder {
     /// or skip the frame; frames with no `data:` line at all (e.g. SSE heartbeats) are silently
     /// dropped.
     pub fn push_bytes(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>> {
+        self.push_bytes_results(bytes).into_iter().collect()
+    }
+
+    /// Appends `bytes` and returns each completed frame's result in wire order.
+    ///
+    /// Unlike [`Self::push_bytes`], this preserves successful events that precede a malformed
+    /// frame in the same byte batch. Decoding stops after the first error so callers can emit the
+    /// preceding events, surface the error, and terminate the stream.
+    pub fn push_bytes_results(&mut self, bytes: &[u8]) -> Vec<Result<SseEvent>> {
         // Normalize CRLF to LF on append so the framing search only needs to find `\n\n`. Some
         // providers emit mixed line endings on the wire; normalizing once here keeps the inner
         // loop cheap.
         let chunk = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
         self.buffer.push_str(&chunk);
-        let mut events = Vec::new();
+        let mut results = Vec::new();
         while let Some(cut) = self.buffer.find("\n\n") {
             let frame: String = self.buffer.drain(..cut).collect();
             // Drop the `\n\n` terminator itself.
             self.buffer.drain(..2);
-            if let Some(event) = parse_sse_frame(&frame)? {
-                events.push(event);
+            match parse_sse_frame(&frame) {
+                Ok(Some(event)) => results.push(Ok(event)),
+                Ok(None) => {}
+                Err(error) => {
+                    results.push(Err(error));
+                    break;
+                }
             }
         }
-        Ok(events)
+        results
     }
 
     /// Drains any remaining buffered frame at end of stream.

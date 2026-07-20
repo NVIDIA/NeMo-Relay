@@ -76,3 +76,22 @@ fn surfaces_parse_errors_with_payload_context() {
     assert!(message.contains("SSE data payload"), "{message}");
     assert!(message.contains("not valid json"), "{message}");
 }
+
+#[test]
+fn preserves_successes_before_a_later_parse_error() {
+    let mut decoder = SseEventDecoder::new();
+    let mut results = decoder
+        .push_bytes_results(
+            b"event: good\ndata: {\"chunk\":\"first\"}\n\nevent: bad\ndata: {not valid json}\n\n",
+        )
+        .into_iter();
+
+    let first = results.next().unwrap().unwrap();
+    assert_eq!(first.event.as_deref(), Some("good"));
+    assert_eq!(first.data, json!({"chunk": "first"}));
+
+    let error = results.next().unwrap().unwrap_err().to_string();
+    assert!(error.contains("SSE data payload"), "{error}");
+    assert!(error.contains("not valid json"), "{error}");
+    assert!(results.next().is_none());
+}
