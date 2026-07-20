@@ -105,7 +105,13 @@ impl Learner for AcgLearner {
                     .store_observations(&profile_key, &observations_vec)
                     .await?;
 
-                let stability_result = analyze_stability(&observations_vec, &self.thresholds);
+                let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
+                stability_result.stable_prefix_fingerprint =
+                    crate::acg::stability::dominant_profile_prefix_fingerprint(
+                        &observations_vec,
+                        stability_result.stable_prefix_length,
+                        &profile_key,
+                    );
                 backend
                     .store_stability(&profile_key, &stability_result)
                     .await?;

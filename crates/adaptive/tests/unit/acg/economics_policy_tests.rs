@@ -84,6 +84,7 @@ fn stability_result(scores: &[(f64, f64)], observation_count: u32) -> StabilityA
             })
             .collect(),
         stable_prefix_length: scores.len(),
+        stable_prefix_fingerprint: None,
         total_observations: observation_count,
     }
 }

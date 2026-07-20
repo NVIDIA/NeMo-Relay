@@ -133,6 +133,34 @@ fn build_intent_bundle(
         return None;
     }
 
+    let learning_key = derive_acg_learning_key(agent_id, annotated_request);
+    let live_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        prompt_ir,
+        stability.stable_prefix_length,
+        &learning_key,
+    );
+    let Some(stored_fingerprint) = stability.stable_prefix_fingerprint.as_ref() else {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_missing"}),
+        );
+        return None;
+    };
+    let Some(live_fingerprint) = live_fingerprint.as_ref() else {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_unavailable"}),
+        );
+        return None;
+    };
+    if stored_fingerprint != live_fingerprint {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_mismatch"}),
+        );
+        return None;
+    }
+
     let toolset_hash = annotated_request
         .tools
         .as_ref()
