@@ -78,7 +78,7 @@ use crate::convert::{
 use crate::stream::LlmStream;
 use crate::types::{
     EventSanitizeFields, LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle,
-    event_sanitize_fields_from_js,
+    event_sanitize_fields_from_json,
 };
 
 #[napi::module_init]
@@ -564,6 +564,41 @@ fn json_callback_tsfn(
     Ok(tsfn)
 }
 
+fn middleware_tool_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>> {
+    let callback = callable::safe_middleware_callback(env, func)?;
+    let mut tsfn = callback.create_threadsafe_function(
+        0,
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(String, Json)>| {
+            let name = ctx.env.create_string_from_std(ctx.value.0)?;
+            let args = unsafe {
+                JsUnknown::from_raw_unchecked(
+                    ctx.env.raw(),
+                    Json::to_napi_value(ctx.env.raw(), ctx.value.1)?,
+                )
+            };
+            Ok(vec![js_unknown_from_raw(&ctx.env, &name), args])
+        },
+    )?;
+    tsfn.unref(env)?;
+    Ok(tsfn)
+}
+
+fn middleware_json_callback_tsfn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<ThreadsafeFunction<Json, ErrorStrategy::Fatal>> {
+    let callback = callable::safe_middleware_callback(env, func)?;
+    let mut tsfn = callback.create_threadsafe_function(
+        0,
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
+    )?;
+    tsfn.unref(env)?;
+    Ok(tsfn)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn add_plugin_event_sanitizer(
     env: &Env,
@@ -683,12 +718,11 @@ fn build_plugin_context(
                 ctx.get::<String>(0)?
             );
             let priority = ctx.get::<i32>(1)?;
-            let callback =
-                ctx.get::<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>>(2)?;
+            let callback = ctx.get::<JsFunction>(2)?;
             core_registry_api::register_tool_sanitize_request_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_tool_fn(callback),
+                callable::wrap_js_tool_fn(middleware_tool_callback_tsfn(ctx.env, &callback)?),
             )
             .map_err(to_napi_err)?;
 
@@ -728,12 +762,11 @@ fn build_plugin_context(
                 ctx.get::<String>(0)?
             );
             let priority = ctx.get::<i32>(1)?;
-            let callback =
-                ctx.get::<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>>(2)?;
+            let callback = ctx.get::<JsFunction>(2)?;
             core_registry_api::register_tool_sanitize_response_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_tool_fn(callback),
+                callable::wrap_js_tool_fn(middleware_tool_callback_tsfn(ctx.env, &callback)?),
             )
             .map_err(to_napi_err)?;
 
@@ -769,12 +802,13 @@ fn build_plugin_context(
         move |ctx| {
             let name = format!("{}{}", tool_conditional_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
-            let callback =
-                ctx.get::<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>>(2)?;
+            let callback = ctx.get::<JsFunction>(2)?;
             core_registry_api::register_tool_conditional_execution_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_tool_conditional_fn(callback),
+                callable::wrap_js_tool_conditional_fn(middleware_tool_callback_tsfn(
+                    ctx.env, &callback,
+                )?),
             )
             .map_err(to_napi_err)?;
 
@@ -816,11 +850,13 @@ fn build_plugin_context(
                 ctx.get::<String>(0)?
             );
             let priority = ctx.get::<i32>(1)?;
-            let callback = ctx.get::<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>(2)?;
+            let callback = ctx.get::<JsFunction>(2)?;
             core_registry_api::register_llm_sanitize_request_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_sanitize_request_fn(callback),
+                callable::wrap_js_llm_sanitize_request_fn(middleware_json_callback_tsfn(
+                    ctx.env, &callback,
+                )?),
             )
             .map_err(to_napi_err)?;
 
@@ -860,11 +896,13 @@ fn build_plugin_context(
                 ctx.get::<String>(0)?
             );
             let priority = ctx.get::<i32>(1)?;
-            let callback = ctx.get::<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>(2)?;
+            let callback = ctx.get::<JsFunction>(2)?;
             core_registry_api::register_llm_sanitize_response_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_response_fn(callback),
+                callable::wrap_js_llm_response_fn(middleware_json_callback_tsfn(
+                    ctx.env, &callback,
+                )?),
             )
             .map_err(to_napi_err)?;
 
@@ -900,11 +938,13 @@ fn build_plugin_context(
         move |ctx| {
             let name = format!("{}{}", llm_conditional_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
-            let callback = ctx.get::<ThreadsafeFunction<Json, ErrorStrategy::Fatal>>(2)?;
+            let callback = ctx.get::<JsFunction>(2)?;
             core_registry_api::register_llm_conditional_execution_guardrail(
                 &name,
                 priority,
-                callable::wrap_js_llm_conditional_fn(callback),
+                callable::wrap_js_llm_conditional_fn(middleware_json_callback_tsfn(
+                    ctx.env, &callback,
+                )?),
             )
             .map_err(to_napi_err)?;
 
@@ -944,7 +984,7 @@ fn build_plugin_context(
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
             let callback = ctx.get::<JsFunction>(3)?;
-            let tsfn = json_callback_tsfn(ctx.env, &callback)?;
+            let tsfn = middleware_json_callback_tsfn(ctx.env, &callback)?;
             core_registry_api::register_llm_request_intercept(
                 &name,
                 priority,
@@ -1072,8 +1112,8 @@ fn build_plugin_context(
             let name = format!("{}{}", tool_request_namespace, ctx.get::<String>(0)?);
             let priority = ctx.get::<i32>(1)?;
             let break_chain = ctx.get::<bool>(2)?;
-            let callback =
-                ctx.get::<ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>>(3)?;
+            let callback = ctx.get::<JsFunction>(3)?;
+            let callback = middleware_tool_callback_tsfn(ctx.env, &callback)?;
             core_registry_api::register_tool_request_intercept(
                 &name,
                 priority,
@@ -1230,11 +1270,7 @@ impl PersistentJsFunction {
         unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
 
-    fn call_event_sanitize(
-        &self,
-        event: Json,
-        fields: EventSanitizeFields,
-    ) -> napi::Result<EventSanitizeFields> {
+    fn call_event_sanitize(&self, event: Json, fields: EventSanitizeFields) -> napi::Result<Json> {
         let mut value = ptr::null_mut();
         // SAFETY: `self.reference` is a live N-API reference created in
         // `self.env`, and `value` is writable storage for the borrowed
@@ -1264,7 +1300,8 @@ impl PersistentJsFunction {
             )
         };
         let returned = func.call(None, &[event, fields])?;
-        event_sanitize_fields_from_js(returned)
+        // SAFETY: `returned` is the live result of invoking `func` in this environment.
+        unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
 }
 
@@ -1294,9 +1331,10 @@ fn js_event_fields(fields: &nemo_relay::api::event::EventSanitizeFields) -> Even
 }
 
 fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
-    let direct = Arc::new(PersistentJsFunction::new(env, func)?);
+    let callback = callable::safe_middleware_callback(env, func)?;
+    let direct = Arc::new(PersistentJsFunction::new(env, &callback)?);
     let register_thread = std::thread::current().id();
-    let mut tsfn = func.create_threadsafe_function(
+    let mut tsfn = callback.create_threadsafe_function(
         0,
         |ctx: napi::threadsafe_function::ThreadSafeCallContext<(Json, Json)>| {
             Ok(vec![ctx.value.0, ctx.value.1])
@@ -1315,14 +1353,37 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
                     return nemo_relay::api::event::EventSanitizeFields::default();
                 }
             };
-            let sanitized = direct
-                .call_event_sanitize(event_json, js_event_fields(&fields))
-                .ok()
-                .and_then(core_event_fields);
-            if sanitized.is_none() {
-                record_callback_error("nemo_relay: JS event sanitizer callback failed".to_string());
+            let sanitized = (|| -> FlowResult<_> {
+                let value = direct
+                    .call_event_sanitize(event_json, js_event_fields(&fields))
+                    .map_err(|error| {
+                        FlowError::Internal(format!(
+                            "nemo_relay: JS event sanitizer callback failed: {error}"
+                        ))
+                    })?;
+                let value = callable::unwrap_middleware_result(
+                    value,
+                    "nemo_relay: JS event sanitizer callback failed",
+                )?;
+                let fields = event_sanitize_fields_from_json(value).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "nemo_relay: JS event sanitizer callback failed: invalid JS event sanitizer result: {error}"
+                    ))
+                })?;
+                core_event_fields(fields).ok_or_else(|| {
+                    FlowError::Internal(
+                        "nemo_relay: JS event sanitizer callback failed: invalid JS event sanitizer result"
+                            .to_string(),
+                    )
+                })
+            })();
+            match sanitized {
+                Ok(sanitized) => sanitized,
+                Err(error) => {
+                    record_callback_error(error.to_string());
+                    nemo_relay::api::event::EventSanitizeFields::default()
+                }
             }
-            sanitized.unwrap_or_default()
         } else {
             background(event, fields)
         }
@@ -1462,8 +1523,8 @@ pub fn scope_stack_active() -> bool {
 
 /// Returns the most recent callback error that could not be surfaced through a direct exception.
 ///
-/// This is primarily used for sanitize/intercept/finalizer callback paths whose
-/// core callback signatures cannot return `Result`.
+/// This is primarily used for sanitize callback paths that fail open and cannot
+/// surface their errors directly.
 #[napi]
 pub fn get_last_callback_error() -> Option<String> {
     get_recorded_callback_error()
@@ -2319,6 +2380,10 @@ pub fn llm_stream_call_execute(
 
 macro_rules! napi_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+        /// Register an event sanitize guardrail.
+        ///
+        /// The callback must be synchronous. If it throws, Relay preserves the current event
+        /// fields and records the error for `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -2366,11 +2431,13 @@ macro_rules! napi_guardrail_tool_api {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
+            env: Env,
             name: String,
             priority: i32,
-            guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+            guardrail: JsFunction,
         ) -> Result<()> {
-            $core_register(&name, priority, $wrapper(guardrail)).map_err(to_napi_err)
+            let callback = middleware_tool_callback_tsfn(&env, &guardrail)?;
+            $core_register(&name, priority, $wrapper(callback)).map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -2386,6 +2453,8 @@ napi_guardrail_tool_api!(
     ///
     /// The `guardrail` callback receives `(toolName, args)` and must return sanitized args.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// for `getLastCallbackError()`.
     register_tool_sanitize_request_guardrail,
     /// Deregister a tool request sanitization guardrail by name.
     ///
@@ -2401,6 +2470,8 @@ napi_guardrail_tool_api!(
     ///
     /// The `guardrail` callback receives `(toolName, result)` and must return sanitized result.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// for `getLastCallbackError()`.
     register_tool_sanitize_response_guardrail,
     /// Deregister a tool response sanitization guardrail by name.
     ///
@@ -2415,16 +2486,19 @@ napi_guardrail_tool_api!(
 ///
 /// The `guardrail` callback receives `(toolName, args)` and must return `null` to allow
 /// execution or a rejection reason string to block it. Higher `priority` values run first.
+/// If the callback throws, the managed call rejects and the protected callback does not run.
 #[napi]
 pub fn register_tool_conditional_execution_guardrail(
+    env: Env,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
+    let callback = middleware_tool_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_tool_conditional_execution_guardrail(
         &name,
         priority,
-        callable::wrap_js_tool_conditional_fn(guardrail),
+        callable::wrap_js_tool_conditional_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2448,12 +2522,14 @@ macro_rules! napi_intercept_tool_api {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
+            env: Env,
             name: String,
             priority: i32,
             break_chain: bool,
-            callable: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+            callable: JsFunction,
         ) -> Result<()> {
-            $core_register(&name, priority, break_chain, $wrapper(callable)).map_err(to_napi_err)
+            let callback = middleware_tool_callback_tsfn(&env, &callable)?;
+            $core_register(&name, priority, break_chain, $wrapper(callback)).map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -2469,6 +2545,7 @@ napi_intercept_tool_api!(
     ///
     /// The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain`
     /// is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+    /// If the callback throws, the managed call rejects and later middleware does not run.
     register_tool_request_intercept,
     /// Deregister a tool request intercept by name.
     ///
@@ -2532,16 +2609,20 @@ pub fn deregister_tool_execution_intercept(name: String) -> Result<bool> {
 ///
 /// The `guardrail` callback receives the LLM request as JSON and must return the sanitized request.
 /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists.
+/// If the callback throws, Relay preserves the current emitted payload and records the error for
+/// `getLastCallbackError()`.
 #[napi]
 pub fn register_llm_sanitize_request_guardrail(
+    env: Env,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
+    let callback = middleware_json_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_sanitize_request_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_request_fn(guardrail),
+        callable::wrap_js_llm_sanitize_request_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2559,16 +2640,20 @@ pub fn deregister_llm_sanitize_request_guardrail(name: String) -> Result<bool> {
 /// The `guardrail` callback receives the LLM response as a JSON value and must return
 /// the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail
 /// with the same `name` already exists.
+/// If the callback throws, Relay preserves the current emitted payload and records the error for
+/// `getLastCallbackError()`.
 #[napi]
 pub fn register_llm_sanitize_response_guardrail(
+    env: Env,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
+    let callback = middleware_json_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_sanitize_response_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_response_fn(guardrail),
+        callable::wrap_js_llm_response_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2585,16 +2670,19 @@ pub fn deregister_llm_sanitize_response_guardrail(name: String) -> Result<bool> 
 ///
 /// The `guardrail` callback receives the LLM request as JSON and must return `null` to allow
 /// execution or a rejection reason string to block it. Higher `priority` values run first.
+/// If the callback throws, the managed call rejects and the protected callback does not run.
 #[napi]
 pub fn register_llm_conditional_execution_guardrail(
+    env: Env,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
+    let callback = middleware_json_callback_tsfn(&env, &guardrail)?;
     core_registry_api::register_llm_conditional_execution_guardrail(
         &name,
         priority,
-        callable::wrap_js_llm_conditional_fn(guardrail),
+        callable::wrap_js_llm_conditional_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2616,21 +2704,24 @@ pub fn deregister_llm_conditional_execution_guardrail(name: String) -> Result<bo
 /// The `callable` receives the `LlmRequest` (as JSON) and returns a transformed request.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
+/// If the callback throws, the managed call rejects and later middleware does not run.
 #[napi]
 pub fn register_llm_request_intercept(
+    env: Env,
     name: String,
     priority: i32,
     break_chain: bool,
     #[napi(
         ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }"
     )]
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
+    let callback = middleware_json_callback_tsfn(&env, &callable)?;
     core_registry_api::register_llm_request_intercept(
         &name,
         priority,
         break_chain,
-        callable::wrap_js_llm_request_intercept_fn(callable),
+        callable::wrap_js_llm_request_intercept_fn(callback),
     )
     .map_err(to_napi_err)
 }
@@ -2770,6 +2861,10 @@ pub fn flush_subscribers() -> Result<()> {
 
 macro_rules! napi_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
+        /// Register a scope-local event sanitize guardrail.
+        ///
+        /// The callback must be synchronous. If it throws, Relay preserves the current event
+        /// fields and records the error for `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -2827,14 +2922,16 @@ macro_rules! napi_scope_guardrail_tool_api {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
+            env: Env,
             scope_uuid: String,
             name: String,
             priority: i32,
-            guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+            guardrail: JsFunction,
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
                 .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-            $core_register(&uuid, &name, priority, $wrapper(guardrail)).map_err(to_napi_err)
+            let callback = middleware_tool_callback_tsfn(&env, &guardrail)?;
+            $core_register(&uuid, &name, priority, $wrapper(callback)).map_err(to_napi_err)
         }
 
         $(#[doc = $dereg_doc])*
@@ -2853,6 +2950,8 @@ napi_scope_guardrail_tool_api!(
     /// The `guardrail` callback receives `(toolName, args)` and must return sanitized args.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
     /// on the specified scope.
+    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// for `getLastCallbackError()`.
     scope_register_tool_sanitize_request_guardrail,
     /// Deregister a scope-local tool request sanitization guardrail by name.
     ///
@@ -2869,6 +2968,8 @@ napi_scope_guardrail_tool_api!(
     /// The `guardrail` callback receives `(toolName, result)` and must return sanitized result.
     /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
     /// on the specified scope.
+    /// If the callback throws, Relay preserves the current emitted payload and records the error
+    /// for `getLastCallbackError()`.
     scope_register_tool_sanitize_response_guardrail,
     /// Deregister a scope-local tool response sanitization guardrail by name.
     ///
@@ -2883,12 +2984,14 @@ napi_scope_guardrail_tool_api!(
 ///
 /// The `guardrail` callback receives `(toolName, args)` and must return `null` to allow
 /// execution or a rejection reason string to block it. Higher `priority` values run first.
+/// If the callback throws, the managed call rejects and the protected callback does not run.
 #[napi]
 pub fn scope_register_tool_conditional_execution_guardrail(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
@@ -2896,7 +2999,7 @@ pub fn scope_register_tool_conditional_execution_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_tool_conditional_fn(guardrail),
+        callable::wrap_js_tool_conditional_fn(middleware_tool_callback_tsfn(&env, &guardrail)?),
     )
     .map_err(to_napi_err)
 }
@@ -2926,15 +3029,17 @@ macro_rules! napi_scope_intercept_tool_api {
         $(#[doc = $reg_doc])*
         #[napi]
         pub fn $register_name(
+            env: Env,
             scope_uuid: String,
             name: String,
             priority: i32,
             break_chain: bool,
-            callable: ThreadsafeFunction<(String, Json), ErrorStrategy::Fatal>,
+            callable: JsFunction,
         ) -> Result<()> {
             let uuid = uuid::Uuid::parse_str(&scope_uuid)
                 .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-            $core_register(&uuid, &name, priority, break_chain, $wrapper(callable))
+            let callback = middleware_tool_callback_tsfn(&env, &callable)?;
+            $core_register(&uuid, &name, priority, break_chain, $wrapper(callback))
                 .map_err(to_napi_err)
         }
 
@@ -2953,6 +3058,7 @@ napi_scope_intercept_tool_api!(
     ///
     /// The `callable` receives `(toolName, args)` and returns transformed args. If `breakChain`
     /// is `true`, no lower-priority intercepts run after this one. Higher `priority` values run first.
+    /// If the callback throws, the managed call rejects and later middleware does not run.
     scope_register_tool_request_intercept,
     /// Deregister a scope-local tool request intercept by name.
     ///
@@ -3029,12 +3135,15 @@ pub fn scope_deregister_tool_execution_intercept(scope_uuid: String, name: Strin
 /// The `guardrail` callback receives the LLM request as JSON and must return the sanitized request.
 /// Higher `priority` values run first. Throws if a guardrail with the same `name` already exists
 /// on the specified scope.
+/// If the callback throws, Relay preserves the current emitted payload and records the error for
+/// `getLastCallbackError()`.
 #[napi]
 pub fn scope_register_llm_sanitize_request_guardrail(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
@@ -3042,7 +3151,7 @@ pub fn scope_register_llm_sanitize_request_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_sanitize_request_fn(guardrail),
+        callable::wrap_js_llm_sanitize_request_fn(middleware_json_callback_tsfn(&env, &guardrail)?),
     )
     .map_err(to_napi_err)
 }
@@ -3066,12 +3175,15 @@ pub fn scope_deregister_llm_sanitize_request_guardrail(
 /// The `guardrail` callback receives the LLM response as a JSON value and must return
 /// the sanitized response as JSON. Higher `priority` values run first. Throws if a guardrail
 /// with the same `name` already exists on the specified scope.
+/// If the callback throws, Relay preserves the current emitted payload and records the error for
+/// `getLastCallbackError()`.
 #[napi]
 pub fn scope_register_llm_sanitize_response_guardrail(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
@@ -3079,7 +3191,7 @@ pub fn scope_register_llm_sanitize_response_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_response_fn(guardrail),
+        callable::wrap_js_llm_response_fn(middleware_json_callback_tsfn(&env, &guardrail)?),
     )
     .map_err(to_napi_err)
 }
@@ -3102,12 +3214,14 @@ pub fn scope_deregister_llm_sanitize_response_guardrail(
 ///
 /// The `guardrail` callback receives the LLM request as JSON and must return `null` to allow
 /// execution or a rejection reason string to block it. Higher `priority` values run first.
+/// If the callback throws, the managed call rejects and the protected callback does not run.
 #[napi]
 pub fn scope_register_llm_conditional_execution_guardrail(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
-    guardrail: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    guardrail: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
@@ -3115,7 +3229,7 @@ pub fn scope_register_llm_conditional_execution_guardrail(
         &uuid,
         &name,
         priority,
-        callable::wrap_js_llm_conditional_fn(guardrail),
+        callable::wrap_js_llm_conditional_fn(middleware_json_callback_tsfn(&env, &guardrail)?),
     )
     .map_err(to_napi_err)
 }
@@ -3143,8 +3257,10 @@ pub fn scope_deregister_llm_conditional_execution_guardrail(
 /// The `callable` receives the `LlmRequest` (as JSON) and returns a transformed request.
 /// If `breakChain` is `true`, no lower-priority intercepts run after this one.
 /// Higher `priority` values run first.
+/// If the callback throws, the managed call rejects and later middleware does not run.
 #[napi]
 pub fn scope_register_llm_request_intercept(
+    env: Env,
     scope_uuid: String,
     name: String,
     priority: i32,
@@ -3152,16 +3268,17 @@ pub fn scope_register_llm_request_intercept(
     #[napi(
         ts_arg_type = "(args: { name: string; request: Json; annotated: Json | null }) => { request: Json; annotated?: Json | null; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions?: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }"
     )]
-    callable: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    callable: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
+    let callback = middleware_json_callback_tsfn(&env, &callable)?;
     core_registry_api::scope_register_llm_request_intercept(
         &uuid,
         &name,
         priority,
         break_chain,
-        callable::wrap_js_llm_request_intercept_fn(callable),
+        callable::wrap_js_llm_request_intercept_fn(callback),
     )
     .map_err(to_napi_err)
 }

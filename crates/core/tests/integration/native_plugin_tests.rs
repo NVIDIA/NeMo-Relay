@@ -774,6 +774,7 @@ async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
         Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
     )
     .expect("test subscriber should register");
+    cleanup.mark_subscriber_registered("native_event_sanitizer_error_capture");
 
     emit_scope_mark(
         EmitMarkEventParams::builder()
