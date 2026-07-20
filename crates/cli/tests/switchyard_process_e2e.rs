@@ -320,6 +320,11 @@ base_url = "{provider_url}"
     );
     assert!(providers[1].1["messages"].is_array());
     assert!(providers[1].1.get("input").is_none());
+    assert_eq!(providers[1].1["messages"][0]["role"], "user");
+    assert_eq!(
+        providers[1].1["messages"][0]["content"],
+        "process boundary response translation"
+    );
     for (headers, _) in providers.iter() {
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
