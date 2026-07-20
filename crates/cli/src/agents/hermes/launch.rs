@@ -75,13 +75,16 @@ fn create_overlay(
 
 fn ensure_durable_state_paths(source_home: &Path) -> Result<(), CliError> {
     std::fs::create_dir_all(source_home.join("sessions"))?;
+    let state_db = source_home.join("state.db");
     match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(source_home.join("state.db"))
+        .open(&state_db)
     {
         Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && state_db.is_file() => {
+            Ok(())
+        }
         Err(error) => Err(CliError::Io(error)),
     }
 }

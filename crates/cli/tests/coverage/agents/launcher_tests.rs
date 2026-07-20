@@ -1072,6 +1072,54 @@ fn sequential_hermes_runs_preserve_state_from_a_fresh_home() {
     assert!(source_home.join("sessions/session.json").exists());
 }
 
+#[test]
+fn rejects_state_db_directory_before_populating_hermes_overlay() {
+    let temp = tempfile::tempdir().unwrap();
+    let source_home = temp.path().join("hermes-home");
+    let state_db = source_home.join("state.db");
+    let hooks_path = source_home.join("config.yaml");
+    std::fs::create_dir_all(&state_db).unwrap();
+    let resolved = ResolvedConfig {
+        agents: AgentConfigs {
+            hermes: AgentCommandConfig {
+                hooks_path: Some(hooks_path.clone()),
+                ..AgentCommandConfig::default()
+            },
+            ..AgentConfigs::default()
+        },
+        ..ResolvedConfig::default()
+    };
+
+    let result = PreparedAgentLaunch::new(
+        CodingAgent::Hermes,
+        vec!["hermes".into(), "chat".into()],
+        "http://127.0.0.1:1234",
+        &resolved,
+        false,
+    );
+    let error = match result {
+        Ok(prepared) => {
+            prepared.restore().unwrap();
+            panic!("state.db directories must be rejected")
+        }
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        CliError::Io(ref error) if error.kind() == std::io::ErrorKind::AlreadyExists
+    ));
+    assert!(state_db.is_dir());
+    assert!(!hooks_path.exists());
+    assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".nemo-relay-hermes-home")
+    }));
+}
+
 #[cfg(unix)]
 #[test]
 fn process_private_directories_are_owner_only() {
