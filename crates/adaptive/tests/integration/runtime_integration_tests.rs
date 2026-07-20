@@ -521,8 +521,7 @@ async fn runtime_integration_acg_learner_reuses_learning_buckets_across_growing_
     let requests = sample_growing_chat_requests("claude-3-5-sonnet");
     let learner = AcgLearner::new(agent_id, 8, StabilityThresholds::default());
     let learning_key = format!(
-        "{agent_id}::model=claude-3-5-sonnet::seed=stable-scaffold::system={}::tools=no-tools",
-        nemo_relay_adaptive::acg::sha256_hex("You are a careful planner"),
+        "{agent_id}::model=claude-3-5-sonnet::seed=stable-scaffold::system=sha256:3087d8fd4b98c564984d0f184c06bf6346f0788022d7cb521231e65f673936ac::tools=no-tools"
     );
 
     learner
