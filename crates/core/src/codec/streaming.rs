@@ -139,7 +139,11 @@ impl SseEventDecoder {
     pub fn push_bytes_results(&mut self, bytes: &[u8]) -> Vec<Result<SseEvent>> {
         // Normalize CRLF to LF on append so the framing search only needs to find `\n\n`. Some
         // providers emit mixed line endings on the wire; normalizing once here keeps the inner
-        // loop cheap.
+        // loop cheap. If CRLF is split across chunks, retain the trailing CR until the next append
+        // and remove it only when the next byte completes the sequence.
+        if self.buffer.ends_with('\r') && bytes.first() == Some(&b'\n') {
+            self.buffer.pop();
+        }
         let chunk = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
         self.buffer.push_str(&chunk);
         let mut results = Vec::new();
