@@ -37,12 +37,12 @@ e2e_wait_for() {
   local process_pid="${4:-}"
   local attempt
   for attempt in $(seq 1 "$attempts"); do
-    if curl --fail --silent "$url" >/dev/null 2>&1; then
-      return 0
-    fi
     if [[ -n "$process_pid" ]] && ! kill -0 "$process_pid" 2>/dev/null; then
       echo "process $process_pid exited before $url became ready" >&2
       return 1
+    fi
+    if curl --fail --silent "$url" >/dev/null 2>&1; then
+      return 0
     fi
     sleep "$delay"
   done
