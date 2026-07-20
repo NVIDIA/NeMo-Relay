@@ -5,13 +5,18 @@ SPDX-License-Identifier: Apache-2.0
 
 # Switchyard Integration Examples
 
-These examples exercise the experimental Relay integration with a separately running Switchyard
-Decision API service and the in-process Switchyard translation library. They are manual, local
-validation workflows rather than production startup orchestration.
+These examples exercise the experimental NeMo Relay 0.6.0 integration with a separately running
+Switchyard Decision API service and the in-process Switchyard translation library. They are
+manual, local validation workflows rather than production startup orchestration.
+
+For the canonical architecture, setup, configuration, validation, and troubleshooting workflow,
+refer to the
+[Switchyard 0.6.0 setup and validation guide](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/about).
+NeMo Relay 0.6.0 does not use the in-process `libsy` decision design planned for NeMo Relay 0.7.
 
 ## Required Switchyard Revision
 
-The scripts default to the latest commit currently pinned for the public topic branch:
+The NeMo Relay 0.6.0 scripts require the following public topic branch and commit:
 
 ```text
 https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration
@@ -58,6 +63,12 @@ a successful run.
 examples/switchyard/run-real-e2e.sh
 ```
 
+A successful run ends with:
+
+```text
+real Switchyard E2E passed: ['provider/weak', 'provider/strong', 'provider/strong']
+```
+
 ### Hermes and Ollama Trajectory
 
 `run-hermes-ollama-smoke.sh` runs a fixed multi-query trajectory through Hermes, Relay, Ollama,
@@ -99,4 +110,6 @@ configuration and refuses activation unless it reports `{"status":"ok"}`.
 Trajectory scripts write to `artifacts/` by default. Set `SWITCHYARD_TRAJECTORY_DIR` to choose a
 shareable output directory. On failure, logs are preserved and include the verified Switchyard
 revision. Do not place API keys or bearer tokens in configuration files; use environment variables
-or an untracked secrets file.
+or an untracked secrets file. For service readiness failures, port conflicts, and the exact
+temporary log locations used by `run-real-e2e.sh`, refer to the
+[canonical Switchyard 0.6.0 guide](https://docs.nvidia.com/nemo/relay/v0.6.0/configure-plugins/switchyard/about#troubleshooting).
