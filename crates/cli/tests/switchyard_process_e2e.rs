@@ -43,7 +43,7 @@ async fn decide(
         requests.push((headers, request));
         requests.len()
     };
-    if call == 3 {
+    if call == 4 {
         return Response::builder()
             .status(StatusCode::SERVICE_UNAVAILABLE)
             .body(Body::from("decision API unavailable"))
@@ -236,7 +236,7 @@ base_url = "{provider_url}"
     let client = reqwest::Client::new();
     wait_for_gateway(&client, &gateway_url, &mut gateway.0).await;
 
-    let send = |request_id: &'static str, stream: bool| {
+    let send_chat = |request_id: &'static str, stream: bool| {
         client
             .post(format!("{gateway_url}/v1/chat/completions"))
             .header("x-nemo-relay-session-id", "ci-process-session")
@@ -254,24 +254,40 @@ base_url = "{provider_url}"
             .send()
     };
 
-    let buffered = send("buffered-request", false).await.unwrap();
+    let buffered = send_chat("buffered-request", false).await.unwrap();
     assert!(buffered.status().is_success());
     let buffered: Value = buffered.json().await.unwrap();
     assert_eq!(buffered["model"], "provider/selected");
 
-    let streaming = send("stream-request", true).await.unwrap();
+    let translated = client
+        .post(format!("{gateway_url}/v1/responses"))
+        .header("x-nemo-relay-session-id", "ci-process-session")
+        .header("x-nemo-relay-request-id", "translated-request")
+        .json(&json!({
+            "model": "client/model",
+            "stream": false,
+            "input": "process boundary response translation"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(translated.status().is_success());
+    let translated: Value = translated.json().await.unwrap();
+    assert_eq!(translated["object"], "response");
+
+    let streaming = send_chat("stream-request", true).await.unwrap();
     assert!(streaming.status().is_success());
     let streaming = streaming.text().await.unwrap();
     assert!(streaming.contains("streamed"));
     assert!(streaming.contains("[DONE]"));
 
-    let fallback = send("fallback-request", false).await.unwrap();
+    let fallback = send_chat("fallback-request", false).await.unwrap();
     assert!(fallback.status().is_success());
     let fallback: Value = fallback.json().await.unwrap();
     assert_eq!(fallback["model"], "provider/fallback");
 
     let decisions = decision_requests.lock().unwrap();
-    assert_eq!(decisions.len(), 3);
+    assert_eq!(decisions.len(), 4);
     for (headers, body) in decisions.iter() {
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
@@ -298,9 +314,12 @@ base_url = "{provider_url}"
         vec![
             "provider/selected",
             "provider/selected",
+            "provider/selected",
             "provider/fallback"
         ]
     );
+    assert!(providers[1].1["messages"].is_array());
+    assert!(providers[1].1.get("input").is_none());
     for (headers, _) in providers.iter() {
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));

@@ -81,7 +81,7 @@ pub(crate) async fn passthrough(
 
 // Captures upstream HTTP status and response headers from inside the managed `func`. The runtime's
 // LLM execution callback returns only a Json (or Json stream), so the outer gateway needs a side
-// channel to recover the bytes the client expects.
+// channel to recover transport metadata that is not represented in the runtime response.
 type UpstreamResponseInfo = Arc<Mutex<Option<(StatusCode, HeaderMap)>>>;
 
 // Captures the original `reqwest::Error` from an upstream send failure so the gateway can return
@@ -214,6 +214,19 @@ async fn run_managed_buffered(
         .await;
     match result {
         Ok(response_json) => {
+            let response_body = match response_bytes
+                .lock()
+                .expect("response bytes lock poisoned")
+                .take()
+            {
+                Some(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                    Ok(upstream_json) if upstream_json != response_json => {
+                        Body::from(response_json.to_string())
+                    }
+                    _ => Body::from(bytes),
+                },
+                None => Body::from(response_json.to_string()),
+            };
             state
                 .sessions
                 .record_gateway_response_hints(&session_id, owner_subagent_id, response_json)
@@ -227,12 +240,7 @@ async fn run_managed_buffered(
                 .expect("upstream info lock poisoned")
                 .take()
                 .unwrap_or((StatusCode::OK, HeaderMap::new()));
-            let bytes = response_bytes
-                .lock()
-                .expect("response bytes lock poisoned")
-                .take()
-                .unwrap_or_default();
-            build_response(status, headers, Body::from(bytes))
+            build_response(status, headers, response_body)
         }
         Err(error) => {
             state
