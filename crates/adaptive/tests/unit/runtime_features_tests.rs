@@ -27,6 +27,7 @@ use nemo_relay::api::registry::{
     register_llm_execution_intercept, register_llm_request_intercept,
     register_llm_stream_execution_intercept, register_tool_execution_intercept,
 };
+use nemo_relay::api::runtime::LlmJsonStream;
 use nemo_relay::api::runtime::ToolExecutionNextFn;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{
@@ -746,14 +747,9 @@ async fn registration_context_registers_all_supported_callback_types() {
         7,
         Arc::new(|_name, request, _next| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                    as Pin<
-                        Box<
-                            dyn tokio_stream::Stream<
-                                    Item = nemo_relay::error::Result<nemo_relay::json::Json>,
-                                > + Send,
-                        >,
-                    >)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
             })
         }),
     )
@@ -878,8 +874,7 @@ async fn acg_feature_registers_execution_and_stream_intercepts() {
 
     let stream_next: LlmStreamExecutionNextFn = Arc::new(|request| {
         Box::pin(async move {
-            let stream: nemo_relay::api::runtime::LlmJsonStream =
-                Box::pin(tokio_stream::iter(vec![Ok(request.content)]));
+            let stream = LlmJsonStream::new(tokio_stream::iter(vec![Ok(request.content)]));
             Ok(stream)
         })
     });

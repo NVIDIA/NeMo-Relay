@@ -117,6 +117,56 @@ func TestScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {
 	runTestWithScopeStack(t, testScopeLocalEventSanitizerInheritanceAndCleanup)
 }
 
+func TestScopeLocalEventSanitizersCanBeDeregistered(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		owner, err := PushScope("deregister-owner", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		defer func() {
+			if err := PopScope(owner); err != nil {
+				t.Fatalf("PopScope failed: %v", err)
+			}
+		}()
+
+		passThrough := func(_ Event, fields EventSanitizeFields) EventSanitizeFields { return fields }
+		for _, sanitizer := range []struct {
+			name       string
+			register   func() error
+			deregister func() error
+		}{
+			{
+				name: "mark",
+				register: func() error {
+					return ScopeRegisterMarkSanitizeGuardrail(owner.UUID(), "deregister-mark", 0, passThrough)
+				},
+				deregister: func() error { return ScopeDeregisterMarkSanitizeGuardrail(owner.UUID(), "deregister-mark") },
+			},
+			{
+				name: "scope start",
+				register: func() error {
+					return ScopeRegisterScopeSanitizeStartGuardrail(owner.UUID(), "deregister-start", 0, passThrough)
+				},
+				deregister: func() error { return ScopeDeregisterScopeSanitizeStartGuardrail(owner.UUID(), "deregister-start") },
+			},
+			{
+				name: "scope end",
+				register: func() error {
+					return ScopeRegisterScopeSanitizeEndGuardrail(owner.UUID(), "deregister-end", 0, passThrough)
+				},
+				deregister: func() error { return ScopeDeregisterScopeSanitizeEndGuardrail(owner.UUID(), "deregister-end") },
+			},
+		} {
+			if err := sanitizer.register(); err != nil {
+				t.Fatalf("register %s sanitizer: %v", sanitizer.name, err)
+			}
+			if err := sanitizer.deregister(); err != nil {
+				t.Fatalf("deregister %s sanitizer: %v", sanitizer.name, err)
+			}
+		}
+	})
+}
+
 func testScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {
 	var mu sync.Mutex
 	seen := map[string]json.RawMessage{}

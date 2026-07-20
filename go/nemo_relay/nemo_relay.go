@@ -1120,13 +1120,14 @@ func LlmCallExecute(name string, request interface{}, fn LLMExecutionFunc, opts 
 // an [LlmStream] that yields individual SSE (Server-Sent Event) chunks.
 // Stream execution intercepts are applied to each chunk as it is consumed.
 // The caller must call [LlmStream.Next] repeatedly until [io.EOF] is
-// returned, then call [LlmStream.Close].
+// returned, or call [LlmStream.Close] to stop early. Close waits for producer
+// cleanup, finalizes the partial response, and returns any cleanup error.
 //
 // The optional collector callback is invoked with each intercepted chunk string,
 // allowing the caller to accumulate chunks for aggregation. The optional
-// finalizer callback is invoked once when the stream is exhausted and must
-// return a JSON string representing the aggregated response. Pass nil for
-// either to use the default no-op behavior.
+// finalizer callback is invoked once when the stream is exhausted or closed
+// early and must return a JSON string representing the aggregated response.
+// Pass nil for either to use the default no-op behavior.
 func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc, collector CollectorFunc, finalizer FinalizerFunc, opts ...LLMCallOption) (*LlmStream, error) {
 	o := &llmCallOptions{}
 	for _, opt := range opts {

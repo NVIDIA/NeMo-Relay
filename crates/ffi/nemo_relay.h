@@ -906,6 +906,18 @@ NemoRelayStatus nemo_relay_llm_stream_call_execute(const char *name,
                                                    struct FfiStream **out);
 
 /**
+ * Stop a stream producer and wait for cleanup to complete.
+ *
+ * This operation is idempotent. It does not free `stream`; callers must still
+ * release the handle with [`nemo_relay_stream_free`].
+ *
+ * # Safety
+ * `stream` must be a valid `FfiStream` pointer returned by
+ * `nemo_relay_llm_stream_call_execute`, or null.
+ */
+NemoRelayStatus nemo_relay_stream_close(struct FfiStream *stream);
+
+/**
  * Poll the next chunk from a streaming LLM response. Blocks until a chunk is
  * available.
  *

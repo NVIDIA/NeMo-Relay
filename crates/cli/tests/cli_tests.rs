@@ -312,6 +312,86 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
 }
 
 #[test]
+fn cli_claude_startup_probe_bypass_is_debug_only() {
+    let default_stderr = run_claude_startup_probe(None);
+    assert!(
+        !default_stderr.contains(" WARN ") && !default_stderr.contains("observability_bypassed"),
+        "startup probe bypass should not be logged by default: {default_stderr}"
+    );
+
+    let debug_stderr = run_claude_startup_probe(Some("debug"));
+    assert!(
+        debug_stderr.contains(" DEBUG ") && debug_stderr.contains("observability_bypassed"),
+        "startup probe bypass should be logged at debug level: {debug_stderr}"
+    );
+}
+
+fn run_claude_startup_probe(log_level: Option<&str>) -> String {
+    let temp = tempfile::tempdir().unwrap();
+    let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = probe.local_addr().unwrap();
+    drop(probe);
+    let (upstream_url, received) = spawn_single_request_server(200, r#"{"id":"probe"}"#);
+
+    let mut command = Command::new(gateway_bin());
+    command
+        .args(["--bind", &address.to_string(), "--anthropic-base-url"])
+        .arg(&upstream_url)
+        .env("HOME", temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env_remove("NEMO_RELAY_LOG_STDERR_FORMAT")
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    match log_level {
+        Some(level) => {
+            command.env("NEMO_RELAY_LOG", level);
+        }
+        None => {
+            command.env_remove("NEMO_RELAY_LOG");
+        }
+    }
+    let child = ChildGuard::new(command.spawn().unwrap());
+
+    let body = r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"test"}]}"#;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect_timeout(&address, Duration::from_millis(100)) {
+            Ok(mut stream) => {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "POST /v1/messages HTTP/1.1\r\nHost: {address}\r\ncontent-type: application/json\r\nx-api-key: test\r\nx-claude-code-session-id: probe-session\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                let mut response = String::new();
+                stream.read_to_string(&mut response).unwrap();
+                assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+                break;
+            }
+            Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let output = child.finish();
+                panic!(
+                    "gateway did not accept the startup probe: {error}; stderr: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+
+    let upstream_request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(upstream_request.starts_with("POST /v1/messages "));
+    String::from_utf8(child.finish().stderr).unwrap()
+}
+
+#[test]
 fn cli_logs_final_failure_before_shutdown_and_preserves_user_error() {
     let temp = tempfile::tempdir().unwrap();
     let (config_path, log_path) = write_jsonl_logging_config(temp.path());
@@ -1271,6 +1351,29 @@ fn wait_child(child: &mut Child) -> ExitStatus {
             panic!("child process did not exit within 10 seconds");
         }
         thread::sleep(Duration::from_millis(20));
+    }
+}
+
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self(Some(child))
+    }
+
+    fn finish(mut self) -> Output {
+        let mut child = self.0.take().unwrap();
+        let _ = child.kill();
+        wait_child_with_output(child)
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

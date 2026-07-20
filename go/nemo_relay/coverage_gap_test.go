@@ -22,14 +22,23 @@ func TestEventBaseNilPointerFallbacks(t *testing.T) {
 	if got := event.Kind(); got != "" {
 		t.Fatalf("expected empty Kind, got %q", got)
 	}
+	if got := event.ATOFVersion(); got != "" {
+		t.Fatalf("expected empty ATOFVersion, got %q", got)
+	}
 	if got := event.ScopeType(); got != "" {
 		t.Fatalf("expected empty ScopeType, got %q", got)
 	}
 	if got := event.Attributes(); got != 0 {
 		t.Fatalf("expected zero Attributes, got %d", got)
 	}
+	if got := event.AttributesJSON(); got != nil {
+		t.Fatalf("expected nil AttributesJSON, got %s", got)
+	}
 	if got := event.Data(); got != nil {
 		t.Fatalf("expected nil Data, got %s", got)
+	}
+	if got := event.DataSchema(); got != nil {
+		t.Fatalf("expected nil DataSchema, got %s", got)
 	}
 	if got := event.Metadata(); got != nil {
 		t.Fatalf("expected nil Metadata, got %s", got)

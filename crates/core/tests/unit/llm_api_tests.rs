@@ -281,10 +281,9 @@ fn managed_and_streaming_calls_cull_event_inputs_and_annotations_with_real_codec
                     .func(Arc::new(|request| {
                         Box::pin(async move {
                             assert_eq!(request.content["messages"].as_array().unwrap().len(), 4);
-                            Ok(
-                                Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                    as LlmJsonStream,
-                            )
+                            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                                "chunk": true
+                            }))])))
                         })
                     }))
                     .collector(Box::new(|_| Ok(())))
@@ -384,10 +383,9 @@ fn projection_encode_failures_do_not_block_managed_or_streaming_calls() {
                     .func(Arc::new(|request| {
                         Box::pin(async move {
                             assert_eq!(request.content["messages"].as_array().unwrap().len(), 4);
-                            Ok(
-                                Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                    as LlmJsonStream,
-                            )
+                            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                                "chunk": true
+                            }))])))
                         })
                     }))
                     .collector(Box::new(|_| Ok(())))
@@ -855,10 +853,9 @@ fn llm_stream_call_execute_adds_otel_status_metadata_to_end_events() {
                 .request(request())
                 .func(Arc::new(|_request| {
                     Box::pin(async {
-                        Ok(
-                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                as LlmJsonStream,
-                        )
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                            "chunk": true
+                        }))])))
                     })
                 }))
                 .collector(Box::new(|_chunk| Ok(())))
@@ -916,9 +913,9 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
                 .request(request())
                 .func(Arc::new(|_request| {
                     Box::pin(async {
-                        Ok(Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
-                            "stream boom".to_string(),
-                        ))])) as LlmJsonStream)
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
+                            FlowError::Internal("stream boom".to_string()),
+                        )])))
                     })
                 }))
                 .collector(Box::new(|_chunk| Ok(())))
@@ -939,10 +936,9 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
                 .request(request())
                 .func(Arc::new(|_request| {
                     Box::pin(async {
-                        Ok(
-                            Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))]))
-                                as LlmJsonStream,
-                        )
+                        Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                            "chunk": true
+                        }))])))
                     })
                 }))
                 .collector(Box::new(|_chunk| {

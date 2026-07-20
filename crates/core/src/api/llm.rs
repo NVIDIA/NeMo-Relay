@@ -1173,7 +1173,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 response_codec,
                 lifecycle_subscribers,
             );
-            Ok(Box::pin(wrapper) as LlmJsonStream)
+            Ok(LlmJsonStream::from_closeable(wrapper))
         }
         Err(error) => {
             let end_metadata =

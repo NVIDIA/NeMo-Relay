@@ -4,13 +4,11 @@
 //! Coverage tests for coverage in the NeMo Relay Python crate.
 
 use std::ffi::CString;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use serde_json::{Value as Json, json};
-use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
@@ -214,14 +212,16 @@ payload = {"nested": {"value": 7}, "items": [1, 2, 3]}
 fn test_py_api_forward_stream_to_channel_exits_when_receiver_is_dropped() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let stream: crate::py_api::RustJsonStream = Box::pin(tokio_stream::iter(vec![
+        let stream = crate::py_api::RustJsonStream::new(tokio_stream::iter(vec![
             Ok(json!({"chunk": 1})),
             Ok(json!({"chunk": 2})),
         ]));
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         drop(rx);
+        let (_cancel, cancel_rx) = tokio::sync::watch::channel(false);
+        let (closed, _closed_rx) = tokio::sync::watch::channel(None);
 
-        crate::py_api::forward_stream_to_channel(stream, tx).await;
+        crate::py_api::forward_stream_to_channel(stream, tx, cancel_rx, closed).await;
     });
 }
 
@@ -831,10 +831,9 @@ async def llm_stream_intercept(request, next):
                 let stream_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
                     Box::pin(async move {
                         let chunks = vec![Ok(json!({"chunk": "a"})), Ok(json!({"chunk": "b"}))];
-                        Ok(Box::pin(tokio_stream::iter(chunks))
-                            as Pin<
-                                Box<dyn Stream<Item = nemo_relay::error::Result<Json>> + Send>,
-                            >)
+                        Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                            tokio_stream::iter(chunks),
+                        ))
                     })
                 });
                 let mut stream = stream_intercept("llm", make_request(), stream_next)
@@ -971,10 +970,9 @@ async def llm_stream_intercept_fail(request, next):
                 let stream_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
                     Box::pin(async move {
                         let chunks = vec![Ok(json!({"chunk": "downstream"}))];
-                        Ok(Box::pin(tokio_stream::iter(chunks))
-                            as Pin<
-                                Box<dyn Stream<Item = nemo_relay::error::Result<Json>> + Send>,
-                            >)
+                        Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                            tokio_stream::iter(chunks),
+                        ))
                     })
                 });
                 let mut stream = stream_intercept("llm", make_request(), stream_next)
@@ -990,10 +988,9 @@ async def llm_stream_intercept_fail(request, next):
                     wrap_py_llm_stream_exec_intercept_fn(llm_stream_intercept_fail_py);
                 let stream_next: LlmStreamExecutionNextFn = Arc::new(|_request| {
                     Box::pin(async move {
-                        Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]))
-                            as Pin<
-                                Box<dyn Stream<Item = nemo_relay::error::Result<Json>> + Send>,
-                            >)
+                        Ok(nemo_relay::api::runtime::LlmJsonStream::new(
+                            tokio_stream::iter(vec![Ok(json!({"chunk": 1}))]),
+                        ))
                     })
                 });
                 let err = match failing_stream_intercept("llm", make_request(), stream_next).await {

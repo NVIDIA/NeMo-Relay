@@ -609,6 +609,49 @@ describe('typedLlmStreamExecute', () => {
     assert.equal(collected.length, 2);
   });
 
+  it('close waits for async-generator cleanup and exhausts subsequent reads', async () => {
+    const passthrough = new JsonPassthrough();
+    let releaseProducer;
+    let producerReady;
+    const ready = new Promise((resolve) => {
+      producerReady = resolve;
+    });
+    let finallyRan = false;
+    async function* partiallyConsumedSource() {
+      try {
+        yield { token: 'first' };
+        await new Promise((resolve) => {
+          releaseProducer = resolve;
+          producerReady();
+        });
+        yield { token: 'unread' };
+      } finally {
+        finallyRan = true;
+      }
+    }
+
+    const stream = await typedLlmStreamExecute(
+      'stream_close_waits_for_finally',
+      makeNative(),
+      partiallyConsumedSource,
+      () => {},
+      () => null,
+      passthrough,
+      passthrough,
+    );
+    assert.deepEqual(await stream.next(), { token: 'first' });
+    await ready;
+
+    const closing = stream.close();
+    await Promise.resolve();
+    assert.equal(finallyRan, false);
+    releaseProducer();
+    await closing;
+
+    assert.equal(finallyRan, true);
+    assert.equal(await stream.next(), null);
+  });
+
   it('stream with envelopeCodec for chunks and response', async () => {
     const native = makeNative();
 

@@ -100,7 +100,7 @@ async fn run_managed_gateway(
         let session_id = prep.session_id.clone();
         let session_finish = prep.session_finish;
         let model = prep.model_name.as_deref().unwrap_or("<unknown>");
-        log::warn!(
+        log::debug!(
             target: "nemo_relay.gateway",
             event = "observability_bypassed",
             session_id = session_id.as_str(),
@@ -534,7 +534,7 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
             Err(error) => yield Err(error),
         }
     };
-    Box::pin(stream)
+    LlmJsonStream::new(stream)
 }
 
 // Re-encodes a runtime JSON stream as `text/event-stream` frames for the downstream client. Event

@@ -119,6 +119,9 @@ dynamic plugins.
   names, or complete request histories.
 - Update Rust exhaustive matches, direct struct literals, and editor metadata
   consumers for the new public variants and fields.
+- Migrate Rust code that directly constructs `LlmJsonStream`, and update Go
+  call sites to handle the error returned by `LlmStream.Close`. Call an
+  explicit close method when a consumer stops reading an LLM stream early.
 - Point any automation that opens public skills by directory name at the new
   task-oriented catalog.
 

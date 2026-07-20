@@ -25,6 +25,7 @@
 //! aggregated response then flows through sanitize response guardrails before
 //! being included in the END event.
 
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -37,7 +38,9 @@ use crate::api::llm::emit_optimization_marks;
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
-use crate::api::runtime::{EventSubscriberFn, ScopeStackHandle, current_scope_stack};
+use crate::api::runtime::{
+    EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, current_scope_stack,
+};
 use crate::api::shared::metadata_with_otel_status;
 use crate::api::shared::sanitize_event_with_scope_stack;
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -50,16 +53,19 @@ use serde_json::Map;
 ///
 /// 1. Passes each chunk to the user-supplied **collector** closure.
 ///    If the collector returns `Err`, the stream terminates with that error.
-/// 2. On stream exhaustion, calls the **finalizer** to produce an aggregated
-///    [`Json`] response, runs sanitize response guardrails on it, then emits
-///    the LLM END event.
+/// 2. On stream exhaustion or explicit close, calls the **finalizer** to
+///    produce an aggregated [`Json`] response, runs sanitize response
+///    guardrails on it, then emits the LLM END event. Explicit close marks the
+///    end event as interrupted and waits for producer cleanup.
 ///
 /// This type is returned by [`crate::api::llm::llm_stream_call_execute`] and
-/// is usually consumed as an ordinary async stream. The wrapper preserves the
-/// originating scope stack so end-of-stream bookkeeping still uses the correct
-/// scope-local middleware and subscribers even when polling happens elsewhere.
+/// is usually consumed as an ordinary async stream. Consumers that stop early
+/// should call [`LlmJsonStream::close`] to perform deterministic cleanup. The
+/// wrapper preserves the originating scope stack so end-of-stream bookkeeping
+/// still uses the correct scope-local middleware and subscribers even when
+/// polling happens elsewhere.
 pub struct LlmStreamWrapper {
-    inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
+    inner: LlmJsonStream,
     handle: LlmHandle,
     scope_stack: ScopeStackHandle,
     collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
@@ -69,6 +75,7 @@ pub struct LlmStreamWrapper {
     subscribers: Vec<EventSubscriberFn>,
     chunk_index: u64,
     ended: bool,
+    close_result: Option<Result<()>>,
 }
 
 impl LlmStreamWrapper {
@@ -94,7 +101,7 @@ impl LlmStreamWrapper {
     /// # Returns
     /// A new [`LlmStreamWrapper`] ready to be polled.
     pub fn new(
-        inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
+        inner: LlmJsonStream,
         handle: LlmHandle,
         collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
         finalizer: Box<dyn FnOnce() -> Json + Send>,
@@ -124,7 +131,7 @@ impl LlmStreamWrapper {
     }
 
     pub(crate) fn new_managed(
-        inner: Pin<Box<dyn Stream<Item = Result<Json>> + Send>>,
+        inner: LlmJsonStream,
         handle: LlmHandle,
         collector: Box<dyn FnMut(Json) -> Result<()> + Send>,
         finalizer: Box<dyn FnOnce() -> Json + Send>,
@@ -144,6 +151,7 @@ impl LlmStreamWrapper {
             subscribers,
             chunk_index: 0,
             ended: false,
+            close_result: None,
         }
     }
 
@@ -308,7 +316,7 @@ impl Stream for LlmStreamWrapper {
         }
 
         // Poll the inner stream
-        match this.inner.as_mut().poll_next(cx) {
+        match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(raw_chunk))) => {
                 let chunk_index = this.chunk_index;
                 this.chunk_index += 1;
@@ -334,6 +342,24 @@ impl Stream for LlmStreamWrapper {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+impl LlmStreamInner for LlmStreamWrapper {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let this = self.get_mut();
+        Box::pin(async move {
+            if let Some(result) = &this.close_result {
+                return result.clone();
+            }
+            let result = this.inner.close().await;
+            this.finish();
+            this.close_result = Some(result.clone());
+            this.close_result
+                .as_ref()
+                .expect("close result was just stored")
+                .clone()
+        })
     }
 }
 

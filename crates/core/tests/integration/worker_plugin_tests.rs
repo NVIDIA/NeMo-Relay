@@ -13,7 +13,7 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::{TASK_SCOPE_STACK, create_scope_stack};
+use nemo_relay::api::runtime::{LlmJsonStream, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
@@ -343,7 +343,7 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
                         "chunk": 1,
                         "request": request.content,
                     });
-                    Ok(Box::pin(tokio_stream::iter(vec![Ok(first)])) as _)
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(first)])))
                 })
             }))
             .collector(Box::new(|_chunk| Ok(())))
@@ -595,7 +595,7 @@ async fn worker_llm_stream_open_error_surfaces_to_host() {
             .func(Arc::new(|request| {
                 Box::pin(async move {
                     let chunk = json!({ "request": request.content });
-                    Ok(Box::pin(tokio_stream::iter(vec![Ok(chunk)])) as _)
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(chunk)])))
                 })
             }))
             .collector(Box::new(|_chunk| Ok(())))

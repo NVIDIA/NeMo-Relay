@@ -5,7 +5,6 @@
 
 #![allow(clippy::await_holding_lock)]
 
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -51,7 +50,9 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::scope::{event, pop_scope, push_scope};
@@ -67,7 +68,6 @@ use nemo_relay::api::tool::{
 use nemo_relay::error::{FlowError, Result};
 use nemo_relay::json::Json;
 use serde_json::{Map, json};
-use tokio_stream::Stream;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
@@ -763,8 +763,9 @@ fn failing_llm_exec() -> LlmExecutionNextFn {
 fn noop_llm_stream_exec() -> LlmStreamExecutionNextFn {
     Arc::new(|request| {
         Box::pin(async move {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                request.content
+            )])))
         })
     })
 }
@@ -775,8 +776,7 @@ fn fixed_llm_stream_exec(chunks: Vec<Json>) -> LlmStreamExecutionNextFn {
         let chunks = chunks.clone();
         Box::pin(async move {
             let items = chunks.iter().cloned().map(Ok).collect::<Vec<_>>();
-            Ok(Box::pin(tokio_stream::iter(items))
-                as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+            Ok(LlmJsonStream::new(tokio_stream::iter(items)))
         })
     })
 }
@@ -908,8 +908,9 @@ fn test_global_registry_and_subscriber_wrappers_cover_success_and_duplicates() {
         1,
         Arc::new(|_name, request, _next| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                    as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
             })
         }),
     )
@@ -1153,8 +1154,9 @@ fn test_scope_registry_and_subscriber_wrappers_cover_success_duplicates_and_miss
         1,
         Arc::new(|_name, request, _next| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                    as Pin<Box<dyn Stream<Item = Result<Json>> + Send>>)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
             })
         }),
     )

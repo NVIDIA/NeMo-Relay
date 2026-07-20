@@ -3,8 +3,11 @@
 
 //! Unit tests for the Switchyard Relay plugin component.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 
 use axum::{
     Json as AxumJson, Router,
@@ -12,17 +15,68 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
+use futures_util::{Stream, stream as futures_stream};
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn};
+use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, LlmStreamInner};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::optimization::LlmOptimizationSummaryStatus;
 use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
 use nemo_relay::plugin::rollback_registrations;
 
 use super::*;
+
+struct CloseTrackingStream {
+    close_calls: Arc<AtomicUsize>,
+    closed: bool,
+}
+
+impl Stream for CloseTrackingStream {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(None)
+    }
+}
+
+impl LlmStreamInner for CloseTrackingStream {
+    fn close(
+        mut self: Pin<&mut Self>,
+    ) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        self.closed = true;
+        self.close_calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn close_tracking_stream(close_calls: Arc<AtomicUsize>) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(CloseTrackingStream {
+        close_calls,
+        closed: false,
+    })
+}
+
+fn prefixed_adapter(upstream: LlmJsonStream) -> LlmJsonStream {
+    LlmJsonStream::from_closeable(PrefixedStream {
+        first: Some(Ok(json!({"first": true}))),
+        upstream,
+    })
+}
+
+fn terminal_adapter(upstream: LlmJsonStream) -> LlmJsonStream {
+    mark_terminal_stream(upstream, "test", "enforce", json!({"route": "test"}))
+}
+
+fn translated_adapter(upstream: LlmJsonStream) -> LlmJsonStream {
+    translated_stream(
+        WireProtocol::OpenaiChat,
+        WireProtocol::AnthropicMessages,
+        "selected".into(),
+        upstream,
+    )
+}
 
 fn binding(protocol: WireProtocol, model: &str) -> TargetBinding {
     TargetBinding {
@@ -618,10 +672,9 @@ async fn stream_setup_retries_and_empty_streams_have_one_bounded_fallback() {
                     class: UpstreamFailureClass::Connection,
                 }));
             }
-            Ok(Box::pin(futures_stream::iter(vec![Ok(chat_chunk(
-                "ok",
-                json!("stop"),
-            ))])) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(vec![Ok(
+                chat_chunk("ok", json!("stop")),
+            )])))
         })
     });
     let output = runtime
@@ -648,7 +701,7 @@ async fn stream_setup_retries_and_empty_streams_have_one_bounded_fallback() {
                 assert_eq!(request.content["model"], "fallback");
                 vec![Ok(chat_chunk("fallback", json!("stop")))]
             };
-            Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(items)))
         })
     });
     let output = runtime
@@ -687,10 +740,10 @@ async fn fallback_setup_failures_preserve_the_provider_error() {
 
 #[tokio::test]
 async fn translated_stream_preserves_success_and_propagates_both_error_sources() {
-    let source = Box::pin(futures_stream::iter(vec![
+    let source = LlmJsonStream::new(futures_stream::iter(vec![
         Ok(chat_chunk("hello", Json::Null)),
         Ok(chat_chunk("", json!("stop"))),
-    ])) as LlmJsonStream;
+    ]));
     let output = translated_stream(
         WireProtocol::OpenaiChat,
         WireProtocol::AnthropicMessages,
@@ -706,7 +759,7 @@ async fn translated_stream_preserves_success_and_propagates_both_error_sources()
     }));
 
     let upstream_error = FlowError::Internal("upstream stream failed".into());
-    let source = Box::pin(futures_stream::iter(vec![Err(upstream_error)])) as LlmJsonStream;
+    let source = LlmJsonStream::new(futures_stream::iter(vec![Err(upstream_error)]));
     let output = translated_stream(
         WireProtocol::OpenaiChat,
         WireProtocol::AnthropicMessages,
@@ -717,9 +770,9 @@ async fn translated_stream_preserves_success_and_propagates_both_error_sources()
     .await;
     assert!(output[0].is_err());
 
-    let malformed = Box::pin(futures_stream::iter(vec![Ok(json!({
+    let malformed = LlmJsonStream::new(futures_stream::iter(vec![Ok(json!({
         "choices": [{"delta": {"reasoning_content": "private"}}]
-    }))])) as LlmJsonStream;
+    }))]));
     let output = translated_stream(
         WireProtocol::OpenaiChat,
         WireProtocol::AnthropicMessages,
@@ -729,6 +782,23 @@ async fn translated_stream_preserves_success_and_propagates_both_error_sources()
     .collect::<Vec<_>>()
     .await;
     assert!(output[0].is_err());
+}
+
+#[tokio::test]
+async fn stream_adapters_forward_explicit_close_to_the_upstream_stream() {
+    for make_adapter in [
+        prefixed_adapter as fn(LlmJsonStream) -> LlmJsonStream,
+        terminal_adapter,
+        translated_adapter,
+    ] {
+        let close_calls = Arc::new(AtomicUsize::new(0));
+        let mut stream = make_adapter(close_tracking_stream(Arc::clone(&close_calls)));
+
+        stream.close().await.unwrap();
+
+        assert_eq!(close_calls.load(Ordering::SeqCst), 1);
+        assert!(stream.next().await.is_none());
+    }
 }
 
 #[test]
@@ -1409,10 +1479,9 @@ async fn streaming_accounting_commits_on_the_first_successful_item_only() {
         SwitchyardRuntime::new(config(url)).unwrap(),
         Arc::new(|_| {
             Box::pin(async {
-                Ok(Box::pin(futures_stream::iter(vec![Ok(chat_chunk(
-                    "ok",
-                    json!("stop"),
-                ))])) as LlmJsonStream)
+                Ok(LlmJsonStream::new(futures_stream::iter(vec![Ok(
+                    chat_chunk("ok", json!("stop")),
+                )])))
             })
         }),
     )
@@ -1443,7 +1512,7 @@ async fn streaming_accounting_commits_on_the_first_successful_item_only() {
                 } else {
                     vec![Ok(chat_chunk("fallback", json!("stop")))]
                 };
-                Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+                Ok(LlmJsonStream::new(futures_stream::iter(items)))
             })
         }),
     )
@@ -1467,7 +1536,7 @@ async fn committed_stream_error_keeps_one_route_and_never_redispatches() {
             let seen = Arc::clone(&seen);
             Box::pin(async move {
                 seen.fetch_add(1, Ordering::SeqCst);
-                Ok(Box::pin(futures_stream::iter(vec![
+                Ok(LlmJsonStream::new(futures_stream::iter(vec![
                     Ok(chat_chunk("partial", Json::Null)),
                     Err(FlowError::Upstream(UpstreamFailure {
                         status: None,
@@ -1475,7 +1544,7 @@ async fn committed_stream_error_keeps_one_route_and_never_redispatches() {
                         headers: BTreeMap::new(),
                         class: UpstreamFailureClass::Connection,
                     })),
-                ])) as LlmJsonStream)
+                ])))
             })
         }),
     )
@@ -1618,7 +1687,7 @@ async fn streaming_retries_before_first_item() {
             } else {
                 vec![Ok(chat_chunk("ok", json!("stop")))]
             };
-            Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(items)))
         })
     });
     let stream = runtime
@@ -1651,7 +1720,7 @@ async fn streaming_never_retries_after_first_item() {
                     class: UpstreamFailureClass::Connection,
                 })),
             ];
-            Ok(Box::pin(futures_stream::iter(items)) as LlmJsonStream)
+            Ok(LlmJsonStream::new(futures_stream::iter(items)))
         })
     });
     let stream = runtime
@@ -1723,9 +1792,9 @@ async fn same_protocol_targets_route_nonportable_streaming_requests() {
             assert_eq!(request.content["model"], "model-b");
             assert_eq!(request.content["store"], true);
             assert_eq!(request.content["reasoning"]["effort"], "high");
-            Ok(Box::pin(futures_stream::iter(vec![Ok(
+            Ok(LlmJsonStream::new(futures_stream::iter(vec![Ok(
                 json!({"type": "response.output_text.delta", "delta": "ok"}),
-            )])) as LlmJsonStream)
+            )])))
         })
     });
     let output = runtime
