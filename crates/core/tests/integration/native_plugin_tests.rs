@@ -746,6 +746,56 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
     activation.clear();
 }
 
+#[tokio::test]
+async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref =
+        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_event_sanitize_errors");
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("raw native event sanitizer fixture should load");
+    let mut cleanup = NativePluginTestCleanup::new();
+
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("raw native event sanitizer fixture should initialize");
+    cleanup.mark_plugin_configuration_active();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "native_event_sanitizer_error_capture",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("native-event-sanitize-error")
+            .data(json!({ "secret": true }))
+            .metadata(json!({ "secret": true }))
+            .build(),
+    )
+    .expect("mark event should emit");
+    flush_subscribers().expect("event should flush");
+
+    let captured_events = events.lock().unwrap().clone();
+    let event = find_event(&captured_events, "native-event-sanitize-error", None);
+    assert_eq!(event.data(), None);
+    assert_eq!(event.metadata(), None);
+
+    deregister_subscriber("native_event_sanitizer_error_capture")
+        .expect("test subscriber should deregister");
+    drop(cleanup);
+    activation.clear();
+}
+
 #[test]
 fn native_loader_rejects_missing_library() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();

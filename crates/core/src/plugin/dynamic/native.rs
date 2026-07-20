@@ -1497,8 +1497,7 @@ fn wrap_event_sanitize_fn(
 ) -> EventSanitizeFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |event, fields| {
-        let fallback = fields.clone();
-        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or(fallback)
+        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or_default()
     })
 }
 
