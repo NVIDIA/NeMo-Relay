@@ -1329,6 +1329,12 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
     pop(&valid);
 
     clear_plugin_configuration().unwrap();
+    let invalid_filename = format!("trajectory-{}.json", invalid.uuid);
+    assert!(
+        !dir.join(&invalid_filename).exists()
+            && !dir.join("../escape").join(&invalid_filename).exists(),
+        "unsafe metadata path should not produce a trajectory file"
+    );
     assert!(
         dir.join(format!(
             "tenant-a/session-123/trajectory-{}.json",
