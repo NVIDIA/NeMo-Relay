@@ -8,7 +8,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use the `opentelemetry` section when you want NeMo Relay lifecycle events
-exported as generic OpenTelemetry Protocol (OTLP) trace spans.
+exported as OpenTelemetry Protocol (OTLP) trace spans. Generic Relay semantics
+remain the default. Set `semantic_convention = "gen_ai"` to opt in to the
+OpenTelemetry GenAI 1.37 or newer projection.
 
 OpenTelemetry export is a good fit when your tracing backend already expects
 OTLP spans and you want NeMo Relay scopes, tool calls, LLM calls, and marks to
@@ -30,6 +32,8 @@ version = 2
 
 [components.config.opentelemetry]
 enabled = true
+semantic_convention = "gen_ai"
+capture_content = false
 transport = "http_binary"
 endpoint = "http://localhost:4318/v1/traces"
 service_name = "agent-service"
@@ -58,6 +62,8 @@ The following table describes OpenTelemetry exporter settings:
 | `mark_projection` | `inherit` | `inherit` uses exporter-native handling; `event` forces span events; `tool` emits zero-duration spans, parented as children when context is available, for trace-tree visibility. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `tool` projection; excluded marks retain exporter-native handling. Metadata `hook_event_name` aliases are also matched. |
 | `attribute_mappings` | `[]` | Copies each fully qualified projected `key` to its `alias` without changing the OTLP type. Set both values to nonblank strings, and use each alias only once. |
+| `semantic_convention` | `generic` | `generic` preserves the existing Relay span projection. `gen_ai` uses OpenTelemetry GenAI 1.37 or newer semantics for supported scopes. |
+| `capture_content` | `false` | When `semantic_convention = "gen_ai"`, includes sanitized messages, instructions, tool definitions and payloads, retrieval queries, and retrieved content. Leave disabled for metadata-only spans. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `endpoint` | Exporter default | OTLP endpoint. |
 | `headers` | `{}` | String-to-string exporter headers. |
@@ -73,6 +79,36 @@ The following table describes OpenTelemetry exporter settings:
 The collector should receive OTLP trace export requests. The tracing backend
 should show spans for NeMo Relay scopes, tools, LLM calls, and marks grouped by
 root scope.
+
+### GenAI Semantic Projection
+
+The opt-in `gen_ai` projection uses these operation names and span kinds:
+
+| Relay Scope | OpenTelemetry Operation | Span Kind |
+|---|---|---|
+| Agent | `invoke_agent` | `INTERNAL` |
+| LLM | `chat`, `generate_content`, or `text_completion` | `CLIENT` |
+| Tool | `execute_tool` | `INTERNAL` |
+| Embedder | `embeddings` | `CLIENT` |
+| Retriever | `retrieval` | `CLIENT` |
+| Reranker | `rerank` | `CLIENT` |
+
+OpenTelemetry 1.37 does not define a first-class reranking operation, so
+`rerank` is a Relay extension used by compatible AI-observability backends.
+Unsupported scope types and marks retain the generic projection.
+
+Where normalized Relay data is available, GenAI spans include standardized
+`gen_ai.*` attributes for provider and model identity, request parameters,
+token usage, conversations, agents, tools, data sources, status, and errors.
+They continue to include `nemo_relay.*` identity, ancestry, accounting, and
+correlation attributes.
+
+Content capture is independent of semantic selection and defaults to disabled.
+When `capture_content = false`, Relay does not emit messages, system
+instructions, descriptions, tool definitions, tool arguments, tool results,
+retrieval queries, or retrieved content in GenAI attributes. When enabled,
+Relay projects only the event after sanitize guardrails and normalization; it
+does not read the original callback arguments or return value.
 
 The default `inherit` projection follows exporter-native handling: a mark with
 an active parent span is a span event, while an orphan mark is a standalone
@@ -95,8 +131,9 @@ attributes. These values match ATIF `step.extra.ancestry.function_id` and
 the trajectory-root span's `nemo_relay.uuid` also matches the ATIF `session_id`.
 Backend-native `trace_id` and `span_id` values are not written into ATIF.
 
-NeMo Relay projects top-level lifecycle payload fields to typed OTLP attributes
-with dotted names. For example, `metadata = { tenant = "acme" }` becomes
+In the default `generic` mode, NeMo Relay projects top-level lifecycle payload
+fields to typed OTLP attributes with dotted names. For example,
+`metadata = { tenant = "acme" }` becomes
 `nemo_relay.start.metadata.tenant = "acme"`.
 - Start events use the
 `nemo_relay.start.data`, `nemo_relay.start.metadata`, and
@@ -143,8 +180,10 @@ it is a span event when a parent is active and a zero-duration root span when
 it is orphaned.
 
 For LLM end spans, cost is emitted as `nemo_relay.llm.cost.total` and
-`nemo_relay.llm.cost.currency` (any currency). Token counts are not emitted as
-discrete attributes. Refer to
+`nemo_relay.llm.cost.currency` (any currency). Generic mode does not emit token
+counts as discrete attributes. GenAI mode additionally emits normalized input,
+output, cache-read, and cache-creation token counts as `gen_ai.usage.*`
+attributes when they are available. Refer to
 [Token and Cost Field Semantics](/integrate-into-frameworks/provider-response-codecs#token-and-cost-field-semantics)
 for the full mapping.
 
@@ -177,6 +216,8 @@ config = plugin.PluginConfig(
             ObservabilityConfig(
                 opentelemetry=OtlpConfig(
                     enabled=True,
+                    semantic_convention="gen_ai",
+                    capture_content=False,
                     transport="http_binary",
                     endpoint="http://localhost:4318/v1/traces",
                     service_name="agent-service",
@@ -221,6 +262,8 @@ void (async () => {
       version: 2,
       opentelemetry: observability.otlpConfig({
         enabled: true,
+        semantic_convention: "gen_ai",
+        capture_content: false,
         transport: "http_binary",
         endpoint: "http://localhost:4318/v1/traces",
         service_name: "agent-service",
@@ -265,6 +308,8 @@ use nemo_relay::plugin::{
 let component = ComponentSpec::new(ObservabilityConfig {
     opentelemetry: Some(OtlpSectionConfig {
         enabled: true,
+        semantic_convention: "gen_ai".into(),
+        capture_content: false,
         transport: "http_binary".into(),
         endpoint: Some("http://localhost:4318/v1/traces".into()),
         service_name: "agent-service".into(),
@@ -314,6 +359,8 @@ config = OpenTelemetryConfig()
 config.transport = "http_binary"
 config.endpoint = "http://localhost:4318/v1/traces"
 config.service_name = "agent-service"
+config.semantic_convention = "gen_ai"
+config.capture_content = False
 config.set_resource_attribute("deployment.environment", "dev")
 
 subscriber = OpenTelemetrySubscriber(config)
@@ -336,6 +383,8 @@ const subscriber = new OpenTelemetrySubscriber({
   transport: "http_binary",
   endpoint: "http://localhost:4318/v1/traces",
   serviceName: "agent-service",
+  semanticConvention: "gen_ai",
+  captureContent: false,
   resourceAttributes: {
     "deployment.environment": "dev",
   },
@@ -356,11 +405,15 @@ try {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::observability::otel::{OpenTelemetryConfig, OpenTelemetrySubscriber};
+use nemo_relay::observability::otel::{
+    OpenTelemetryConfig, OpenTelemetrySemanticConvention, OpenTelemetrySubscriber,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = OpenTelemetryConfig::http_binary("agent-service")
         .with_endpoint("http://localhost:4318/v1/traces")
+        .with_semantic_convention(OpenTelemetrySemanticConvention::GenAi)
+        .with_content_capture(false)
         .with_resource_attribute("deployment.environment", "dev");
     let subscriber = OpenTelemetrySubscriber::new(config)?;
     subscriber.register("otel-exporter")?;
@@ -381,6 +434,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Common Configuration and Runtime Issues
 
 - `transport` is not `http_binary` or `grpc`.
+- `semantic_convention` is not `generic` or `gen_ai`.
+- GenAI-only options are configured under the `openinference` section.
 - Headers or resource attributes are not string-to-string maps.
 - The exporter feature is unavailable in the current build or target.
 - The endpoint is unreachable at runtime.

@@ -90,7 +90,7 @@ Choose the exporter based on the downstream system:
 |---|---|
 | Raw canonical event stream | [Agent Trajectory Observability Format (ATOF)](/configure-plugins/observability/atof) |
 | Offline analysis, replay, or evaluation trajectories | [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif) |
-| Generic OTLP traces | [OpenTelemetry](/configure-plugins/observability/opentelemetry) |
+| Generic OTLP traces or opt-in OpenTelemetry GenAI 1.37+ spans | [OpenTelemetry](/configure-plugins/observability/opentelemetry) |
 | OpenInference-oriented agent and LLM spans | [OpenInference](/configure-plugins/observability/openinference) |
 
 Start with in-process event inspection before exporting externally. Add sanitize
@@ -140,6 +140,6 @@ IDs and exposes the same logical values under `extra.nemo_relay`.
 - [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif) covers
   trajectory export for top-level Agent scopes and supported coding-agent turn
   scopes.
-- [OpenTelemetry](/configure-plugins/observability/opentelemetry) covers generic OTLP trace export.
+- [OpenTelemetry](/configure-plugins/observability/opentelemetry) covers generic OTLP trace export and the opt-in GenAI semantic projection.
 - [OpenInference](/configure-plugins/observability/openinference) covers OpenInference-oriented OTLP trace
   export.

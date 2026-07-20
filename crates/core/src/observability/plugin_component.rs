@@ -54,7 +54,8 @@ use crate::observability::openinference::{
 };
 #[cfg(feature = "otel")]
 use crate::observability::otel::{
-    OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySubscriber,
+    OpenTelemetryConfig as CoreOpenTelemetryConfig, OpenTelemetrySemanticConvention,
+    OpenTelemetrySubscriber,
 };
 use crate::observability::{
     MarkProjection, OtlpAttributeMapping, default_mark_exclude_names, validate_attribute_mappings,
@@ -402,6 +403,23 @@ pub struct OtlpSectionConfig {
     /// Typed projected attributes copied to aliases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    /// OpenTelemetry semantic projection: `generic` or `gen_ai`.
+    ///
+    /// The `openinference` section only supports `generic`.
+    #[serde(
+        default = "default_semantic_convention",
+        skip_serializing_if = "is_default_semantic_convention"
+    )]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(schema_with = "semantic_convention_schema")
+    )]
+    pub semantic_convention: String,
+    /// Whether the OpenTelemetry GenAI projection includes sanitized content.
+    ///
+    /// The `openinference` section does not use this setting.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub capture_content: bool,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -439,6 +457,8 @@ impl Default for OtlpSectionConfig {
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
+            semantic_convention: default_semantic_convention(),
+            capture_content: false,
             transport: default_otlp_transport(),
             endpoint: None,
             headers: HashMap::new(),
@@ -607,6 +627,8 @@ crate::editor_config! {
         mark_projection => { label: "mark_projection", kind: Enum, values: ["inherit", "event", "tool"] },
         mark_exclude_names => { label: "mark_exclude_names", kind: Json },
         attribute_mappings => { label: "attribute_mappings", kind: List, list: &OTLP_ATTRIBUTE_MAPPING_LIST_ITEM },
+        semantic_convention => { label: "semantic_convention", kind: Enum, values: ["generic", "gen_ai"] },
+        capture_content => { label: "capture_content", kind: Boolean },
         transport => { label: "transport", kind: Enum, values: ["http_binary", "grpc"] },
         endpoint => { label: "endpoint", kind: String, optional: true },
         headers => { label: "headers", kind: StringMap },
@@ -700,6 +722,13 @@ fn mark_projection_schema(
     generator: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
     string_enum_schema(generator, &["inherit", "event", "tool"], Some("inherit"))
+}
+
+#[cfg(feature = "schema")]
+fn semantic_convention_schema(
+    generator: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    string_enum_schema(generator, &["generic", "gen_ai"], Some("generic"))
 }
 
 #[cfg(feature = "schema")]
@@ -1630,7 +1659,17 @@ fn build_otel_config(section: OtlpSectionConfig) -> PluginResult<CoreOpenTelemet
     config = config
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
-        .with_attribute_mappings(section.attribute_mappings);
+        .with_attribute_mappings(section.attribute_mappings)
+        .with_semantic_convention(match section.semantic_convention.as_str() {
+            "generic" => OpenTelemetrySemanticConvention::Generic,
+            "gen_ai" => OpenTelemetrySemanticConvention::GenAi,
+            other => {
+                return Err(PluginError::InvalidConfig(format!(
+                    "OpenTelemetry semantic_convention must be 'generic' or 'gen_ai', got {other:?}"
+                )));
+            }
+        })
+        .with_content_capture(section.capture_content);
 
     if let Some(endpoint) = section.endpoint {
         config = config.with_endpoint(endpoint);
@@ -1803,6 +1842,8 @@ fn validate_observability_section_fields(
             "mark_projection",
             "mark_exclude_names",
             "attribute_mappings",
+            "semantic_convention",
+            "capture_content",
             "transport",
             "endpoint",
             "headers",
@@ -1824,6 +1865,8 @@ fn validate_observability_section_fields(
             "mark_projection",
             "mark_exclude_names",
             "attribute_mappings",
+            "semantic_convention",
+            "capture_content",
             "transport",
             "endpoint",
             "headers",
@@ -1979,6 +2022,27 @@ fn validate_openinference_section(
     section: &OtlpSectionConfig,
 ) {
     validate_otlp_values(diagnostics, policy, "openinference", section);
+    if section.semantic_convention != "generic" {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("openinference".to_string()),
+            Some("semantic_convention".to_string()),
+            "openinference semantic_convention must be 'generic'".to_string(),
+        );
+    }
+    if section.capture_content {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("openinference".to_string()),
+            Some("capture_content".to_string()),
+            "openinference does not support capture_content; use its existing content policy"
+                .to_string(),
+        );
+    }
     validate_openinference_feature_support(diagnostics, policy, section);
 }
 
@@ -2604,6 +2668,16 @@ fn validate_otlp_values(
             format!("{section_name} transport must be 'http_binary' or 'grpc'"),
         );
     }
+    if !matches!(section.semantic_convention.as_str(), "generic" | "gen_ai") {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some(section_name.to_string()),
+            Some("semantic_convention".to_string()),
+            format!("{section_name} semantic_convention must be 'generic' or 'gen_ai'"),
+        );
+    }
     if let Err(message) = validate_attribute_mappings(&section.attribute_mappings) {
         push_policy_diag(
             diagnostics,
@@ -2701,6 +2775,18 @@ fn default_atif_filename_template() -> String {
 
 fn default_otlp_transport() -> String {
     "http_binary".to_string()
+}
+
+fn default_semantic_convention() -> String {
+    "generic".to_string()
+}
+
+fn is_default_semantic_convention(value: &str) -> bool {
+    value == "generic"
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 fn default_service_name() -> String {

@@ -13,6 +13,8 @@ type AtofExporterConfig = nemo_relay::observability::atof::AtofExporterConfig;
 type AtofExporterError = nemo_relay::observability::atof::AtofExporterError;
 type AtofExporterMode = nemo_relay::observability::atof::AtofExporterMode;
 type OpenTelemetryConfig = nemo_relay::observability::otel::OpenTelemetryConfig;
+type OpenTelemetrySemanticConvention =
+    nemo_relay::observability::otel::OpenTelemetrySemanticConvention;
 type OpenTelemetrySubscriber = nemo_relay::observability::otel::OpenTelemetrySubscriber;
 type OpenInferenceConfig = nemo_relay::observability::openinference::OpenInferenceConfig;
 type OpenInferenceSubscriber = nemo_relay::observability::openinference::OpenInferenceSubscriber;
@@ -731,6 +733,48 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_attribute_mappin
     attribute_mappings_json: *const c_char,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_subscriber_create_with_options(
+            transport,
+            endpoint,
+            headers_json,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            attribute_mappings_json,
+            std::ptr::null(),
+            false,
+            out,
+        )
+    }
+}
+
+/// Creates a new OpenTelemetry subscriber with projection and content-capture options.
+///
+/// `semantic_convention` accepts `generic` (the default) or `gen_ai`.
+/// `capture_content` only affects the `gen_ai` projection and operates on sanitized events.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_options(
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    attribute_mappings_json: *const c_char,
+    semantic_convention: *const c_char,
+    capture_content: bool,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -749,6 +793,20 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_attribute_mappin
         Ok(config) => config,
         Err(status) => return status,
     };
+    let semantic_convention = match parse_string_or_default(semantic_convention, "generic") {
+        Ok(value) if value == "generic" => OpenTelemetrySemanticConvention::Generic,
+        Ok(value) if value == "gen_ai" => OpenTelemetrySemanticConvention::GenAi,
+        Ok(value) => {
+            set_last_error(&format!(
+                "semantic_convention must be 'generic' or 'gen_ai', got {value:?}"
+            ));
+            return NemoRelayStatus::InvalidArg;
+        }
+        Err(status) => return status,
+    };
+    config = config
+        .with_semantic_convention(semantic_convention)
+        .with_content_capture(capture_content);
     config = match apply_optional_string(config, endpoint, OpenTelemetryConfig::with_endpoint) {
         Ok(config) => config,
         Err(status) => return status,

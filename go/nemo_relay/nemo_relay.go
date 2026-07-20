@@ -252,6 +252,7 @@ extern void nemo_relay_atof_exporter_free(void*);
 // OpenTelemetry subscriber
 extern int32_t nemo_relay_otel_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, void**);
 extern int32_t nemo_relay_otel_subscriber_create_with_attribute_mappings(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, void**);
+extern int32_t nemo_relay_otel_subscriber_create_with_options(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, const char*, _Bool, void**);
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
@@ -1861,6 +1862,16 @@ const (
 	OpenTelemetryTransportGrpc OpenTelemetryTransport = "grpc"
 )
 
+// OpenTelemetrySemanticConvention selects the span attribute projection.
+type OpenTelemetrySemanticConvention string
+
+const (
+	// OpenTelemetrySemanticConventionGeneric preserves Relay's generic OpenTelemetry output.
+	OpenTelemetrySemanticConventionGeneric OpenTelemetrySemanticConvention = "generic"
+	// OpenTelemetrySemanticConventionGenAI emits OpenTelemetry GenAI 1.37+ conventions.
+	OpenTelemetrySemanticConventionGenAI OpenTelemetrySemanticConvention = "gen_ai"
+)
+
 // OpenTelemetryConfig configures the OpenTelemetry subscriber.
 //
 // Create it with [NewOpenTelemetryConfig], then mutate fields as needed before
@@ -1876,6 +1887,8 @@ type OpenTelemetryConfig struct {
 	InstrumentationScope string
 	Timeout              time.Duration
 	AttributeMappings    []OtlpAttributeMapping
+	SemanticConvention   OpenTelemetrySemanticConvention
+	CaptureContent       bool
 }
 
 // OtlpAttributeMapping copies a projected OTLP attribute to an alias.
@@ -1893,6 +1906,7 @@ func NewOpenTelemetryConfig() OpenTelemetryConfig {
 		ServiceName:          defaultServiceName,
 		InstrumentationScope: "nemo-relay-otel",
 		Timeout:              3 * time.Second,
+		SemanticConvention:   OpenTelemetrySemanticConventionGeneric,
 	}
 }
 
@@ -1920,6 +1934,9 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	}
 	if config.ResourceAttributes == nil {
 		config.ResourceAttributes = map[string]string{}
+	}
+	if config.SemanticConvention == "" {
+		config.SemanticConvention = OpenTelemetrySemanticConventionGeneric
 	}
 
 	cTransport := C.CString(string(config.Transport))
@@ -1972,9 +1989,12 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 
 	cInstrumentationScope := C.CString(config.InstrumentationScope)
 	defer C.free(unsafe.Pointer(cInstrumentationScope))
+	cSemanticConvention := C.CString(string(config.SemanticConvention))
+	defer C.free(unsafe.Pointer(cSemanticConvention))
+	cCaptureContent := C.bool(config.CaptureContent)
 
 	var ptr unsafe.Pointer
-	status := C.nemo_relay_otel_subscriber_create_with_attribute_mappings(
+	status := C.nemo_relay_otel_subscriber_create_with_options(
 		cTransport,
 		cEndpoint,
 		cHeadersJSON,
@@ -1985,6 +2005,8 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 		cInstrumentationScope,
 		C.uint64_t(config.Timeout/time.Millisecond),
 		cAttributeMappingsJSON,
+		cSemanticConvention,
+		cCaptureContent,
 		&ptr,
 	)
 	if err := checkStatus(status); err != nil {

@@ -30,6 +30,25 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 - NeMo Relay emits a top-level object or array field as a JSON string, omits a
   top-level `null` field, and no longer emits the old aggregate `*_json` payload
   attributes.
+- Generic projection remains the default. Set `semantic_convention` to
+  `gen_ai` to use OpenTelemetry GenAI semantic conventions 1.37 or newer for
+  agent, LLM, tool, embedding, retrieval, and reranking scopes. The exporter,
+  transport, authentication, resource, mark, and flush settings remain the
+  same.
+- In GenAI projection, Relay emits standardized `gen_ai.*`, `error.type`, and
+  `server.*` attributes alongside `nemo_relay.*` correlation and accounting
+  attributes. Reranking uses the documented Relay extension operation name
+  `rerank` because OpenTelemetry does not define a first-class reranking
+  operation.
+- GenAI content capture is disabled by default. Set `capture_content` to `true`
+  only after configuring Relay sanitization. When disabled, Relay omits system
+  instructions, input and output messages, tool descriptions, tool
+  definitions, tool arguments and results, retrieval queries and documents,
+  and agent descriptions. When enabled, the projection reads the sanitized
+  event representation rather than the callback's original values.
+- The `semantic_convention` and `capture_content` settings apply only to the
+  OpenTelemetry section. OpenInference keeps its existing semantic and content
+  behavior and rejects GenAI-only settings.
 - Use `attribute_mappings` to copy a fully qualified projected attribute to a
   backend-specific alias without changing its OTLP type.
 - Start with `http_binary` transport and an OTLP traces endpoint such as a local
@@ -56,7 +75,31 @@ OpenTelemetry Collector, Jaeger, Tempo, or Honeycomb.
 - Endpoint, TLS verification, and required authentication header names
 - Service naming and resource attributes
 - Whether deterministic flush-before-exit is required
+- Whether the backend expects generic Relay attributes or the opt-in GenAI
+  projection
+- Whether content capture is permitted and sanitization has been verified
 - Whether the chosen binding and target support the desired transport
+
+## GenAI Configuration
+
+Use the same OTLP destination for generic and GenAI projection. For plugin
+configuration, add these fields to the `opentelemetry` section:
+
+```json
+{
+  "enabled": true,
+  "semantic_convention": "gen_ai",
+  "capture_content": false,
+  "transport": "http_binary",
+  "endpoint": "http://127.0.0.1:4318/v1/traces",
+  "service_name": "my-agent"
+}
+```
+
+For direct subscriber APIs, set `semantic_convention` and `capture_content` on
+the Python config, `semanticConvention` and `captureContent` on the Node.js
+config, `SemanticConvention` and `CaptureContent` on the Go config, or use
+`with_semantic_convention(...)` and `with_content_capture(...)` in Rust.
 
 ## Troubleshooting Focus
 

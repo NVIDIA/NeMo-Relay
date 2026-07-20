@@ -47,7 +47,8 @@ Node.js bindings mirror the semantics exposed by this crate.
   one shared plugin system.
 - **Built-in observability plugin**: Configure first-party Agent Trajectory
   Observability Format (ATOF), Agent Trajectory Interchange Format (ATIF),
-  OpenTelemetry, and OpenInference exporters from the core crate.
+  generic or GenAI-semantic OpenTelemetry, and OpenInference exporters from the
+  core crate.
 - **Codec and typed helpers**: Normalize provider requests and responses for
   framework integrations.
 - **Binding source of truth**: Use the runtime semantics mirrored by the

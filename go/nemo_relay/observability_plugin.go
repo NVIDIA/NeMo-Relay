@@ -181,19 +181,21 @@ func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 
 // ObservabilityOtlpConfig configures OpenTelemetry or OpenInference OTLP export.
 type ObservabilityOtlpConfig struct {
-	Enabled              bool                        `json:"enabled,omitempty"`
-	MarkProjection       ObservabilityMarkProjection `json:"mark_projection,omitempty"`
-	MarkExcludeNames     []string                    `json:"mark_exclude_names,omitempty"`
-	AttributeMappings    []OtlpAttributeMapping      `json:"attribute_mappings,omitempty"`
-	Transport            string                      `json:"transport,omitempty"`
-	Endpoint             string                      `json:"endpoint,omitempty"`
-	Headers              map[string]string           `json:"headers,omitempty"`
-	ResourceAttributes   map[string]string           `json:"resource_attributes,omitempty"`
-	ServiceName          string                      `json:"service_name,omitempty"`
-	ServiceNamespace     string                      `json:"service_namespace,omitempty"`
-	ServiceVersion       string                      `json:"service_version,omitempty"`
-	InstrumentationScope string                      `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis        uint64                      `json:"timeout_millis,omitempty"`
+	Enabled              bool                            `json:"enabled,omitempty"`
+	MarkProjection       ObservabilityMarkProjection     `json:"mark_projection,omitempty"`
+	MarkExcludeNames     []string                        `json:"mark_exclude_names,omitempty"`
+	AttributeMappings    []OtlpAttributeMapping          `json:"attribute_mappings,omitempty"`
+	SemanticConvention   OpenTelemetrySemanticConvention `json:"semantic_convention,omitempty"`
+	CaptureContent       bool                            `json:"capture_content,omitempty"`
+	Transport            string                          `json:"transport,omitempty"`
+	Endpoint             string                          `json:"endpoint,omitempty"`
+	Headers              map[string]string               `json:"headers,omitempty"`
+	ResourceAttributes   map[string]string               `json:"resource_attributes,omitempty"`
+	ServiceName          string                          `json:"service_name,omitempty"`
+	ServiceNamespace     string                          `json:"service_namespace,omitempty"`
+	ServiceVersion       string                          `json:"service_version,omitempty"`
+	InstrumentationScope string                          `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64                          `json:"timeout_millis,omitempty"`
 }
 
 // MarshalJSON preserves the distinction between a nil exclusion list, which
@@ -271,6 +273,7 @@ func NewObservabilityOtlpConfig() ObservabilityOtlpConfig {
 		Transport:          "http_binary",
 		MarkProjection:     ObservabilityMarkProjectionInherit,
 		MarkExcludeNames:   []string{"llm.chunk"},
+		SemanticConvention: OpenTelemetrySemanticConventionGeneric,
 		Headers:            map[string]string{},
 		ResourceAttributes: map[string]string{},
 		ServiceName:        "nemo-relay",

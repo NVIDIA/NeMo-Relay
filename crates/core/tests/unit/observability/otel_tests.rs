@@ -14,6 +14,7 @@ use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
+use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
     reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -25,6 +26,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use uuid::Uuid;
@@ -413,6 +415,41 @@ fn make_scope_event_with_profile(
     ))
 }
 
+fn make_scope_event_with_metadata_and_profile(
+    scope_category: ScopeCategory,
+    uuid: Uuid,
+    name: &str,
+    scope_type: ScopeType,
+    data: Option<Json>,
+    metadata: Option<Json>,
+    category_profile: Option<CategoryProfile>,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .uuid(uuid)
+            .name(name)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .build(),
+        scope_category,
+        Vec::new(),
+        EventCategory::from(scope_type),
+        category_profile,
+    ))
+}
+
+fn make_genai_processor(provider: SdkTracerProvider, capture_content: bool) -> OtelEventProcessor {
+    OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+        provider,
+        "test-genai".to_string(),
+        MarkProjection::default(),
+        default_mark_exclude_names(),
+        Vec::new(),
+        OpenTelemetrySemanticConvention::GenAi,
+        capture_content,
+    )
+}
+
 fn make_scope_event_with_attributes(
     scope_category: ScopeCategory,
     uuid: Uuid,
@@ -549,6 +586,8 @@ fn config_defaults_and_builder_overrides_are_applied() {
         .with_instrumentation_scope("demo-scope")
         .with_mark_projection(MarkProjection::Tool)
         .with_mark_exclude_names(["notification", "hook_mark"])
+        .with_semantic_convention(OpenTelemetrySemanticConvention::GenAi)
+        .with_content_capture(true)
         .with_timeout(Duration::from_millis(1250));
 
     assert_eq!(config.transport, OtlpTransport::HttpBinary);
@@ -570,6 +609,11 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(config.instrumentation_scope, "demo-scope");
     assert_eq!(config.mark_projection, MarkProjection::Tool);
     assert_eq!(config.mark_exclude_names, vec!["notification", "hook_mark"]);
+    assert_eq!(
+        config.semantic_convention,
+        OpenTelemetrySemanticConvention::GenAi
+    );
+    assert!(config.capture_content);
     assert_eq!(config.timeout, Duration::from_millis(1250));
 
     let defaults = OpenTelemetryConfig::default();
@@ -578,6 +622,11 @@ fn config_defaults_and_builder_overrides_are_applied() {
     assert_eq!(defaults.instrumentation_scope, "nemo-relay-otel");
     assert_eq!(defaults.mark_projection, MarkProjection::Inherit);
     assert_eq!(defaults.mark_exclude_names, vec!["llm.chunk"]);
+    assert_eq!(
+        defaults.semantic_convention,
+        OpenTelemetrySemanticConvention::Generic
+    );
+    assert!(!defaults.capture_content);
     assert_eq!(defaults.timeout, Duration::from_secs(3));
     assert!(defaults.headers.is_empty());
     assert!(defaults.resource_attributes.is_empty());
@@ -1668,6 +1717,403 @@ fn llm_end_emits_cost_only_no_token_or_gen_ai_attributes() {
             .all(|k| !k.starts_with("llm.token") && !k.starts_with("gen_ai")),
         "no token attributes expected on the LLM span: {keys:?}"
     );
+    assert_eq!(spans[0].name.as_ref(), "other");
+    assert_eq!(spans[0].span_kind, SpanKind::Client);
+}
+
+#[test]
+fn genai_llm_projection_emits_datadog_compatible_attributes() {
+    let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "messages": [
+            {"role": "system", "content": "Answer precisely."},
+            {"role": "user", "content": "What is 2+2?"}
+        ],
+        "model": "gpt-4.1-mini",
+        "params": {
+            "temperature": 0.2,
+            "max_tokens": 64,
+            "top_p": 0.9,
+            "stop": ["DONE"]
+        },
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "calculator",
+                "description": "Evaluate an expression",
+                "parameters": {"type": "object"}
+            }
+        }]
+    }))
+    .unwrap();
+    let response: AnnotatedLlmResponse = serde_json::from_value(json!({
+        "id": "chatcmpl-123",
+        "model": "gpt-4.1-mini-2026-01-01",
+        "message": "Four.",
+        "finish_reason": "complete",
+        "usage": {
+            "prompt_tokens": 17,
+            "completion_tokens": 3,
+            "total_tokens": 20,
+            "cache_read_tokens": 5
+        }
+    }))
+    .unwrap();
+    let uuid = Uuid::now_v7();
+    let start = make_scope_event_with_metadata_and_profile(
+        ScopeCategory::Start,
+        uuid,
+        "openai.chat",
+        ScopeType::Llm,
+        None,
+        Some(json!({
+            "conversation_id": "conversation-42",
+            "server.address": "api.openai.com"
+        })),
+        Some(
+            CategoryProfile::builder()
+                .model_name("gpt-4.1-mini")
+                .annotated_request(Arc::new(request))
+                .build(),
+        ),
+    );
+    let end = make_scope_event_with_metadata_and_profile(
+        ScopeCategory::End,
+        uuid,
+        "openai.chat",
+        ScopeType::Llm,
+        None,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .model_name("gpt-4.1-mini")
+                .annotated_response(Arc::new(response))
+                .build(),
+        ),
+    );
+
+    let (provider, exporter) = make_provider();
+    let mut processor = make_genai_processor(provider, true);
+    processor.process(&start);
+    processor.process(&end);
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span = &spans[0];
+    assert_eq!(span.name.as_ref(), "chat gpt-4.1-mini");
+    assert_eq!(span.span_kind, SpanKind::Client);
+    let attributes = attr_map(&span.attributes);
+    assert_eq!(attributes["gen_ai.operation.name"], "chat");
+    assert_eq!(attributes["gen_ai.provider.name"], "openai");
+    assert_eq!(attributes["gen_ai.request.model"], "gpt-4.1-mini");
+    assert_eq!(
+        attributes["gen_ai.response.model"],
+        "gpt-4.1-mini-2026-01-01"
+    );
+    assert_eq!(attributes["gen_ai.response.id"], "chatcmpl-123");
+    assert_eq!(attributes["gen_ai.usage.input_tokens"], "17");
+    assert_eq!(attributes["gen_ai.usage.output_tokens"], "3");
+    assert_eq!(attributes["gen_ai.usage.cache_read.input_tokens"], "5");
+    assert_eq!(attributes["gen_ai.conversation.id"], "conversation-42");
+    assert_eq!(attributes["server.address"], "api.openai.com");
+    assert!(attributes["gen_ai.system_instructions"].contains("Answer precisely."));
+    assert!(attributes["gen_ai.input.messages"].contains("What is 2+2?"));
+    assert!(attributes["gen_ai.output.messages"].contains("Four."));
+    assert!(attributes["gen_ai.tool.definitions"].contains("calculator"));
+    assert_eq!(attributes["nemo_relay.scope_type"], "llm");
+    assert_eq!(attributes["nemo_relay.model_name"], "gpt-4.1-mini");
+    assert_eq!(attributes["nemo_relay.otel.semantic_convention"], "1.37+");
+}
+
+#[test]
+fn genai_content_capture_is_disabled_by_default_and_uses_sanitized_values() {
+    let request: AnnotatedLlmRequest = serde_json::from_value(json!({
+        "messages": [
+            {"role": "system", "content": "[REDACTED]"},
+            {"role": "user", "content": "[REDACTED]"}
+        ],
+        "model": "safe-model",
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "safe-tool",
+                "description": "[REDACTED]",
+                "parameters": {"secret": "[REDACTED]"}
+            }
+        }]
+    }))
+    .unwrap();
+    let response: AnnotatedLlmResponse = serde_json::from_value(json!({
+        "model": "safe-model",
+        "message": "[REDACTED]",
+        "finish_reason": "complete",
+        "usage": {"prompt_tokens": 2, "completion_tokens": 1}
+    }))
+    .unwrap();
+    let uuid = Uuid::now_v7();
+    let start = make_scope_event_with_metadata_and_profile(
+        ScopeCategory::Start,
+        uuid,
+        "openai.chat",
+        ScopeType::Llm,
+        Some(json!({"raw_secret": "must-not-export"})),
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(Arc::new(request.clone()))
+                .build(),
+        ),
+    );
+    let end = make_scope_event_with_metadata_and_profile(
+        ScopeCategory::End,
+        uuid,
+        "openai.chat",
+        ScopeType::Llm,
+        Some(json!({"raw_secret": "must-not-export"})),
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(Arc::new(response.clone()))
+                .build(),
+        ),
+    );
+
+    let (provider, exporter) = make_provider();
+    let mut processor = make_genai_processor(provider, false);
+    processor.process(&start);
+    processor.process(&end);
+    processor.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(!attributes.contains_key("gen_ai.system_instructions"));
+    assert!(!attributes.contains_key("gen_ai.input.messages"));
+    assert!(!attributes.contains_key("gen_ai.output.messages"));
+    assert!(!attributes.contains_key("gen_ai.tool.definitions"));
+    assert!(
+        attributes
+            .values()
+            .all(|value| !value.contains("must-not-export"))
+    );
+    assert_eq!(attributes["gen_ai.usage.input_tokens"], "2");
+
+    let tool_uuid = Uuid::now_v7();
+    processor.process(&make_scope_event_with_metadata_and_profile(
+        ScopeCategory::Start,
+        tool_uuid,
+        "private-tool",
+        ScopeType::Tool,
+        Some(json!({"arguments": {"secret": "must-not-export"}})),
+        Some(json!({"tool_description": "must-not-export"})),
+        None,
+    ));
+    processor.process(&make_scope_event_with_metadata_and_profile(
+        ScopeCategory::End,
+        tool_uuid,
+        "private-tool",
+        ScopeType::Tool,
+        Some(json!({"result": "must-not-export"})),
+        None,
+        None,
+    ));
+    processor.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    let tool = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "execute_tool private-tool")
+        .unwrap();
+    let tool_attributes = attr_map(&tool.attributes);
+    assert!(!tool_attributes.contains_key("gen_ai.tool.description"));
+    assert!(!tool_attributes.contains_key("gen_ai.tool.call.arguments"));
+    assert!(!tool_attributes.contains_key("gen_ai.tool.call.result"));
+    assert!(
+        tool_attributes
+            .values()
+            .all(|value| !value.contains("must-not-export"))
+    );
+
+    let (provider, exporter) = make_provider();
+    let mut processor = make_genai_processor(provider, true);
+    processor.process(&start);
+    processor.process(&end);
+    processor.force_flush().unwrap();
+    let spans = exporter.get_finished_spans().unwrap();
+    let attributes = attr_map(&spans[0].attributes);
+    assert!(attributes["gen_ai.input.messages"].contains("[REDACTED]"));
+    assert!(attributes["gen_ai.output.messages"].contains("[REDACTED]"));
+    assert!(
+        attributes
+            .values()
+            .all(|value| !value.contains("must-not-export"))
+    );
+}
+
+#[test]
+fn genai_llm_span_names_follow_the_inference_operation() {
+    let (provider, _) = make_provider();
+    let processor = make_genai_processor(provider, false);
+    for (name, operation) in [
+        ("openai.chat", "chat"),
+        ("gemini.generateContent", "generate_content"),
+        ("openai.completions", "text_completion"),
+    ] {
+        let event = make_scope_event_with_metadata_and_profile(
+            ScopeCategory::Start,
+            Uuid::now_v7(),
+            name,
+            ScopeType::Llm,
+            None,
+            Some(json!({"model": "test-model"})),
+            None,
+        );
+        assert_eq!(
+            processor.span_name(&event),
+            format!("{operation} test-model")
+        );
+        let attributes = attr_map(&processor.start_attributes(&event));
+        assert_eq!(attributes["gen_ai.operation.name"], operation);
+    }
+}
+
+#[test]
+fn genai_projection_names_supported_scope_types_and_records_errors() {
+    let cases = [
+        (
+            ScopeType::Agent,
+            "planner",
+            "invoke_agent planner",
+            SpanKind::Internal,
+        ),
+        (
+            ScopeType::Tool,
+            "search",
+            "execute_tool search",
+            SpanKind::Internal,
+        ),
+        (
+            ScopeType::Embedder,
+            "embed",
+            "embeddings text-embed-3",
+            SpanKind::Client,
+        ),
+        (
+            ScopeType::Retriever,
+            "search-index",
+            "retrieval products",
+            SpanKind::Client,
+        ),
+        (
+            ScopeType::Reranker,
+            "rerank",
+            "rerank cohere-rerank",
+            SpanKind::Client,
+        ),
+    ];
+    let (provider, exporter) = make_provider();
+    let mut processor = make_genai_processor(provider, true);
+    for (scope_type, name, _, _) in &cases {
+        let uuid = Uuid::now_v7();
+        let metadata = match scope_type {
+            ScopeType::Embedder => json!({"model": "text-embed-3"}),
+            ScopeType::Retriever => json!({"data_source_id": "products", "top_k": 7.0}),
+            ScopeType::Reranker => json!({"model": "cohere-rerank"}),
+            ScopeType::Tool => json!({"tool_call_id": "call-7", "tool_type": "function"}),
+            _ => json!({"agent_id": "agent-7", "agent_version": "1.0"}),
+        };
+        processor.process(&make_scope_event_with_metadata_and_profile(
+            ScopeCategory::Start,
+            uuid,
+            name,
+            *scope_type,
+            Some(if *scope_type == ScopeType::Tool {
+                json!({"x": 1})
+            } else {
+                json!({"query": "private query"})
+            }),
+            Some(metadata),
+            None,
+        ));
+        let end_data = match scope_type {
+            ScopeType::Tool => json!({"value": 2}),
+            ScopeType::Embedder => json!({
+                "model": "text-embed-3-2026",
+                "usage": {"input_tokens": 9}
+            }),
+            ScopeType::Retriever | ScopeType::Reranker => {
+                json!({"results": [{"id": "doc-1"}]})
+            }
+            _ => json!({"status": "failed"}),
+        };
+        processor.process(&make_scope_event_with_metadata_and_profile(
+            ScopeCategory::End,
+            uuid,
+            name,
+            *scope_type,
+            Some(end_data),
+            Some(json!({"otel.status_code": "ERROR", "error.type": "timeout"})),
+            None,
+        ));
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), cases.len());
+    for (_, _, expected_name, expected_kind) in cases {
+        let span = spans
+            .iter()
+            .find(|span| span.name.as_ref() == expected_name)
+            .unwrap_or_else(|| panic!("missing span {expected_name}"));
+        assert_eq!(span.span_kind, expected_kind);
+        let attributes = attr_map(&span.attributes);
+        assert_eq!(attributes["error.type"], "timeout");
+        assert!(attributes.contains_key("gen_ai.operation.name"));
+        assert!(attributes.contains_key("nemo_relay.uuid"));
+        assert!(matches!(
+            span.status,
+            opentelemetry::trace::Status::Error { .. }
+        ));
+    }
+    let tool = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "execute_tool search")
+        .unwrap();
+    let tool_attributes = attr_map(&tool.attributes);
+    assert_eq!(tool_attributes["gen_ai.tool.name"], "search");
+    assert_eq!(tool_attributes["gen_ai.tool.call.id"], "call-7");
+    assert!(tool_attributes["gen_ai.tool.call.arguments"].contains("\"x\":1"));
+    assert!(tool_attributes["gen_ai.tool.call.result"].contains("\"value\":2"));
+
+    let agent = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "invoke_agent planner")
+        .unwrap();
+    let agent_attributes = attr_map(&agent.attributes);
+    assert_eq!(agent_attributes["gen_ai.agent.name"], "planner");
+    assert_eq!(agent_attributes["gen_ai.agent.id"], "agent-7");
+    assert_eq!(agent_attributes["gen_ai.agent.version"], "1.0");
+
+    let embedding = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "embeddings text-embed-3")
+        .unwrap();
+    let embedding_attributes = attr_map(&embedding.attributes);
+    assert_eq!(
+        embedding_attributes["gen_ai.response.model"],
+        "text-embed-3-2026"
+    );
+    assert_eq!(embedding_attributes["gen_ai.usage.input_tokens"], "9");
+
+    let retrieval = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "retrieval products")
+        .unwrap();
+    let retrieval_attributes = attr_map(&retrieval.attributes);
+    assert_eq!(retrieval_attributes["gen_ai.data_source.id"], "products");
+    assert!(retrieval.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "gen_ai.request.top_k"
+            && matches!(&attribute.value, opentelemetry::Value::F64(value) if *value == 7.0)
+    }));
+    assert!(retrieval_attributes["gen_ai.retrieval.query.text"].contains("private query"));
+    assert!(retrieval_attributes["gen_ai.retrieval.documents"].contains("doc-1"));
 }
 
 #[test]

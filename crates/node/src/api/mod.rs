@@ -175,6 +175,16 @@ fn build_otel_config(
         .instrumentation_scope
         .unwrap_or_else(|| "nemo-relay-otel".to_string());
     let timeout_millis = options.timeout_millis.unwrap_or(3_000);
+    let semantic_convention = match options.semantic_convention.as_deref().unwrap_or("generic") {
+        "generic" => nemo_relay::observability::otel::OpenTelemetrySemanticConvention::Generic,
+        "gen_ai" => nemo_relay::observability::otel::OpenTelemetrySemanticConvention::GenAi,
+        other => {
+            return Err(napi::Error::from_reason(format!(
+                "semanticConvention must be 'generic' or 'gen_ai', got {other:?}",
+            )));
+        }
+    };
+    let capture_content = options.capture_content.unwrap_or(false);
 
     let mut config = match transport.as_str() {
         "http_binary" => {
@@ -188,7 +198,9 @@ fn build_otel_config(
         }
     }
     .with_instrumentation_scope(instrumentation_scope)
-    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()));
+    .with_timeout(std::time::Duration::from_millis(timeout_millis.into()))
+    .with_semantic_convention(semantic_convention)
+    .with_content_capture(capture_content);
 
     if let Some(endpoint) = options.endpoint {
         config = config.with_endpoint(endpoint);
@@ -3598,6 +3610,10 @@ pub struct OpenTelemetryConfig {
     pub timeout_millis: Option<u32>,
     /// Typed projected attributes copied to aliases.
     pub attribute_mappings: Option<Vec<OtlpAttributeMapping>>,
+    /// `"generic"` (default) or the OpenTelemetry GenAI `"gen_ai"` projection.
+    pub semantic_convention: Option<String>,
+    /// Emit sanitized message and tool content in GenAI attributes. Defaults to `false`.
+    pub capture_content: Option<bool>,
 }
 
 /// Typed projected attribute copy configuration.

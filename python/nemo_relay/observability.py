@@ -215,7 +215,11 @@ class AtifConfig:
 
 @dataclass(slots=True)
 class OtlpConfig:
-    """Shared OpenTelemetry/OpenInference OTLP export settings."""
+    """Shared OpenTelemetry/OpenInference OTLP export settings.
+
+    ``semantic_convention`` and ``capture_content`` apply only to the
+    OpenTelemetry section. OpenInference supports the generic value only.
+    """
 
     enabled: bool = False
     mark_projection: MarkProjection = "inherit"
@@ -230,6 +234,8 @@ class OtlpConfig:
     instrumentation_scope: str | None = None
     timeout_millis: int = 3000
     attribute_mappings: list[dict[str, str]] = field(default_factory=list)
+    semantic_convention: Literal["generic", "gen_ai"] = "generic"
+    capture_content: bool = False
 
     def to_dict(self) -> JsonObject:
         """Serialize this OTLP config to the canonical JSON object shape."""
@@ -239,6 +245,8 @@ class OtlpConfig:
                 "mark_projection": self.mark_projection,
                 "mark_exclude_names": self.mark_exclude_names,
                 "attribute_mappings": self.attribute_mappings,
+                "semantic_convention": self.semantic_convention,
+                "capture_content": self.capture_content,
                 "transport": self.transport,
                 "endpoint": self.endpoint,
                 "headers": self.headers,

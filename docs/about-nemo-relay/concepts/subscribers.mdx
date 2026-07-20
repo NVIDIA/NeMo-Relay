@@ -171,7 +171,8 @@ event per line.
 ### OpenTelemetry Subscriber
 
 The OpenTelemetry subscriber maps runtime events into OTLP traces for tracing
-backends.
+backends. It preserves generic Relay semantics by default and can opt in to an
+OpenTelemetry GenAI 1.37 or newer projection for supported AI scopes.
 
 ### OpenInference Subscriber
 

@@ -955,6 +955,8 @@ class OpenTelemetryConfig:
     service_version: Optional[str]
     instrumentation_scope: str
     timeout_millis: int
+    semantic_convention: Literal["generic", "gen_ai"]
+    capture_content: bool
 
     def __init__(self) -> None:
         """Create an OpenTelemetry config with native defaults."""
