@@ -22,6 +22,12 @@ async function waitFor(events, count) {
   assert.ok(events.length >= count, `expected ${count} events, received ${events.length}`);
 }
 
+function assertSanitizerFieldsCleared(event) {
+  assert.equal(event.data, null);
+  assert.equal(event.category_profile, null);
+  assert.equal(event.metadata, null);
+}
+
 describe('event sanitizer registries', () => {
   it('orders mark sanitizers and supports field removal', async () => {
     const events = capture('node-event-sanitize-order-sub');
@@ -97,16 +103,24 @@ describe('event sanitizer registries', () => {
     try {
       for (const [kind, sanitizer] of Object.entries(invalidResults)) {
         const name = `node-event-invalid-${kind}`;
+        const seedName = `${name}-seed`;
         lib.clearLastCallbackError();
+        lib.registerMarkSanitizeGuardrail(seedName, -1, (_event, fields) => ({
+          ...fields,
+          data: { kept: kind },
+          categoryProfile: { subtype: 'seeded' },
+          metadata: { kept: kind },
+        }));
         lib.registerMarkSanitizeGuardrail(name, 0, sanitizer);
         try {
-          lib.event(name, null, { kept: kind });
+          lib.event(name, null, { kept: kind }, { kept: kind });
           lib.flushSubscribers();
           await waitFor(events, Object.keys(invalidResults).indexOf(kind) + 1);
         } finally {
+          lib.deregisterMarkSanitizeGuardrail(seedName);
           lib.deregisterMarkSanitizeGuardrail(name);
         }
-        assert.equal(events.at(-1).data, null);
+        assertSanitizerFieldsCleared(events.at(-1));
         assert.match(lib.getLastCallbackError(), /event sanitizer callback failed/);
       }
     } finally {
@@ -144,19 +158,27 @@ describe('event sanitizer registries', () => {
     try {
       for (const [kind, sanitizer] of Object.entries(invalidResults)) {
         const name = `node-background-invalid-${kind}`;
+        const seedName = `${name}-seed`;
         lib.clearLastCallbackError();
+        lib.registerScopeSanitizeStartGuardrail(seedName, -1, (_event, fields) => ({
+          ...fields,
+          data: { kept: kind },
+          categoryProfile: { ...fields.categoryProfile, subtype: 'seeded' },
+          metadata: { kept: kind },
+        }));
         lib.registerScopeSanitizeStartGuardrail(name, 0, sanitizer);
         try {
           await lib.toolCallExecute(name, { kept: kind }, async (args) => args);
           lib.flushSubscribers();
           await waitFor(events, (Object.keys(invalidResults).indexOf(kind) + 1) * 2);
         } finally {
+          lib.deregisterScopeSanitizeStartGuardrail(seedName);
           lib.deregisterScopeSanitizeStartGuardrail(name);
         }
         const start = events.find(
           (event) => event.kind === 'scope' && event.name === name && event.scope_category === 'start',
         );
-        assert.equal(start.data, null);
+        assertSanitizerFieldsCleared(start);
         assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {
@@ -167,6 +189,12 @@ describe('event sanitizer registries', () => {
   it('fails closed when a thread-safe sanitizer throws', async () => {
     const events = capture('node-event-sanitize-background-throw-sub');
     lib.clearLastCallbackError();
+    lib.registerScopeSanitizeStartGuardrail('node-background-throw-seed', -1, (_event, fields) => ({
+      ...fields,
+      data: { kept: true },
+      categoryProfile: { ...fields.categoryProfile, subtype: 'seeded' },
+      metadata: { kept: true },
+    }));
     lib.registerScopeSanitizeStartGuardrail('node-background-throw', 0, () => {
       throw new Error('background sanitizer boom');
     });
@@ -177,9 +205,10 @@ describe('event sanitizer registries', () => {
       const start = events.find(
         (event) => event.kind === 'scope' && event.name === 'background-throw-tool' && event.scope_category === 'start',
       );
-      assert.equal(start.data, null);
+      assertSanitizerFieldsCleared(start);
       assert.match(lib.getLastCallbackError() ?? '', /background sanitizer boom/i);
     } finally {
+      lib.deregisterScopeSanitizeStartGuardrail('node-background-throw-seed');
       lib.deregisterScopeSanitizeStartGuardrail('node-background-throw');
       lib.deregisterSubscriber('node-event-sanitize-background-throw-sub');
       lib.clearLastCallbackError();
@@ -247,6 +276,12 @@ describe('event sanitizer registries', () => {
     const events = capture('node-event-sanitize-plugin-throw-sub');
     plugin.register(kind, {
       register(_config, context) {
+        context.registerMarkSanitizeGuardrail('seed', -1, (_event, fields) => ({
+          ...fields,
+          data: { raw: true },
+          categoryProfile: { subtype: 'seeded' },
+          metadata: { raw: true },
+        }));
         context.registerMarkSanitizeGuardrail('mark', 0, () => {
           throw new Error('plugin sanitizer boom');
         });
@@ -255,10 +290,10 @@ describe('event sanitizer registries', () => {
     lib.clearLastCallbackError();
     try {
       await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(kind)] });
-      lib.event('plugin-throw', null, { raw: true });
+      lib.event('plugin-throw', null, { raw: true }, { raw: true });
       lib.flushSubscribers();
       await waitFor(events, 1);
-      assert.equal(events.at(-1).data, null);
+      assertSanitizerFieldsCleared(events.at(-1));
       assert.match(lib.getLastCallbackError() ?? '', /plugin sanitizer boom/i);
     } finally {
       plugin.clear();

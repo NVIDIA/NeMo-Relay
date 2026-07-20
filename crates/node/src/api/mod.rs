@@ -2382,8 +2382,9 @@ macro_rules! napi_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         /// Register an event sanitize guardrail.
         ///
-        /// The callback must be synchronous. If it throws, Relay preserves the current event
-        /// fields and records the error for `getLastCallbackError()`.
+        /// The callback must be synchronous. Callback, serialization, conversion, or
+        /// invalid-result failures clear the event fields and record the error for
+        /// `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
             env: Env,
@@ -2863,8 +2864,9 @@ macro_rules! napi_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         /// Register a scope-local event sanitize guardrail.
         ///
-        /// The callback must be synchronous. If it throws, Relay preserves the current event
-        /// fields and records the error for `getLastCallbackError()`.
+        /// The callback must be synchronous. Callback, serialization, conversion, or
+        /// invalid-result failures clear the event fields and record the error for
+        /// `getLastCallbackError()`.
         #[napi]
         pub fn $register_name(
             env: Env,
