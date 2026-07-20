@@ -54,8 +54,8 @@ Use this model when explaining how capture and export relate:
   components.
 - Exporter-oriented subscribers preserve raw ATOF or translate the event stream
   into ATIF, OpenTelemetry, or OpenInference output.
-- Event payloads reflect sanitized post-guardrail input and output when calls use
-  managed helpers or manual lifecycle params provide those fields.
+- Event payloads reflect sanitized post-guardrail input and output when calls
+  use managed helpers or manual lifecycle params provide those fields.
 - LLM annotations follow the freshness rules:
   - Each owning agent scope starts fresh, and a `compaction` mark refreshes it.
   - The first subsequent LLM start retains complete annotation history. Later

@@ -164,6 +164,29 @@ describe('event sanitizer registries', () => {
     }
   });
 
+  it('fails open with the original payload when a thread-safe sanitizer throws', async () => {
+    const events = capture('node-event-sanitize-background-throw-sub');
+    lib.clearLastCallbackError();
+    lib.registerScopeSanitizeStartGuardrail('node-background-throw', 0, () => {
+      throw new Error('background sanitizer boom');
+    });
+    try {
+      await lib.toolCallExecute('background-throw-tool', { kept: true }, async (args) => args);
+      lib.flushSubscribers();
+      await waitFor(events, 2);
+      const start = events.find(
+        (event) =>
+          event.kind === 'scope' && event.name === 'background-throw-tool' && event.scope_category === 'start',
+      );
+      assert.deepEqual(start.data, { kept: true });
+      assert.match(lib.getLastCallbackError() ?? '', /background sanitizer boom/i);
+    } finally {
+      lib.deregisterScopeSanitizeStartGuardrail('node-background-throw');
+      lib.deregisterSubscriber('node-event-sanitize-background-throw-sub');
+      lib.clearLastCallbackError();
+    }
+  });
+
   it('inherits and cleans up scope-local mark sanitizers', async () => {
     const events = capture('node-event-sanitize-local-sub');
     const owner = lib.pushScope('owner', lib.ScopeType.Agent);
@@ -218,5 +241,31 @@ describe('event sanitizer registries', () => {
     );
     assert.deepEqual(marks.configured.data, { plugin: true });
     assert.deepEqual(marks.cleared.data, { raw: true });
+  });
+
+  it('fails open when a plugin-owned sanitizer throws', async () => {
+    const kind = `node.test.event-sanitize-throw.${Date.now()}`;
+    const events = capture('node-event-sanitize-plugin-throw-sub');
+    plugin.register(kind, {
+      register(_config, context) {
+        context.registerMarkSanitizeGuardrail('mark', 0, () => {
+          throw new Error('plugin sanitizer boom');
+        });
+      },
+    });
+    lib.clearLastCallbackError();
+    try {
+      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(kind)] });
+      lib.event('plugin-throw', null, { raw: true });
+      lib.flushSubscribers();
+      await waitFor(events, 1);
+      assert.deepEqual(events.at(-1).data, { raw: true });
+      assert.match(lib.getLastCallbackError() ?? '', /plugin sanitizer boom/i);
+    } finally {
+      plugin.clear();
+      plugin.deregister(kind);
+      lib.deregisterSubscriber('node-event-sanitize-plugin-throw-sub');
+      lib.clearLastCallbackError();
+    }
   });
 });
