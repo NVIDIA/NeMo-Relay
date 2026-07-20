@@ -87,7 +87,19 @@ async fn provide(
 ) -> Response {
     let stream = request["stream"].as_bool().unwrap_or(false);
     let model = request["model"].as_str().unwrap_or("unknown").to_string();
+    let malformed_response = !stream
+        && model == "provider/selected"
+        && headers
+            .get("x-nemo-relay-request-id")
+            .is_some_and(|value| value == "malformed-response");
     state.requests.lock().unwrap().push((headers, request));
+    if malformed_response {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from("{invalid-provider-json"))
+            .unwrap();
+    }
     if stream {
         let first = json!({
             "id": "chat-ci", "object": "chat.completion.chunk", "model": model,
@@ -286,8 +298,13 @@ base_url = "{provider_url}"
     let fallback: Value = fallback.json().await.unwrap();
     assert_eq!(fallback["model"], "provider/fallback");
 
+    let malformed = send_chat("malformed-response", false).await.unwrap();
+    assert!(malformed.status().is_success());
+    let malformed: Value = malformed.json().await.unwrap();
+    assert_eq!(malformed["model"], "provider/fallback");
+
     let decisions = decision_requests.lock().unwrap();
-    assert_eq!(decisions.len(), 4);
+    assert_eq!(decisions.len(), 5);
     for (headers, body) in decisions.iter() {
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-route"));
@@ -315,6 +332,8 @@ base_url = "{provider_url}"
             "provider/selected",
             "provider/selected",
             "provider/selected",
+            "provider/fallback",
+            "provider/selected",
             "provider/fallback"
         ]
     );
@@ -324,6 +343,19 @@ base_url = "{provider_url}"
     assert_eq!(
         providers[1].1["messages"][0]["content"],
         "process boundary response translation"
+    );
+    let malformed_models = providers
+        .iter()
+        .filter(|(headers, _)| {
+            headers
+                .get("x-nemo-relay-request-id")
+                .is_some_and(|value| value == "malformed-response")
+        })
+        .map(|(_, body)| body["model"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        malformed_models,
+        vec!["provider/selected", "provider/fallback"]
     );
     for (headers, _) in providers.iter() {
         assert!(!headers.contains_key("x-nemo-relay-internal-dispatch-url"));

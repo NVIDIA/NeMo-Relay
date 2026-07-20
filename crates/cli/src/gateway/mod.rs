@@ -322,8 +322,17 @@ fn build_buffered_func(
                     &bytes,
                 )));
             }
-            let json = serde_json::from_slice::<Value>(&bytes)
-                .unwrap_or_else(|_| json!({ "body_bytes": bytes.len() }));
+            let json = match serde_json::from_slice::<Value>(&bytes) {
+                Ok(json) => json,
+                Err(_) if retry_aware => {
+                    return Err(FlowError::Upstream(http_failure(
+                        status,
+                        &response_headers,
+                        &bytes,
+                    )));
+                }
+                Err(_) => json!({ "body_bytes": bytes.len() }),
+            };
             *upstream_info.lock().expect("upstream info lock poisoned") =
                 Some((status, response_headers));
             *response_bytes.lock().expect("response bytes lock poisoned") = Some(bytes);

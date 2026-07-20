@@ -25,6 +25,37 @@ func TestEventSanitizerRegistries(t *testing.T) {
 	runTestWithScopeStack(t, testEventSanitizerRegistries)
 }
 
+func TestEventSanitizerMarshalFailureClearsObservabilityFields(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var events []Event
+		registerEventSanitizerSubscriber(t, &mu, &events)
+
+		if err := RegisterMarkSanitizeGuardrail("go-mark-sanitize-invalid", 0, func(_ Event, _ EventSanitizeFields) EventSanitizeFields {
+			return EventSanitizeFields{Data: json.RawMessage("{")}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = DeregisterMarkSanitizeGuardrail("go-mark-sanitize-invalid") })
+
+		if err := EmitEvent("invalid-sanitizer", WithEventData(json.RawMessage(`{"secret":true}`)), WithEventMetadata(json.RawMessage(`{"secret":true}`))); err != nil {
+			t.Fatal(err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatal(err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(events) != 1 {
+			t.Fatalf("expected one event, got %d", len(events))
+		}
+		if len(events[0].Data()) != 0 || len(events[0].CategoryProfile()) != 0 || len(events[0].Metadata()) != 0 {
+			t.Fatalf("expected cleared observability fields, got data=%s category_profile=%s metadata=%s", events[0].Data(), events[0].CategoryProfile(), events[0].Metadata())
+		}
+	})
+}
+
 func testEventSanitizerRegistries(t *testing.T) {
 	var mu sync.Mutex
 	var events []Event

@@ -1507,7 +1507,10 @@ fn resolve_headers(
         insert_http_header(&mut headers, name, value)?;
     }
     for (name, variable) in environment_headers {
-        if static_headers.contains_key(name) {
+        if static_headers
+            .keys()
+            .any(|configured| configured.eq_ignore_ascii_case(name))
+        {
             return Err(format!(
                 "header {name:?} cannot appear in both headers and header_env"
             ));
@@ -1531,7 +1534,10 @@ fn resolve_json_headers(
         headers.insert(name.clone(), Json::String(value.clone()));
     }
     for (name, variable) in environment_headers {
-        if static_headers.contains_key(name) {
+        if static_headers
+            .keys()
+            .any(|configured| configured.eq_ignore_ascii_case(name))
+        {
             return Err(format!(
                 "target header {name:?} cannot appear in both headers and header_env"
             ));
