@@ -24,14 +24,21 @@ one Hermes process.
 
 ## Install Persistent Capture
 
+Install Hermes Agent 0.18.2 or newer by following the
+[official Hermes Agent installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
+Open a new shell after installation and verify that the Hermes CLI is available:
+
+```bash
+hermes --version
+```
+
 Install the user-level integration:
 
 ```bash
 nemo-relay install hermes
 ```
 
-Installation requires Hermes Agent 0.18.2 or newer. NeMo Relay checks the
-installed Hermes CLI before it changes any files.
+NeMo Relay checks the installed Hermes CLI before it changes any files.
 
 Relay preserves unrelated Hermes settings and updates the Relay-owned portions
 of the user configuration. Hermes reads this configuration from
