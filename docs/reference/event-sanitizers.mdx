@@ -49,8 +49,9 @@ semantic category, attributes, semantic input and output meaning, or schemas.
 
 Registries run in priority order. Lower priorities run first, and each
 callback receives the fields returned by the callback before it. Invalid
-binding callback results fail open and preserve the current fields. Node.js
-records these failures for `getLastCallbackError()`.
+binding callback results fail open and preserve the current fields. In Node.js,
+a synchronous sanitizer callback that throws also fails open; Relay records the
+error for `getLastCallbackError()`.
 
 ## Registration Lifetimes
 

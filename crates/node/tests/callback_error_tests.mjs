@@ -67,17 +67,18 @@ describe('callback error helpers', () => {
     }
   });
 
-  it('closed tool callbacks fall back to null and record the queue failure', () => {
+  it('closed tool sanitize callbacks preserve the original payload and record the queue failure', () => {
+    const args = {
+      value: 1,
+    };
     const result = __testClosedToolCallback(
       () => ({
         ok: true,
       }),
       'closed_tool',
-      {
-        value: 1,
-      },
+      args,
     );
-    assert.equal(result, null);
+    assert.deepEqual(result, args);
     assert.match(getLastCallbackError() ?? '', /failed to queue JS tool callback/i);
     clearLastCallbackError();
   });

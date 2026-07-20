@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const lib = require('../index.js');
 const plugin = require('../plugin.js');
 const adaptive = require('../adaptive.js');
 
@@ -161,6 +162,39 @@ describe('core plugins', () => {
         hasScopeStartSanitize: true,
         hasScopeEndSanitize: true,
       });
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
+
+  it('turns plugin request-intercept throws into catchable errors', async () => {
+    const pluginKind = `node.test.request-throw.${Date.now()}`;
+    plugin.register(pluginKind, {
+      register(_config, context) {
+        context.registerToolRequestIntercept('throwingRequest', 10, false, () => {
+          throw new Error('plugin request intercept boom');
+        });
+      },
+    });
+
+    try {
+      const report = await plugin.initialize({
+        version: 1,
+        components: [
+          adaptive.ComponentSpec({
+            version: 1,
+            state: { backend: adaptive.inMemoryBackend() },
+            adaptive_hints: adaptive.adaptiveHintsConfig(),
+          }),
+          plugin.ComponentSpec(pluginKind, {}),
+        ],
+      });
+      assert.deepEqual(report.diagnostics, []);
+      await assert.rejects(
+        () => lib.toolCallExecute('plugin_request_throw', {}, () => ({ should_not: 'run' })),
+        /plugin request intercept boom/i,
+      );
     } finally {
       plugin.clear();
       plugin.deregister(pluginKind);

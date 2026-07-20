@@ -192,6 +192,14 @@ NeMo Relay exposes the same core middleware families for tools and LLMs:
 
 Sanitize guardrails affect only the payload recorded on emitted events. Request intercepts affect the real request that reaches the tool or provider. Execution intercepts wrap the callback itself and are only available when the invocation uses managed execution.
 
+### Node.js Callback Failures
+
+Node.js guardrail and request-intercept callbacks are synchronous. A thrown
+conditional-execution guardrail or request intercept rejects the managed call
+before protected execution or later middleware runs. A thrown sanitize guardrail
+or event sanitizer fails open, preserving the current emitted payload and
+recording the error for `getLastCallbackError()`.
+
 Scope-local variants are available through `nemo_relay.scope_local.register_*`, Node.js `scopeRegister*` helpers, and Rust `scope_register_*` functions.
 
 ## Validate the Middleware
