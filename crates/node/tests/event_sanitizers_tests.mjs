@@ -86,7 +86,7 @@ describe('event sanitizer registries', () => {
     assert.ok(lifecycle.every((event) => event.category_profile.subtype === 'sanitized'));
   });
 
-  it('fails open and records invalid direct sanitizer results', async () => {
+  it('fails closed and records invalid direct sanitizer results', async () => {
     const events = capture('node-event-sanitize-invalid-sub');
     const invalidResults = {
       scalar: () => 'invalid',
@@ -106,7 +106,7 @@ describe('event sanitizer registries', () => {
         } finally {
           lib.deregisterMarkSanitizeGuardrail(name);
         }
-        assert.deepEqual(events.at(-1).data, { kept: kind });
+        assert.equal(events.at(-1).data, null);
         assert.match(lib.getLastCallbackError(), /event sanitizer callback failed/);
       }
     } finally {
@@ -134,7 +134,7 @@ describe('event sanitizer registries', () => {
     assert.equal(start.metadata.background, true);
   });
 
-  it('fails open and records invalid thread-safe sanitizer results', async () => {
+  it('fails closed and records invalid thread-safe sanitizer results', async () => {
     const events = capture('node-event-sanitize-background-invalid-sub');
     const invalidResults = {
       emptyObject: () => ({}),
@@ -156,7 +156,7 @@ describe('event sanitizer registries', () => {
         const start = events.find(
           (event) => event.kind === 'scope' && event.name === name && event.scope_category === 'start',
         );
-        assert.deepEqual(start.data, { kept: kind });
+        assert.equal(start.data, null);
         assert.match(lib.getLastCallbackError(), /invalid JS event sanitizer result/);
       }
     } finally {

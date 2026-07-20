@@ -1312,7 +1312,7 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
                     record_callback_error(format!(
                         "nemo_relay: failed to serialize JS event sanitizer context: {error}"
                     ));
-                    return fields;
+                    return nemo_relay::api::event::EventSanitizeFields::default();
                 }
             };
             let sanitized = direct
@@ -1322,7 +1322,7 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
             if sanitized.is_none() {
                 record_callback_error("nemo_relay: JS event sanitizer callback failed".to_string());
             }
-            sanitized.unwrap_or(fields)
+            sanitized.unwrap_or_default()
         } else {
             background(event, fields)
         }
