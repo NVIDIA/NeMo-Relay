@@ -1294,6 +1294,51 @@ fn atif_defaults_create_one_file_per_top_level_agent() {
 }
 
 #[test]
+fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-metadata-template");
+
+    let config = plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "{metadata.routing.artifact_path}/trajectory-{session_id}.json"
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+
+    let invalid = crate::api::scope::push_scope(
+        PushScopeParams::builder()
+            .name("invalid-metadata-path-agent")
+            .scope_type(ScopeType::Agent)
+            .metadata(json!({"routing": {"artifact_path": "../escape"}}))
+            .build(),
+    )
+    .unwrap();
+    pop(&invalid);
+
+    let valid = crate::api::scope::push_scope(
+        PushScopeParams::builder()
+            .name("valid-metadata-path-agent")
+            .scope_type(ScopeType::Agent)
+            .metadata(json!({"routing": {"artifact_path": "tenant-a/session-123"}}))
+            .build(),
+    )
+    .unwrap();
+    pop(&valid);
+
+    clear_plugin_configuration().unwrap();
+    assert!(
+        dir.join(format!(
+            "tenant-a/session-123/trajectory-{}.json",
+            valid.uuid
+        ))
+        .exists()
+    );
+}
+
+#[test]
 fn atif_routes_global_descendant_events_by_parent_uuid() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1763,7 +1808,7 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
 #[test]
 fn atif_dispatcher_default_output_path_uses_current_directory() {
     let dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
-    let (filename, local_path) = dispatcher.prepare_destination("session-1");
+    let (filename, local_path) = dispatcher.prepare_destination("session-1", None).unwrap();
     assert_eq!(filename, "nemo-relay-atif-session-1.json");
     assert_eq!(
         local_path.unwrap(),
@@ -1771,6 +1816,71 @@ fn atif_dispatcher_default_output_path_uses_current_directory() {
             .unwrap()
             .join("nemo-relay-atif-session-1.json")
     );
+}
+
+#[test]
+fn atif_metadata_template_values_must_be_safe_path_fragments() {
+    assert_eq!(
+        render_atif_filename(
+            "{metadata.workflow_id:-unassigned}/trajectory-{session_id}.json",
+            "scope-id",
+            None
+        )
+        .unwrap(),
+        "unassigned/trajectory-scope-id.json"
+    );
+
+    assert!(is_safe_atif_metadata_path(
+        "tenant-a/team_1.session-123~retry"
+    ));
+
+    for value in [
+        "",
+        "/absolute",
+        "trailing/",
+        "double//slash",
+        ".",
+        "../escape",
+        "tenant/../escape",
+        r"tenant\session",
+        "tenant name",
+        "tenant:session",
+    ] {
+        assert!(
+            !is_safe_atif_metadata_path(value),
+            "metadata path should be rejected: {value:?}"
+        );
+    }
+
+    let dispatcher = AtifDispatcher::new(AtifSectionConfig {
+        filename_template: "{metadata.artifact_path}/trajectory-{session_id}.json".to_string(),
+        ..AtifSectionConfig::default()
+    });
+    assert!(dispatcher.prepare_destination("session-1", None).is_err());
+    let non_string = json!({"artifact_path": 123});
+    assert!(
+        dispatcher
+            .prepare_destination("session-1", Some(&non_string))
+            .is_err()
+    );
+
+    for template in [
+        "{metadata.}/trajectory-{session_id}.json",
+        "{metadata.tenant..id}/trajectory-{session_id}.json",
+        "{metadata.tenant/trajectory-{session_id}.json",
+        "{metadata.{tenant}}/trajectory-{session_id}.json",
+    ] {
+        let dispatcher = AtifDispatcher::new(AtifSectionConfig {
+            filename_template: template.to_string(),
+            ..AtifSectionConfig::default()
+        });
+        assert!(
+            dispatcher
+                .prepare_destination("session-1", Some(&json!({"tenant": "tenant-a"})))
+                .is_err(),
+            "template should be rejected: {template:?}"
+        );
+    }
 }
 
 #[test]

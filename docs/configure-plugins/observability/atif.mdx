@@ -68,8 +68,45 @@ The following table describes the top-level ATIF settings:
 | `tool_definitions` | Omitted | Optional ATIF tool metadata. |
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files. Ignored when `storage` is non-empty. |
-| `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. |
+| `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
 | `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend instead of being written locally. Refer to [Remote Storage](#remote-storage). |
+
+### Metadata-Based Paths
+
+Use `{metadata.<path>}` placeholders in `filename_template` to route
+trajectories with top-level scope metadata. Dots select nested fields, and
+templates can use multiple placeholders. For example:
+
+```toml
+[components.config.atif]
+enabled = true
+output_directory = "logs"
+filename_template = "{metadata.atif_prefix:-unassigned}/trajectory-{session_id}.json"
+```
+
+With scope metadata `{"atif_prefix":"tenant-a/session-123"}`, Relay writes
+`logs/tenant-a/session-123/trajectory-<scope-uuid>.json`. The template must
+still contain `{session_id}`.
+
+Use `:-` to provide a literal fallback when metadata can be absent, for example
+`{metadata.atif_prefix:-unassigned}`. Relay also uses the fallback when the
+metadata value is not a string.
+
+Each metadata placeholder must resolve to a string containing a non-empty,
+relative path fragment. Slash-separated segments can contain ASCII letters,
+digits, `-`, `_`, `.`, and `~`. Relay rejects empty segments, `.` and `..`
+segments, absolute paths, backslashes, spaces, and other characters. If a
+placeholder has no fallback and is missing or non-string, or if its resolved
+value is unsafe, Relay skips that trajectory and logs
+`atif_destination_render_failed`. The rendered filename applies to local, S3,
+and HTTP storage in the same way as a static filename.
+
+The CLI gateway parses `x-nemo-relay-session-metadata` as JSON and merges it
+into the top-level scope metadata:
+
+```http
+x-nemo-relay-session-metadata: {"atif_prefix":"tenant-a/session-123"}
+```
 
 ## Remote Storage
 
