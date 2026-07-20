@@ -187,3 +187,65 @@ fn build_prompt_ir_omits_tool_schema_hashes_when_no_tools_are_present() {
     assert!(prompt_ir.tool_schema_hashes.is_none());
     assert_eq!(prompt_ir.blocks[0].span_id.0, "user-0");
 }
+
+#[test]
+fn build_prompt_ir_canonicalizes_structured_output_before_user_content() {
+    let mut request = AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: MessageContent::Text("variable task".to_string()),
+            name: None,
+        }],
+        model: Some("gpt-4o".to_string()),
+        params: None,
+        tools: None,
+        tool_choice: None,
+        store: None,
+        previous_response_id: None,
+        truncation: None,
+        reasoning: None,
+        include: None,
+        user: None,
+        metadata: None,
+        service_tier: None,
+        parallel_tool_calls: None,
+        max_output_tokens: None,
+        max_tool_calls: None,
+        top_logprobs: None,
+        stream: None,
+        extra: serde_json::Map::new(),
+    };
+    request.extra.insert(
+        "response_format".to_string(),
+        serde_json::json!({"type":"json_schema","json_schema":{"required":["answer"],"type":"object"}}),
+    );
+
+    let first = build_prompt_ir(&request).unwrap();
+    request.extra.insert(
+        "response_format".to_string(),
+        serde_json::json!({"json_schema":{"type":"object","required":["answer"]},"type":"json_schema"}),
+    );
+    let reordered = build_prompt_ir(&request).unwrap();
+
+    assert_eq!(
+        first.structured_output_schema_id,
+        reordered.structured_output_schema_id
+    );
+    assert!(first.structured_output_schema_id.is_some());
+    assert_eq!(
+        first.blocks[0].content_type,
+        BlockContentType::StructuredOutput
+    );
+    assert_eq!(first.blocks[1].role, PromptRole::User);
+
+    request
+        .extra
+        .insert("response_format".to_string(), serde_json::Value::Null);
+    let null_contract = build_prompt_ir(&request).unwrap();
+    assert!(null_contract.structured_output_schema_id.is_none());
+    assert!(
+        null_contract
+            .blocks
+            .iter()
+            .all(|block| block.content_type != BlockContentType::StructuredOutput)
+    );
+}

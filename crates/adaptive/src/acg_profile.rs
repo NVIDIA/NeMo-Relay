@@ -15,6 +15,8 @@ struct AcgKeyParts<'a> {
     model: &'a str,
     system_hash: String,
     tool_hash: String,
+    response_format_hash: Option<String>,
+    has_stable_scaffold: bool,
 }
 
 /// Derive the stable ACG learning key used to bucket observations and hot-cache state.
@@ -28,12 +30,20 @@ pub(crate) fn derive_acg_learning_key(
     annotated_request: &AnnotatedLlmRequest,
 ) -> String {
     let parts = derive_key_parts(annotated_request);
-    let seed_fingerprint = learning_seed_fingerprint(annotated_request);
-    let seed_hash = short_hash(&seed_fingerprint);
-    format!(
+    let seed_fingerprint =
+        (!parts.has_stable_scaffold).then(|| learning_seed_fingerprint(annotated_request));
+    let seed_hash = seed_fingerprint
+        .as_deref()
+        .map(short_hash)
+        .unwrap_or("stable-scaffold");
+    let key = format!(
         "{agent_id}::model={}::seed={seed_hash}::system={}::tools={}",
         parts.model, parts.system_hash, parts.tool_hash
-    )
+    );
+    parts
+        .response_format_hash
+        .map(|hash| format!("{key}::response_format={hash}"))
+        .unwrap_or(key)
 }
 
 /// Derive the exact ACG profile key used for diagnostics and debug output.
@@ -58,18 +68,47 @@ pub(crate) fn derive_acg_profile_key(
         .join(".");
     format!(
         "{agent_id}::model={}::roles={role_signature}::system={}::anchor={}::tools={}",
-        parts.model, parts.system_hash, anchor_hash, parts.tool_hash
+        parts.model,
+        short_hash(&parts.system_hash),
+        anchor_hash,
+        short_hash(&parts.tool_hash)
     )
 }
 
 fn derive_key_parts(annotated_request: &AnnotatedLlmRequest) -> AcgKeyParts<'_> {
     let system_fingerprint = system_prompt_fingerprint(annotated_request);
     let tool_fingerprint = tool_schema_fingerprint(annotated_request.tools.as_deref());
+    let response_format_fingerprint = response_format_fingerprint(annotated_request);
+    let has_stable_scaffold = system_fingerprint != "no-system"
+        || annotated_request
+            .tools
+            .as_ref()
+            .is_some_and(|tools| !tools.is_empty())
+        || response_format_fingerprint.is_some();
 
     AcgKeyParts {
         model: annotated_request.model.as_deref().unwrap_or("unknown"),
-        system_hash: short_hash(&system_fingerprint).to_string(),
-        tool_hash: short_hash(&tool_fingerprint).to_string(),
+        system_hash: if has_stable_scaffold {
+            system_fingerprint
+        } else {
+            short_hash(&system_fingerprint).to_string()
+        },
+        tool_hash: if has_stable_scaffold {
+            tool_fingerprint
+        } else {
+            short_hash(&tool_fingerprint).to_string()
+        },
+        response_format_hash: response_format_fingerprint
+            .as_deref()
+            .map(|fingerprint| {
+                if has_stable_scaffold {
+                    fingerprint
+                } else {
+                    short_hash(fingerprint)
+                }
+            })
+            .map(str::to_string),
+        has_stable_scaffold,
     }
 }
 
@@ -181,6 +220,15 @@ fn tool_schema_fingerprint(tools: Option<&[ToolDefinition]>) -> String {
     } else {
         sha256_hex(&canonical_tools)
     }
+}
+
+fn response_format_fingerprint(annotated_request: &AnnotatedLlmRequest) -> Option<String> {
+    annotated_request
+        .extra
+        .get("response_format")
+        .filter(|value| !value.is_null())
+        .and_then(|value| canonicalize_value(value).ok())
+        .map(|value| sha256_hex(&value))
 }
 
 fn extract_text(content: &MessageContent) -> String {

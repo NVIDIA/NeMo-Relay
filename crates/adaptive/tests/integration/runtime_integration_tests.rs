@@ -61,10 +61,6 @@ fn enable_operational_logs() {
     });
 }
 
-fn short_hash(value: &str) -> &str {
-    value.get(..16).unwrap_or(value)
-}
-
 fn reset_global() {
     enable_operational_logs();
     let _ = clear_plugin_configuration();
@@ -517,14 +513,8 @@ async fn runtime_integration_acg_learner_reuses_learning_buckets_across_growing_
     let requests = sample_growing_chat_requests("claude-3-5-sonnet");
     let learner = AcgLearner::new(agent_id, 8, StabilityThresholds::default());
     let learning_key = format!(
-        "{agent_id}::model=claude-3-5-sonnet::seed={}::system={}::tools=no-tools",
-        short_hash(&format!(
-            "user:{}",
-            nemo_relay_adaptive::acg::sha256_hex("Summarize the latest findings")
-        )),
-        short_hash(&nemo_relay_adaptive::acg::sha256_hex(
-            "You are a careful planner"
-        )),
+        "{agent_id}::model=claude-3-5-sonnet::seed=stable-scaffold::system={}::tools=no-tools",
+        nemo_relay_adaptive::acg::sha256_hex("You are a careful planner"),
     );
 
     learner

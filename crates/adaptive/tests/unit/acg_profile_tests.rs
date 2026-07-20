@@ -46,6 +46,104 @@ fn sample_tool(name: &str) -> ToolDefinition {
     }
 }
 
+fn scaffolded_request(task: &str) -> AnnotatedLlmRequest {
+    request(
+        vec![
+            Message::System {
+                content: MessageContent::Text("Follow policy".to_string()),
+                name: None,
+            },
+            Message::User {
+                content: MessageContent::Text(task.to_string()),
+                name: None,
+            },
+        ],
+        Some(vec![sample_tool("search")]),
+    )
+}
+
+#[test]
+fn acg_learning_key_groups_variable_tasks_by_stable_scaffold() {
+    let first = scaffolded_request("find alpha");
+    let second = scaffolded_request("find beta");
+
+    assert_eq!(
+        derive_acg_learning_key("agent-a", &first),
+        derive_acg_learning_key("agent-a", &second)
+    );
+}
+
+#[test]
+fn acg_learning_key_separates_scaffold_and_output_contract_changes() {
+    let baseline = scaffolded_request("find alpha");
+
+    let mut changed_system = baseline.clone();
+    changed_system.messages[0] = Message::System {
+        content: MessageContent::Text("Follow a different policy".to_string()),
+        name: None,
+    };
+
+    let mut changed_tool = baseline.clone();
+    changed_tool.tools = Some(vec![sample_tool("lookup")]);
+
+    let mut contract_a = baseline.clone();
+    contract_a.extra.insert(
+        "response_format".to_string(),
+        json!({"type":"json_schema","json_schema":{"type":"object","properties":{"a":{"type":"string"}}}}),
+    );
+    let mut contract_b = baseline.clone();
+    contract_b.extra.insert(
+        "response_format".to_string(),
+        json!({"json_schema":{"properties":{"b":{"type":"string"}},"type":"object"},"type":"json_schema"}),
+    );
+
+    let baseline_key = derive_acg_learning_key("agent-a", &baseline);
+    assert_ne!(
+        baseline_key,
+        derive_acg_learning_key("agent-a", &changed_system)
+    );
+    assert_ne!(
+        baseline_key,
+        derive_acg_learning_key("agent-a", &changed_tool)
+    );
+    assert_ne!(
+        derive_acg_learning_key("agent-a", &contract_a),
+        derive_acg_learning_key("agent-a", &contract_b)
+    );
+
+    let mut null_contract = baseline.clone();
+    null_contract
+        .extra
+        .insert("response_format".to_string(), serde_json::Value::Null);
+    assert_eq!(
+        baseline_key,
+        derive_acg_learning_key("agent-a", &null_contract)
+    );
+}
+
+#[test]
+fn acg_learning_key_keeps_task_seed_without_a_stable_scaffold() {
+    let first = request(
+        vec![Message::User {
+            content: MessageContent::Text("alpha".to_string()),
+            name: None,
+        }],
+        None,
+    );
+    let second = request(
+        vec![Message::User {
+            content: MessageContent::Text("beta".to_string()),
+            name: None,
+        }],
+        None,
+    );
+
+    assert_ne!(
+        derive_acg_learning_key("agent-a", &first),
+        derive_acg_learning_key("agent-a", &second)
+    );
+}
+
 #[test]
 fn acg_profile_derivation_covers_anchor_hash_system_fallback_and_empty_tools() {
     let layered = request(

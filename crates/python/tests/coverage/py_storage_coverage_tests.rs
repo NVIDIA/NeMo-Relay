@@ -140,6 +140,7 @@ fn sample_stability_result() -> StabilityAnalysisResult {
             observation_count: 2,
         }],
         stable_prefix_length: 1,
+        stable_prefix_fingerprint: Some("stable-prefix-1".to_string()),
         total_observations: 2,
     }
 }

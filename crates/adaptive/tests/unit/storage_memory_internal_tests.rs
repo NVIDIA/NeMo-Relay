@@ -84,6 +84,7 @@ fn sample_stability_record() -> StabilityAnalysisResult {
             observation_count: 1,
         }],
         stable_prefix_length: 1,
+        stable_prefix_fingerprint: None,
         total_observations: 1,
     }
 }
