@@ -163,9 +163,10 @@ jobs:
             echo "::error::Fern docs preview generation failed"
             exit "$fern_exit"
           fi
-          url="$(printf '%s\n' "$OUTPUT" | sed -n 's/^.*Published docs to //p' | tail -n 1)"
+          published_url="$(printf '%s\n' "$OUTPUT" | sed -n 's/^.*Published docs to //p' | tail -n 1)"
+          url="${published_url%%[[:space:]]*}"
           if [[ -n "$url" ]]; then
-            printf 'url=%s\n' "$url" >> "$GITHUB_OUTPUT"
+            printf 'url=%s/dev\n' "${url%/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Comment preview URL on PR
