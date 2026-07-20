@@ -467,11 +467,30 @@ fn configuration_validation_rejects_unsafe_or_ambiguous_bindings() {
         .insert("x-test".into(), "bad\nvalue".into());
     assert_invalid(candidate, "invalid header value");
     let mut candidate = config(url.clone());
+    candidate
+        .decision_headers
+        .insert("Authorization".into(), "Bearer static".into());
+    candidate.decision_header_env.insert(
+        "authorization".into(),
+        "SWITCHYARD_TEST_MISSING_DECISION_SECRET".into(),
+    );
+    assert_invalid(candidate, "cannot appear in both headers and header_env");
+    let mut candidate = config(url.clone());
     candidate.decision_header_env.insert(
         "authorization".into(),
         "SWITCHYARD_TEST_MISSING_DECISION_SECRET".into(),
     );
     assert_invalid(candidate, "is not set");
+    let mut candidate = config(url.clone());
+    let target = candidate.targets.get_mut("selected-chat").unwrap();
+    target
+        .headers
+        .insert("Authorization".into(), "Bearer static".into());
+    target.header_env.insert(
+        "authorization".into(),
+        "SWITCHYARD_TEST_MISSING_TARGET_SECRET".into(),
+    );
+    assert_invalid(candidate, "cannot appear in both headers and header_env");
     let mut candidate = config(url);
     candidate
         .targets

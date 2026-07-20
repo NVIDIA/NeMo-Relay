@@ -644,7 +644,7 @@ async def collect_stream(awaitable):
 }
 
 #[test]
-fn event_sanitize_wrapper_covers_conversion_success_and_fail_open_paths() {
+fn event_sanitize_wrapper_covers_conversion_success_and_fail_closed_paths() {
     use nemo_relay::api::event::{BaseEvent, MarkEvent};
 
     let _python = crate::test_support::init_python_test();
@@ -687,12 +687,12 @@ def invalid(event, fields):
             &event,
             fields.clone(),
         );
-        assert_eq!(raised, fields);
+        assert_eq!(raised, EventSanitizeFields::default());
 
         let invalid = wrap_py_event_sanitize_fn(module.getattr("invalid").unwrap().unbind())(
             &event,
             fields.clone(),
         );
-        assert_eq!(invalid, fields);
+        assert_eq!(invalid, EventSanitizeFields::default());
     });
 }

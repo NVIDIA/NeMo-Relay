@@ -335,8 +335,8 @@ fn test_ffi_event_sanitizer_registries_and_error_paths() {
             .iter()
             .find(|event| event["name"] == "ffi-invalid-callback-mark")
             .expect("invalid callback mark should be delivered");
-        assert_eq!(invalid_callback_event["data"], json!({"secret": true}));
-        assert_eq!(invalid_callback_event["metadata"], json!({"secret": true}));
+        assert_eq!(invalid_callback_event["data"], Json::Null);
+        assert_eq!(invalid_callback_event["metadata"], Json::Null);
         for name in ["ffi-local-child", "ffi-local-mark"] {
             for event in events.iter().filter(|event| event["name"] == name) {
                 assert_eq!(event["data"], json!({"sanitized_by": name}));

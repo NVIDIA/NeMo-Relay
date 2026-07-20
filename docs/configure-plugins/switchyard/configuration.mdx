@@ -142,9 +142,9 @@ The following table describes the Decision API and rollout settings:
 | `decision_headers` | Empty | Optional non-sensitive static Decision API headers. |
 | `decision_header_env` | Empty | Map of header names to environment-variable names for sensitive Decision API headers. Referenced values must be present and non-blank. |
 
-Do not define the same header in both a static header map and its environment
-map. Keep bearer tokens, API keys, cookies, and other secrets in environment
-variables rather than tracked configuration.
+Do not define the same header, including case variants, in both a static header
+map and its environment map. Keep bearer tokens, API keys, cookies, and other
+secrets in environment variables rather than tracked configuration.
 
 ## Request Materialization
 
@@ -201,6 +201,9 @@ The following table describes target bindings and trusted defaults:
 | `default_targets.openai_chat` | Target using `openai_chat` | Trusted fallback for OpenAI Chat Completions requests. |
 | `default_targets.openai_responses` | Target using `openai_responses` | Trusted fallback for OpenAI Responses requests. |
 | `default_targets.anthropic_messages` | Target using `anthropic_messages` | Trusted fallback for Anthropic Messages requests. |
+
+Do not define the same target header, including case variants, in both
+`headers` and `header_env`.
 
 Protocol and endpoint pairs are fixed:
 

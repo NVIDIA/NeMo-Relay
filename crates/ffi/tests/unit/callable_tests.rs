@@ -553,9 +553,15 @@ fn test_wrap_llm_exec_stream_and_event_callbacks() {
     assert_eq!(sanitize_calls.load(Ordering::SeqCst), 2);
 
     let invalid = wrap_event_sanitize_fn(invalid_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(invalid(&event, original_fields.clone()), original_fields);
+    assert_eq!(
+        invalid(&event, original_fields.clone()),
+        EventSanitizeFields::default()
+    );
     let null = wrap_event_sanitize_fn(null_event_sanitize_cb, std::ptr::null_mut(), None);
-    assert_eq!(null(&event, original_fields.clone()), original_fields);
+    assert_eq!(
+        null(&event, original_fields.clone()),
+        EventSanitizeFields::default()
+    );
 
     let handle = LlmHandle::builder()
         .name("llm")
