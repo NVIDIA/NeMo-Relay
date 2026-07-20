@@ -1118,6 +1118,8 @@ struct FixtureCodec;
 impl LlmCodec for FixtureCodec {
     fn decode(&self, request: &LlmRequest) -> FlowResult<AnnotatedLlmRequest> {
         Ok(AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: Vec::new(),
             model: Some("fixture-model".into()),
             params: None,

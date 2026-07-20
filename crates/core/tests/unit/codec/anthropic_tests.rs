@@ -405,12 +405,12 @@ fn test_decode_request_full() {
     }));
     let annotated = codec.decode(&request).unwrap();
 
-    // System should be prepended as Message::System
-    assert_eq!(annotated.messages.len(), 2);
-    assert!(
-        matches!(&annotated.messages[0], Message::System { content: MessageContent::Text(t), .. } if t == "Be helpful")
+    assert_eq!(annotated.messages.len(), 1);
+    assert_eq!(
+        annotated.instructions,
+        Some(MessageContent::Text("Be helpful".into()))
     );
-    assert!(matches!(&annotated.messages[1], Message::User { .. }));
+    assert!(matches!(&annotated.messages[0], Message::User { .. }));
 
     assert_eq!(annotated.model, Some("claude-sonnet-4-20250514".into()));
 
@@ -420,10 +420,12 @@ fn test_decode_request_full() {
     // Tools should be normalized: input_schema -> parameters
     let tools = annotated.tools.unwrap();
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].tool_type, "function");
-    assert_eq!(tools[0].function.name, "get_weather");
-    assert_eq!(tools[0].function.description, Some("Get weather".into()));
-    assert!(tools[0].function.parameters.is_some());
+    let ToolDefinition::Function { function, .. } = &tools[0] else {
+        panic!("expected a portable function tool");
+    };
+    assert_eq!(function.name, "get_weather");
+    assert_eq!(function.description, Some("Get weather".into()));
+    assert!(function.parameters.is_some());
 
     assert_eq!(annotated.tool_choice, Some(ToolChoice::Auto));
 }
@@ -443,11 +445,10 @@ fn test_decode_request_system_array() {
         "max_tokens": 100
     }));
     let annotated = codec.decode(&request).unwrap();
-    assert_eq!(annotated.messages.len(), 2);
+    assert_eq!(annotated.messages.len(), 1);
     assert!(matches!(
-        &annotated.messages[0],
-        Message::System { content: MessageContent::Text(t), .. }
-        if t == "First instruction.\nSecond instruction."
+        &annotated.instructions,
+        Some(MessageContent::Parts(parts)) if parts.len() == 2
     ));
 }
 
@@ -521,7 +522,7 @@ fn test_decode_request_extra_fields() {
     }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.metadata, Some(json!({"user_id": "abc"})));
-    assert_eq!(annotated.extra.get("stream"), Some(&json!(true)));
+    assert_eq!(annotated.stream, Some(true));
 }
 
 #[test]
@@ -601,15 +602,19 @@ fn test_decode_request_litellm_bridge_thinking_output_config_preserved_in_extra(
     // stable extraction
     assert_eq!(annotated.tool_choice, Some(ToolChoice::Required));
     assert_eq!(annotated.parallel_tool_calls, Some(true));
-    // bridge-specific controls preserved losslessly
+    let Some(ApiSpecificRequest::AnthropicMessages {
+        thinking,
+        output_config,
+        ..
+    }) = annotated.api_specific
+    else {
+        panic!("expected Anthropic-specific request controls");
+    };
     assert_eq!(
-        annotated.extra.get("thinking"),
-        Some(&json!({"type":"enabled","budget_tokens":2048}))
+        thinking,
+        Some(json!({"type":"enabled","budget_tokens":2048}))
     );
-    assert_eq!(
-        annotated.extra.get("output_config"),
-        Some(&json!({"effort":"low"}))
-    );
+    assert_eq!(output_config, Some(json!({"effort":"low"})));
     assert_eq!(
         annotated.extra.get("reasoning_effort"),
         Some(&json!("minimal"))
@@ -643,6 +648,118 @@ fn test_decode_request_litellm_cache_control_blocks_preserved() {
     assert_eq!(annotated.system_prompt(), Some("Be terse"));
     // `system` is a modeled key in Anthropic decode and should not live in extra.
     assert!(annotated.extra.get("system").is_none());
+    let Some(MessageContent::Parts(parts)) = &annotated.instructions else {
+        panic!("expected block-form system instructions");
+    };
+    let super::super::request::ContentPart::Text { extra, .. } = &parts[0] else {
+        panic!("expected a portable text block");
+    };
+    assert_eq!(
+        extra.get("cache_control"),
+        Some(&json!({"type": "ephemeral"}))
+    );
+    assert_eq!(codec.encode(&annotated, &request).unwrap(), request);
+}
+
+#[test]
+fn request_schema_fixture_round_trips_and_issue_501_edit_is_surgical() {
+    let codec = AnthropicMessagesCodec;
+    let original = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 512,
+        "system": [{
+            "type": "text",
+            "text": "You are precise.",
+            "cache_control": {"type": "ephemeral"}
+        }],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Inspect these", "cache_control": {"type": "ephemeral"}},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abcd"}},
+                    {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "notes"}, "title": "Notes"},
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": "sunny"}], "is_error": false}
+                ]
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Calling a tool"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "weather", "input": {"city": "NYC"}},
+                    {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {"query": "weather"}},
+                    {"type": "thinking", "thinking": "private", "signature": "sig"}
+                ]
+            }
+        ],
+        "cache_control": {"type": "ephemeral"},
+        "container": "container_1",
+        "inference_geo": "us",
+        "metadata": {"user_id": "user_1"},
+        "output_config": {"effort": "high"},
+        "service_tier": "auto",
+        "stop_sequences": ["END"],
+        "stream": true,
+        "temperature": 0.2,
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "tool_choice": {"type": "auto", "disable_parallel_tool_use": false},
+        "tools": [
+            {"name": "weather", "description": "Weather", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
+        ],
+        "top_k": 20,
+        "top_p": 0.9,
+        "anthropic-user-profile-id": "profile_1",
+        "future_field": null
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(codec.encode(&annotated, &original).unwrap(), original);
+
+    let Some(MessageContent::Parts(parts)) = &mut annotated.instructions else {
+        panic!("expected block-form instructions");
+    };
+    let super::super::request::ContentPart::Text { text, extra } = &mut parts[0] else {
+        panic!("expected portable instruction text");
+    };
+    *text = "You are concise.".into();
+    assert_eq!(
+        extra.get("cache_control"),
+        Some(&json!({"type": "ephemeral"}))
+    );
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original.clone();
+    expected.content["system"][0]["text"] = json!("You are concise.");
+    assert_eq!(encoded, expected);
+}
+
+#[test]
+fn request_schema_rejects_malformed_known_anthropic_components() {
+    let codec = AnthropicMessagesCodec;
+    for content in [
+        json!([{"type": "tool_use", "id": "toolu_1", "input": {}}]),
+        json!([{"type": "tool_result", "tool_use_id": "toolu_1"}]),
+    ] {
+        let error = codec
+            .decode(&make_request(json!({
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": content}]
+            })))
+            .unwrap_err();
+        assert!(error.to_string().contains("missing"));
+    }
+
+    let error = codec
+        .decode(&make_request(json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 64,
+            "messages": [],
+            "stop_sequences": ["ok", 7]
+        })))
+        .unwrap_err();
+    assert!(error.to_string().contains("stop_sequences"));
 }
 
 // ===================================================================
@@ -804,33 +921,22 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
         None
     );
     assert_eq!(decode_anthropic_tool_choice(&json!({"type": "tool"})), None);
-    assert_eq!(
-        extract_system_message(&json!([{ "type": "image", "source": "ignored" }])),
-        None
-    );
+    assert!(matches!(
+        decode_anthropic_content(&json!([{ "type": "image", "source": "ignored" }])).unwrap(),
+        MessageContent::Parts(parts)
+            if matches!(parts.as_slice(), [super::super::request::ContentPart::Image { .. }])
+    ));
 
-    let system_parts = Message::System {
-        content: MessageContent::Parts(vec![
-            super::super::request::ContentPart::Text {
-                text: "First".into(),
-            },
-            super::super::request::ContentPart::Text {
-                text: "Second".into(),
-            },
-        ]),
-        name: None,
-    };
-    assert_eq!(
-        extract_system_text(&system_parts),
-        Some("First\nSecond".to_string())
-    );
-    assert_eq!(
-        extract_system_text(&Message::User {
-            content: MessageContent::Text("hi".into()),
-            name: None,
-        }),
-        None
-    );
+    let system_parts = MessageContent::Parts(vec![
+        super::super::request::ContentPart::Text {
+            text: "First".into(),
+            extra: serde_json::Map::new(),
+        },
+        super::super::request::ContentPart::Text {
+            text: "Second".into(),
+            extra: serde_json::Map::new(),
+        },
+    ]);
 
     let codec = AnthropicMessagesCodec;
 
@@ -853,7 +959,9 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
     assert_eq!(partial_usage.usage.unwrap().total_tokens, None);
 
     let annotated = AnnotatedLlmRequest {
-        messages: vec![system_parts],
+        instructions: Some(system_parts),
+        api_specific: None,
+        messages: vec![],
         model: Some("claude-sonnet-4-20250514".into()),
         params: Some(GenerationParams {
             temperature: Some(0.3),
@@ -861,13 +969,15 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
             top_p: Some(0.8),
             stop: Some(vec!["END".into()]),
         }),
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".into(),
+        tools: Some(vec![ToolDefinition::Function {
             function: FunctionDefinition {
                 name: "lookup".into(),
                 description: None,
                 parameters: None,
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         tool_choice: Some(ToolChoice::None),
         store: None,
@@ -900,7 +1010,13 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
     assert_eq!(obj.get("top_p"), Some(&json!(0.8)));
     assert_eq!(obj.get("stop_sequences"), Some(&json!(["END"])));
     assert_eq!(obj.get("tool_choice"), Some(&json!({"type": "none"})));
-    assert_eq!(obj.get("system"), Some(&json!("First\nSecond")));
+    assert_eq!(
+        obj.get("system"),
+        Some(&json!([
+            {"type": "text", "text": "First"},
+            {"type": "text", "text": "Second"}
+        ]))
+    );
 
     let tools = obj.get("tools").unwrap().as_array().unwrap();
     assert_eq!(tools[0].get("name"), Some(&json!("lookup")));
@@ -909,7 +1025,7 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
 
     match codec.encode(&annotated, &make_request(json!("still-not-an-object"))) {
         Err(FlowError::Internal(message)) => {
-            assert!(message.contains("original content is not an object"));
+            assert!(message.contains("not an object"));
         }
         other => panic!("unexpected encode result: {other:?}"),
     }

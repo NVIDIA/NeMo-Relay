@@ -76,22 +76,36 @@ fn derive_key_parts(annotated_request: &AnnotatedLlmRequest) -> AcgKeyParts<'_> 
 fn message_role_tag(message: &Message) -> &'static str {
     match message {
         Message::System { .. } => "system",
+        Message::Developer { .. } => "developer",
         Message::User { .. } => "user",
         Message::Assistant { .. } => "assistant",
         Message::Tool { .. } => "tool",
+        Message::Function { .. } => "function",
+        Message::ToolCallItem { .. } => "tool_call",
+        Message::ToolResultItem { .. } => "tool_result",
+        Message::ProviderNative { .. } => "provider_native",
     }
 }
 
 fn system_prompt_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String {
-    let system_content = annotated_request
-        .messages
-        .iter()
-        .filter_map(|message| match message {
-            Message::System { content, .. } => Some(extract_text(content)),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut system_content = annotated_request
+        .instructions
+        .as_ref()
+        .map(extract_text)
+        .into_iter()
+        .collect::<Vec<_>>();
+    system_content.extend(
+        annotated_request
+            .messages
+            .iter()
+            .filter_map(|message| match message {
+                Message::System { content, .. } | Message::Developer { content, .. } => {
+                    Some(extract_text(content))
+                }
+                _ => None,
+            }),
+    );
+    let system_content = system_content.join("\n");
     if system_content.is_empty() {
         "no-system".to_string()
     } else {
@@ -148,7 +162,7 @@ fn learning_seed_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String 
         .messages
         .iter()
         .find_map(|message| match message {
-            Message::System { .. } => None,
+            Message::System { .. } | Message::Developer { .. } => None,
             Message::User { content, .. } => {
                 Some(format!("user:{}", sha256_hex(&extract_text(content))))
             }
@@ -159,6 +173,19 @@ fn learning_seed_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String 
             Message::Assistant { content: None, .. } => Some("assistant:no-content".to_string()),
             Message::Tool { content, .. } => {
                 Some(format!("tool:{}", sha256_hex(&extract_text(content))))
+            }
+            Message::Function { content, .. } => Some(format!(
+                "function:{}",
+                sha256_hex(content.as_deref().unwrap_or_default())
+            )),
+            Message::ToolCallItem { arguments, .. } => {
+                Some(format!("tool-call:{}", sha256_hex(&arguments.to_string())))
+            }
+            Message::ToolResultItem { output, .. } => {
+                Some(format!("tool-result:{}", sha256_hex(&output.to_string())))
+            }
+            Message::ProviderNative { value, .. } => {
+                Some(format!("native:{}", sha256_hex(&value.to_string())))
             }
         })
         .unwrap_or_else(|| "no-seed".to_string())
@@ -189,12 +216,21 @@ fn extract_text(content: &MessageContent) -> String {
         MessageContent::Parts(parts) => parts
             .iter()
             .map(|part| match part {
-                ContentPart::Text { text } => text.clone(),
-                ContentPart::ImageUrl { image_url } => format!(
+                ContentPart::Text { text, .. } => text.clone(),
+                ContentPart::Refusal { refusal, .. } => refusal.clone(),
+                ContentPart::ImageUrl { image_url, .. } => format!(
                     "[image:{}:{}]",
                     image_url.detail.as_deref().unwrap_or("none"),
                     sha256_hex(&image_url.url)
                 ),
+                ContentPart::Image { .. }
+                | ContentPart::Audio { .. }
+                | ContentPart::File { .. }
+                | ContentPart::ToolUse { .. }
+                | ContentPart::ToolResult { .. }
+                | ContentPart::ProviderNative { .. } => {
+                    serde_json::to_string(part).unwrap_or_default()
+                }
             })
             .collect::<Vec<_>>()
             .join("\n"),

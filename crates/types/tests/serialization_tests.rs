@@ -18,6 +18,8 @@ use serde_json::{Map, json};
 #[test]
 fn event_round_trips_with_annotated_llm_profiles() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,

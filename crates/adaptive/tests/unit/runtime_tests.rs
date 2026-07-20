@@ -37,6 +37,8 @@ fn short_hash(value: &str) -> &str {
 
 fn sample_annotated_request(model: Option<&str>) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),
@@ -70,6 +72,8 @@ fn sample_annotated_request(model: Option<&str>) -> AnnotatedLlmRequest {
 
 fn sample_layered_request(model: Option<&str>, language_guide: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),
@@ -427,6 +431,8 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
     assert_eq!(learning_key, expected_learning_key,);
 
     let grown_chat_request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),
@@ -504,6 +510,8 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
     );
 
     let rust_bundle_variant = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),

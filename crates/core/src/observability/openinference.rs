@@ -1097,9 +1097,20 @@ fn push_annotated_input_messages(attributes: &mut Vec<KeyValue>, messages: &[Mes
     for (index, message) in messages.iter().enumerate() {
         let (role, content) = match message {
             Message::System { content, .. } => ("system", Some(content)),
+            Message::Developer { content, .. } => ("developer", Some(content)),
             Message::User { content, .. } => ("user", Some(content)),
             Message::Assistant { content, .. } => ("assistant", content.as_ref()),
             Message::Tool { content, .. } => ("tool", Some(content)),
+            Message::Function { .. } => ("function", None),
+            Message::ToolCallItem { .. } => ("assistant", None),
+            Message::ToolResultItem { .. } => ("tool", None),
+            Message::ProviderNative { value, .. } => (
+                value
+                    .get("role")
+                    .and_then(Json::as_str)
+                    .unwrap_or("provider_native"),
+                None,
+            ),
         };
         push_message_role(attributes, "llm.input_messages", index, role);
         if let Some(content) = content {
@@ -1169,8 +1180,13 @@ fn message_content_text(content: &MessageContent) -> Option<String> {
             let text = parts
                 .iter()
                 .filter_map(|part| match part {
-                    ContentPart::Text { text } => Some(text.as_str()),
-                    ContentPart::ImageUrl { .. } => None,
+                    ContentPart::Text { text, .. } => Some(text.as_str()),
+                    ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
+                    ContentPart::ProviderNative { value, .. } => value
+                        .get("text")
+                        .and_then(Json::as_str)
+                        .or_else(|| value.get("refusal").and_then(Json::as_str)),
+                    _ => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n")

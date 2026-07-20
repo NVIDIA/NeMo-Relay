@@ -83,6 +83,8 @@ fn sample_openai_chat_request() -> LlmRequest {
 
 fn sample_annotated_request(model: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are helpful.".to_string()),

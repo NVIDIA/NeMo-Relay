@@ -572,6 +572,8 @@ fn test_stream_request_event_and_handle_wrappers_cover_remaining_methods() {
         assert_eq!(request.__repr__(), "LLMRequest(...)");
 
         let annotated_request = AnnotatedLLMRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![
                 Message::System {
                     content: MessageContent::Text("system".into()),
@@ -1074,10 +1076,12 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
 
         let mut annotated = PyAnnotatedLLMRequest::new(
             messages.bind(py),
+            None,
             Some("demo-model".into()),
             Some(params.bind(py)),
             Some(tools.bind(py)),
             Some(tool_choice.bind(py)),
+            None,
             Some(extra.bind(py)),
         )
         .unwrap();
@@ -1209,9 +1213,18 @@ fn test_annotated_llm_types_and_builtin_codecs_cover_mutators_and_codecs() {
         assert!(annotated.metadata(py).unwrap().bind(py).is_none());
 
         let bad_messages = json_to_py(py, &json!([{"content": "missing role"}])).unwrap();
-        let err = PyAnnotatedLLMRequest::new(bad_messages.bind(py), None, None, None, None, None)
-            .err()
-            .unwrap();
+        let err = PyAnnotatedLLMRequest::new(
+            bad_messages.bind(py),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .err()
+        .unwrap();
         assert!(err.to_string().contains("invalid messages"));
         let bad_params = json_to_py(py, &json!({"temperature": "hot"})).unwrap();
         assert!(annotated.set_params(bad_params.bind(py)).is_err());
@@ -1477,6 +1490,8 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
 
         let annotated = PyAnnotatedLLMRequest {
             inner: AnnotatedLLMRequest {
+                instructions: None,
+                api_specific: None,
                 messages: vec![
                     Message::System {
                         content: MessageContent::Text("system".into()),
@@ -1493,13 +1508,15 @@ fn test_forced_serialization_error_hooks_cover_unreachable_wrappers() {
                     max_tokens: Some(8),
                     ..Default::default()
                 }),
-                tools: Some(vec![nemo_relay::codec::request::ToolDefinition {
-                    tool_type: "function".into(),
+                tools: Some(vec![nemo_relay::codec::request::ToolDefinition::Function {
                     function: nemo_relay::codec::request::FunctionDefinition {
                         name: "lookup".into(),
                         description: None,
                         parameters: Some(json!({"type": "object"})),
+                        strict: None,
+                        extra: serde_json::Map::new(),
                     },
+                    extra: serde_json::Map::new(),
                 }]),
                 tool_choice: Some(nemo_relay::codec::request::ToolChoice::Auto),
                 store: None,

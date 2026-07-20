@@ -26,6 +26,8 @@ struct MockCodec {
 impl LlmCodec for MockCodec {
     fn decode(&self, _request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         Ok(AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![],
             model: Some(self.id.clone()),
             params: None,
@@ -71,6 +73,8 @@ fn dummy_llm_request() -> LlmRequest {
 #[test]
 fn test_annotated_llm_request_full_roundtrip() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("Be helpful".into()),
@@ -104,15 +108,17 @@ fn test_annotated_llm_request_full_roundtrip() {
             top_p: Some(0.9),
             stop: Some(vec!["END".into()]),
         }),
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".into(),
+        tools: Some(vec![ToolDefinition::Function {
             function: FunctionDefinition {
                 name: "search".into(),
                 description: Some("Search the web".into()),
                 parameters: Some(
                     json!({"type": "object", "properties": {"q": {"type": "string"}}}),
                 ),
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         tool_choice: Some(ToolChoice::Auto),
         store: None,
@@ -143,6 +149,8 @@ fn test_annotated_llm_request_full_roundtrip() {
 #[test]
 fn test_annotated_llm_request_minimal() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("Hi".into()),
             name: None,
@@ -279,7 +287,10 @@ fn test_message_content_text_serializes_as_string() {
 
 #[test]
 fn test_message_content_parts_serializes_as_array() {
-    let content = MessageContent::Parts(vec![ContentPart::Text { text: "hi".into() }]);
+    let content = MessageContent::Parts(vec![ContentPart::Text {
+        text: "hi".into(),
+        extra: serde_json::Map::new(),
+    }]);
     let json_val = serde_json::to_value(&content).unwrap();
     assert_eq!(json_val, json!([{"type": "text", "text": "hi"}]));
 }
@@ -310,13 +321,15 @@ fn test_tool_call_roundtrip() {
 
 #[test]
 fn test_tool_definition_roundtrip() {
-    let td = ToolDefinition {
-        tool_type: "function".into(),
+    let td = ToolDefinition::Function {
         function: FunctionDefinition {
             name: "get_weather".into(),
             description: Some("Get current weather".into()),
             parameters: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+            strict: None,
+            extra: serde_json::Map::new(),
         },
+        extra: serde_json::Map::new(),
     };
     let json_val = serde_json::to_value(&td).unwrap();
     assert_eq!(
@@ -399,6 +412,8 @@ fn test_extra_field_flatten() {
     extra.insert("response_format".into(), json!({"type": "json_object"}));
 
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hi".into()),
             name: None,
@@ -440,6 +455,8 @@ fn test_extra_field_flatten() {
 #[test]
 fn test_clone_and_partial_eq() {
     let a = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,
@@ -465,6 +482,8 @@ fn test_clone_and_partial_eq() {
     };
 
     let b = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,
@@ -505,6 +524,8 @@ fn test_clone_and_partial_eq() {
 #[test]
 fn test_system_prompt_text() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("Be helpful".into()),
@@ -540,6 +561,8 @@ fn test_system_prompt_text() {
 #[test]
 fn test_system_prompt_none() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("Hi".into()),
             name: None,
@@ -569,9 +592,12 @@ fn test_system_prompt_none() {
 #[test]
 fn test_system_prompt_parts() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::System {
             content: MessageContent::Parts(vec![ContentPart::Text {
                 text: "Be careful".into(),
+                extra: serde_json::Map::new(),
             }]),
             name: None,
         }],
@@ -600,6 +626,8 @@ fn test_system_prompt_parts() {
 #[test]
 fn test_last_user_message_basic() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::User {
                 content: MessageContent::Text("first".into()),
@@ -640,6 +668,8 @@ fn test_last_user_message_basic() {
 #[test]
 fn test_last_user_message_none() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("hi".into()),
@@ -676,6 +706,8 @@ fn test_last_user_message_none() {
 #[test]
 fn test_has_tool_calls_true() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::Assistant {
             content: None,
             tool_calls: Some(vec![ToolCall {
@@ -713,6 +745,8 @@ fn test_has_tool_calls_true() {
 #[test]
 fn test_has_tool_calls_false_no_assistant() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hi".into()),
             name: None,
@@ -742,6 +776,8 @@ fn test_has_tool_calls_false_no_assistant() {
 #[test]
 fn test_has_tool_calls_false_empty_calls() {
     let req = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::Assistant {
             content: Some(MessageContent::Text("hello".into())),
             tool_calls: Some(vec![]),

@@ -299,8 +299,15 @@ fn annotated_message_text(message: Option<&MessageContent>) -> Option<String> {
             let text_parts: Vec<&str> = parts
                 .iter()
                 .filter_map(|part| match part {
-                    ContentPart::Text { text } => Some(text.as_str()),
-                    ContentPart::ImageUrl { .. } => None,
+                    ContentPart::Text { text, .. } => Some(text.as_str()),
+                    ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
+                    ContentPart::ImageUrl { .. }
+                    | ContentPart::Image { .. }
+                    | ContentPart::Audio { .. }
+                    | ContentPart::File { .. }
+                    | ContentPart::ToolUse { .. }
+                    | ContentPart::ToolResult { .. }
+                    | ContentPart::ProviderNative { .. } => None,
                 })
                 .collect();
             (!text_parts.is_empty()).then(|| text_parts.join("\n"))

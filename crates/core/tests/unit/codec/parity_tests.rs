@@ -680,8 +680,19 @@ fn test_request_normalization_parity() {
             name: None,
         },
     ];
+    assert_eq!(chat.messages, expected_messages);
+    let expected_user_messages = vec![Message::User {
+        content: MessageContent::Text("Summarize the docs.".to_string()),
+        name: None,
+    }];
+    assert_eq!(anthropic.messages, expected_user_messages);
+    assert_eq!(responses.messages, expected_user_messages);
+    assert_eq!(
+        anthropic.instructions,
+        Some(MessageContent::Text("You are terse.".to_string()))
+    );
+    assert_eq!(anthropic.instructions, responses.instructions);
     for decoded in [&chat, &anthropic, &responses] {
-        assert_eq!(decoded.messages, expected_messages);
         assert_eq!(decoded.model.as_deref(), Some("parity-request-model"));
         assert_eq!(decoded.system_prompt(), Some("You are terse."));
         assert_eq!(decoded.last_user_message(), Some("Summarize the docs."));

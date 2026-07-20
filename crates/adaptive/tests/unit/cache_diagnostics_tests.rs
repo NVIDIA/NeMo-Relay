@@ -90,6 +90,8 @@ fn make_hot_cache(stable_prefix_length: Option<usize>) -> HotCache {
 
 fn sample_request(model: Option<&str>) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),

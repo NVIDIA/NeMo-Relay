@@ -459,18 +459,21 @@ fn test_decode_request_with_input_array() {
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.model, Some("gpt-4o".into()));
 
-    // instructions becomes system message (first)
-    assert!(annotated.messages.len() >= 2);
+    assert_eq!(
+        annotated.instructions,
+        Some(MessageContent::Text("Be helpful.".into()))
+    );
     assert_eq!(annotated.system_prompt(), Some("Be helpful."));
 
-    // input items become messages (after system)
-    // System + 3 input items = 4 total messages
-    assert_eq!(annotated.messages.len(), 4);
+    assert_eq!(annotated.messages.len(), 3);
 
     // Tools present
     let tools = annotated.tools.unwrap();
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].function.name, "calculate");
+    let ToolDefinition::Function { function, .. } = &tools[0] else {
+        panic!("expected a portable function tool");
+    };
+    assert_eq!(function.name, "calculate");
 }
 
 #[test]
@@ -563,16 +566,16 @@ fn test_decode_request_input_array_preserves_unparsed_items_in_extra() {
         ]
     }));
     let annotated = codec.decode(&request).unwrap();
-    // strict-first behavior: no partial message extraction on mixed arrays
-    assert!(annotated.messages.is_empty());
-    assert_eq!(
-        annotated
+    assert!(matches!(annotated.messages[0], Message::User { .. }));
+    assert!(matches!(
+        &annotated.messages[1],
+        Message::ToolResultItem { call_id, output, .. }
+            if call_id == "call_1" && output == &json!("ok")
+    ));
+    assert!(
+        !annotated
             .extra
-            .get("_openai_responses_unparsed_input_items"),
-        Some(&json!([
-            { "role": "user", "content": "hello" },
-            { "type": "function_call_output", "call_id": "call_1", "output": "ok" }
-        ]))
+            .contains_key("_openai_responses_unparsed_input_items")
     );
 }
 
@@ -620,14 +623,12 @@ fn test_decode_request_litellm_reasoning_input_item_preserved_and_controls_extra
         "parallel_tool_calls": true
     }));
     let annotated = codec.decode(&request).unwrap();
-    // strict-first parse: mixed input array preserved whole in extra
-    assert!(annotated.messages.is_empty());
-    assert!(
-        annotated
-            .extra
-            .get("_openai_responses_unparsed_input_items")
-            .is_some()
-    );
+    assert!(matches!(
+        &annotated.messages[0],
+        Message::ProviderNative { provider, kind, .. }
+            if provider == "openai_responses" && kind == "reasoning"
+    ));
+    assert!(matches!(annotated.messages[1], Message::User { .. }));
     // stable controls still extracted
     assert_eq!(annotated.store, Some(true));
     assert_eq!(annotated.parallel_tool_calls, Some(true));
@@ -677,6 +678,139 @@ fn test_decode_request_sglang_extensions_preserved_in_extra() {
         annotated.extra.get("repetition_penalty"),
         Some(&json!(1.02))
     );
+}
+
+#[test]
+fn request_schema_fixture_round_trips_ordered_native_items_and_surgical_edits() {
+    let codec = OpenAIResponsesCodec;
+    let original = make_request(json!({
+        "model": "gpt-5",
+        "instructions": "Be exact.",
+        "input": [
+            {"type": "message", "role": "user", "content": [
+                {"type": "input_text", "text": "Solve this", "future_part": 1},
+                {"type": "input_image", "image_url": "https://example.com/a.png", "detail": "high"},
+                {"type": "input_file", "file_id": "file_1", "filename": "notes.txt"}
+            ]},
+            {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{ \"q\" : \"x\" }", "status": "completed"},
+            {"type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": [{"type": "input_text", "text": "result"}], "status": "completed"},
+            {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "work"}], "encrypted_content": "cipher"},
+            {"type": "mcp_call", "id": "mcp_1", "server_label": "docs", "name": "search", "arguments": "{}"},
+            {"type": "computer_call", "id": "cmp_1", "call_id": "cmp_call", "action": {"type": "screenshot"}},
+            {"type": "shell_call", "id": "sh_1", "call_id": "sh_call", "action": {"commands": ["pwd"]}},
+            {"type": "apply_patch_call", "id": "patch_1", "call_id": "patch_call", "operation": {"type": "create_file", "path": "a.txt", "diff": "+a"}},
+            {"type": "file_search_call", "id": "fs_1", "queries": ["docs"], "status": "completed"}
+        ],
+        "background": true,
+        "context_management": [{"type": "compaction", "compact_threshold": 1000}],
+        "conversation": "conv_1",
+        "include": ["reasoning.encrypted_content"],
+        "max_output_tokens": 256,
+        "max_tool_calls": 4,
+        "metadata": {"tenant": "a"},
+        "moderation": {"mode": "auto"},
+        "parallel_tool_calls": true,
+        "previous_response_id": "resp_prev",
+        "prompt": {"id": "pmpt_1", "variables": {"name": "Ada"}},
+        "prompt_cache_key": "cache-key",
+        "prompt_cache_options": {"scope": "request"},
+        "prompt_cache_retention": "24h",
+        "reasoning": {"effort": "high", "summary": "auto"},
+        "safety_identifier": "safe-user",
+        "service_tier": "auto",
+        "store": true,
+        "stream": true,
+        "stream_options": {"include_obfuscation": true},
+        "temperature": 0.2,
+        "text": {"format": {"type": "json_object"}, "verbosity": "low"},
+        "tool_choice": {"type": "mcp", "server_label": "docs"},
+        "tools": [
+            {"type": "function", "name": "lookup", "description": "Lookup", "parameters": {"type": "object"}, "strict": true},
+            {"type": "file_search", "vector_store_ids": ["vs_1"]},
+            {"type": "web_search_preview", "search_context_size": "low"},
+            {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+            {"type": "mcp", "server_label": "docs", "server_url": "https://example.com/mcp"},
+            {"type": "custom", "name": "grammar", "format": {"type": "text"}}
+        ],
+        "top_logprobs": 2,
+        "top_p": 0.9,
+        "truncation": "auto",
+        "user": "user_1",
+        "future_field": null
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(annotated.messages.len(), 9);
+    assert!(matches!(
+        &annotated.messages[3],
+        Message::ProviderNative { kind, .. } if kind == "reasoning"
+    ));
+    assert_eq!(codec.encode(&annotated, &original).unwrap(), original);
+
+    let Message::User {
+        content: MessageContent::Parts(parts),
+        ..
+    } = &mut annotated.messages[0]
+    else {
+        panic!("expected portable Responses message");
+    };
+    let ContentPart::Text { text, extra } = &mut parts[0] else {
+        panic!("expected portable Responses text part");
+    };
+    *text = "Solve carefully".into();
+    assert_eq!(extra.get("future_part"), Some(&json!(1)));
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original.clone();
+    expected.content["input"][0]["content"][0]["text"] = json!("Solve carefully");
+    assert_eq!(encoded, expected);
+
+    let mut without_future = codec.decode(&original).unwrap();
+    without_future.extra.remove("future_field");
+    let encoded = codec.encode(&without_future, &original).unwrap();
+    assert!(encoded.content.get("future_field").is_none());
+}
+
+#[test]
+fn responses_string_input_and_native_surface_mismatch_are_explicit() {
+    let codec = OpenAIResponsesCodec;
+    let original = make_request(json!({
+        "model": "gpt-5",
+        "input": "hello",
+        "stream_options": null
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(codec.encode(&annotated, &original).unwrap(), original);
+
+    annotated.messages.push(Message::ProviderNative {
+        provider: "anthropic_messages".into(),
+        kind: "thinking".into(),
+        value: json!({"type": "thinking", "thinking": "private"}),
+    });
+    let error = codec.encode(&annotated, &original).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot be encoded for OpenAI Responses")
+    );
+}
+
+#[test]
+fn request_schema_rejects_malformed_known_responses_items() {
+    let codec = OpenAIResponsesCodec;
+    for item in [
+        json!({
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup"
+        }),
+        json!({"type": "function_call_output", "call_id": "call_1"}),
+    ] {
+        let error = codec
+            .decode(&make_request(json!({"model": "gpt-5", "input": [item]})))
+            .unwrap_err();
+        assert!(error.to_string().contains("missing"));
+    }
 }
 
 // ===================================================================
@@ -836,13 +970,15 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
         })))
         .unwrap_err()
     {
-        FlowError::Internal(message) => {
-            assert!(message.contains("OpenAI Responses tools decode"));
+        FlowError::InvalidArgument(message) => {
+            assert!(message.contains("tools must be an array"));
         }
         other => panic!("unexpected tools decode error: {other}"),
     }
 
     let annotated = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![super::super::request::Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,
@@ -854,13 +990,15 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
             top_p: Some(0.95),
             stop: None,
         }),
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".into(),
+        tools: Some(vec![ToolDefinition::Function {
             function: super::super::request::FunctionDefinition {
                 name: "lookup".into(),
                 description: Some("Look up data".into()),
                 parameters: Some(json!({"type": "object"})),
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         tool_choice: Some(ToolChoice::Auto),
         store: None,
@@ -899,7 +1037,7 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
 
     match codec.encode(&annotated, &make_request(json!("still-not-an-object"))) {
         Err(FlowError::Internal(message)) => {
-            assert!(message.contains("original content is not an object"));
+            assert!(message.contains("not an object"));
         }
         other => panic!("unexpected encode result: {other:?}"),
     }

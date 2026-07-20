@@ -29,11 +29,11 @@ use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, TASK_SCOPE_STACK,
 };
 use nemo_relay::codec::resolve::{
-    ProviderSurface, response_codec as build_response_codec,
+    ProviderSurface, request_codec as build_request_codec, response_codec as build_response_codec,
     streaming_codec as build_streaming_codec,
 };
 use nemo_relay::codec::streaming::StreamingCodec;
-use nemo_relay::codec::traits::LlmResponseCodec;
+use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, UpstreamFailure, UpstreamFailureClass};
 use serde_json::{Value, json};
 
@@ -149,6 +149,7 @@ async fn run_unmanaged_gateway(
 // Codecs registered for each managed provider route. Routes that emit LLM events but lack a typed
 // codec (count_tokens) return `None` so the runtime still wraps the call but skips annotation.
 struct RouteCodecs {
+    request: Option<Arc<dyn LlmCodec>>,
     streaming: Option<Box<dyn StreamingCodec>>,
     response: Option<Arc<dyn LlmResponseCodec>>,
 }
@@ -156,10 +157,12 @@ struct RouteCodecs {
 fn codecs_for_route(route: ProviderRoute) -> RouteCodecs {
     match route.provider_surface() {
         Some(surface) => RouteCodecs {
+            request: Some(build_request_codec(surface)),
             streaming: Some(build_streaming_codec(surface)),
             response: Some(build_response_codec(surface)),
         },
         None => RouteCodecs {
+            request: None,
             streaming: None,
             response: None,
         },
@@ -207,6 +210,7 @@ async fn run_managed_buffered(
         .attributes(attributes)
         .metadata(metadata)
         .model_name_opt(model_name)
+        .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
     let result = TASK_SCOPE_STACK
@@ -407,6 +411,7 @@ async fn run_managed_streaming(
         .attributes(attributes)
         .metadata(metadata)
         .model_name_opt(model_name)
+        .codec_opt(codecs.request)
         .response_codec_opt(codecs.response)
         .build();
     let json_stream_result = TASK_SCOPE_STACK

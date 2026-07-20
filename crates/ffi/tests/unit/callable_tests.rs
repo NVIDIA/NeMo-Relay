@@ -409,6 +409,8 @@ fn test_wrap_llm_request_intercept_with_annotated_input() {
     let request_intercept =
         wrap_llm_request_intercept_fn(llm_request_intercept_cb, std::ptr::null_mut(), None);
     let annotated = nemo_relay::codec::request::AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![],
         model: Some("test-model".into()),
         params: None,

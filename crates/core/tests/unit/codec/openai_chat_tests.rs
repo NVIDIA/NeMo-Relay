@@ -566,7 +566,10 @@ fn test_decode_request_full() {
 
     let tools = annotated.tools.unwrap();
     assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0].function.name, "get_weather");
+    let ToolDefinition::Function { function, .. } = &tools[0] else {
+        panic!("expected a portable function tool");
+    };
+    assert_eq!(function.name, "get_weather");
 
     assert_eq!(annotated.tool_choice, Some(ToolChoice::Auto));
 }
@@ -596,11 +599,16 @@ fn test_decode_request_extra_fields() {
     }));
     let annotated = codec.decode(&request).unwrap();
     assert_eq!(annotated.stream, Some(true));
-    assert_eq!(annotated.extra.get("seed"), Some(&json!(42)));
-    assert_eq!(
-        annotated.extra.get("response_format"),
-        Some(&json!({"type": "json_object"}))
-    );
+    let Some(ApiSpecificRequest::OpenAIChat {
+        seed,
+        response_format,
+        ..
+    }) = annotated.api_specific
+    else {
+        panic!("expected Chat-specific request controls");
+    };
+    assert_eq!(seed, Some(42));
+    assert_eq!(response_format, Some(json!({"type": "json_object"})));
 }
 
 #[test]
@@ -633,8 +641,8 @@ fn test_decode_request_no_messages_key() {
     let request = make_request(json!({
         "model": "gpt-4o"
     }));
-    let annotated = codec.decode(&request).unwrap();
-    assert!(annotated.messages.is_empty());
+    let error = codec.decode(&request).unwrap_err();
+    assert!(error.to_string().contains("missing messages"));
 }
 
 #[test]
@@ -658,13 +666,15 @@ fn test_decode_request_multimodal_image_url_parts() {
                     parts,
                     &vec![
                         ContentPart::Text {
-                            text: "describe this".into()
+                            text: "describe this".into(),
+                            extra: serde_json::Map::new(),
                         },
                         ContentPart::ImageUrl {
                             image_url: OpenAiImageUrl {
                                 url: "https://example.com/cat.png".into(),
                                 detail: Some("high".into())
-                            }
+                            },
+                            extra: serde_json::Map::new(),
                         }
                     ]
                 );
@@ -779,12 +789,14 @@ fn test_encode_request_multimodal_image_url_parts() {
         content: MessageContent::Parts(vec![
             ContentPart::Text {
                 text: "describe this".into(),
+                extra: serde_json::Map::new(),
             },
             ContentPart::ImageUrl {
                 image_url: OpenAiImageUrl {
                     url: "https://example.com/cat.png".into(),
                     detail: Some("low".into()),
                 },
+                extra: serde_json::Map::new(),
             },
         ]),
         name: None,
@@ -843,24 +855,26 @@ fn test_helper_and_error_paths_cover_remaining_chat_branches() {
         })))
         .unwrap_err()
     {
-        FlowError::Internal(message) => assert!(message.contains("OpenAI Chat tools decode")),
+        FlowError::InvalidArgument(message) => {
+            assert!(message.contains("tools must be an array"))
+        }
         other => panic!("unexpected tools decode error: {other}"),
     }
 
-    match codec
+    let native_choice = codec
         .decode(&make_request(json!({
             "messages": [],
             "tool_choice": []
         })))
-        .unwrap_err()
-    {
-        FlowError::Internal(message) => {
-            assert!(message.contains("OpenAI Chat tool_choice decode"));
-        }
-        other => panic!("unexpected tool_choice decode error: {other}"),
-    }
+        .unwrap();
+    assert!(matches!(
+        native_choice.tool_choice,
+        Some(ToolChoice::ProviderNative(_))
+    ));
 
     let annotated = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![],
         model: Some("gpt-4.1-mini".into()),
         params: Some(GenerationParams {
@@ -869,13 +883,15 @@ fn test_helper_and_error_paths_cover_remaining_chat_branches() {
             top_p: Some(0.9),
             stop: Some(vec!["END".into()]),
         }),
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".into(),
+        tools: Some(vec![ToolDefinition::Function {
             function: super::super::request::FunctionDefinition {
                 name: "lookup".into(),
                 description: Some("Look up data".into()),
                 parameters: Some(json!({"type": "object"})),
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         tool_choice: Some(ToolChoice::Required),
         store: None,
@@ -906,65 +922,34 @@ fn test_helper_and_error_paths_cover_remaining_chat_branches() {
     assert_eq!(obj.get("temperature"), Some(&json!(0.2)));
     assert_eq!(obj.get("top_p"), Some(&json!(0.9)));
     assert_eq!(obj.get("stop"), Some(&json!(["END"])));
-    assert_eq!(obj.get("max_tokens"), Some(&json!(64)));
+    assert_eq!(obj.get("max_completion_tokens"), Some(&json!(64)));
     assert!(obj.get("tools").unwrap().is_array());
     assert_eq!(obj.get("tool_choice"), Some(&json!("required")));
 
     match codec.encode(&annotated, &make_request(json!("still-not-an-object"))) {
         Err(FlowError::Internal(message)) => {
-            assert!(message.contains("original content is not an object"));
+            assert!(message.contains("not an object"));
         }
         other => panic!("unexpected encode result: {other:?}"),
     }
 }
 // ===================================================================
-// stream_options injection tests (for Phoenix / OpenInference usage)
+// stream_options identity tests
 // ===================================================================
 
-/// On streaming requests (`stream: true`), the encoder forces
-/// `stream_options.include_usage=true` when the caller did not provide
-/// `stream_options`. Without this, OpenAI-compatible providers never emit
-/// the terminal usage chunk and token counts are lost in Phoenix traces.
+/// Request codecs do not enrich streaming requests as a side effect.
 #[test]
-fn test_encode_injects_stream_options_on_streaming_request() {
+fn test_encode_does_not_inject_stream_options_on_streaming_request() {
     let codec = OpenAIChatCodec;
-    let annotated = AnnotatedLlmRequest {
-        messages: vec![],
-        model: Some("gpt-4o".into()),
-        params: None,
-        tools: None,
-        tool_choice: None,
-        store: None,
-        previous_response_id: None,
-        truncation: None,
-        reasoning: None,
-        include: None,
-        user: None,
-        metadata: None,
-        service_tier: None,
-        parallel_tool_calls: None,
-        max_output_tokens: None,
-        max_tool_calls: None,
-        top_logprobs: None,
-        stream: None,
-        extra: serde_json::Map::new(),
-    };
-    let encoded = codec
-        .encode(
-            &annotated,
-            &make_request(json!({
-                "messages": [],
-                "model": "gpt-4o",
-                "stream": true,
-            })),
-        )
-        .unwrap();
-    let obj = encoded.content.as_object().unwrap();
-    assert_eq!(
-        obj.get("stream_options"),
-        Some(&json!({"include_usage": true})),
-        "encoder must inject stream_options.include_usage on streaming requests when absent",
-    );
+    let original = make_request(json!({
+        "messages": [],
+        "model": "gpt-4o",
+        "stream": true
+    }));
+    let annotated = codec.decode(&original).unwrap();
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded, original);
+    assert!(encoded.content.get("stream_options").is_none());
 }
 
 /// Caller-supplied `stream_options` must be preserved verbatim. This matters
@@ -973,40 +958,15 @@ fn test_encode_injects_stream_options_on_streaming_request() {
 #[test]
 fn test_encode_preserves_caller_stream_options() {
     let codec = OpenAIChatCodec;
-    let annotated = AnnotatedLlmRequest {
-        messages: vec![],
-        model: Some("gpt-4o".into()),
-        params: None,
-        tools: None,
-        tool_choice: None,
-        store: None,
-        previous_response_id: None,
-        truncation: None,
-        reasoning: None,
-        include: None,
-        user: None,
-        metadata: None,
-        service_tier: None,
-        parallel_tool_calls: None,
-        max_output_tokens: None,
-        max_tool_calls: None,
-        top_logprobs: None,
-        stream: None,
-        extra: serde_json::Map::new(),
-    };
-    let caller_set = json!({
+    let original = make_request(json!({
         "messages": [],
         "model": "gpt-4o",
         "stream": true,
         "stream_options": { "include_usage": false }
-    });
-    let encoded = codec.encode(&annotated, &make_request(caller_set)).unwrap();
-    let obj = encoded.content.as_object().unwrap();
-    assert_eq!(
-        obj.get("stream_options"),
-        Some(&json!({"include_usage": false})),
-        "caller-provided stream_options must be preserved verbatim",
-    );
+    }));
+    let annotated = codec.decode(&original).unwrap();
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded, original);
 }
 
 /// Per the OpenAI Chat Completions spec, `stream_options` is only valid on
@@ -1016,55 +976,142 @@ fn test_encode_preserves_caller_stream_options() {
 #[test]
 fn test_encode_does_not_inject_stream_options_on_non_streaming() {
     let codec = OpenAIChatCodec;
-    let annotated = AnnotatedLlmRequest {
-        messages: vec![],
-        model: Some("gpt-4o".into()),
-        params: None,
-        tools: None,
-        tool_choice: None,
-        store: None,
-        previous_response_id: None,
-        truncation: None,
-        reasoning: None,
-        include: None,
-        user: None,
-        metadata: None,
-        service_tier: None,
-        parallel_tool_calls: None,
-        max_output_tokens: None,
-        max_tool_calls: None,
-        top_logprobs: None,
-        stream: None,
-        extra: serde_json::Map::new(),
+    for content in [
+        json!({"messages": [], "model": "gpt-4o"}),
+        json!({"messages": [], "model": "gpt-4o", "stream": false}),
+    ] {
+        let original = make_request(content);
+        let annotated = codec.decode(&original).unwrap();
+        let encoded = codec.encode(&annotated, &original).unwrap();
+        assert_eq!(encoded, original);
+        assert!(encoded.content.get("stream_options").is_none());
+    }
+}
+
+#[test]
+fn request_schema_fixture_round_trips_and_preserves_adjacent_native_messages() {
+    let codec = OpenAIChatCodec;
+    let original = make_request(json!({
+        "model": "gpt-4.1",
+        "messages": [
+            {"role": "developer", "content": "Be exact.", "name": "policy"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Describe this", "future_part": 1},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png", "detail": "high"}},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+                {"type": "file", "file": {"file_id": "file_1"}}
+            ]},
+            {"role": "assistant", "content": null, "refusal": null, "audio": {"id": "audio_1"}, "tool_calls": [{
+                "id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{ \"q\" : \"x\" }"}
+            }]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+            {"role": "function", "name": "legacy", "content": null}
+        ],
+        "audio": {"format": "wav", "voice": "alloy"},
+        "frequency_penalty": 0.1,
+        "function_call": "auto",
+        "functions": [{"name": "legacy", "parameters": {"type": "object"}}],
+        "logit_bias": {"42": 1},
+        "logprobs": true,
+        "max_completion_tokens": 128,
+        "metadata": {"tenant": "a"},
+        "modalities": ["text", "audio"],
+        "moderation": {"mode": "auto"},
+        "n": 1,
+        "parallel_tool_calls": true,
+        "prediction": {"type": "content", "content": "prefix"},
+        "presence_penalty": 0.2,
+        "prompt_cache_key": "cache-key",
+        "prompt_cache_options": {"scope": "request"},
+        "prompt_cache_retention": "24h",
+        "reasoning_effort": "medium",
+        "response_format": {"type": "json_object"},
+        "safety_identifier": "safe-user",
+        "seed": 7,
+        "service_tier": "auto",
+        "stop": "END",
+        "store": true,
+        "stream": true,
+        "stream_options": {"include_usage": false},
+        "temperature": 0.3,
+        "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        "tools": [
+            {"type": "function", "function": {"name": "lookup", "description": "Lookup", "parameters": {"type": "object"}, "strict": true}},
+            {"type": "custom", "custom": {"name": "grammar", "format": {"type": "grammar", "grammar": "start: WORD"}}}
+        ],
+        "top_logprobs": 3,
+        "top_p": 0.8,
+        "user": "user_1",
+        "verbosity": "low",
+        "web_search_options": {"search_context_size": "low"},
+        "future_field": null
+    }));
+
+    let mut annotated = codec.decode(&original).unwrap();
+    assert_eq!(codec.encode(&annotated, &original).unwrap(), original);
+
+    let Message::User {
+        content: MessageContent::Parts(parts),
+        ..
+    } = &mut annotated.messages[1]
+    else {
+        panic!("expected portable user message parts");
     };
+    let ContentPart::Text { text, extra } = &mut parts[0] else {
+        panic!("expected portable text part");
+    };
+    *text = "Summarize this".into();
+    assert_eq!(extra.get("future_part"), Some(&json!(1)));
 
-    let encoded = codec
-        .encode(
-            &annotated,
-            &make_request(json!({"messages": [], "model": "gpt-4o"})),
-        )
-        .unwrap();
-    let obj = encoded.content.as_object().unwrap();
-    assert!(
-        !obj.contains_key("stream_options"),
-        "stream_options must not be injected when stream key is absent",
-    );
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original.clone();
+    expected.content["messages"][1]["content"][0]["text"] = json!("Summarize this");
+    assert_eq!(encoded, expected);
+}
 
-    let encoded = codec
-        .encode(
-            &annotated,
-            &make_request(json!({
-                "messages": [],
-                "model": "gpt-4o",
-                "stream": false,
-            })),
-        )
-        .unwrap();
-    let obj = encoded.content.as_object().unwrap();
-    assert!(
-        !obj.contains_key("stream_options"),
-        "stream_options must not be injected when stream: false",
-    );
+#[test]
+fn native_chat_tool_choices_round_trip_without_fallback_loss() {
+    let codec = OpenAIChatCodec;
+    for tool_choice in [
+        json!({"type": "custom", "custom": {"name": "grammar"}}),
+        json!({"type": "future_tool", "name": "next"}),
+    ] {
+        let original = make_request(json!({
+            "model": "gpt-4.1",
+            "messages": [],
+            "tool_choice": tool_choice
+        }));
+        let annotated = codec.decode(&original).unwrap();
+        assert!(matches!(
+            annotated.tool_choice,
+            Some(ToolChoice::ProviderNative(_))
+        ));
+        assert_eq!(codec.encode(&annotated, &original).unwrap(), original);
+    }
+}
+
+#[test]
+fn request_schema_rejects_malformed_known_chat_components() {
+    let codec = OpenAIChatCodec;
+    for message in [
+        json!({"role": "function", "name": "legacy", "content": 7}),
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "lookup"}
+            }]
+        }),
+    ] {
+        let error = codec
+            .decode(&make_request(
+                json!({"model": "gpt-4.1", "messages": [message]}),
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("OpenAI Chat"));
+    }
 }
 
 // ===================================================================

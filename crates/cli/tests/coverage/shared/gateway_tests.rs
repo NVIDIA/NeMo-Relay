@@ -328,6 +328,48 @@ fn selects_provider_routes() {
 }
 
 #[test]
+fn generation_routes_have_request_codecs_and_passthrough_routes_do_not() {
+    for route in [
+        ProviderRoute::AnthropicMessages,
+        ProviderRoute::OpenAiChatCompletions,
+        ProviderRoute::OpenAiResponses,
+    ] {
+        let codecs = codecs_for_route(route);
+        assert!(
+            codecs.request.is_some(),
+            "missing request codec for {route:?}"
+        );
+        assert!(
+            codecs.streaming.is_some(),
+            "missing stream codec for {route:?}"
+        );
+        assert!(
+            codecs.response.is_some(),
+            "missing response codec for {route:?}"
+        );
+    }
+
+    for route in [
+        ProviderRoute::AnthropicCountTokens,
+        ProviderRoute::OpenAiModels,
+    ] {
+        let codecs = codecs_for_route(route);
+        assert!(
+            codecs.request.is_none(),
+            "unexpected request codec for {route:?}"
+        );
+        assert!(
+            codecs.streaming.is_none(),
+            "unexpected stream codec for {route:?}"
+        );
+        assert!(
+            codecs.response.is_none(),
+            "unexpected response codec for {route:?}"
+        );
+    }
+}
+
+#[test]
 fn dispatch_override_routes_cover_models_and_count_tokens() {
     for alias in ["openai_models", "openai.models", "/models", "/v1/models"] {
         assert_eq!(

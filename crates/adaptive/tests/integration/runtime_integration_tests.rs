@@ -78,6 +78,8 @@ fn reset_global() {
 
 fn sample_annotated_request(model: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),
@@ -112,6 +114,8 @@ fn sample_annotated_request(model: &str) -> AnnotatedLlmRequest {
 fn sample_growing_chat_requests(model: &str) -> Vec<AnnotatedLlmRequest> {
     vec![
         AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![
                 Message::System {
                     content: MessageContent::Text("You are a careful planner".to_string()),
@@ -142,6 +146,8 @@ fn sample_growing_chat_requests(model: &str) -> Vec<AnnotatedLlmRequest> {
             extra: Map::new(),
         },
         AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![
                 Message::System {
                     content: MessageContent::Text("You are a careful planner".to_string()),
@@ -183,6 +189,8 @@ fn sample_growing_chat_requests(model: &str) -> Vec<AnnotatedLlmRequest> {
             extra: Map::new(),
         },
         AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages: vec![
                 Message::System {
                     content: MessageContent::Text("You are a careful planner".to_string()),

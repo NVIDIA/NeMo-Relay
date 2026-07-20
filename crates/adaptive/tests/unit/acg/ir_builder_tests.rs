@@ -12,8 +12,7 @@ use super::super::ir_builder::build_prompt_ir;
 use crate::acg::prompt_ir::{BlockContentType, PromptRole, ProvenanceLabel};
 
 fn sample_tool_definition(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        tool_type: "function".to_string(),
+    ToolDefinition::Function {
         function: FunctionDefinition {
             name: name.to_string(),
             description: Some(format!("describe {name}")),
@@ -23,7 +22,10 @@ fn sample_tool_definition(name: &str) -> ToolDefinition {
                     "query": {"type": "string"}
                 }
             })),
+            strict: None,
+            extra: serde_json::Map::new(),
         },
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -41,6 +43,8 @@ fn sample_tool_call(name: &str) -> ToolCall {
 #[test]
 fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_all_message_kinds() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are helpful.".to_string()),
@@ -50,9 +54,11 @@ fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_a
                 content: MessageContent::Parts(vec![
                     ContentPart::Text {
                         text: "Hello".to_string(),
+                        extra: serde_json::Map::new(),
                     },
                     ContentPart::Text {
                         text: "World".to_string(),
+                        extra: serde_json::Map::new(),
                     },
                 ]),
                 name: None,
@@ -112,6 +118,8 @@ fn build_prompt_ir_inserts_tools_before_first_non_system_message_and_preserves_a
 #[test]
 fn build_prompt_ir_appends_tool_blocks_when_request_contains_only_system_messages() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::System {
             content: MessageContent::Text("System only".to_string()),
             name: None,
@@ -157,6 +165,8 @@ fn build_prompt_ir_appends_tool_blocks_when_request_contains_only_system_message
 #[test]
 fn build_prompt_ir_omits_tool_schema_hashes_when_no_tools_are_present() {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("No tools".to_string()),
             name: None,

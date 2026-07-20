@@ -43,9 +43,18 @@ separate response-side path used to attach normalized data to lifecycle events.
 
 With an active codec, `request.content` is read-only context. Every intercept
 must return an annotation and make provider-body changes through that
-annotation, including its flattened `extra` fields for provider-specific data.
-Relay rejects a changed raw body or missing annotation at the offending
-intercept before invoking later middleware or creating an LLM lifecycle.
+annotation. Use portable fields such as `messages` and `instructions`, the
+tagged `api_specific` surface for modeled provider controls, provider-native
+components for provider-only unions, and flattened `extra` only for unknown
+future top-level fields. Relay rejects a changed raw body or missing annotation
+at the offending intercept before invoking later middleware or creating an LLM
+lifecycle.
+
+The `nemo-relay` gateway enables request codecs for the generation routes
+`/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, including streaming
+requests. Interceptors written for those routes must migrate provider-body
+mutation from `request.content` to `annotated_request`. Count-token, model,
+probe, and non-LLM passthrough routes retain raw-body authority.
 
 The following diagram shows how Relay resolves an intercept outcome before
 managed execution.
@@ -113,6 +122,13 @@ hosts them. Replace tuple results, split C/Go
 outputs, metadata envelopes, and parallel mark-aware registrations with the
 canonical outcome and the existing `register_llm_request_intercept`
 registration name.
+
+For gateway generation requests, replace code such as
+`request.content["messages"] = ...` with an edit to
+`annotated_request.messages`, then return both the unchanged raw request and the
+edited annotation. Header edits continue to use `request.headers`. An attempt
+to change the raw body while its request codec is active returns an explicit
+error before the provider callback.
 
 ## Related Topics
 

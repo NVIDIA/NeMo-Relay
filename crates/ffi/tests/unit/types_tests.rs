@@ -559,6 +559,24 @@ fn test_llm_request_and_event_accessors() {
 #[test]
 fn test_annotated_event_accessors_and_codec_handles() {
     let annotated_request = nemo_relay::codec::request::AnnotatedLlmRequest {
+        instructions: Some(nemo_relay::codec::request::MessageContent::Text(
+            "follow policy".into(),
+        )),
+        api_specific: Some(
+            nemo_relay::codec::request::ApiSpecificRequest::OpenAIResponses {
+                background: Some(true),
+                context_management: None,
+                conversation: None,
+                moderation: None,
+                prompt: None,
+                prompt_cache_key: Some("cache-key".into()),
+                prompt_cache_options: None,
+                prompt_cache_retention: None,
+                safety_identifier: None,
+                stream_options: None,
+                text: None,
+            },
+        ),
         messages: vec![nemo_relay::codec::request::Message::User {
             content: nemo_relay::codec::request::MessageContent::Text("hello".into()),
             name: Some("tester".into()),
@@ -604,6 +622,18 @@ fn test_annotated_event_accessors_and_codec_handles() {
     let annotated_request_value: serde_json::Value =
         serde_json::from_str(&annotated_request_json).unwrap();
     assert_eq!(annotated_request_value["model"], json!("gpt-test"));
+    assert_eq!(
+        annotated_request_value["instructions"],
+        json!("follow policy")
+    );
+    assert_eq!(
+        annotated_request_value["api_specific"],
+        json!({
+            "api": "openai_responses",
+            "background": true,
+            "prompt_cache_key": "cache-key"
+        })
+    );
     assert_eq!(annotated_request_value["provider"], json!("ffi"));
     assert!(unsafe { nemo_relay_event_annotated_response(&ffi_start) }.is_null());
 

@@ -98,6 +98,8 @@ fn assert_no_attr_contains(attributes: &HashMap<String, String>, expected: &str)
 
 fn empty_annotated_request() -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: Vec::new(),
         model: None,
         params: None,
@@ -367,6 +369,8 @@ fn openai_chat_provider_response(model_id: &str) -> Json {
 
 fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("Use concise answers.".to_string()),
@@ -384,8 +388,7 @@ fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
             top_p: None,
             stop: None,
         }),
-        tools: Some(vec![ToolDefinition {
-            tool_type: "function".to_string(),
+        tools: Some(vec![ToolDefinition::Function {
             function: FunctionDefinition {
                 name: "search_docs".to_string(),
                 description: Some("Search the docs corpus.".to_string()),
@@ -393,7 +396,10 @@ fn sample_openinference_annotated_request() -> AnnotatedLlmRequest {
                     "type": "object",
                     "properties": {"query": {"type": "string"}}
                 })),
+                strict: None,
+                extra: serde_json::Map::new(),
             },
+            extra: serde_json::Map::new(),
         }]),
         ..empty_annotated_request()
     }

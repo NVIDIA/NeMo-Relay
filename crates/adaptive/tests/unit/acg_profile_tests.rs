@@ -13,6 +13,8 @@ use super::*;
 
 fn request(messages: Vec<Message>, tools: Option<Vec<ToolDefinition>>) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages,
         model: Some("gpt-4o".to_string()),
         params: None,
@@ -36,13 +38,15 @@ fn request(messages: Vec<Message>, tools: Option<Vec<ToolDefinition>>) -> Annota
 }
 
 fn sample_tool(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        tool_type: "function".to_string(),
+    ToolDefinition::Function {
         function: FunctionDefinition {
             name: name.to_string(),
             description: Some("desc".to_string()),
             parameters: Some(json!({"type":"object","properties":{"a":{"type":"string"}}})),
+            strict: None,
+            extra: serde_json::Map::new(),
         },
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -53,18 +57,21 @@ fn acg_profile_derivation_covers_anchor_hash_system_fallback_and_empty_tools() {
             Message::System {
                 content: MessageContent::Parts(vec![ContentPart::Text {
                     text: "System guide".to_string(),
+                    extra: serde_json::Map::new(),
                 }]),
                 name: None,
             },
             Message::User {
                 content: MessageContent::Parts(vec![ContentPart::Text {
                     text: "Language guide".to_string(),
+                    extra: serde_json::Map::new(),
                 }]),
                 name: None,
             },
             Message::Assistant {
                 content: Some(MessageContent::Parts(vec![ContentPart::Text {
                     text: "Acknowledged".to_string(),
+                    extra: serde_json::Map::new(),
                 }])),
                 tool_calls: None,
                 name: None,
@@ -134,6 +141,7 @@ fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
                     url: "https://example.com/a.png".to_string(),
                     detail: Some("high".to_string()),
                 },
+                extra: serde_json::Map::new(),
             }]),
             name: None,
         }],
@@ -146,6 +154,7 @@ fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
                     url: "https://example.com/b.png".to_string(),
                     detail: Some("high".to_string()),
                 },
+                extra: serde_json::Map::new(),
             }]),
             name: None,
         }],

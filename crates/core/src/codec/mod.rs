@@ -25,6 +25,34 @@ pub mod response;
 pub mod streaming;
 pub mod traits;
 
+use nemo_relay_types::Json;
+
+use crate::error::Result;
+
+fn encode_changed_items<T, F>(
+    edited: &[T],
+    baseline: &[T],
+    original: Option<&[Json]>,
+    mut encode: F,
+) -> Result<Vec<Json>>
+where
+    T: PartialEq,
+    F: FnMut(&T) -> Result<Json>,
+{
+    edited
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            if baseline.get(index) == Some(item)
+                && let Some(original) = original.and_then(|items| items.get(index))
+            {
+                return Ok(original.clone());
+            }
+            encode(item)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "../../tests/unit/codec/parity_tests.rs"]
 mod parity_tests;
