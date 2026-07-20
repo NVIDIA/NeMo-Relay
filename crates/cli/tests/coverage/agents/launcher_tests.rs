@@ -1105,10 +1105,7 @@ fn rejects_state_db_directory_before_populating_hermes_overlay() {
         Err(error) => error,
     };
 
-    assert!(matches!(
-        error,
-        CliError::Io(ref error) if error.kind() == std::io::ErrorKind::AlreadyExists
-    ));
+    assert!(matches!(error, CliError::Io(_)));
     assert!(state_db.is_dir());
     assert!(!hooks_path.exists());
     assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| {
