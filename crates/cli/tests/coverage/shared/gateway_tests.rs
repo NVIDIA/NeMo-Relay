@@ -931,6 +931,68 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
     server.await.unwrap();
 }
 
+#[tokio::test]
+async fn retry_aware_buffered_invalid_json_stays_structured() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nx-request-id: provider-request\r\ncontent-length: 22\r\nconnection: close\r\n\r\n{invalid-provider-json",
+            )
+            .await
+            .unwrap();
+    });
+
+    let state = AppState::new(GatewayConfig::default());
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/chat/completions".into(),
+        provider: ProviderRoute::OpenAiChatCompletions,
+        upstream_url: format!("http://{address}/v1/chat/completions"),
+        body_bytes: Bytes::from_static(b"{}"),
+        request_json: json!({}),
+        streaming: false,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
+    };
+    let upstream_info = Arc::new(Mutex::new(None));
+    let upstream_error = Arc::new(Mutex::new(None));
+    let response_bytes = Arc::new(Mutex::new(None));
+    let func = build_buffered_func(
+        state,
+        &prepared,
+        upstream_info,
+        upstream_error.clone(),
+        response_bytes,
+    );
+    let error = func(LlmRequest {
+        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        content: json!({}),
+    })
+    .await
+    .unwrap_err();
+
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure, got {error:?}");
+    };
+    assert_eq!(failure.status, Some(200));
+    assert_eq!(failure.class, UpstreamFailureClass::Other);
+    assert_eq!(failure.body, "{invalid-provider-json");
+    assert_eq!(
+        failure.headers.get("x-request-id"),
+        Some(&"provider-request".to_string())
+    );
+    assert!(upstream_error.lock().unwrap().is_none());
+    server.await.unwrap();
+}
+
 #[test]
 fn gateway_session_id_prefers_headers_and_has_fallbacks() {
     let mut headers = HeaderMap::new();
