@@ -55,6 +55,7 @@ fn create_overlay(
     source_config: &Path,
     gateway_url: &str,
 ) -> Result<PathBuf, CliError> {
+    ensure_durable_state_paths(source_home)?;
     let overlay = source_home
         .parent()
         .filter(|parent| parent.is_dir())
@@ -70,6 +71,22 @@ fn create_overlay(
         return Err(error);
     }
     Ok(overlay)
+}
+
+fn ensure_durable_state_paths(source_home: &Path) -> Result<(), CliError> {
+    std::fs::create_dir_all(source_home.join("sessions"))?;
+    let state_db = source_home.join("state.db");
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&state_db)
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && state_db.is_file() => {
+            Ok(())
+        }
+        Err(error) => Err(CliError::Io(error)),
+    }
 }
 
 pub(crate) fn populate_overlay(
