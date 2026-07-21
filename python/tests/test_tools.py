@@ -3,6 +3,8 @@
 
 """Tests for NeMo Relay tool lifecycle, guardrails, and intercepts."""
 
+from collections import UserDict, UserList
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -99,6 +101,31 @@ class TestToolsAsync:
 
         with pytest.raises(RuntimeError, match="circular reference detected"):
             await tools.execute("cyclic_result", {}, cyclic_result)
+
+        async def async_cyclic_result(_args):
+            return cyclic_result(_args)
+
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("async_cyclic_result", {}, async_cyclic_result)
+
+        cyclic_mapping = UserDict()
+        cyclic_mapping["self"] = cyclic_mapping
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_mapping", {}, lambda _args: cyclic_mapping)
+
+        cyclic_sequence = UserList()
+        cyclic_sequence.append(cyclic_sequence)
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_sequence", {}, lambda _args: cyclic_sequence)
+
+        @dataclass
+        class CyclicDataclass:
+            child: object | None = None
+
+        cyclic_dataclass = CyclicDataclass()
+        cyclic_dataclass.child = cyclic_dataclass
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_dataclass", {}, lambda _args: cyclic_dataclass)
 
         result = await tools.execute(
             "post_cycle_result",

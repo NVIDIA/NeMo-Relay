@@ -10,17 +10,32 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{
+    PyByteArray, PyBytes, PyDict, PyFrozenSet, PyMapping, PySequence, PySet, PyString,
+};
+use pyo3::{intern, prelude::*};
 use serde_json::Value as Json;
 
 fn validate_acyclic(
     value: &Bound<'_, PyAny>,
     active_containers: &mut HashSet<usize>,
 ) -> PyResult<()> {
-    let is_container = value.cast::<PyDict>().is_ok()
-        || value.cast::<PyList>().is_ok()
-        || value.cast::<PyTuple>().is_ok();
+    if value.is_instance_of::<PyString>()
+        || value.is_instance_of::<PyBytes>()
+        || value.is_instance_of::<PyByteArray>()
+    {
+        return Ok(());
+    }
+
+    let dataclass_fields = value
+        .getattr_opt(intern!(value.py(), "__dataclass_fields__"))
+        .ok()
+        .flatten();
+    let is_container = value.cast::<PySet>().is_ok()
+        || value.cast::<PyFrozenSet>().is_ok()
+        || value.cast::<PySequence>().is_ok()
+        || value.cast::<PyMapping>().is_ok()
+        || dataclass_fields.is_some();
     if !is_container {
         return Ok(());
     }
@@ -32,18 +47,36 @@ fn validate_acyclic(
         ));
     }
 
-    let result = if let Ok(dictionary) = value.cast::<PyDict>() {
-        dictionary
-            .iter()
-            .try_for_each(|(_, child)| validate_acyclic(&child, active_containers))
-    } else if let Ok(list) = value.cast::<PyList>() {
-        list.iter()
+    let result = if let Ok(set) = value.cast::<PySet>() {
+        set.iter()
             .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else if let Ok(set) = value.cast::<PyFrozenSet>() {
+        set.iter()
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else if let Ok(sequence) = value.cast::<PySequence>() {
+        (0..sequence.len()?).try_for_each(|index| {
+            let child = sequence.get_item(index)?;
+            validate_acyclic(&child, active_containers)
+        })
+    } else if let Ok(mapping) = value.cast::<PyMapping>() {
+        let keys = mapping.keys()?;
+        let values = mapping.values()?;
+        keys.iter()
+            .chain(values.iter())
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else if let Some(fields) = dataclass_fields {
+        let fields = fields.cast::<PyDict>()?.keys();
+        let attributes = value
+            .getattr(intern!(value.py(), "__dict__"))?
+            .cast_into::<PyDict>()?;
+        fields.iter().try_for_each(|field| {
+            if let Some(child) = attributes.get_item(&field)? {
+                validate_acyclic(&child, active_containers)?;
+            }
+            Ok(())
+        })
     } else {
-        value
-            .cast::<PyTuple>()?
-            .iter()
-            .try_for_each(|child| validate_acyclic(&child, active_containers))
+        Ok(())
     };
 
     active_containers.remove(&identity);
