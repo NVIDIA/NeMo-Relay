@@ -7,12 +7,52 @@
 //! the required/optional × to-json/from-json matrix used throughout the PyO3
 //! binding layer.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::Value as Json;
+
+fn validate_acyclic(
+    value: &Bound<'_, PyAny>,
+    active_containers: &mut HashSet<usize>,
+) -> PyResult<()> {
+    let is_container = value.cast::<PyDict>().is_ok()
+        || value.cast::<PyList>().is_ok()
+        || value.cast::<PyTuple>().is_ok();
+    if !is_container {
+        return Ok(());
+    }
+
+    let identity = value.as_ptr() as usize;
+    if !active_containers.insert(identity) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Failed to convert to JSON: circular reference detected",
+        ));
+    }
+
+    let result = if let Ok(dictionary) = value.cast::<PyDict>() {
+        dictionary
+            .iter()
+            .try_for_each(|(_, child)| validate_acyclic(&child, active_containers))
+    } else if let Ok(list) = value.cast::<PyList>() {
+        list.iter()
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    } else {
+        value
+            .cast::<PyTuple>()?
+            .iter()
+            .try_for_each(|child| validate_acyclic(&child, active_containers))
+    };
+
+    active_containers.remove(&identity);
+    result
+}
 
 /// Convert a Python object to serde_json::Value via pythonize.
 pub fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Json> {
+    validate_acyclic(obj, &mut HashSet::new())?;
     pythonize::depythonize(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to convert to JSON: {e}"))
     })
