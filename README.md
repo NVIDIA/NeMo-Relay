@@ -338,8 +338,8 @@ End-user documentation lives at
 Important local entry points:
 
 - [Overview](https://docs.nvidia.com/nemo/relay/about-nemo-relay/overview)
+- [Getting Started](https://docs.nvidia.com/nemo/relay/getting-started/quick-start)
 - [Installation](https://docs.nvidia.com/nemo/relay/getting-started/installation)
-- [Agent Runtime Primer](https://docs.nvidia.com/nemo/relay/getting-started/agent-runtime-primer)
 - [Testing and Docs](https://docs.nvidia.com/nemo/relay/contribute/testing-and-docs)
 
 For source builds, tests, and contribution workflow, refer to

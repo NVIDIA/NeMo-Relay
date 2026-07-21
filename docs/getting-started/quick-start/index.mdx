@@ -15,8 +15,41 @@ or control:
   boundary.
 
 If you still need the shared runtime vocabulary for scopes, middleware, events,
-or plugins, refer to the [Agent Runtime Primer](/getting-started/agent-runtime-primer)
+or plugins, refer to the [Agent Runtime Primer](/about-nemo-relay/agent-runtime-primer)
 or [Concepts](/about-nemo-relay/concepts) first.
+
+<CardGroup cols={1}>
+<Card
+  title="Using an AI Coding Assistant?"
+  icon="terminal"
+  iconPosition="left"
+>
+
+Install [NVIDIA agent skills](https://docs.nvidia.com/skills) to give
+compatible coding agents product-specific Relay workflows and references. After
+the NeMo Relay skills are published in `nvidia/skills`, install the full Relay
+skill set without cloning the catalog:
+
+```bash
+npx skills add nvidia/skills \
+  --skill nemo-relay-install \
+  --skill nemo-relay-get-started \
+  --skill nemo-relay-instrument-calls \
+  --skill nemo-relay-instrument-context-isolation \
+  --skill nemo-relay-instrument-typed-wrappers \
+  --skill nemo-relay-plugin-observability \
+  --skill nemo-relay-plugin-adaptive-tuning \
+  --skill nemo-relay-plugin-build \
+  --skill nemo-relay-migrate-from-flow \
+  --skill nemo-relay-debug-runtime-integration \
+  --agent codex
+```
+
+Use `--agent claude-code`, `--agent cursor`, or another supported agent target
+when that is where you want the skill installed. To inspect the current NVIDIA
+skill catalog first, run `npx skills add nvidia/skills --list`.
+</Card>
+</CardGroup>
 
 ## Examples by Integration Layer
 

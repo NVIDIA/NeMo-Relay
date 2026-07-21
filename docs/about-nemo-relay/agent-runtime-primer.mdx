@@ -1,7 +1,7 @@
 ---
 title: "Agent Runtime Primer"
 description: "Learn the NeMo Relay runtime model for scopes, middleware, events, and integration boundaries."
-position: 1
+position: 2
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
 
@@ -11,7 +11,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 NeMo Relay is a portable runtime layer for agent systems that already have an
 application, framework, or model provider. Use this primer when you need to
-understand what NeMo Relay adds before running [Quick Start](/getting-started/quick-start).
+understand what NeMo Relay adds before choosing an installation, quick-start, or
+integration path.
 
 Agent applications usually cross several boundaries in one request: an entry
 point starts work, the agent calls a model, the model asks for tools, tools call
@@ -91,29 +92,4 @@ It does not replace:
 Instead, it gives those systems a shared runtime contract for call boundaries,
 policy hooks, event emission, and export.
 
-## Find the Right Starting Point
-
-Use this section as a router, not a setup checklist. Start from the destination
-or outcome that matches your task; the linked page points you to the setup,
-configuration, and validation steps for that path.
-
-- **Direct Python, Node.js, or Rust application APIs:** Application code owns
-  callback placement, provider authentication, and plugin initialization. Start
-  with [Quick Start](/getting-started/quick-start), then use
-  [Instrument Applications](/instrument-applications/about) when you own the
-  tool or LLM call site.
-- **LangChain, LangGraph, Deep Agents, or OpenClaw:** Start with
-  [Supported Integrations](/supported-integrations/about) to choose the
-  maintained path and support level. Local wiring still belongs to the
-  application, framework, or OpenClaw plugin configuration.
-- **New framework, orchestration, SDK, or provider integration:** The framework
-  or adapter owns scheduling, retries, callbacks, and provider payloads. Start
-  with [Integrate into Frameworks](/integrate-into-frameworks/about).
-- **Local Claude Code, Codex, or Hermes runs:** The coding-agent harness
-  owns invocation while Relay observes hooks, gateway-routed model traffic, and
-  exporter output. Start with [NeMo Relay CLI](/nemo-relay-cli/about).
-- **Reusable runtime behavior across services or teams:** Runtime plugin
-  configuration owns reusable middleware, subscribers, exporters, model pricing,
-  policy, or adaptive behavior. Start with [Build Plugins](/build-plugins/about),
-  use [Observability](/configure-plugins/observability/about) for export setup, and use
-  [Adaptive](/configure-plugins/adaptive/about) after baseline instrumentation is working.
+For setup routing, start with [Getting Started](/getting-started/about).
