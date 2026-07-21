@@ -161,6 +161,7 @@ The following table describes how each failure affects application work:
 | ATIF dispatcher serialization or subscriber-management failure | The ATIF dispatcher records a fatal exporter error and stops observing later ATIF events. Other observability sections continue to run. |
 | OpenTelemetry or OpenInference construction failure | Plugin initialization fails before the subscriber is registered. |
 | OpenTelemetry or OpenInference export failure after registration | Application work continues. The OTLP exporter reports failures through its runtime logging and flush or shutdown path. |
+| Process termination before plugin teardown completes | The output can omit events that were still in the subscriber queue or an exporter-owned worker. NeMo Relay does not backfill those events after restart, and the process can end before an exporter reports an error. |
 
 Missing or delayed telemetry is represented as absence of exporter output, not
 as synthetic success or failure events. NeMo Relay does not backfill events for
@@ -438,9 +439,17 @@ filename templates, unknown fields according to policy, and enabled exporters
 that are unavailable in the current build or target.
 
 Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
-Clearing the plugin configuration deregisters inferred subscribers, flushes file
-exporters, drains and closes ATOF stream sinks, and shuts down owned OTLP
+Clearing the plugin configuration waits for previously queued subscriber
+callbacks, runs exporter-specific shutdown work, and removes plugin-owned
+registrations. That work flushes file exporters, drains and closes ATOF stream
+sinks, writes any eligible partial ATIF trajectories, and shuts down owned OTLP
 subscribers.
+
+This is a graceful teardown barrier, not a crash-durability guarantee. If the
+process terminates before clearing begins or finishes, the output can omit
+telemetry for application work that completed successfully. Telemetry delivery
+failures remain fail-open and do not retroactively change the application
+result.
 
 Use manual subscriber/exporter APIs instead of the plugin when you need custom
 subscriber names, explicit per-run exporter objects, or direct control over the

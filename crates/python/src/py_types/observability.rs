@@ -391,13 +391,13 @@ impl PyAtofExporter {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Flush the output file.
+    /// Wait for queued subscriber delivery, then flush the file sink or drain the stream sink.
     pub(crate) fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.force_flush())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Shut down the exporter by flushing output.
+    /// Wait for queued subscriber delivery, then flush and shut down the exporter.
     pub(crate) fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.shutdown())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))

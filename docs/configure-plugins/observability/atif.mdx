@@ -217,7 +217,10 @@ single-file ATIF v1.7 artifact.
 
 The plugin writes each trajectory when its top-level Agent scope or supported
 coding-agent turn scope closes. If the plugin is cleared while that root scope
-is still open, teardown flushes the partial trajectory.
+is still open, teardown first drains queued subscriber callbacks and then
+writes the partial trajectory. Terminating the process before root-scope
+closure or plugin teardown completes can leave the trajectory absent or
+incomplete.
 
 To correlate ATIF with OpenTelemetry or OpenInference traces from the same run,
 join on NeMo Relay UUIDs. The plugin-managed ATIF `session_id` is the
@@ -375,7 +378,11 @@ Ok(())
 ## Manual API
 
 Use the manual `AtifExporter` API when you need explicit collection boundaries
-or one exporter object per run.
+or one exporter object per run. `export()` and `export_json()` wait for queued
+subscriber callbacks before taking a snapshot of the collected event history,
+so a separate subscriber flush immediately before export is unnecessary. The
+returned trajectory includes events that the exporter observed before the
+barrier completed. It does not include events emitted concurrently afterward.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -416,7 +423,7 @@ try {
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::observability::atif::{AtifAgentInfo, AtifExporter};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -434,7 +441,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run instrumented application work here.
 
-    flush_subscribers()?;
     let trajectory = exporter.export()?;
     let trajectory_json = serde_json::to_string_pretty(&trajectory)?;
     println!("{trajectory_json}");
@@ -456,6 +462,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - Tool definitions or `extra` metadata are not JSON-compatible.
 - The application never opens a top-level Agent scope or a supported
   coding-agent turn scope, so no trajectory file is created.
+- The application expects manual trajectory output without calling `export()`
+  or `export_json()`.
+- The process terminates before manual `export()`, supported root-scope closure,
+  or plugin teardown establishes the export boundary.
 - `storage[i].type` is unknown or `storage[i].bucket` is empty for some entry.
 - `storage` is non-empty in a build that was compiled without the
   `atif-storage` feature.

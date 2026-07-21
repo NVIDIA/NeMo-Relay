@@ -912,10 +912,10 @@ class AtofExporter:
         """Deregister ``name`` and return whether it existed."""
         ...
     def force_flush(self) -> None:
-        """Flush the output file."""
+        """Wait for queued subscriber delivery, then flush the file sink or drain the stream sink."""
         ...
     def shutdown(self) -> None:
-        """Flush the output file before shutdown."""
+        """Wait for queued subscriber delivery, then flush and shut down the exporter."""
         ...
 
 class ScopeStack:

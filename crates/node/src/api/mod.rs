@@ -3676,7 +3676,7 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Flush the output file.
+    /// Wait for queued subscriber delivery, then flush the file sink or drain the stream sink.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner
@@ -3684,7 +3684,7 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Shut down the exporter by flushing output.
+    /// Wait for queued subscriber delivery, then flush and shut down the exporter.
     #[napi]
     pub fn shutdown(&self) -> napi::Result<()> {
         self.inner

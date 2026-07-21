@@ -24,6 +24,11 @@ waiting for subscriber callbacks or exporter work.
 Events describe what happened. Subscribers are the components that watch those
 events.
 
+In this documentation, an event is **emitted** when the runtime submits it for
+subscriber dispatch. An event is **delivered** to a subscriber when its callback
+runs. An event is **exported** when an exporter completes the downstream work
+defined by its API. On native targets, these are separate milestones.
+
 That separation matters:
 
 - The runtime can emit one canonical event stream
@@ -127,14 +132,37 @@ order and subscriber snapshot order.
 
 ## Waiting for Delivery
 
-Use the flush API when application shutdown, tests, or examples must observe
-side effects from subscriber callbacks that have already been queued:
+An event-producing call returning is not a delivery barrier. Use the following
+milestones to choose the barrier that matches the output you need to observe:
+
+| Milestone | What It Establishes | What It Does Not Establish |
+|---|---|---|
+| Event-producing call returns | The runtime call completed. On native targets, the runtime normally queues subscriber work for background dispatch. | Subscriber callbacks ran, exporter work completed, or output is visible or durable. |
+| Subscriber flush returns | All native subscriber callbacks queued before the flush call have completed. | Exporter-owned workers drained or a remote backend accepted the data. |
+| Exporter barrier returns | The runtime drained the shared subscriber queue, and the exporter completed its documented `force_flush()`, `export()`, or equivalent operation. | Exactly-once delivery, machine-crash durability, or success beyond the exporter's documented error and timeout behavior. |
+| Plugin clear or exporter shutdown returns | NeMo Relay completed graceful terminal draining and cleanup, or reported an error. | Retention if the process terminates before teardown completes. |
+| Process terminates before a barrier | You can observe only callback side effects and exporter work that completed before termination. | Retention of queued subscriber callbacks or pending exporter work. |
+
+Use the subscriber flush API when application shutdown, tests, or examples must
+observe side effects from callbacks that were already queued before the barrier:
 
 - Rust: `nemo_relay::api::subscriber::flush_subscribers()?`
 - Python: `nemo_relay.subscribers.flush()`
 - Node.js: `flushSubscribers()`, then await an event-loop tick for JavaScript
   callback side effects
 - FFI: `nemo_relay_flush_subscribers()`
+
+Events emitted concurrently after the flush barrier are not covered by that
+call. Exporters with their own workers or batch processors require the
+exporter-specific flush, export, or shutdown operation described in
+[Observability](/configure-plugins/observability/about).
+
+<Warning>
+If the process terminates before subscriber delivery and exporter teardown
+complete, queued telemetry can be lost. Returning from the event-producing API
+does not make that telemetry crash-safe.
+
+</Warning>
 
 ### Forwarding and Export
 
@@ -190,8 +218,10 @@ plugin component.
 Use these practices when applying the concept in application or integration code.
 
 - Use a plain subscriber when you want in-process custom behavior.
-- Flush subscribers before asserting on printed output, captured lists, or files
-  written by subscriber callbacks.
+- Flush subscribers before inspecting printed output, captured lists, or other
+  custom callback side effects.
+- Use the exporter's documented barrier before inspecting exporter output.
+- Clear plugin-managed exporters during graceful shutdown.
 - Use `event.to_dict()` or `event.to_json()` when a host runtime or exporter
   needs the canonical event JSON shape in-process.
 - Use a scope-local subscriber when the observation should disappear with the

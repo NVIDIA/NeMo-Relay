@@ -66,7 +66,7 @@ The following table describes the top-level ATOF settings:
 | Field | Default | Notes |
 |---|---|---|
 | `enabled` | `false` | Must be `true` to export events. |
-| `sinks` | `[]` | File and stream destinations. An enabled ATOF section requires at least one sink, and every sink receives each event. |
+| `sinks` | `[]` | File and stream destinations. An enabled ATOF section requires at least one sink. Each event delivered to the ATOF subscriber is sent to every configured sink. |
 
 ## File Sinks
 
@@ -79,6 +79,20 @@ table describes each file sink:
 | `output_directory` | Current working directory | Directory containing the JSONL file. |
 | `filename` | Timestamped `nemo-relay-events-*.jsonl` | Output filename. |
 | `mode` | `append` | `append` or `overwrite`. |
+
+<Note>
+Native event-producing APIs return before the ATOF subscriber necessarily
+runs. After it receives an event, a file sink writes one complete JSONL record
+and flushes the process writer. A subscriber flush waits for the file callback
+to complete its write attempt for every event queued before the barrier. A
+manual exporter reports any stored file errors during `force_flush()` or
+`shutdown()`. Plugin teardown also reports stored file errors.
+
+Flushing the process writer does not call `fsync` or guarantee durability after
+a machine crash. If the process terminates before the subscriber receives an
+event, the corresponding record can still be lost.
+
+</Note>
 
 ## Stream Sinks
 
@@ -120,9 +134,16 @@ The following transports are supported:
 - `ndjson` opens one long-lived HTTP upload and writes each event as one
   newline-delimited JSON record.
 
-`force_flush()` flushes file output and drains queued stream events while
-keeping stream connections open. `shutdown()` is terminal: it flushes pending
-work, closes the connections, and ignores events that arrive later.
+For a file sink, the shared subscriber flush completes the synchronous file
+callback. For a stream sink, it only confirms that the ATOF callback queued the
+stream work. A manual exporter's `force_flush()` first waits for queued
+subscriber callbacks, then flushes file output or drains queued stream events
+while keeping the exporter open. `shutdown()` performs the terminal form of
+that operation, closes stream connections, and ignores events delivered after
+the exporter closes.
+
+During graceful shutdown, `plugin.clear()` or `clear_plugin_configuration()`
+drains and closes plugin-managed stream sinks.
 
 ## Migrate From Version 1
 
@@ -138,15 +159,16 @@ Make the following changes when you migrate a plugin configuration:
 - Keep static request headers in `headers`, or use `header_env` to read complete
   header values from environment variables at activation time.
 
-The plugin sends every event to every configured sink. The manual
-`AtofExporter` API is different: each exporter owns one file or stream sink.
+The plugin fans out each event delivered to its ATOF subscriber to every
+configured sink. The manual `AtofExporter` API is different: each exporter owns
+one file or stream sink.
 
 ## Expected Output
 
-Each file sink writes an emitted scope, tool, LLM, middleware, or mark event as
-one ATOF JSON object per line. Stream sinks encode the event as described in
-[Stream Sinks](#stream-sinks). For event field semantics, refer to
-[Events](/about-nemo-relay/concepts/events).
+Each file sink writes a scope, tool, LLM, middleware, or mark event delivered to
+the exporter as one ATOF JSON object per line. Stream sinks encode the delivered
+event as described in [Stream Sinks](#stream-sinks). For event field semantics,
+refer to [Events](/about-nemo-relay/concepts/events).
 
 Coding-agent sessions emit a `session.start` mark with the logical
 `metadata.session_id`, a Relay-owned UUIDv7 `metadata.session_instance_id`, and
@@ -167,6 +189,8 @@ annotation. The request used for provider execution remains unchanged. Refer to
 
 Register the plugin before instrumented work starts. Clear it during shutdown
 so every sink flushes pending events and stream connections close cleanly.
+Terminating the process before subscriber delivery or plugin teardown completes
+can leave the final records missing.
 
 ## Plugin Configuration
 
@@ -426,3 +450,5 @@ Common configuration and runtime issues include:
   configured stream sink.
 - A file sink is configured in a target that cannot access the native
   filesystem.
+- The process terminates before a subscriber or exporter barrier, so the file
+  or stream destination is missing queued tail records.
