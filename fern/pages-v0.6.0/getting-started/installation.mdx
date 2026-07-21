@@ -171,7 +171,7 @@ cargo binstall nemo-relay-cli
 ```
 
 For source installation and unsupported-platform guidance, refer to the
-[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/0.6.0-rc.2/crates/cli/README.md#installation-options).
+[CLI README](https://github.com/NVIDIA/NeMo-Relay/blob/0.6.0-rc.3/crates/cli/README.md#installation-options).
 
 ## Python
 
@@ -231,7 +231,15 @@ configuration and verification steps.
 
 ### Hermes Agent
 
-After installing the NeMo Relay CLI, install and diagnose the Hermes user
+Install Hermes Agent 0.18.2 or newer by following the
+[official Hermes Agent installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
+Open a new shell after installation and verify that the Hermes CLI is available:
+
+```bash
+hermes --version
+```
+
+After the NeMo Relay CLI is installed, install and diagnose the Hermes user
 integration:
 
 ```bash

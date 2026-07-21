@@ -73,11 +73,22 @@ The top-level PII redaction object contains:
 | `tool_output` | Enables sanitization of emitted tool-response observability payloads. Defaults to `true`. |
 | `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
 | `codec` | Managed LLM provider codec. Required when `input` or `output` is enabled. |
+| `profiles` | Ordered redaction profiles. Each profile selects `builtin` or `local_model`; enabled profiles cover every supported sanitization surface. |
 | `builtin` | Built-in backend settings used when `mode = "builtin"`. |
 | `local` | Local-backend settings used when `mode = "local_model"`. |
 | `policy` | Component-local handling for unknown fields and unsupported values. |
 
 At least one managed redaction surface must be enabled.
+
+Use either the legacy single-policy fields (`mode`, surface flags, `priority`,
+`builtin`, and `local`) or `profiles`, but not both. The component-wide
+`codec`, `version`, and `policy` fields remain valid with `profiles`.
+
+In profile-array mode, profiles execute by ascending priority and use array
+order to break ties. Relay assigns internal names such as `profile_0`, so
+profiles do not require IDs. Disabled profiles are validated but do not
+register callbacks. The complete array is replaced as one value during config
+layering.
 
 ## Backend Support
 
@@ -113,7 +124,7 @@ To use `mode = "builtin"`:
 - `builtin.action` must be `remove`, `redact`, `regex_replace`, `hash`, or `mask`.
 - `builtin.pattern` or `builtin.detector` is required when `builtin.action = "regex_replace"` or `builtin.action = "redact"`.
 
-### `plugins.toml` Example
+### Composed `plugins.toml` Example
 
 You can write this config directly in `plugins.toml`, or create and edit it
 through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
@@ -129,24 +140,23 @@ enabled = true
 
 [components.config]
 version = 1
-mode = "builtin"
 codec = "openai_chat"
-input = true
-output = true
-mark = true
-tool_input = true
-tool_output = true
 
-[components.config.builtin]
-action = "regex_replace"
-pattern = "sk-[A-Za-z0-9_-]+"
-replacement = "[REDACTED]"
-target_paths = [
-  "/messages/0/content",
-  "/message",
-  "/api_key",
-  "/result/secret",
-]
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "email"
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 90
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "api_key"
 
 [components.config.policy]
 unknown_component = "warn"
@@ -154,18 +164,13 @@ unknown_field = "warn"
 unsupported_value = "error"
 ```
 
-This example configures the built-in backend for:
+This example applies email redaction before API-key redaction to marks, LLM
+and tool observability payloads, and scope metadata. `[REDACTED]` is already
+the default replacement for `redact`, so no `replacement` field is needed.
 
-- LLM request redaction from the normalized request path
-  `/messages/0/content`
-- LLM response redaction from the normalized response path `/message`
-- tool argument redaction at `/api_key`
-- tool result redaction at `/result/secret`
-- mark-event and non-tool, non-LLM scope-event redaction at matching target paths within
-  `data`, `category_profile`, and `metadata`
-
-`mark` is enabled when omitted. Set `mark = false` only when marks are known to
-contain no sensitive observability fields or another sanitizer owns that
+Legacy single-policy configurations may still use `mark` and the other
+surface flags. Profile-array configurations intentionally do not expose those
+flags: every enabled profile owns the complete pre-subscriber sanitization
 boundary.
 
 ### CLI Editor Support
@@ -177,7 +182,8 @@ Use the editor when you want to:
 
 - Toggle the component on or off
 - Choose `builtin` or `local_model`
-- Enable or opt out of mark sanitization
+- Add and order multiple redaction profiles
+- Enable or disable individual profiles
 - Set the LLM `codec`
 - Edit `builtin` action settings such as `action`, `target_paths`,
   `pattern`, `detector`, `replacement`, and masking fields

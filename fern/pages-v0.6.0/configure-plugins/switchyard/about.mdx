@@ -1,9 +1,11 @@
 ---
 title: "Switchyard (Experimental)"
 sidebar-title: "Switchyard (Experimental)"
-description: "Route Relay LLM requests through the experimental Switchyard Decision API integration."
+description: "Set up and validate the experimental Switchyard Decision API integration for NeMo Relay 0.6.0."
 position: 5
 ---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
@@ -12,48 +14,169 @@ SPDX-License-Identifier: Apache-2.0 */}
 > change, and the current deployment requires a separately running Switchyard
 > Decision API service.
 
-The `nemo-relay-switchyard` plugin uses the
-[Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) Decision API to select
-backends for supported LLM requests. Relay validates each decision, translates
-requests and responses in process through Switchyard's
-`switchyard-translation` library, and dispatches directly to the selected
-Relay-owned target. Relay also owns provider credentials, retries, trusted
-fallbacks, and observability. The separately running Switchyard service owns
-routing decisions.
+> **NeMo Relay 0.6.0 architecture:** This release uses the external Switchyard
+> Decision API from the
+> [`topic/nemo-relay-integration`](https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration)
+> branch.
+
+Switchyard is an LLM routing decision engine. The `nemo-relay-switchyard`
+plugin asks Switchyard which configured target should handle an LLM request.
+Relay validates the decision and performs the authenticated provider request.
+For example, a routing profile can send a simple prompt to a lower-cost model
+and a complex prompt to a more capable model.
+
+## Architecture
+
+The following diagram shows the NeMo Relay 0.6.0 service boundary:
+
+<MermaidStyles />
+
+```mermaid
+flowchart LR
+    Agent["Agent"] -->|LLM request| Relay["NeMo Relay"]
+    Relay -->|routing request| Decision["Switchyard Decision API"]
+    Decision -->|backend decision| Relay
+    Relay -->|authenticated provider request| Backend["Selected LLM backend"]
+    Relay -->|ATOF events| History["Switchyard ATOF accumulator"]
+    History -. routing history .-> Decision
+
+    class Agent grey-lightest;
+    class Relay green-lightest;
+    class Decision yellow-lightest;
+    class History yellow-lightest;
+    class Backend teal-lightest;
+```
+
+The components divide responsibility as follows:
+
+| Component | Responsibilities |
+| --- | --- |
+| Switchyard | Selects a backend and accumulates ATOF routing history for history-based profiles. |
+| NeMo Relay | Owns provider credentials, target bindings, decision validation, protocol translation, dispatch, retries, trusted fallback, and observability. |
+
+Relay does not start or supervise the Switchyard service. Start Switchyard
+before Relay activates the plugin. Relay derives the service's root `/health`
+URL from `decision_api_url` and fails activation unless the endpoint returns
+`{"status":"ok"}`.
 
 ## Prerequisites
 
-The current integration has two runtime pieces:
+Install the following prerequisites before you start:
 
-1. A Relay build with the optional `switchyard` feature.
-2. A Switchyard service built from the pinned
-   [`topic/nemo-relay-integration` revision](https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration).
+| Requirement | Version or Value |
+| --- | --- |
+| NeMo Relay | Tag `0.6.0` |
+| Rust | `1.96.1` |
+| Switchyard branch | `topic/nemo-relay-integration` |
+| Switchyard commit | `8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8` |
+| Local commands | `git`, `python3`, and `curl` |
 
-The current Relay examples pin Switchyard commit
-[`8f9db9a6`](https://github.com/NVIDIA-NeMo/Switchyard/commit/8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8).
-Treat that revision as part of this experimental compatibility boundary; update
-it deliberately when testing a different Switchyard topic commit.
+Keep the repositories in the following sibling layout. The validation script
+uses this layout by default:
 
-The plugin does not start or supervise the Switchyard service. Start a compatible
-service before Relay activates the plugin. Relay derives the service's root
-`/health` URL from `decision_api_url` and fails activation unless the endpoint
-returns `{"status":"ok"}`. After activation, unavailable Decision API calls fail
-open to the configured same-protocol fallback.
+```text
+<workspace>/
+├── NeMo-Relay/
+└── Switchyard-topic-nemo-relay-integration/
+```
 
-Profiles that depend on ATOF history, including StageRouter, must use
-`context_mode = "atof_required"` and name an enabled Relay ATOF HTTP stream sink
-with `atof_endpoint_name`. Relay fails startup validation when that sink is
-missing or invalid. Relay pushes ATOF events to the sink; a local ATOF file sink
-alone does not populate Switchyard's accumulator.
+## Build and Run the Compatibility Test
 
-Build the opt-in CLI feature with:
+Use the following procedure to clone and pin both repositories:
+
+```bash
+mkdir relay-switchyard-0.6
+cd relay-switchyard-0.6
+
+git clone --branch 0.6.0 \
+  https://github.com/NVIDIA/NeMo-Relay.git \
+  NeMo-Relay
+
+git clone --branch topic/nemo-relay-integration \
+  https://github.com/NVIDIA-NeMo/Switchyard.git \
+  Switchyard-topic-nemo-relay-integration
+
+git -C Switchyard-topic-nemo-relay-integration checkout --detach \
+  8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8
+
+cd NeMo-Relay
+```
+
+The Switchyard plugin is excluded from default Relay CLI builds. Build the CLI
+with the optional feature explicitly:
 
 ```bash
 cargo build -p nemo-relay-cli --features switchyard
 ```
 
-The default CLI build does not include the plugin or the Switchyard translation
-library.
+Run the real-service compatibility test from the NeMo Relay repository root:
+
+```bash
+examples/switchyard/run-real-e2e.sh
+```
+
+The script prints the verified Switchyard revision and ends with the following
+line when routing succeeds:
+
+```text
+real Switchyard E2E passed: ['provider/weak', 'provider/strong', 'provider/strong']
+```
+
+The test starts these local processes:
+
+| Process | Port | Readiness Check or Purpose |
+| --- | --- | --- |
+| Switchyard Decision API | `4000` | Serves `/health`, routing decisions, and ATOF ingestion. |
+| NeMo Relay | `4041` | Serves `/healthz` and the OpenAI-compatible gateway. |
+| Deterministic provider | `4101` | Records the model selected for each provider request. |
+
+The first request has no accumulated ATOF history and routes to
+`provider/weak`. The script then sends session and tool events to Relay. Relay
+exports those events to Switchyard's ATOF accumulator, so the next buffered
+request and the final streaming request route to `provider/strong`. The test
+also validates the streamed response before reporting success.
+
+## Configuration Walkthrough
+
+The compatibility test uses
+[`real-e2e-plugins.toml`](https://github.com/NVIDIA/NeMo-Relay/blob/release/0.6/examples/switchyard/real-e2e-plugins.toml)
+and
+[`real-e2e-profiles.yaml`](https://github.com/NVIDIA/NeMo-Relay/blob/release/0.6/examples/switchyard/real-e2e-profiles.yaml).
+The following settings establish the routing boundary:
+
+| Setting | Purpose |
+| --- | --- |
+| `decision_api_url` | Points Relay to the separately running Switchyard Decision API. |
+| `decision_profile_id` | Selects the Switchyard routing profile. The profile maps its semantic targets to backend IDs. |
+| `targets.<backend_id>` | Binds each returned backend ID to a Relay-owned model, protocol, endpoint, base URL, and credentials. |
+| `mode = "enforce"` | Applies a valid Switchyard decision and dispatches to the selected target. |
+| `mode = "observe_only"` | Records the hypothetical decision but dispatches once to the trusted same-protocol default. |
+| `default_targets` | Defines trusted same-protocol fallbacks for unavailable or invalid decisions and provider failures. |
+| `context_mode = "atof_required"` | Requires stable identity and accumulated ATOF history for the selected profile. |
+| `atof_endpoint_name` | Selects exactly one named Relay ATOF HTTP stream sink that sends events to Switchyard. |
+
+For history-based routing, a local ATOF JSONL file is not sufficient.
+Switchyard must receive events through the named HTTP sink at
+`/v1/atof/events` so its accumulator can provide the history used by the
+routing profile. Relay rejects a missing, duplicate, disabled, or invalid
+named sink during startup validation.
+
+For the complete option reference, refer to
+[Switchyard Configuration](./configuration.mdx).
+
+## Troubleshooting
+
+Use the following table to diagnose common compatibility-test failures:
+
+| Symptom | Cause and Resolution |
+| --- | --- |
+| `Switchyard worktree not found: ...` | Place the Switchyard checkout next to `NeMo-Relay` as `Switchyard-topic-nemo-relay-integration`, or set `SWITCHYARD_ROOT` to its absolute path. |
+| `Switchyard checkout mismatch: expected ..., found ...` | Check out commit `8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8`. Override `SWITCHYARD_EXPECTED_COMMIT` only when deliberately testing a different contract. |
+| A build uses Rust `1.96.0` or reports an unsupported toolchain | Run `rustc --version`, install Rust `1.96.1`, and allow the repository's `rust-toolchain.toml` to select it. |
+| `timed out waiting for http://127.0.0.1:4000/health` | Review `switchyard.log`. Confirm the pinned checkout builds and port `4000` is free. |
+| `timed out waiting for http://127.0.0.1:4041/healthz` or `process ... exited before http://127.0.0.1:4041/healthz became ready` | Review `relay.log`. Confirm the CLI was built with `--features switchyard`, the Switchyard health check passed, and port `4041` is free. |
+| The provider cannot start or requests fail | Review `upstream.log` and confirm port `4101` is free. |
+| `E2E logs preserved in ...` | The script preserves its temporary directory after a runtime failure and prints the exact path. Inspect `switchyard.log`, `relay.log`, `upstream.log`, and the captured request outputs there. Successful runs remove the directory. |
 
 ## Capabilities
 
@@ -72,9 +195,10 @@ The integration provides the following capabilities:
 
 For more information, refer to the following pages:
 
-- [Switchyard Configuration](/configure-plugins/switchyard/configuration)
-  is the complete option and deployment reference. Review its
-  [experimental limitations](/configure-plugins/switchyard/configuration#experimental-limitations)
+- [Switchyard Configuration](./configuration.mdx)
+  provides the complete option and deployment reference. Review its
+  [experimental limitations](./configuration.mdx#experimental-limitations)
   before adopting the integration.
-- [Switchyard integration examples](https://github.com/NVIDIA/NeMo-Relay/tree/0.6.0-rc.2/examples/switchyard)
-  documents the pinned service worktree and manual compatibility smoke tests.
+- [Switchyard integration examples](https://github.com/NVIDIA/NeMo-Relay/tree/release/0.6/examples/switchyard)
+  contains the versioned configuration and validation scripts used by this
+  guide.

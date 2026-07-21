@@ -2,14 +2,14 @@
 title: "Enum Message"
 sidebar-title: "Message"
 description: "A single message in a conversation, tagged by role."
-position: 11
+position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Message &#123;\n    System &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    User &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Assistant &#123;\n        content: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-messagecontent\">MessageContent</a>&gt;,\n        tool_calls: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-toolcall\">ToolCall</a>&gt;&gt;,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Tool &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        tool_call_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub enum Message &#123;\n    System &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    User &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Developer &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Assistant &#123;\n        content: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"enum-messagecontent\">MessageContent</a>&gt;,\n        tool_calls: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-toolcall\">ToolCall</a>&gt;&gt;,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    &#125;,\n    Tool &#123;\n        content: <a href=\"enum-messagecontent\">MessageContent</a>,\n        tool_call_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    Function &#123;\n        content: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    &#125;,\n    ToolCallItem &#123;\n        id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n        call_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        arguments: <a href=\"../../type-json\">Json</a>,\n        extra: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"../../type-json\">Json</a>&gt;,\n    &#125;,\n    ToolResultItem &#123;\n        id: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n        call_id: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        output: <a href=\"../../type-json\">Json</a>,\n        extra: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"../../type-json\">Json</a>&gt;,\n    &#125;,\n    ProviderNative &#123;\n        provider: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        kind: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n        value: <a href=\"../../type-json\">Json</a>,\n    &#125;,\n&#125;"}} /></pre>
 
 A single message in a conversation, tagged by role.
 
@@ -36,6 +36,22 @@ Optional sender name.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "User"}} /></pre>
 
 A user message.
+
+#### Fields
+
+### `content: MessageContent`
+
+The message content.
+
+### `name: Option<String>`
+
+Optional sender name.
+
+### `Developer`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Developer"}} /></pre>
+
+A developer instruction message used by OpenAI APIs.
 
 #### Fields
 
@@ -82,6 +98,94 @@ The tool execution result.
 ### `tool_call_id: String`
 
 The ID of the tool call this result corresponds to.
+
+### `Function`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Function"}} /></pre>
+
+A legacy OpenAI function-result message.
+
+#### Fields
+
+### `content: Option<String>`
+
+The function result. OpenAI permits an explicit null value.
+
+### `name: String`
+
+Function name.
+
+### `ToolCallItem`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolCallItem"}} /></pre>
+
+A portable top-level tool-call item, primarily used by OpenAI Responses.
+
+#### Fields
+
+### `id: Option<String>`
+
+Optional provider item ID.
+
+### `call_id: String`
+
+Provider call ID used to correlate the result.
+
+### `name: String`
+
+Tool/function name.
+
+### `arguments: Json`
+
+Parsed tool arguments.
+
+### `extra: Map<String, Json>`
+
+Provider fields without portable semantics.
+
+### `ToolResultItem`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ToolResultItem"}} /></pre>
+
+A portable top-level tool-result item, primarily used by OpenAI Responses.
+
+#### Fields
+
+### `id: Option<String>`
+
+Optional provider item ID.
+
+### `call_id: String`
+
+Provider call ID used to correlate the result.
+
+### `output: Json`
+
+Provider result payload.
+
+### `extra: Map<String, Json>`
+
+Provider fields without portable semantics.
+
+### `ProviderNative`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ProviderNative"}} /></pre>
+
+Lossless provider-native request item.
+
+#### Fields
+
+### `provider: String`
+
+Provider surface that owns the value.
+
+### `kind: String`
+
+Native discriminator or a descriptive fallback.
+
+### `value: Json`
+
+Exact provider JSON value.
 
 ## Trait Implementations
 

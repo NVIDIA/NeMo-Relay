@@ -64,6 +64,12 @@ Set `compat.worker_protocol` to `grpc-v1` and include `plugin_worker` in the
 capability list. Refer to [Choose a Worker Runtime](#choose-a-worker-runtime)
 for the runtime-specific `load` and `source` requirements.
 
+If the worker registers an LLM request intercept, set
+`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. The
+Relay 0.6 host sends `nemo.relay.AnnotatedLlmRequest@2` and expects
+`nemo.relay.LlmRequestInterceptOutcome@2`; it rejects request-intercept
+registrations whose manifest still admits Relay 0.5.
+
 The worker receives its activation ID, plugin ID, worker and host endpoints,
 and a local activation token through environment variables. Do not start the
 worker directly during normal operation. The host supplies these values.

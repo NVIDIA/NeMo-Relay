@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct FunctionDefinition &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub description: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub parameters: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct FunctionDefinition &#123;\n    pub name: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>,\n    pub description: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub parameters: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n    pub strict: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;,\n    pub extra: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/map/struct.Map.html\">Map</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>, <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n&#125;"}} /></pre>
 
 A function definition within a tool definition.
 
@@ -26,6 +26,14 @@ A description of what the function does.
 ### `parameters: Option<Value>`
 
 The JSON Schema for the function parameters.
+
+### `strict: Option<bool>`
+
+Whether the provider should enforce the parameter schema strictly.
+
+### `extra: Map<String, Value>`
+
+Provider fields without portable semantics.
 
 ## Trait Implementations
 
