@@ -705,6 +705,35 @@ fn unknown_fields_and_bad_values_follow_policy() {
 }
 
 #[test]
+fn atif_filename_template_syntax_is_rejected_before_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let valid_report = validate_plugin_config(&plugin_config(json!({
+        "atif": {
+            "filename_template": "{metadata.workflow_id:-unassigned}/trajectory-{session_id}.json"
+        }
+    })));
+    assert!(!valid_report.has_errors());
+
+    let malformed = "trajectory-{session_id}.json/{metadata.tenant";
+    let invalid_report = validate_plugin_config(&plugin_config(json!({
+        "atif": {"filename_template": malformed}
+    })));
+    assert!(invalid_report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("filename_template")
+            && diag.message.contains("unclosed metadata placeholder")
+    }));
+
+    let error = futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "atif": {"enabled": true, "filename_template": malformed}
+    }))))
+    .unwrap_err();
+    assert!(error.to_string().contains("unclosed metadata placeholder"));
+}
+
+#[test]
 fn invalid_shapes_and_strict_policy_are_reported() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -1826,6 +1855,12 @@ fn atif_dispatcher_default_output_path_uses_current_directory() {
 
 #[test]
 fn atif_metadata_template_values_must_be_safe_path_fragments() {
+    assert!(
+        validate_atif_filename_template(
+            "{metadata.workflow_id:-unassigned}/trajectory-{session_id}.json"
+        )
+        .is_ok()
+    );
     assert_eq!(
         render_atif_filename(
             "{metadata.workflow_id:-unassigned}/trajectory-{session_id}.json",
@@ -1876,6 +1911,10 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
         "{metadata.tenant/trajectory-{session_id}.json",
         "{metadata.{tenant}}/trajectory-{session_id}.json",
     ] {
+        assert!(
+            validate_atif_filename_template(template).is_err(),
+            "template should fail configuration validation: {template:?}"
+        );
         let dispatcher = AtifDispatcher::new(AtifSectionConfig {
             filename_template: template.to_string(),
             ..AtifSectionConfig::default()

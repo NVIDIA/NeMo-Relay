@@ -848,11 +848,8 @@ fn register_atif_dispatcher(
     section: AtifSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
-    if !section.filename_template.contains("{session_id}") {
-        return Err(PluginError::InvalidConfig(
-            "ATIF filename_template must contain '{session_id}'".to_string(),
-        ));
-    }
+    validate_atif_filename_template(&section.filename_template)
+        .map_err(PluginError::InvalidConfig)?;
 
     let mut storage_vec = Vec::with_capacity(section.storage.len());
     for (index, entry) in section.storage.iter().enumerate() {
@@ -1419,6 +1416,40 @@ fn is_valid_atif_metadata_selector(selector: &str) -> bool {
         })
 }
 
+fn parse_atif_metadata_expression(expression: &str) -> Result<(&str, Option<&str>), String> {
+    let (selector, fallback) = expression
+        .split_once(":-")
+        .map_or((expression, None), |(key, value)| (key, Some(value)));
+    if !is_valid_atif_metadata_selector(selector) {
+        return Err(format!(
+            "ATIF filename_template metadata placeholder '{{metadata.{selector}}}' must contain a dot-separated path of ASCII letters, digits, '-' or '_'"
+        ));
+    }
+    Ok((selector, fallback))
+}
+
+fn validate_atif_filename_template(template: &str) -> Result<(), String> {
+    const PREFIX: &str = "{metadata.";
+
+    if !template.contains("{session_id}") {
+        return Err("ATIF filename_template must contain '{session_id}'".to_string());
+    }
+
+    let mut cursor = 0;
+    while let Some(relative_start) = template[cursor..].find(PREFIX) {
+        let selector_start = cursor + relative_start + PREFIX.len();
+        let end = template[selector_start..]
+            .find('}')
+            .map(|relative_end| selector_start + relative_end)
+            .ok_or_else(|| {
+                "ATIF filename_template contains an unclosed metadata placeholder".to_string()
+            })?;
+        parse_atif_metadata_expression(&template[selector_start..end])?;
+        cursor = end + 1;
+    }
+    Ok(())
+}
+
 fn render_atif_filename(
     template: &str,
     session_id: &str,
@@ -1438,16 +1469,7 @@ fn render_atif_filename(
                 "ATIF filename_template contains an unclosed metadata placeholder".to_string()
             })?;
         let expression = rendered[selector_start..end].to_string();
-        let (selector, fallback) = expression
-            .split_once(":-")
-            .map_or((expression.as_str(), None), |(key, value)| {
-                (key, Some(value))
-            });
-        if !is_valid_atif_metadata_selector(selector) {
-            return Err(format!(
-                "ATIF filename_template metadata placeholder '{{metadata.{selector}}}' must contain a dot-separated path of ASCII letters, digits, '-' or '_'"
-            ));
-        }
+        let (selector, fallback) = parse_atif_metadata_expression(&expression)?;
         let value = selector
             .split('.')
             .fold(metadata, |value, segment| value?.get(segment))
@@ -2462,14 +2484,14 @@ fn validate_atif_values(
     policy: &ConfigPolicy,
     section: &AtifSectionConfig,
 ) {
-    if !section.filename_template.contains("{session_id}") {
+    if let Err(message) = validate_atif_filename_template(&section.filename_template) {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some("atif".to_string()),
             Some("filename_template".to_string()),
-            "ATIF filename_template must contain '{session_id}'".to_string(),
+            message,
         );
     }
     for (index, storage) in section.storage.iter().enumerate() {
