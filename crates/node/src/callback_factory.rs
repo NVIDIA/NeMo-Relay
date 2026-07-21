@@ -35,6 +35,12 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       return result;
     }
 
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      seen.delete(value);
+      throw new TypeError('JavaScript callback returned an unsupported object value that cannot be converted to JSON');
+    }
+
     const result = Object.create(null);
     for (const key of Object.keys(value)) {
       result[key] = jsonValue(value[key], seen);
