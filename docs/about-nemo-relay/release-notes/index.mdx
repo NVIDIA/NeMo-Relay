@@ -59,9 +59,10 @@ Here's what changed across the main product surfaces:
   and Hermes can share that gateway, coordinate a single recovery attempt, and
   let it shut down after it becomes idle.
 - **Events and security:** Mark, scope-start, and scope-end sanitizers now work
-  at global, scope-local, and plugin levels. The PII plugin sanitizes those
-  surfaces, later LLM events can omit stale history, and Relay records
-  skill-load attempts with `skill.load` marks.
+  at global, scope-local, and plugin levels. The PII plugin sanitizes these
+  surfaces and supports ordered, composable profiles plus an opt-in
+  `trajectory_context` preset. Later LLM events can omit stale history, and
+  Relay records skill-load attempts with `skill.load` marks.
 - **Observability and optimization:** ATOF can send every event to multiple
   file and stream sinks. OTLP exporters use typed attributes, trace exporters
   can show marks as tool spans, session identifiers correlate across formats,

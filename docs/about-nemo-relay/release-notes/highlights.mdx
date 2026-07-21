@@ -45,6 +45,16 @@ dynamic plugins.
 - The built-in PII redaction plugin now cleans mark data, category profiles,
   metadata, and generic scope inputs and outputs before subscribers or
   exporters receive them.
+- The PII redaction plugin now supports ordered, composable profiles. A single
+  component can apply multiple privacy policies to marks, LLM and tool
+  inputs/outputs, and scope metadata. Relay runs profiles by priority and uses
+  array order to break ties.
+- The opt-in `trajectory_context` preset removes request and response content
+  from buffered and streaming events for OpenAI Chat Completions, OpenAI
+  Responses, and Anthropic Messages. It preserves conversation topology,
+  tool-call relationships, agent hierarchy, routing, usage, cost, and
+  optimization telemetry. You can preserve custom mark payloads or redact them
+  recursively.
 - Relay now tracks LLM event-history freshness per agent. A new agent and the
   first LLM start after a `compaction` mark retain the complete sanitized
   history. Later starts keep the system instructions, latest user turn, and
