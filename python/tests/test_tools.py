@@ -3,6 +3,8 @@
 
 """Tests for NeMo Relay tool lifecycle, guardrails, and intercepts."""
 
+from collections import UserDict, UserList
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -90,6 +92,61 @@ class TestToolsAsync:
 
         result = await tools.execute("double", {"x": 5}, my_func)
         assert result == {"result": 10}
+
+    async def test_execute_rejects_cyclic_results_and_remains_usable(self):
+        def cyclic_result(_args):
+            result = {}
+            result["self"] = result
+            return result
+
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_result", {}, cyclic_result)
+
+        async def async_cyclic_result(_args):
+            return cyclic_result(_args)
+
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("async_cyclic_result", {}, async_cyclic_result)
+
+        cyclic_mapping = UserDict()
+        cyclic_mapping["self"] = cyclic_mapping
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_mapping", {}, lambda _args: cyclic_mapping)
+
+        cyclic_sequence = UserList()
+        cyclic_sequence.append(cyclic_sequence)
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_sequence", {}, lambda _args: cyclic_sequence)
+
+        @dataclass
+        class CyclicDataclass:
+            child: object | None = None
+
+        cyclic_dataclass = CyclicDataclass()
+        cyclic_dataclass.child = cyclic_dataclass
+        with pytest.raises(RuntimeError, match="circular reference detected"):
+            await tools.execute("cyclic_dataclass", {}, lambda _args: cyclic_dataclass)
+
+        result = await tools.execute(
+            "post_cycle_result",
+            {},
+            lambda _args: {"status": "ok"},
+        )
+        assert result == {"status": "ok"}
+
+    async def test_execute_allows_shared_non_cyclic_results(self):
+        shared = {"value": True}
+
+        result = await tools.execute(
+            "shared_result",
+            {},
+            lambda _args: {"first": shared, "second": shared},
+        )
+
+        assert result == {
+            "first": {"value": True},
+            "second": {"value": True},
+        }
 
     async def test_execute_returns_string(self):
         def func(args):

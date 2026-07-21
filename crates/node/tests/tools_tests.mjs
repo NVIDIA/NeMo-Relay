@@ -276,6 +276,28 @@ describe('Tool execute', () => {
     }
   });
 
+  it('sync and async execute reject circular results without terminating Node', async () => {
+    const circularResult = () => {
+      const result = {};
+      result.self = result;
+      return result;
+    };
+
+    const cases = [
+      ['sync', () => toolCallExecute('exec_tool_circular', {}, circularResult)],
+      ['async', () => toolCallExecuteAsync('exec_async_tool_circular', {}, async () => circularResult())],
+    ];
+
+    for (const [kind, execute] of cases) {
+      await assert.rejects(execute, /circular|json/i);
+
+      const result = await toolCallExecute(`exec_tool_after_circular_${kind}`, {}, () => ({
+        ok: true,
+      }));
+      assert.deepEqual(result, { ok: true });
+    }
+  });
+
   it('sync and async execute read stateful getter results once', async () => {
     const statefulResult = () => {
       let reads = 0;
