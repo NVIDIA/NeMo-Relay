@@ -229,6 +229,44 @@ async fn acg_learner_returns_early_without_llm_requests() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn acg_learner_accumulates_same_scaffold_calls_from_one_run_in_one_profile() {
+    let first = sample_request("gpt-4o", "Stable system", "task alpha");
+    let second = sample_request("gpt-4o", "Stable system", "task beta");
+    let learning_key = derive_acg_learning_key("agent-a", &first);
+    assert_eq!(learning_key, derive_acg_learning_key("agent-a", &second));
+
+    let learner = AcgLearner::new("agent-a", 8, StabilityThresholds::default());
+    let backend = crate::storage::memory::InMemoryBackend::new();
+    let hot_cache = empty_cache();
+    learner
+        .process_run(&sample_run(vec![first, second]), &backend, &hot_cache)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        backend
+            .load_observations(&learning_key)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        2
+    );
+    let guard = hot_cache.read().unwrap();
+    assert_eq!(guard.acg_profiles.len(), 1);
+    assert_eq!(guard.acg_profile_observation_counts[&learning_key], 2);
+    let stored = &guard.acg_profiles[&learning_key];
+    assert_eq!(
+        stored.stable_prefix_fingerprint,
+        crate::acg::stability::profile_prefix_fingerprint(
+            &build_prompt_ir(&sample_request("gpt-4o", "Stable system", "task alpha")).unwrap(),
+            stored.stable_prefix_length,
+            &learning_key,
+        )
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn acg_learner_trims_observation_windows_and_updates_agent_seed() {
     let learner = AcgLearner::new("agent-a", 2, StabilityThresholds::default());
     let new_request = sample_request("gpt-4o", "System B", "Prompt B");

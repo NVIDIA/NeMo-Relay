@@ -501,3 +501,54 @@ async fn redis_integration_persists_runtime_seed_entries_and_manifest_cleanup() 
         "adaptive manifest should not depend directly on the compatibility shim"
     );
 }
+
+#[tokio::test]
+async fn redis_integration_persists_scaffold_profile_across_backend_restart() {
+    let Some((backend, prefix)) = get_test_redis_with_prefix().await else {
+        return;
+    };
+    let agent_id = "agent-redis-scaffold-restart";
+    let learner = AcgLearner::new(agent_id, 8, StabilityThresholds::default());
+    let first = sample_annotated_request("claude-3-5-sonnet");
+    let mut second = first.clone();
+    second.messages[1] = Message::User {
+        content: MessageContent::Text("Plan a different task".to_string()),
+        name: None,
+    };
+    let hot_cache = empty_hot_cache();
+
+    for request in [first, second] {
+        learner
+            .process_run(
+                &sample_run_with_request(agent_id, request),
+                &backend,
+                &hot_cache,
+            )
+            .await
+            .unwrap();
+    }
+    let learning_key = {
+        let guard = hot_cache.read().unwrap();
+        assert_eq!(guard.acg_profiles.len(), 1);
+        guard.acg_profiles.keys().next().unwrap().clone()
+    };
+    drop(backend);
+
+    let restarted = RedisBackend::new("redis://127.0.0.1/", prefix)
+        .await
+        .unwrap();
+    let observations = restarted
+        .load_observations(&learning_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let stability = restarted
+        .load_stability(&learning_key)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(observations.len(), 2);
+    assert_eq!(stability.total_observations, 2);
+    assert!(stability.stable_prefix_fingerprint.is_some());
+}

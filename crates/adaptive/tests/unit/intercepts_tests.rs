@@ -50,6 +50,7 @@ fn make_hot_cache(
         acg_stability: Some(StabilityAnalysisResult {
             scores: vec![],
             stable_prefix_length,
+            stable_prefix_fingerprint: None,
             total_observations: observation_count,
         }),
         acg_observation_count: observation_count,

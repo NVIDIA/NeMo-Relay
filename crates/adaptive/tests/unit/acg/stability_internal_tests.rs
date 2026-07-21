@@ -78,3 +78,58 @@ fn stability_internal_effective_score_handles_zero_present_count() {
 
     assert_eq!(effective_stability_score(&observations, 3), 0.0);
 }
+
+#[test]
+fn stability_internal_fingerprints_the_exact_dominant_prefix() {
+    let first = prompt(vec![
+        block("system-0", 0, "stable policy"),
+        block("user-1", 1, "task alpha"),
+    ]);
+    let second = prompt(vec![
+        block("system-0", 0, "stable policy"),
+        block("user-1", 1, "task beta"),
+    ]);
+    let changed = prompt(vec![
+        block("system-0", 0, "changed policy"),
+        block("user-1", 1, "task gamma"),
+    ]);
+
+    let result = analyze_stability(&[first.clone(), second], &StabilityThresholds::default());
+
+    assert_eq!(result.stable_prefix_length, 1);
+    assert_eq!(
+        result.stable_prefix_fingerprint,
+        prompt_prefix_fingerprint(&first, 1)
+    );
+    assert_ne!(
+        result.stable_prefix_fingerprint,
+        prompt_prefix_fingerprint(&changed, 1)
+    );
+    assert_eq!(prompt_prefix_fingerprint(&first, 0), None);
+}
+
+#[test]
+fn stability_internal_deserializes_persisted_state_without_a_prefix_fingerprint() {
+    let restored: StabilityAnalysisResult = serde_json::from_value(serde_json::json!({
+        "scores": [],
+        "stable_prefix_length": 0,
+        "total_observations": 4
+    }))
+    .unwrap();
+
+    assert_eq!(restored.stable_prefix_fingerprint, None);
+}
+
+#[test]
+fn profile_fingerprint_requires_source_hash_beyond_the_scaffold() {
+    let mut observation = prompt(vec![
+        block("system-0", 0, "stable policy"),
+        block("user-1", 1, "stable task"),
+    ]);
+    observation.blocks[1].role = PromptRole::User;
+
+    assert_eq!(
+        profile_prefix_fingerprint(&observation, 2, "learning-key"),
+        None
+    );
+}

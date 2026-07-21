@@ -47,6 +47,7 @@ fn sample_hot_cache() -> Arc<RwLock<HotCache>> {
                 },
             ],
             stable_prefix_length: 2,
+            stable_prefix_fingerprint: None,
             total_observations: 8,
         }),
         acg_observation_count: 8,
@@ -231,6 +232,7 @@ fn stability_with_prefix(prefix_len: u32, observations: u32) -> StabilityAnalysi
             })
             .collect(),
         stable_prefix_length: prefix_len as usize,
+        stable_prefix_fingerprint: None,
         total_observations: observations,
     }
 }
@@ -261,6 +263,7 @@ fn layered_stability_result(observation_count: u32) -> StabilityAnalysisResult {
             },
         ],
         stable_prefix_length: 3,
+        stable_prefix_fingerprint: None,
         total_observations: observation_count,
     }
 }
@@ -283,6 +286,27 @@ fn sample_prompt_ir(span: &str) -> PromptIR {
         source_request_hash: None,
         created_at: Utc::now(),
     }
+}
+
+fn stability_for_request(
+    agent_id: &str,
+    request: &LlmRequest,
+    mut stability: StabilityAnalysisResult,
+) -> StabilityAnalysisResult {
+    let view = build_semantic_request_view(request).expect("fixture request should decode");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&view.annotated_request)
+        .expect("fixture request should build prompt ir");
+    stability.stable_prefix_length = stability.stable_prefix_length.min(prompt_ir.blocks.len());
+    let learning_key = derive_acg_learning_key(agent_id, &view.annotated_request);
+    stability.stable_prefix_fingerprint = Some(
+        crate::acg::stability::profile_prefix_fingerprint(
+            &prompt_ir,
+            stability.stable_prefix_length,
+            &learning_key,
+        )
+        .expect("fixture stable prefix should exist"),
+    );
+    stability
 }
 
 #[test]
@@ -427,6 +451,11 @@ fn acg_component_translate_request_degrades_when_provider_semantics_do_not_match
 fn acg_component_translate_request_applies_openai_semantics_on_resolved_request_surface() {
     let request = sample_openai_responses_request();
     let hot_cache = sample_hot_cache();
+    hot_cache.write().unwrap().acg_stability = Some(stability_for_request(
+        "agent-1",
+        &request,
+        stability_with_prefix(2, 8),
+    ));
     let plugin = build_provider_plugin("openai").expect("openai plugin should build");
 
     let translated = translate_request(&request, "agent-1", "openai", plugin.as_ref(), &hot_cache)
@@ -502,7 +531,11 @@ fn acg_component_translate_request_applies_multiple_ordered_anthropic_breakpoint
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(layered_stability_result(6)),
+        acg_stability: Some(stability_for_request(
+            "agent-1",
+            &request,
+            layered_stability_result(6),
+        )),
         acg_observation_count: 6,
     }));
 
@@ -548,7 +581,11 @@ fn rewrite_request_with_hot_cache_adaptive_placement_differs_by_state() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(stability_with_prefix(1, 8)),
+        acg_stability: Some(stability_for_request(
+            "agent-1",
+            &request,
+            stability_with_prefix(1, 8),
+        )),
         acg_observation_count: 8,
     }));
     let translated_short =
@@ -561,7 +598,11 @@ fn rewrite_request_with_hot_cache_adaptive_placement_differs_by_state() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(stability_with_prefix(3, 8)),
+        acg_stability: Some(stability_for_request(
+            "agent-1",
+            &request,
+            stability_with_prefix(3, 8),
+        )),
         acg_observation_count: 8,
     }));
     let translated_long =
@@ -602,7 +643,7 @@ fn acg_component_translate_request_uses_learning_key_for_profile_lookup() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::from([(
             learning_key.clone(),
-            layered_stability_result(6),
+            stability_for_request("agent-1", &request, layered_stability_result(6)),
         )]),
         acg_profile_observation_counts: std::collections::HashMap::from([(learning_key, 6)]),
         acg_stability: None,
@@ -633,7 +674,11 @@ async fn acg_component_stream_execution_intercept_rewrites_streaming_requests() 
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(layered_stability_result(6)),
+        acg_stability: Some(stability_for_request(
+            "agent-1",
+            &request,
+            layered_stability_result(6),
+        )),
         acg_observation_count: 6,
     }));
 
@@ -689,6 +734,7 @@ fn acg_component_build_intent_bundle_requires_at_least_two_observations() {
             },
         ],
         stable_prefix_length: 2,
+        stable_prefix_fingerprint: None,
         total_observations: 1,
     };
 
@@ -764,6 +810,39 @@ async fn acg_component_load_persisted_state_prefers_stability_and_falls_back_to_
     let guard = hot_cache.read().unwrap();
     assert!(guard.acg_stability.is_none());
     assert_eq!(guard.acg_observation_count, 2);
+}
+
+#[tokio::test]
+async fn acg_component_rehydrates_matching_profile_and_rejects_changed_scaffold() {
+    let agent_id = "agent-restarted";
+    let request = sample_openai_responses_request();
+    let stability = stability_for_request(
+        agent_id,
+        &request,
+        stability_with_prefix(2, MIN_ACG_OBSERVATIONS),
+    );
+    let backend = InMemoryBackend::new();
+    backend.store_stability(agent_id, &stability).await.unwrap();
+
+    let hot_cache = Arc::new(RwLock::new(HotCache {
+        plan: None,
+        trie: None,
+        agent_hints_default: None,
+        acg_profiles: std::collections::HashMap::new(),
+        acg_profile_observation_counts: std::collections::HashMap::new(),
+        acg_stability: None,
+        acg_observation_count: 0,
+    }));
+    load_persisted_acg_state(agent_id, &backend, &hot_cache)
+        .await
+        .unwrap();
+    let plugin = build_provider_plugin("openai").unwrap();
+
+    assert!(translate_request(&request, agent_id, "openai", plugin.as_ref(), &hot_cache).is_some());
+
+    let mut changed = request;
+    changed.content["instructions"] = json!("A different system policy.");
+    assert!(translate_request(&changed, agent_id, "openai", plugin.as_ref(), &hot_cache).is_none());
 }
 
 #[tokio::test]
@@ -863,7 +942,12 @@ fn acg_component_build_intent_bundle_supports_openai_and_rejects_unknown_provide
     let request = sample_annotated_request("gpt-4o");
     let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&request).unwrap();
     let plugin = build_provider_plugin("openai").unwrap();
-    let stability = layered_stability_result(4);
+    let mut stability = stability_with_prefix(2, 4);
+    stability.stable_prefix_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        &prompt_ir,
+        stability.stable_prefix_length,
+        &derive_acg_learning_key("agent-openai", &request),
+    );
 
     let bundle = build_intent_bundle(
         "agent-openai",
@@ -890,6 +974,157 @@ fn acg_component_build_intent_bundle_supports_openai_and_rejects_unknown_provide
             &prompt_ir,
             &stability,
             4,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn acg_component_requires_the_exact_learned_prefix_before_reuse() {
+    let request = sample_annotated_request("gpt-4o");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&request).unwrap();
+    let mut stability = crate::acg::stability::analyze_stability(
+        std::slice::from_ref(&prompt_ir),
+        &crate::acg::stability::StabilityThresholds::default(),
+    );
+    let learning_key = derive_acg_learning_key("agent-openai", &request);
+    stability.stable_prefix_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        &prompt_ir,
+        stability.stable_prefix_length,
+        &learning_key,
+    );
+    let plugin = build_provider_plugin("openai").unwrap();
+
+    assert!(
+        build_intent_bundle(
+            "agent-openai",
+            "openai",
+            plugin.as_ref(),
+            RequestSurface::OpenAIChat,
+            &request,
+            &prompt_ir,
+            &stability,
+            MIN_ACG_OBSERVATIONS,
+        )
+        .is_some()
+    );
+
+    let mut changed_prefix = prompt_ir.clone();
+    changed_prefix.blocks[0].content = "changed policy".to_string();
+    assert!(
+        build_intent_bundle(
+            "agent-openai",
+            "openai",
+            plugin.as_ref(),
+            RequestSurface::OpenAIChat,
+            &request,
+            &changed_prefix,
+            &stability,
+            MIN_ACG_OBSERVATIONS,
+        )
+        .is_none()
+    );
+
+    let mut legacy_stability = stability;
+    legacy_stability.stable_prefix_fingerprint = None;
+    assert!(
+        build_intent_bundle(
+            "agent-openai",
+            "openai",
+            plugin.as_ref(),
+            RequestSurface::OpenAIChat,
+            &request,
+            &prompt_ir,
+            &legacy_stability,
+            MIN_ACG_OBSERVATIONS,
+        )
+        .is_none()
+    );
+
+    legacy_stability.stable_prefix_length = prompt_ir.blocks.len() + 1;
+    assert!(
+        build_intent_bundle(
+            "agent-openai",
+            "openai",
+            plugin.as_ref(),
+            RequestSurface::OpenAIChat,
+            &request,
+            &prompt_ir,
+            &legacy_stability,
+            MIN_ACG_OBSERVATIONS,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn acg_component_rejects_raw_user_changes_beyond_the_stable_scaffold() {
+    let request = sample_annotated_request("gpt-4o");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&request).unwrap();
+    let mut stability = crate::acg::stability::analyze_stability(
+        std::slice::from_ref(&prompt_ir),
+        &crate::acg::stability::StabilityThresholds::default(),
+    );
+    let learning_key = derive_acg_learning_key("agent-openai", &request);
+    stability.stable_prefix_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        &prompt_ir,
+        stability.stable_prefix_length,
+        &learning_key,
+    );
+
+    let mut changed_request = request.clone();
+    changed_request.messages[1] = Message::User {
+        content: MessageContent::Text("Hello  ".to_string()),
+        name: None,
+    };
+    let changed_ir = crate::acg::ir_builder::build_prompt_ir(&changed_request).unwrap();
+    let plugin = build_provider_plugin("openai").unwrap();
+
+    assert!(
+        build_intent_bundle(
+            "agent-openai",
+            "openai",
+            plugin.as_ref(),
+            RequestSurface::OpenAIChat,
+            &changed_request,
+            &changed_ir,
+            &stability,
+            MIN_ACG_OBSERVATIONS,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn acg_component_rejects_raw_whitespace_changes_inside_the_stable_scaffold() {
+    let request = sample_annotated_request("gpt-4o");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&request).unwrap();
+    let mut stability = stability_with_prefix(1, MIN_ACG_OBSERVATIONS);
+    stability.stable_prefix_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        &prompt_ir,
+        1,
+        &derive_acg_learning_key("agent-openai", &request),
+    );
+
+    let mut changed_request = request.clone();
+    changed_request.messages[0] = Message::System {
+        content: MessageContent::Text("You are helpful.  ".to_string()),
+        name: None,
+    };
+    let changed_ir = crate::acg::ir_builder::build_prompt_ir(&changed_request).unwrap();
+    assert_eq!(prompt_ir.blocks[0].content, changed_ir.blocks[0].content);
+
+    let plugin = build_provider_plugin("openai").unwrap();
+    assert!(
+        build_intent_bundle(
+            "agent-openai",
+            "openai",
+            plugin.as_ref(),
+            RequestSurface::OpenAIChat,
+            &changed_request,
+            &changed_ir,
+            &stability,
+            MIN_ACG_OBSERVATIONS,
         )
         .is_none()
     );
@@ -947,7 +1182,7 @@ fn acg_component_build_hint_translation_and_apply_hint_translation_cover_passthr
     let prompt_ir =
         crate::acg::ir_builder::build_prompt_ir(&semantic_view.annotated_request).unwrap();
     let plugin = build_provider_plugin("openai").unwrap();
-    let stability = layered_stability_result(4);
+    let stability = stability_for_request("agent-openai", &request, layered_stability_result(4));
     let bundle = build_intent_bundle(
         "agent-openai",
         "openai",
@@ -1002,7 +1237,7 @@ fn acg_component_translate_request_uses_profile_specific_stability_and_fails_ope
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::from([(
             learning_key.clone(),
-            layered_stability_result(6),
+            stability_for_request("agent-profile", &request, layered_stability_result(6)),
         )]),
         acg_profile_observation_counts: std::collections::HashMap::from([(learning_key, 6)]),
         acg_stability: None,
@@ -1049,7 +1284,11 @@ async fn acg_component_execution_intercept_rewrites_non_streaming_requests() {
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(layered_stability_result(6)),
+        acg_stability: Some(stability_for_request(
+            "agent-1",
+            &request,
+            layered_stability_result(6),
+        )),
         acg_observation_count: 6,
     }));
 
@@ -1148,7 +1387,7 @@ fn acg_component_build_hint_translation_succeeds_for_openai_and_anthropic() {
         RequestSurface::OpenAIChat,
         &openai_view.annotated_request,
         &openai_prompt_ir,
-        &layered_stability_result(4),
+        &stability_for_request("agent-openai", &openai_request, stability_with_prefix(1, 4)),
         4,
     )
     .unwrap();
@@ -1189,7 +1428,11 @@ fn acg_component_build_hint_translation_succeeds_for_openai_and_anthropic() {
         RequestSurface::AnthropicMessages,
         &anthropic_view.annotated_request,
         &anthropic_prompt_ir,
-        &layered_stability_result(6),
+        &stability_for_request(
+            "agent-anthropic",
+            &anthropic_request,
+            layered_stability_result(6),
+        ),
         6,
     )
     .unwrap();
@@ -1323,7 +1566,11 @@ fn acg_component_request_intercept_rewrites_annotation_without_mutating_provider
         agent_hints_default: None,
         acg_profiles: std::collections::HashMap::new(),
         acg_profile_observation_counts: std::collections::HashMap::new(),
-        acg_stability: Some(layered_stability_result(6)),
+        acg_stability: Some(stability_for_request(
+            "agent-1",
+            &request,
+            layered_stability_result(6),
+        )),
         acg_observation_count: 6,
     }));
     let intercept = create_acg_llm_request_intercept(

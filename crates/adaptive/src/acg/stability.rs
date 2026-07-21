@@ -39,6 +39,11 @@ pub struct StabilityAnalysisResult {
     pub scores: Vec<BlockStabilityScore>,
     /// Number of leading blocks that were classified as stable.
     pub stable_prefix_length: usize,
+    /// Fingerprint of the dominant stable prefix. Generic analysis hashes the
+    /// prompt IR; ACG profile persistence additionally binds it to the learning
+    /// key and, beyond the leading scaffold, the full source request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stable_prefix_fingerprint: Option<String>,
     /// Total number of observations included in the analysis.
     pub total_observations: u32,
 }
@@ -69,6 +74,7 @@ pub fn analyze_stability(
         return StabilityAnalysisResult {
             scores: Vec::new(),
             stable_prefix_length: 0,
+            stable_prefix_fingerprint: None,
             total_observations: 0,
         };
     }
@@ -89,12 +95,107 @@ pub fn analyze_stability(
     let scores: Vec<BlockStabilityScore> =
         indexed_scores.into_iter().map(|(_, score)| score).collect();
     let stable_prefix_length = find_stable_prefix_length(&scores);
+    let stable_prefix_fingerprint = observations
+        .iter()
+        .filter_map(|observation| prompt_prefix_fingerprint(observation, stable_prefix_length))
+        .fold(HashMap::new(), |mut counts, fingerprint| {
+            *counts.entry(fingerprint).or_insert(0_u32) += 1;
+            counts
+        })
+        .into_iter()
+        .max_by(|(left_hash, left_count), (right_hash, right_count)| {
+            left_count
+                .cmp(right_count)
+                .then_with(|| right_hash.cmp(left_hash))
+        })
+        .map(|(fingerprint, _)| fingerprint);
 
     StabilityAnalysisResult {
         scores,
         stable_prefix_length,
+        stable_prefix_fingerprint,
         total_observations,
     }
+}
+
+pub(crate) fn prompt_prefix_fingerprint(
+    observation: &PromptIR,
+    prefix_length: usize,
+) -> Option<String> {
+    if prefix_length == 0 || observation.blocks.len() < prefix_length {
+        return None;
+    }
+
+    let prefix = observation
+        .blocks
+        .iter()
+        .take(prefix_length)
+        .map(|block| {
+            serde_json::to_string(&(
+                &block.span_id,
+                block.role,
+                block.content_type,
+                &block.content,
+            ))
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?
+        .join("\n");
+    Some(sha256_hex(&prefix))
+}
+
+pub(crate) fn profile_prefix_fingerprint(
+    observation: &PromptIR,
+    prefix_length: usize,
+    learning_key: &str,
+) -> Option<String> {
+    let prefix_fingerprint = prompt_prefix_fingerprint(observation, prefix_length)?;
+    let scaffold_length = observation
+        .blocks
+        .iter()
+        .take_while(|block| {
+            block.role == crate::acg::prompt_ir::PromptRole::System
+                || matches!(
+                    block.content_type,
+                    crate::acg::prompt_ir::BlockContentType::ToolSchema
+                        | crate::acg::prompt_ir::BlockContentType::StructuredOutput
+                )
+        })
+        .count();
+    // Conservatively bind deeper prefixes to the complete request because the
+    // normalized IR does not retain a lossless provider-prefix representation.
+    let request_fingerprint = if prefix_length > scaffold_length {
+        observation.source_request_hash.as_deref()?
+    } else {
+        "stable-scaffold"
+    };
+
+    Some(sha256_hex(
+        &[learning_key, &prefix_fingerprint, request_fingerprint].join("\n"),
+    ))
+}
+
+pub(crate) fn dominant_profile_prefix_fingerprint(
+    observations: &[PromptIR],
+    prefix_length: usize,
+    learning_key: &str,
+) -> Option<String> {
+    observations
+        .iter()
+        .filter_map(|observation| {
+            profile_prefix_fingerprint(observation, prefix_length, learning_key)
+        })
+        .fold(HashMap::new(), |mut counts, fingerprint| {
+            *counts.entry(fingerprint).or_insert(0_u32) += 1;
+            counts
+        })
+        .into_iter()
+        .max_by(|(left_hash, left_count), (right_hash, right_count)| {
+            left_count
+                .cmp(right_count)
+                .then_with(|| right_hash.cmp(left_hash))
+        })
+        .map(|(fingerprint, _)| fingerprint)
 }
 
 fn record_observation(observation: &PromptIR, span_map: &mut HashMap<SpanId, SpanObservations>) {

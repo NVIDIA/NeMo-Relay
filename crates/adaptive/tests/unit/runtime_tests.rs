@@ -31,10 +31,6 @@ fn reset_runtime_context() {
     set_thread_scope_stack(create_scope_stack());
 }
 
-fn short_hash(value: &str) -> &str {
-    value.get(..16).unwrap_or(value)
-}
-
 fn sample_annotated_request(model: Option<&str>) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
         messages: vec![
@@ -417,12 +413,8 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
         &sample_annotated_request(Some("claude-sonnet-4")),
     );
     let expected_learning_key = format!(
-        "agent-1::model=claude-sonnet-4::seed={}::system={}::tools=no-tools",
-        short_hash(&format!(
-            "user:{}",
-            crate::acg::sha256_hex("Summarize the latest findings")
-        )),
-        short_hash(&crate::acg::sha256_hex("You are a careful planner")),
+        "agent-1::model=claude-sonnet-4::seed=stable-scaffold::system={}::tools=no-tools",
+        crate::acg::sha256_hex("You are a careful planner"),
     );
     assert_eq!(learning_key, expected_learning_key,);
 
@@ -498,9 +490,9 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
         "agent-1",
         &sample_layered_request(Some("claude-sonnet-4"), "Python review guide"),
     );
-    assert_ne!(
+    assert_eq!(
         rust_learning_key, python_learning_key,
-        "layered requests should still separate learning buckets when the stable anchor differs",
+        "variable first-user guide content should share the stable system scaffold",
     );
 
     let rust_bundle_variant = AnnotatedLlmRequest {
