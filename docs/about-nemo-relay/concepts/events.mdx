@@ -170,9 +170,9 @@ For a reader request, all of the following conditions must be true:
 - The path's immediate parent directory has a nonempty name, which Relay uses
   as the skill name.
 - The request reads the entire file. Relay ignores requests that use partial or
-  range controls, unsupported transformations, pipelines, redirections,
-  command substitutions, or compound commands. Display flags that don't
-  truncate the file remain supported.
+  range controls, unsupported transformations, metadata-only operations,
+  pipelines, redirections, command substitutions, or compound commands.
+  Output-formatting flags that don't truncate the file remain supported.
 
 Relay checks the request before tool execution. The mark records an attempted
 load even if execution later fails. If Relay doesn't emit a mark, that doesn't
@@ -208,8 +208,16 @@ suffixes and argument fields:
 - Argument fields: `path`, `file_path`, `filepath`, `filename`, `file`,
   `paths`, `uri`, and `absolute_path`.
 
-Relay also recognizes a single wrapper layer. Each wrapper must use one of the
-following forms:
+For shell reads, Relay recognizes the following direct shell tool names after
+normalizing case and nonalphanumeric separators:
+
+- Tool names: `sh`, `bash`, `zsh`, `fish`, `shell`, `shell_command`, `exec`,
+  `exec_command`, `execute`, `terminal`, `run_command`, `run_shell_command`,
+  `shell_exec`, `powershell`, and `pwsh`.
+- Argument fields: `command` and `cmd`.
+
+Relay also recognizes a single wrapper layer inside a direct shell tool. Each
+wrapper must use one of the following forms:
 
 - POSIX shells: `sh -c`, `bash -c`, `bash -lc`, `zsh -c`, or `zsh -lc`.
 - Fish: `fish -c` or `fish --command=...`.
@@ -223,9 +231,10 @@ unsupported until an integration explicitly adds them to the registry.
 For a reader request, the final path component must equal `SKILL.md` under an
 ASCII case-insensitive comparison. Relay uses the immediate parent directory as
 the skill name. Relay doesn't emit a mark when a structured request has a
-nonzero `offset`, a `limit`, or a range control. It also doesn't emit a mark for
-shell commands that use pipelines, redirections, compound commands, or
-range-limited readers. An explicit structured `offset` of `0` still represents
+`offset` other than the integer `0`, a `limit`, or a range control. It also
+doesn't emit a mark for shell commands that use pipelines, redirections,
+compound commands, or range-limited readers, or help, version, listing, or
+diagnostic operations. An explicit structured `offset` of `0` still represents
 a complete read. Relay omits the full path and shell command from the mark.
 
 The mark has these lifecycle semantics:

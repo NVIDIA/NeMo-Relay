@@ -133,6 +133,9 @@ fn structured_readers_allow_zero_offset_but_reject_every_partial_read_control() 
     for args in [
         json!({"file_path": "/skills/review/SKILL.md", "offset": 1}),
         json!({"file_path": "/skills/review/SKILL.md", "offset": -1}),
+        json!({"file_path": "/skills/review/SKILL.md", "offset": 1.0}),
+        json!({"file_path": "/skills/review/SKILL.md", "offset": "1"}),
+        json!({"file_path": "/skills/review/SKILL.md", "offset": null}),
         json!({"file_path": "/skills/review/SKILL.md", "limit": 2000}),
         json!({"file_path": "/skills/review/SKILL.md", "range": "1:20"}),
         json!({"file_path": "/skills/review/SKILL.md", "head": true}),
@@ -147,6 +150,23 @@ fn structured_readers_allow_zero_offset_but_reject_every_partial_read_control() 
         }),
     ] {
         assert_rejected("Read", args);
+    }
+}
+
+#[test]
+fn structured_readers_require_paths_to_end_exactly_in_skill_md() {
+    for (tool, args) in [
+        ("Read", json!({"file_path": "/skills/review/SKILL.md "})),
+        (
+            "read_file",
+            json!({"absolute_path": "/skills/review/SKILL.md/"}),
+        ),
+        (
+            "mcp__resources__read_resource",
+            json!({"uri": "file:///skills/review/SKILL.md/"}),
+        ),
+    ] {
+        assert_rejected(tool, args);
     }
 }
 
@@ -328,6 +348,7 @@ fn shell_detection_rejects_partial_transformed_and_compound_commands() {
         "Get-Content -Last 20 /skills/review/SKILL.md",
         "Get-Content -Ta 20 /skills/review/SKILL.md",
         "Get-Content -To 20 /skills/review/SKILL.md",
+        "Get-Content -? C:\\skills\\review\\SKILL.md",
         "cat /skills/review/SKILL.md | head",
         "cat /skills/review/SKILL.md|head",
         "cat /skills/review/SKILL.md > /tmp/copy",
@@ -340,6 +361,9 @@ fn shell_detection_rejects_partial_transformed_and_compound_commands() {
         "cat /skills/review/SKILL.md || echo failed",
         "cat /skills/review/SKILL.md; echo done",
         "Get-Content C:\\skills\\review\\SKILL.md|Out-String",
+        "cat --help /skills/review/SKILL.md",
+        "bat --list-themes /skills/review/SKILL.md",
+        "batcat --diagnostic /skills/review/SKILL.md",
         "cat /skills/review/SKILL.md\necho done",
         "cat $(find /skills -name SKILL.md)",
         "cat `find /skills -name SKILL.md`",
@@ -359,15 +383,19 @@ fn shell_detection_rejects_unsupported_wrapper_forms_and_aliases() {
         "fish -c 'cat /skills/review/SKILL.md | head'",
         "bash -lc 'cat /skills/review/SKILL.md > /tmp/copy'",
         "bash -lc 'cat /skills/review/SKILL.md|head'",
+        "bash -lc 'cat --version /skills/review/SKILL.md'",
         "bash -lc 'cat $(find /skills -name SKILL.md)'",
         "bash -lc 'cat /skills/review/SKILL.md' ignored",
         "powershell -NoProfile -Command Get-Content C:\\skills\\review\\SKILL.md",
         "powershell -Command Get-Content -Ta 20 C:\\skills\\review\\SKILL.md",
         "pwsh -Command Get-Content -To 20 C:\\skills\\review\\SKILL.md",
+        "powershell -Command Get-Content -? C:\\skills\\review\\SKILL.md",
         "powershell -Command \"Get-Content C:\\skills\\review\\SKILL.md; Write-Host done\"",
         "powershell -Command gc C:\\skills\\review\\SKILL.md",
         "pwsh -Command cat C:\\skills\\review\\SKILL.md",
         "cmd /c type C:\\skills\\review\\SKILL.md",
+        "cat '/skills/review/SKILL.md/'",
+        "cat '/skills/review/SKILL.md '",
     ] {
         assert_rejected("shell", json!({"command": command}));
     }

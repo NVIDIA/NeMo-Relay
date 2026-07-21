@@ -11,6 +11,21 @@ use strum::{EnumString, IntoStaticStr};
 pub(crate) const HANDLED_METADATA_KEY: &str = "nemo_relay.skill_load_handled";
 pub(crate) const PRECOMPUTED_METADATA_KEY: &str = "nemo_relay.skill_loads";
 
+const CAT_REJECTED_OPTIONS: &[&str] = &["-h", "--help", "--version"];
+const BAT_REJECTED_OPTIONS: &[&str] = &[
+    "-h",
+    "--help",
+    "--version",
+    "-r",
+    "--line-range",
+    "--list-languages",
+    "--list-themes",
+    "--generate-completion",
+    "--diagnostic",
+    "--acknowledgements",
+];
+const POWERSHELL_NON_READ_OPTIONS: &[&str] = &["-?", "-help", "--help"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 pub(crate) enum SkillLoadSource {
@@ -166,7 +181,7 @@ fn has_partial_read_controls(value: &Value) -> bool {
         if !partial {
             let key = normalize_identifier(&key);
             partial = match key.as_str() {
-                "offset" => value.as_i64().is_some_and(|offset| offset != 0),
+                "offset" => value.as_i64() != Some(0),
                 "limit" | "range" | "head" | "tail" | "startline" | "endline" | "linestart"
                 | "lineend" => !value.is_null(),
                 _ => false,
@@ -207,7 +222,10 @@ fn visit_named_values(value: &Value, mut visit: impl FnMut(String, &Value)) {
 }
 
 fn skill_name_from_path(path: &str) -> Option<String> {
-    let path = path.trim().trim_matches(['\'', '"']);
+    let path = path.trim_matches(['\'', '"']);
+    if path.trim() != path || path.ends_with('/') || path.ends_with('\\') {
+        return None;
+    }
     let components = path
         .split(['/', '\\'])
         .filter(|component| !component.is_empty())
@@ -253,8 +271,8 @@ fn complete_reader_word_paths(words: &[String], allow_direct_cat: bool) -> Vec<S
         return Vec::new();
     };
     match executable.as_str() {
-        "cat" if allow_direct_cat => positional_paths(&words[1..], &[]),
-        "bat" | "batcat" => positional_paths(&words[1..], &["-r", "--line-range"]),
+        "cat" if allow_direct_cat => positional_paths(&words[1..], CAT_REJECTED_OPTIONS),
+        "bat" | "batcat" => positional_paths(&words[1..], BAT_REJECTED_OPTIONS),
         "get-content" => powershell_content_paths(&words[1..]),
         "sh" | "bash" | "zsh" => posix_shell_wrapper_paths(&executable, &words[1..]),
         "fish" => fish_shell_wrapper_paths(&words[1..]),
@@ -312,8 +330,8 @@ fn posix_reader_word_paths(words: &[String]) -> Vec<String> {
         return Vec::new();
     };
     match executable.as_str() {
-        "cat" => positional_paths(&words[1..], &[]),
-        "bat" | "batcat" => positional_paths(&words[1..], &["-r", "--line-range"]),
+        "cat" => positional_paths(&words[1..], CAT_REJECTED_OPTIONS),
+        "bat" | "batcat" => positional_paths(&words[1..], BAT_REJECTED_OPTIONS),
         _ => Vec::new(),
     }
 }
@@ -350,10 +368,13 @@ fn powershell_content_paths(words: &[String]) -> Vec<String> {
             .next()
             .unwrap_or_default()
             .to_ascii_lowercase();
-        candidate.len() > 1
-            && ["-totalcount", "-tail", "-head", "-first", "-last"]
-                .iter()
-                .any(|flag| flag.starts_with(&candidate))
+        POWERSHELL_NON_READ_OPTIONS
+            .iter()
+            .any(|option| candidate.eq_ignore_ascii_case(option))
+            || (candidate.len() > 1
+                && ["-totalcount", "-tail", "-head", "-first", "-last"]
+                    .iter()
+                    .any(|flag| flag.starts_with(&candidate)))
     }) {
         return Vec::new();
     }
