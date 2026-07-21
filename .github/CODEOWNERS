@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Default ownership for repository files.
-* @nvidia/nat-developers
+* @nvidia/nemo-relay-developers
+
+# CODEOWNERS changes require repository administrator review.
+/.github/CODEOWNERS @nvidia/nemo-relay-admins
 
 # Attribution files require dependency approver review due to change in version(s)
-ATTRIBUTIONS-*.md @nvidia/nat-dep-approvers
+ATTRIBUTIONS-*.md @nvidia/nemo-relay-dep-approvers
 
-# Documentation changes must go to technical writers and NAT developers.
-docs/ @lvojtku @nvidia/NAT-developers
-fern/ @lvojtku @nvidia/NAT-developers
+# Documentation changes must go to technical writers and NeMo Relay developers.
+docs/ @nvidia/nemo-relay-docs-reviewers @nvidia/nemo-relay-developers
+fern/ @nvidia/nemo-relay-docs-reviewers @nvidia/nemo-relay-developers
