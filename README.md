@@ -21,6 +21,9 @@ requiring changes to the existing agent stack. It gives coding agents,
 applications, framework integrations, middleware, and observability backends a
 shared runtime for scopes, policy, plugins, and lifecycle events.
 
+For how Relay complements OpenTelemetry GenAI conventions and observability or
+evaluation products, see [the Ecosystem guide](https://docs.nvidia.com/nemo/relay/about-nemo-relay/ecosystem).
+
 ## Where To Start
 
 | Goal | Start With |
@@ -30,7 +33,7 @@ shared runtime for scopes, policy, plugins, and lifecycle events.
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
 | Export ATOF, ATIF, OpenTelemetry, or OpenInference | [Observability Plugin](https://docs.nvidia.com/nemo/relay/configure-plugins/observability/about) |
-| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/v0.5.0/build-plugins/about) |
+| Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
 | Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 
@@ -211,7 +214,7 @@ uv add nemo-relay
 
 # Node.js
 # Requires Node.js 24 or newer.
-npm install nemo-relay-node
+npm install nemo-relay-node@0.6.0
 
 # Rust
 cargo add nemo-relay
