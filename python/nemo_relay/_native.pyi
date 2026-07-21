@@ -1968,7 +1968,11 @@ def deregister_subscriber(name: str) -> bool:
     ...
 
 def flush_subscribers() -> None:
-    """Wait for subscriber callbacks already queued by native event emission."""
+    """Wait for subscriber callbacks queued by native event emission.
+
+    Call this function outside subscriber callbacks. A re-entrant call returns
+    without waiting, so callbacks later in the same dispatch snapshot can run.
+    """
     ...
 
 def scope_register_tool_sanitize_request_guardrail(

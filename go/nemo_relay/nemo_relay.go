@@ -1549,7 +1549,10 @@ func DeregisterSubscriber(name string) error {
 
 // FlushSubscribers waits for subscriber callbacks queued before this call to
 // finish. Native event-producing APIs enqueue subscriber work and return
-// without waiting for observer callbacks.
+// without waiting for observer callbacks. Call this function outside native
+// subscriber callbacks. A re-entrant call returns without waiting to avoid
+// blocking the dispatcher, so callbacks later in the same dispatch snapshot
+// can still run.
 func FlushSubscribers() error {
 	return checkStatus(C.nemo_relay_flush_subscribers())
 }

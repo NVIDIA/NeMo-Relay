@@ -2849,6 +2849,10 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 
 /// Wait for native subscriber callbacks queued before this call to finish.
 ///
+/// Call this function outside native subscriber callbacks. A re-entrant call returns without
+/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
+/// still run.
+///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`; callers that
 /// need JS callback side effects should await an event-loop tick after this returns.
 #[napi]

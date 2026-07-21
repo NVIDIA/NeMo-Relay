@@ -132,8 +132,10 @@ order and subscriber snapshot order.
 
 ## Waiting for Delivery
 
-An event-producing call returning is not a delivery barrier. Use the following
-milestones to choose the barrier that matches the output you need to observe:
+An event-producing call returning is not a delivery barrier. These guarantees
+apply when you call a barrier outside a native subscriber callback. Use the
+following milestones to choose the barrier that matches the output you need to
+observe:
 
 | Milestone | What It Establishes | What It Does Not Establish |
 |---|---|---|
@@ -158,6 +160,12 @@ exporter-specific flush, export, or shutdown operation described in
 [Observability](/configure-plugins/observability/about).
 
 <Warning>
+Do not invoke a subscriber flush, an exporter barrier, or plugin clear from a
+native subscriber callback. To avoid blocking its worker, the native dispatcher
+returns a re-entrant subscriber flush without waiting. Callbacks later in the
+active dispatch snapshot can still run after the barrier returns. Run those
+operations after the callback returns.
+
 If the process terminates before subscriber delivery and exporter teardown
 complete, queued telemetry can be lost. Returning from the event-producing API
 does not make that telemetry crash-safe.
