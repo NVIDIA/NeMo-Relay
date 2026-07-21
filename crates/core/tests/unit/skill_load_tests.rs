@@ -157,6 +157,8 @@ fn structured_readers_allow_zero_offset_but_reject_every_partial_read_control() 
 fn structured_readers_require_paths_to_end_exactly_in_skill_md() {
     for (tool, args) in [
         ("Read", json!({"file_path": "/skills/review/SKILL.md "})),
+        ("Read", json!({"file_path": "'/skills/review/SKILL.md"})),
+        ("Read", json!({"file_path": "/skills/review/SKILL.md'"})),
         (
             "read_file",
             json!({"absolute_path": "/skills/review/SKILL.md/"}),
@@ -362,6 +364,8 @@ fn shell_detection_rejects_partial_transformed_and_compound_commands() {
         "cat /skills/review/SKILL.md; echo done",
         "Get-Content C:\\skills\\review\\SKILL.md|Out-String",
         "cat --help /skills/review/SKILL.md",
+        "cat -s /skills/review/SKILL.md",
+        "cat --squeeze-blank /skills/review/SKILL.md",
         "bat --list-themes /skills/review/SKILL.md",
         "batcat --diagnostic /skills/review/SKILL.md",
         "cat /skills/review/SKILL.md\necho done",
@@ -384,6 +388,8 @@ fn shell_detection_rejects_unsupported_wrapper_forms_and_aliases() {
         "bash -lc 'cat /skills/review/SKILL.md > /tmp/copy'",
         "bash -lc 'cat /skills/review/SKILL.md|head'",
         "bash -lc 'cat --version /skills/review/SKILL.md'",
+        "bash -lc 'cat -s /skills/review/SKILL.md'",
+        "fish -c 'cat --squeeze-blank /skills/review/SKILL.md'",
         "bash -lc 'cat $(find /skills -name SKILL.md)'",
         "bash -lc 'cat /skills/review/SKILL.md' ignored",
         "powershell -NoProfile -Command Get-Content C:\\skills\\review\\SKILL.md",

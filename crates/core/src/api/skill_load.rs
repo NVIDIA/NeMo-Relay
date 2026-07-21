@@ -11,7 +11,7 @@ use strum::{EnumString, IntoStaticStr};
 pub(crate) const HANDLED_METADATA_KEY: &str = "nemo_relay.skill_load_handled";
 pub(crate) const PRECOMPUTED_METADATA_KEY: &str = "nemo_relay.skill_loads";
 
-const CAT_REJECTED_OPTIONS: &[&str] = &["-h", "--help", "--version"];
+const CAT_REJECTED_OPTIONS: &[&str] = &["-h", "--help", "--version", "-s", "--squeeze-blank"];
 const BAT_REJECTED_OPTIONS: &[&str] = &[
     "-h",
     "--help",
@@ -222,8 +222,10 @@ fn visit_named_values(value: &Value, mut visit: impl FnMut(String, &Value)) {
 }
 
 fn skill_name_from_path(path: &str) -> Option<String> {
-    let path = path.trim_matches(['\'', '"']);
-    if path.trim() != path || path.ends_with('/') || path.ends_with('\\') {
+    if path.trim() != path
+        || path.starts_with(['\'', '"'])
+        || path.ends_with(['\'', '"', '/', '\\'])
+    {
         return None;
     }
     let components = path
