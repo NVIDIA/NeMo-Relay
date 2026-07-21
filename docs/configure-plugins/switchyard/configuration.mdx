@@ -7,9 +7,12 @@ position: 2
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-> **Experimental:** This page describes the current service-based Switchyard
-> integration. Its configuration and service boundary can change as Switchyard
-> develops an in-process Decision Provider.
+> **Experimental NeMo Relay 0.6.0 integration:** This release calls a separately
+> running Switchyard Decision API.
+
+Start with the
+[Switchyard 0.6.0 setup and validation guide](./about.mdx)
+before using this page as the complete configuration reference.
 
 The Switchyard component connects Relay's CLI gateway to a separately running
 [Switchyard](https://github.com/NVIDIA-NeMo/Switchyard) Decision API. Relay
@@ -142,9 +145,9 @@ The following table describes the Decision API and rollout settings:
 | `decision_headers` | Empty | Optional non-sensitive static Decision API headers. |
 | `decision_header_env` | Empty | Map of header names to environment-variable names for sensitive Decision API headers. Referenced values must be present and non-blank. |
 
-Do not define the same header in both a static header map and its environment
-map. Keep bearer tokens, API keys, cookies, and other secrets in environment
-variables rather than tracked configuration.
+Do not define the same header, including case variants, in both a static header
+map and its environment map. Keep bearer tokens, API keys, cookies, and other
+secrets in environment variables rather than tracked configuration.
 
 ## Request Materialization
 
@@ -201,6 +204,9 @@ The following table describes target bindings and trusted defaults:
 | `default_targets.openai_chat` | Target using `openai_chat` | Trusted fallback for OpenAI Chat Completions requests. |
 | `default_targets.openai_responses` | Target using `openai_responses` | Trusted fallback for OpenAI Responses requests. |
 | `default_targets.anthropic_messages` | Target using `anthropic_messages` | Trusted fallback for Anthropic Messages requests. |
+
+Do not define the same target header, including case variants, in both
+`headers` and `header_env`.
 
 Protocol and endpoint pairs are fixed:
 
@@ -338,8 +344,7 @@ Consider the following experimental limitations before adopting the plugin:
   [`8f9db9a6`](https://github.com/NVIDIA-NeMo/Switchyard/commit/8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8)
   on `topic/nemo-relay-integration`. Testing another revision is deliberate and
   can expose contract drift.
-- The Decision API and service/library boundary are experimental and can change
-  when Switchyard introduces an in-process Decision Provider.
+- The Decision API and service/library boundary are experimental.
 - Nonportable provider extensions in configurations that can translate across
   protocols, malformed decisions, service failures, pre-dispatch translation
   failures, buffered-response translation failures, and target drift fail open
@@ -350,4 +355,4 @@ Consider the following experimental limitations before adopting the plugin:
 
 Run `nemo-relay doctor` to validate component configuration before startup. For
 the pinned local service and manual compatibility workflow, refer to the
-[Switchyard integration examples](https://github.com/NVIDIA/NeMo-Relay/tree/main/examples/switchyard).
+[Switchyard integration examples](https://github.com/NVIDIA/NeMo-Relay/tree/release/0.6/examples/switchyard).

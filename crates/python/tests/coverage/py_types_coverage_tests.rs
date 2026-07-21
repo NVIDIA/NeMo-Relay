@@ -786,10 +786,14 @@ async def next_item(stream):
             let (tx_ok, rx_ok) = tokio::sync::mpsc::channel(2);
             tx_ok.blocking_send(Ok(json!({"chunk": 1}))).unwrap();
             drop(tx_ok);
+            let (cancel_ok, _cancel_ok_rx) = tokio::sync::watch::channel(false);
+            let (_closed_ok, closed_ok_rx) = tokio::sync::watch::channel(Some(Ok(())));
             let stream_ok = pyo3::Py::new(
                 py,
                 PyLlmStream {
-                    receiver: tokio::sync::Mutex::new(rx_ok),
+                    receiver: Arc::new(tokio::sync::Mutex::new(rx_ok)),
+                    cancel: cancel_ok,
+                    closed: closed_ok_rx,
                 },
             )
             .unwrap();
@@ -819,10 +823,14 @@ async def next_item(stream):
                 )))
                 .unwrap();
             drop(tx_err);
+            let (cancel_err, _cancel_err_rx) = tokio::sync::watch::channel(false);
+            let (_closed_err, closed_err_rx) = tokio::sync::watch::channel(Some(Ok(())));
             let stream_err = pyo3::Py::new(
                 py,
                 PyLlmStream {
-                    receiver: tokio::sync::Mutex::new(rx_err),
+                    receiver: Arc::new(tokio::sync::Mutex::new(rx_err)),
+                    cancel: cancel_err,
+                    closed: closed_err_rx,
                 },
             )
             .unwrap();
@@ -840,10 +848,14 @@ async def next_item(stream):
 
             let (tx_done, rx_done) = tokio::sync::mpsc::channel(1);
             drop(tx_done);
+            let (cancel_done, _cancel_done_rx) = tokio::sync::watch::channel(false);
+            let (_closed_done, closed_done_rx) = tokio::sync::watch::channel(Some(Ok(())));
             let stream_done = pyo3::Py::new(
                 py,
                 PyLlmStream {
-                    receiver: tokio::sync::Mutex::new(rx_done),
+                    receiver: Arc::new(tokio::sync::Mutex::new(rx_done)),
+                    cancel: cancel_done,
+                    closed: closed_done_rx,
                 },
             )
             .unwrap();

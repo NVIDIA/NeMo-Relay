@@ -550,9 +550,7 @@ async fn callback_stream_transport_error_surfaces_to_host_stream() {
             "stream_transport_error",
             "model",
             valid_llm_request(),
-            Arc::new(|_request| {
-                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
-            }),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
         .expect("host stream should be returned");
@@ -605,9 +603,7 @@ async fn callback_stream_stops_when_host_receiver_is_dropped() {
             "stream_receiver_drop",
             "model",
             valid_llm_request(),
-            Arc::new(|_request| {
-                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
-            }),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
         .expect("host stream should be returned");
@@ -962,9 +958,7 @@ async fn dropping_host_stream_sends_explicit_worker_cancellation() {
             "cancel_stream",
             "model",
             valid_llm_request(),
-            Arc::new(|_request| {
-                Box::pin(async { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
-            }),
+            Arc::new(|_request| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })),
         )
         .await
         .expect("host stream should be returned");
@@ -1047,7 +1041,7 @@ async fn install_registrations_covers_registry_error_edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn installed_fail_open_callbacks_preserve_original_values() {
+async fn installed_callbacks_apply_surface_specific_fallbacks() {
     struct RuntimeCleanup {
         registrations: Option<PluginRegistrationContext>,
     }
@@ -1122,8 +1116,9 @@ async fn installed_fail_open_callbacks_preserve_original_values() {
 
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
-            .name("fail-open-event")
+            .name("fallback-event")
             .data(json!({"preserved": true}))
+            .metadata(json!({"preserved": true}))
             .build(),
         None,
         None,
@@ -1144,11 +1139,10 @@ async fn installed_fail_open_callbacks_preserve_original_values() {
             &state.scope_sanitize_end_guardrails,
         ] {
             let entries = NemoRelayContextState::event_sanitize_entries(registry, &[]);
-            assert_eq!(
-                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries)
-                    .data(),
-                event.data()
-            );
+            let sanitized =
+                NemoRelayContextState::event_sanitize_snapshot_chain(event.clone(), &entries);
+            assert_eq!(sanitized.data(), None);
+            assert_eq!(sanitized.metadata(), None);
         }
 
         let entries = state.tool_sanitize_request_entries(&[]);
@@ -1502,9 +1496,9 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
     let stream_continuation = state
         .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Err(FlowError::Internal(
-                    "stream item failed".into(),
-                ))])) as LlmJsonStream)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Err(
+                    FlowError::Internal("stream item failed".into()),
+                )])))
             })
         })))
         .expect("stream continuation should insert");
@@ -1541,7 +1535,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
 
     let stream_continuation = state
         .insert_continuation(Continuation::LlmStream(Arc::new(|_request| {
-            Box::pin(async move { Ok(Box::pin(tokio_stream::empty()) as LlmJsonStream) })
+            Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })
         })))
         .expect("stream continuation should insert");
     let invalid_stream_request = match service

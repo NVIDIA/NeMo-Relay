@@ -933,6 +933,9 @@ class LlmStream:
     async def __anext__(self) -> _Json:
         """Return the next JSON chunk or raise ``StopAsyncIteration``."""
         ...
+    async def aclose(self) -> None:
+        """Cancel the producer and release native stream resources."""
+        ...
 
 class OpenTelemetryConfig:
     """Mutable configuration for ``OpenTelemetrySubscriber``.

@@ -443,6 +443,45 @@ pub unsafe extern "C" fn nemo_relay_llm_call_execute(
 pub struct FfiStream {
     pub(crate) receiver:
         tokio::sync::Mutex<tokio::sync::mpsc::Receiver<FlowResult<serde_json::Value>>>,
+    pub(crate) cancel: tokio::sync::watch::Sender<bool>,
+    pub(crate) closed: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+}
+
+impl Drop for FfiStream {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
+    }
+}
+
+async fn forward_stream_to_channel(
+    mut stream: nemo_relay::api::runtime::LlmJsonStream,
+    tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+) {
+    loop {
+        if *cancel.borrow() {
+            break;
+        }
+        let item = tokio::select! {
+            _ = cancel.changed() => break,
+            item = stream.next() => item,
+        };
+        let Some(item) = item else {
+            break;
+        };
+        tokio::select! {
+            _ = cancel.changed() => break,
+            result = tx.send(item) => {
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+    closed.send_replace(Some(
+        stream.close().await.map_err(|error| error.to_string()),
+    ));
 }
 
 /// Execute a streaming LLM call end-to-end. Conditional-execution guardrails
@@ -553,21 +592,59 @@ pub unsafe extern "C" fn nemo_relay_llm_stream_call_execute(
     match result {
         Ok(rust_stream) => {
             let (tx, rx) = tokio::sync::mpsc::channel(32);
-            tokio_runtime().spawn(async move {
-                let mut stream = rust_stream;
-                while let Some(item) = stream.next().await {
-                    if tx.send(item).await.is_err() {
-                        break;
-                    }
-                }
-            });
+            let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+            let (closed, closed_rx) = tokio::sync::watch::channel(None);
+            tokio_runtime().spawn(forward_stream_to_channel(
+                rust_stream,
+                tx,
+                cancel_rx,
+                closed,
+            ));
             let ffi_stream = Box::new(FfiStream {
                 receiver: tokio::sync::Mutex::new(rx),
+                cancel,
+                closed: closed_rx,
             });
             unsafe { *out = Box::into_raw(ffi_stream) };
             NemoRelayStatus::Ok
         }
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Stop a stream producer and wait for cleanup to complete.
+///
+/// This operation is idempotent. It does not free `stream`; callers must still
+/// release the handle with [`nemo_relay_stream_free`].
+///
+/// # Safety
+/// `stream` must be a valid `FfiStream` pointer returned by
+/// `nemo_relay_llm_stream_call_execute`, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_stream_close(stream: *mut FfiStream) -> NemoRelayStatus {
+    clear_last_error();
+    if stream.is_null() {
+        set_last_error("null pointer argument");
+        return NemoRelayStatus::NullPointer;
+    }
+    let stream = unsafe { &*stream };
+    let result = tokio_runtime().block_on(async {
+        stream.cancel.send_replace(true);
+        let mut closed = stream.closed.clone();
+        while closed.borrow().is_none() {
+            closed.changed().await.map_err(|_| {
+                nemo_relay::error::FlowError::Internal("stream close task ended early".into())
+            })?;
+        }
+        let result = closed.borrow().clone().expect("close state checked above");
+        let mut receiver = stream.receiver.lock().await;
+        receiver.close();
+        while receiver.try_recv().is_ok() {}
+        result.map_err(nemo_relay::error::FlowError::Internal)
+    });
+    match result {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
     }
 }
 

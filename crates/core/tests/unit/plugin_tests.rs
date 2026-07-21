@@ -13,8 +13,8 @@ use tokio::sync::Notify;
 
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
-use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
+use crate::api::runtime::{LlmJsonStream, NemoRelayContextState};
 use crate::api::tool::tool_conditional_execution;
 use crate::error::FlowError;
 
@@ -913,10 +913,9 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         1,
         Arc::new(|_name, request, _next| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                    as Pin<
-                        Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
-                    >)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
             })
         }),
     )
@@ -1635,10 +1634,9 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         1,
         Arc::new(|_name, request, _next| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                    as Pin<
-                        Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
-                    >)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
             })
         }),
     )
@@ -1649,10 +1647,9 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
             1,
             Arc::new(|_name, request, _next| {
                 Box::pin(async move {
-                    Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                        as Pin<
-                            Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
-                        >)
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                        request.content
+                    )])))
                 })
             }),
         ),
@@ -1765,10 +1762,9 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         1,
         Arc::new(|_name, request, _next| {
             Box::pin(async move {
-                Ok(Box::pin(tokio_stream::iter(vec![Ok(request.content)]))
-                    as Pin<
-                        Box<dyn tokio_stream::Stream<Item = crate::error::Result<Json>> + Send>,
-                    >)
+                Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(
+                    request.content
+                )])))
             })
         }),
     )

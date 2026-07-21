@@ -453,10 +453,16 @@ func TestScopeLocalSubscriberCleanupOnPop(t *testing.T) {
 			t.Fatalf(scopeLocalRegisterSubscriberFailed, err)
 		}
 		PopScope(handle)
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers after PopScope failed: %v", err)
+		}
 		mu.Lock()
 		countAfterPop := eventCount
 		mu.Unlock()
 		EmitEvent("after_pop_event")
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers after EmitEvent failed: %v", err)
+		}
 		mu.Lock()
 		countAfterEmit := eventCount
 		mu.Unlock()

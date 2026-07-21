@@ -4,22 +4,26 @@
 //! The buffered and streaming LLM execution intercepts: cache decisions,
 //! the streaming tee, and the storage rules.
 
+use std::cell::Cell;
+use std::collections::BTreeSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn,
+    LlmStreamExecutionNextFn, LlmStreamInner,
 };
 use nemo_relay::codec::resolve::{detect_request_surface_with_hint, streaming_codec};
 use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::error::Result as FlowResult;
 use serde_json::Value as Json;
-use std::cell::Cell;
-use std::collections::BTreeSet;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio_stream::StreamExt;
+use tokio::sync::watch;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::{Stream, StreamExt};
 
 use crate::config::ResponseCacheConfig;
 use crate::response_cache::key::{KeyOutcome, build_cache_key};
@@ -31,6 +35,49 @@ use crate::response_cache::store::{CacheEntry, CacheStore, now_unix_ms};
 /// the consumer while accumulating them, applying backpressure when the consumer
 /// is slow.
 const STREAM_TEE_CHANNEL_CAP: usize = 64;
+
+/// Receiver half of the streaming cache tee with upstream cleanup forwarding.
+struct ResponseCacheReceiver {
+    receiver: ReceiverStream<FlowResult<Json>>,
+    cancel: watch::Sender<bool>,
+    closed: watch::Receiver<Option<FlowResult<()>>>,
+}
+
+impl Stream for ResponseCacheReceiver {
+    type Item = FlowResult<Json>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.receiver).poll_next(cx)
+    }
+}
+
+impl Drop for ResponseCacheReceiver {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
+    }
+}
+
+impl LlmStreamInner for ResponseCacheReceiver {
+    fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
+        let this = self.get_mut();
+        this.cancel.send_replace(true);
+        this.receiver.close();
+        while this.receiver.as_mut().try_recv().is_ok() {}
+        let mut closed = this.closed.clone();
+        Box::pin(async move {
+            loop {
+                if let Some(result) = closed.borrow().clone() {
+                    return result;
+                }
+                closed.changed().await.map_err(|_| {
+                    nemo_relay::error::FlowError::Internal(
+                        "response-cache stream cleanup task ended early".into(),
+                    )
+                })?;
+            }
+        })
+    }
+}
 
 /// Builds the buffered LLM execution intercept for the response cache.
 ///
@@ -262,12 +309,23 @@ fn tee_and_aggregate(
     model: Option<String>,
 ) -> LlmJsonStream {
     let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<Json>>(STREAM_TEE_CHANNEL_CAP);
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let (closed_tx, closed_rx) = watch::channel(None);
     tokio::spawn(async move {
         let mut collect = codec.collector();
         let mut live = live;
         let mut collector_failed = false;
         let mut completion = StreamCompletion::default();
-        while let Some(item) = live.next().await {
+        let mut reached_eof = false;
+        loop {
+            let item = tokio::select! {
+                _ = cancel_rx.changed() => break,
+                item = live.next() => item,
+            };
+            let Some(item) = item else {
+                reached_eof = true;
+                break;
+            };
             match &item {
                 Ok(chunk) => {
                     // In-band provider errors never surface as stream-level Err.
@@ -279,26 +337,37 @@ fn tee_and_aggregate(
                 Err(_) => {
                     // Upstream error is a failed call: forward it, never cache.
                     let _ = tx.send(item).await;
-                    return;
+                    break;
                 }
             }
             // Forward to the consumer; a send error means it was dropped.
-            if tx.send(item).await.is_err() {
-                return;
+            let sent = tokio::select! {
+                _ = cancel_rx.changed() => break,
+                sent = tx.send(item) => sent,
+            };
+            if sent.is_err() {
+                break;
             }
         }
+        let close_result = live.close().await;
         // Store only protocol-complete streams: every collector finalizes a
         // clean truncation as a well-formed partial.
-        if !collector_failed && completion.is_terminal() {
+        if reached_eof && close_result.is_ok() && !collector_failed && completion.is_terminal() {
             let aggregate = codec.finalizer()();
             // Empty = mis-inferred surface; lossy = unfaithful replay.
-            if aggregate_has_no_content(&aggregate) || aggregate_replay_lossy(&aggregate) {
-                return;
+            if !aggregate_has_no_content(&aggregate) && !aggregate_replay_lossy(&aggregate) {
+                maybe_store(&store, &config, &key, &provider, model, &aggregate).await;
             }
-            maybe_store(&store, &config, &key, &provider, model, &aggregate).await;
+        } else if reached_eof && let Err(error) = &close_result {
+            let _ = tx.send(Err(error.clone())).await;
         }
+        closed_tx.send_replace(Some(close_result));
     });
-    Box::pin(ReceiverStream::new(rx))
+    LlmJsonStream::from_closeable(ResponseCacheReceiver {
+        receiver: ReceiverStream::new(rx),
+        cancel: cancel_tx,
+        closed: closed_rx,
+    })
 }
 
 /// Streamed content the collectors assemble lossily: thinking blocks lose

@@ -32,6 +32,23 @@ fn buffers_partial_frames_across_pushes() {
 }
 
 #[test]
+fn normalizes_crlf_terminator_split_across_pushes() {
+    let mut decoder = SseEventDecoder::new();
+    assert!(
+        decoder
+            .push_bytes_results(b"data: {\"a\":1}\r\n\r")
+            .is_empty()
+    );
+
+    let results = decoder.push_bytes_results(b"\n");
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results.into_iter().next().unwrap().unwrap().data,
+        json!({"a": 1})
+    );
+}
+
+#[test]
 fn drops_frames_without_data_lines() {
     let mut decoder = SseEventDecoder::new();
     // A heartbeat-style comment frame plus a real one.
@@ -75,4 +92,23 @@ fn surfaces_parse_errors_with_payload_context() {
     let message = error.to_string();
     assert!(message.contains("SSE data payload"), "{message}");
     assert!(message.contains("not valid json"), "{message}");
+}
+
+#[test]
+fn preserves_successes_before_a_later_parse_error() {
+    let mut decoder = SseEventDecoder::new();
+    let mut results = decoder
+        .push_bytes_results(
+            b"event: good\ndata: {\"chunk\":\"first\"}\n\nevent: bad\ndata: {not valid json}\n\n",
+        )
+        .into_iter();
+
+    let first = results.next().unwrap().unwrap();
+    assert_eq!(first.event.as_deref(), Some("good"));
+    assert_eq!(first.data, json!({"chunk": "first"}));
+
+    let error = results.next().unwrap().unwrap_err().to_string();
+    assert!(error.contains("SSE data payload"), "{error}");
+    assert!(error.contains("not valid json"), "{error}");
+    assert!(results.next().is_none());
 }

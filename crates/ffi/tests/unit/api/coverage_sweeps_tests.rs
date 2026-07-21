@@ -1866,6 +1866,8 @@ fn test_ffi_stream_next_reports_error_items() {
 
     let stream = Box::into_raw(Box::new(FfiStream {
         receiver: tokio::sync::Mutex::new(rx),
+        cancel: tokio::sync::watch::channel(false).0,
+        closed: tokio::sync::watch::channel(Some(Ok(()))).1,
     }));
 
     unsafe {

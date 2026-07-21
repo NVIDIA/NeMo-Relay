@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers choosing, configuring, and verifying observability export for NeMo Relay instrumented applications across ATOF, ATIF, OpenTelemetry, and OpenInference backends. <br>
+Developers and engineers choosing or configuring observability exports for NeMo Relay agent runtime applications, including selecting telemetry formats and registering subscribers or exporters. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -25,26 +25,26 @@ Risk: Review before execution as proposals could introduce incorrect or misleadi
 Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
-- [ATOF Export Reference](references/atof.md) <br>
+- [ATOF Event Export Reference](references/atof.md) <br>
 - [ATIF Trajectory Export Reference](references/atif.md) <br>
 - [OpenTelemetry Export Reference](references/opentelemetry.md) <br>
 - [OpenInference Export Reference](references/openinference.md) <br>
 
 
 ## Skill Output: <br>
-**Output Type(s):** [Configuration instructions, Code, Analysis] <br>
+**Output Type(s):** [Configuration instructions, Code] <br>
 **Output Format:** [Markdown with inline code blocks] <br>
 **Output Parameters:** [1D] <br>
 **Other Properties Related to Output:** [None] <br>
 
 ## Evaluation Agents Used: <br>
-- `claude-code` <br>
-- `codex` <br>
+- Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`) <br>
+- Codex (`openai/openai/gpt-5.5`) <br>
 
 
 
 ## Evaluation Tasks: <br>
-Evaluated against 20 evaluation tasks in the NVSkills-Eval external profile (astra-sandbox environment, 1 attempt per task, 50% pass threshold). <br>
+Evaluated against 20 evaluation tasks (16 positive activation, 4 negative activation) in a k8s-sandbox environment with 1 attempt per task. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
@@ -61,21 +61,20 @@ Underlying evaluation signals used in this run: <br>
 - `accuracy`: Grades final-answer correctness against the reference answer. <br>
 - `goal_accuracy`: Checks whether the overall user task completed successfully. <br>
 - `behavior_check`: Verifies expected behavior steps, including safety expectations. <br>
-- `token_efficiency`: Compares token usage with and without the skill. <br>
 
 
 
 ## Evaluation Results: <br>
-| Dimension | Num | `claude-code` | `codex` |
+| Dimension | Num | Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`) | Codex (`openai/openai/gpt-5.5`) |
 |---|---:|---:|---:|
-| Security | 8 | 100% (+0%) | 100% (+0%) |
-| Correctness | 8 | 98% (+53%) | 93% (+31%) |
-| Discoverability | 8 | 99% (+67%) | 85% (+42%) |
-| Effectiveness | 8 | 91% (+47%) | 87% (+30%) |
-| Efficiency | 8 | 92% (+51%) | 82% (+35%) |
+| Security | 20 | 100% (+2%) | 100% (+2%) |
+| Correctness | 20 | 100% (+51%) | 94% (+4%) |
+| Discoverability | 20 | 100% (+51%) | 93% (+34%) |
+| Effectiveness | 20 | 89% (+48%) | 86% (+23%) |
+| Efficiency | 20 | 96% (+55%) | 93% (+65%) |
 
 ## Skill Version(s): <br>
-e05cfbb8 (source: git SHA, committed 2026-07-15) <br>
+0.6.0-alpha.20260719 (source: git tag) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>

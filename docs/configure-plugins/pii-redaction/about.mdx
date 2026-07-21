@@ -75,6 +75,10 @@ The built-in plugin exposes five managed sanitize surfaces:
 - `tool_input`
 - `tool_output`
 
+Legacy single-policy configuration can toggle these surfaces independently.
+When `profiles` is used, every enabled profile covers all five surfaces and
+the associated LLM/tool scope metadata automatically.
+
 The current built-in backend supports five actions:
 
 - `remove`
@@ -92,9 +96,10 @@ The current backend boundary is intentional:
   and `/message`.
 - `mark` sanitizes `data`, `category_profile`, and `metadata` independently on
   every mark event. It defaults to `true`; set `mark = false` to opt out.
-- `input` and `output` also sanitize those three fields on non-tool, non-LLM
-  scope starts and ends. Tool and LLM scope envelopes remain on their
-  specialized sanitizer paths to avoid applying the same mask or hash twice.
+- `input`, `output`, `tool_input`, and `tool_output` sanitize scope metadata on
+  their corresponding lifecycle events. Tool and LLM primary data and typed
+  profiles remain on their specialized sanitizer paths to avoid applying the
+  same mask or hash twice.
 
 ## Observability Boundary
 

@@ -25,6 +25,37 @@ func TestEventSanitizerRegistries(t *testing.T) {
 	runTestWithScopeStack(t, testEventSanitizerRegistries)
 }
 
+func TestEventSanitizerMarshalFailureClearsObservabilityFields(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var events []Event
+		registerEventSanitizerSubscriber(t, &mu, &events)
+
+		if err := RegisterMarkSanitizeGuardrail("go-mark-sanitize-invalid", 0, func(_ Event, _ EventSanitizeFields) EventSanitizeFields {
+			return EventSanitizeFields{Data: json.RawMessage("{")}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = DeregisterMarkSanitizeGuardrail("go-mark-sanitize-invalid") })
+
+		if err := EmitEvent("invalid-sanitizer", WithEventData(json.RawMessage(`{"secret":true}`)), WithEventMetadata(json.RawMessage(`{"secret":true}`))); err != nil {
+			t.Fatal(err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatal(err)
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		if len(events) != 1 {
+			t.Fatalf("expected one event, got %d", len(events))
+		}
+		if len(events[0].Data()) != 0 || len(events[0].CategoryProfile()) != 0 || len(events[0].Metadata()) != 0 {
+			t.Fatalf("expected cleared observability fields, got data=%s category_profile=%s metadata=%s", events[0].Data(), events[0].CategoryProfile(), events[0].Metadata())
+		}
+	})
+}
+
 func testEventSanitizerRegistries(t *testing.T) {
 	var mu sync.Mutex
 	var events []Event
@@ -115,6 +146,56 @@ func assertSanitizedTestEvents(t *testing.T, mu *sync.Mutex, events []Event) {
 
 func TestScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {
 	runTestWithScopeStack(t, testScopeLocalEventSanitizerInheritanceAndCleanup)
+}
+
+func TestScopeLocalEventSanitizersCanBeDeregistered(t *testing.T) {
+	runTestWithScopeStack(t, func(t *testing.T) {
+		owner, err := PushScope("deregister-owner", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		defer func() {
+			if err := PopScope(owner); err != nil {
+				t.Fatalf("PopScope failed: %v", err)
+			}
+		}()
+
+		passThrough := func(_ Event, fields EventSanitizeFields) EventSanitizeFields { return fields }
+		for _, sanitizer := range []struct {
+			name       string
+			register   func() error
+			deregister func() error
+		}{
+			{
+				name: "mark",
+				register: func() error {
+					return ScopeRegisterMarkSanitizeGuardrail(owner.UUID(), "deregister-mark", 0, passThrough)
+				},
+				deregister: func() error { return ScopeDeregisterMarkSanitizeGuardrail(owner.UUID(), "deregister-mark") },
+			},
+			{
+				name: "scope start",
+				register: func() error {
+					return ScopeRegisterScopeSanitizeStartGuardrail(owner.UUID(), "deregister-start", 0, passThrough)
+				},
+				deregister: func() error { return ScopeDeregisterScopeSanitizeStartGuardrail(owner.UUID(), "deregister-start") },
+			},
+			{
+				name: "scope end",
+				register: func() error {
+					return ScopeRegisterScopeSanitizeEndGuardrail(owner.UUID(), "deregister-end", 0, passThrough)
+				},
+				deregister: func() error { return ScopeDeregisterScopeSanitizeEndGuardrail(owner.UUID(), "deregister-end") },
+			},
+		} {
+			if err := sanitizer.register(); err != nil {
+				t.Fatalf("register %s sanitizer: %v", sanitizer.name, err)
+			}
+			if err := sanitizer.deregister(); err != nil {
+				t.Fatalf("deregister %s sanitizer: %v", sanitizer.name, err)
+			}
+		}
+	})
 }
 
 func testScopeLocalEventSanitizerInheritanceAndCleanup(t *testing.T) {

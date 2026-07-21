@@ -21,7 +21,7 @@ use serde_json::{Map, Value as Json, json};
 /// gate normally sends such entries live before reaching this point.
 pub(crate) fn replay_aggregate(response: Json) -> LlmJsonStream {
     let chunks = synthesize_replay_chunks(&response).unwrap_or_else(|| vec![response]);
-    Box::pin(tokio_stream::iter(
+    LlmJsonStream::new(tokio_stream::iter(
         chunks.into_iter().map(Ok::<Json, FlowError>),
     ))
 }

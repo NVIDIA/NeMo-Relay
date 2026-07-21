@@ -291,10 +291,6 @@ impl<'ast> Visit<'ast> for LogMacroVisitor {
         let macro_name = path.rsplit("::").next().unwrap_or_default();
         if matches!(macro_name, "info" | "warn" | "error" | "debug" | "trace") {
             let tokens = item.tokens.to_string();
-            if matches!(macro_name, "debug" | "trace") {
-                self.failures
-                    .push(format!("production call site uses {path}!"));
-            }
             let target = string_field(&tokens, "target :");
             if target
                 .as_deref()

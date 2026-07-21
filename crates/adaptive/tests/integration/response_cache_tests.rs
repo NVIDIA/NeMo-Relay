@@ -91,9 +91,9 @@ fn counting_stream_provider(
         let chunks = chunks.clone();
         Box::pin(async move {
             calls.fetch_add(1, Ordering::SeqCst);
-            Ok(Box::pin(tokio_stream::iter(
+            Ok(LlmJsonStream::new(tokio_stream::iter(
                 chunks.into_iter().map(Ok::<Json, FlowError>),
-            )) as LlmJsonStream)
+            )))
         })
     })
 }

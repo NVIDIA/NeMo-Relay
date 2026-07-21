@@ -953,7 +953,7 @@ async fn native_stream_adapter_covers_chunks_end_errors_and_cancellation() {
 
 #[tokio::test]
 async fn relay_stream_adapter_covers_poll_end_error_and_cancel() {
-    let stream: LlmJsonStream = Box::pin(tokio_stream::iter(vec![
+    let stream = LlmJsonStream::new(tokio_stream::iter(vec![
         Ok(json!({"chunk": 1})),
         Err(FlowError::Internal("stream failed".into())),
     ]));
@@ -975,7 +975,7 @@ async fn relay_stream_adapter_covers_poll_end_error_and_cancel() {
     );
     drop_native_stream(raw);
 
-    let stream: LlmJsonStream = Box::pin(tokio_stream::empty());
+    let stream = LlmJsonStream::new(tokio_stream::empty());
     let raw = relay_stream_to_native_stream(stream);
     let poll = raw.next.unwrap();
     out = ptr::null_mut();
@@ -999,7 +999,7 @@ async fn relay_stream_adapter_covers_poll_end_error_and_cancel() {
     );
     unsafe { drop_relay_llm_stream(ptr::null_mut()) };
 
-    let stream: LlmJsonStream = Box::pin(tokio_stream::empty());
+    let stream = LlmJsonStream::new(tokio_stream::empty());
     let raw = relay_stream_to_native_stream(stream);
     let state = unsafe { &*(raw.user_data as *const NativeHostLlmStream) };
     let mutex = state.stream.clone();
@@ -1024,7 +1024,9 @@ fn native_stream_continuation_covers_success_and_error() {
 
     let next: LlmStreamExecutionNextFn = Arc::new(|_request| {
         Box::pin(async {
-            Ok(Box::pin(tokio_stream::iter(vec![Ok(json!({"chunk": true}))])) as LlmJsonStream)
+            Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                "chunk": true
+            }))])))
         })
     });
     let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;

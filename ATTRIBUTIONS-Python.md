@@ -1490,7 +1490,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 DAMAGE.
 ```
 
-## deepagents (0.5.9)
+## deepagents (0.6.12)
 
 ### Licenses
 License: `MIT`
@@ -3729,7 +3729,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## langchain (1.3.11)
+## langchain (1.3.14)
 
 ### Licenses
 License: `MIT`
@@ -3789,7 +3789,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langchain-core (1.4.8)
+## langchain-core (1.4.9)
 
 ### Licenses
 License: `MIT`
@@ -3799,7 +3799,7 @@ License: `MIT`
 (No license file found in locked artifact for langchain-core; see package metadata or PyPI.)
 ```
 
-## langchain-google-genai (4.2.2)
+## langchain-google-genai (4.2.7)
 
 ### Licenses
 License: `MIT`
@@ -3889,7 +3889,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph (1.2.7)
+## langgraph (1.2.9)
 
 ### Licenses
 License: `MIT`
@@ -6595,7 +6595,7 @@ licenses found in LICENSE.APACHE2 or LICENSE.MIT. Contributions to are
 made under the terms of *both* these licenses.
 ```
 
-## soupsieve (2.8.3)
+## soupsieve (2.8.4)
 
 ### Licenses
 License: `MIT`
@@ -7348,7 +7348,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## uv (0.10.12)
+## uv (0.11.29)
 
 ### Licenses
 License: `MIT OR Apache-2.0`

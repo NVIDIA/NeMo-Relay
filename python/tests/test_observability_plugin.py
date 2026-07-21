@@ -5,8 +5,12 @@
 
 from __future__ import annotations
 
+import http.server
 import json
+import threading
+import time
 import typing
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -27,6 +31,55 @@ from nemo_relay.observability import (
 
 if typing.TYPE_CHECKING:
     from pathlib import Path
+
+
+class _AtofCaptureServer(http.server.ThreadingHTTPServer):
+    requests: list[tuple[dict[str, str], bytes]]
+    request_event: threading.Event
+
+
+class _AtofCaptureHandler(http.server.BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802
+        content_length = int(self.headers.get("content-length", "0"))
+        server = typing.cast(_AtofCaptureServer, self.server)
+        server.requests.append((dict(self.headers.items()), self.rfile.read(content_length)))
+        server.request_event.set()
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: ARG002
+        return
+
+
+class _AtofCapture:
+    server: "_AtofCaptureServer"
+    thread: threading.Thread
+
+    def __enter__(self) -> _AtofCapture:
+        self.server = _AtofCaptureServer(("127.0.0.1", 0), _AtofCaptureHandler)
+        self.server.requests = []
+        self.server.request_event = threading.Event()
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def wait_for_requests(self, expected: int, timeout: float = 5.0) -> list[tuple[dict[str, str], bytes]]:
+        deadline = time.monotonic() + timeout
+        while len(self.server.requests) < expected:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"timed out waiting for {expected} ATOF requests"
+            self.server.request_event.wait(remaining)
+            self.server.request_event.clear()
+        return self.server.requests
 
 
 class TestObservabilityConfigHelpers:
@@ -131,6 +184,48 @@ class TestObservabilityConfigHelpers:
         assert endpoint.transport == "websocket"
         assert endpoint.name is None
 
+    async def test_atof_stream_sink_snapshots_header_env(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ):
+        variable = "NEMO_RELAY_TEST_ATOF_HEADER_ENV"
+        credential = "Bearer relay-499"
+        monkeypatch.setenv(variable, credential)
+
+        with _AtofCapture() as capture:
+            config = ObservabilityConfig(
+                atof=AtofConfig(
+                    enabled=True,
+                    sinks=[
+                        AtofStreamSinkConfig(
+                            url=capture.url,
+                            transport="http_post",
+                            header_env={"authorization": variable},
+                        )
+                    ],
+                )
+            )
+            report = await plugin.initialize(plugin.PluginConfig(components=[ComponentSpec(config)]))
+            assert report["diagnostics"] == []
+            monkeypatch.delenv(variable)
+
+            try:
+                with scope.scope("python-header-env-agent", ScopeType.Agent) as handle:
+                    scope.event("python-header-env-mark", handle=handle, data={"step": 1})
+            finally:
+                plugin.clear()
+            requests = capture.wait_for_requests(3)
+
+        assert len(requests) == 3
+        payload = b"".join(body for _, body in requests).decode()
+        assert '"scope_category":"start"' in payload
+        assert '"name":"python-header-env-mark"' in payload
+        assert '"scope_category":"end"' in payload
+        for headers, _ in requests:
+            authorization = next(value for name, value in headers.items() if name.lower() == "authorization")
+            assert authorization == credential
+        assert credential not in json.dumps(report)
+        assert credential not in caplog.text
+
     def test_http_storage_config_serializes_headers(self):
         s3 = S3StorageConfig(bucket="archive")
         http = HttpStorageConfig(
@@ -202,6 +297,121 @@ class TestObservabilityConfigHelpers:
         assert trajectory["agent"]["tool_definitions"][0]["name"] == "search"
         assert trajectory["agent"]["extra"]["binding"] == "python"
         assert "python-observability-agent" in json.dumps(trajectory["extra"])
+
+    @pytest.mark.parametrize(
+        ("field_name_policy", "expected_data"),
+        [
+            (
+                "preserve",
+                {
+                    "service.name": "relay",
+                    "nested": {"deployment.region": "us-east"},
+                },
+            ),
+            (
+                "replace_dots",
+                {
+                    "service_name": "relay",
+                    "nested": {"deployment_region": "us-east"},
+                },
+            ),
+        ],
+    )
+    async def test_atof_stream_sink_dotted_fields_deliver_during_plugin_clear(
+        self,
+        tmp_path: Path,
+        field_name_policy: typing.Literal["preserve", "replace_dots"],
+        expected_data: dict[str, object],
+    ):
+        received: list[bytes] = []
+        request_received = threading.Event()
+        allow_response = threading.Event()
+        teardown_started = threading.Event()
+
+        class CaptureHandler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers["Content-Length"])
+                received.append(self.rfile.read(content_length))
+                request_received.set()
+                assert allow_response.wait(timeout=5)
+                self.send_response(204)
+                self.end_headers()
+
+            def log_message(self, format: str, *args: typing.Any) -> None:
+                return None
+
+        server = HTTPServer(("127.0.0.1", 0), CaptureHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        cleared = False
+        try:
+            await plugin.initialize(
+                plugin.PluginConfig(
+                    components=[
+                        ComponentSpec(
+                            ObservabilityConfig(
+                                atof=AtofConfig(
+                                    enabled=True,
+                                    sinks=[
+                                        AtofFileSinkConfig(
+                                            output_directory=str(tmp_path),
+                                            filename="events.jsonl",
+                                            mode="overwrite",
+                                        ),
+                                        AtofStreamSinkConfig(
+                                            url=f"http://127.0.0.1:{server.server_port}/events",
+                                            timeout_millis=5000,
+                                            field_name_policy=field_name_policy,
+                                        ),
+                                    ],
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+            with scope.scope("python-stream-agent", ScopeType.Agent) as handle:
+                scope.event(
+                    "python-dotted-mark",
+                    handle=handle,
+                    data={
+                        "service.name": "relay",
+                        "nested": {"deployment.region": "us-east"},
+                    },
+                )
+
+            def release_response() -> None:
+                teardown_started.wait(timeout=5)
+                request_received.wait(timeout=5)
+                allow_response.set()
+
+            response_thread = threading.Thread(target=release_response, daemon=True)
+            response_thread.start()
+            teardown_started.set()
+            started_at = time.monotonic()
+            plugin.clear()
+            cleared = True
+            assert time.monotonic() - started_at < 2
+            response_thread.join(timeout=2)
+            assert not response_thread.is_alive()
+
+            file_events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+            stream_events = [json.loads(body) for body in received]
+            assert len(file_events) == len(stream_events) == 3
+            file_mark = next(event for event in file_events if event["name"] == "python-dotted-mark")
+            stream_mark = next(event for event in stream_events if event["name"] == "python-dotted-mark")
+            assert file_mark["data"] == {
+                "service.name": "relay",
+                "nested": {"deployment.region": "us-east"},
+            }
+            assert stream_mark["data"] == expected_data
+        finally:
+            allow_response.set()
+            if not cleared:
+                plugin.clear()
+            server.shutdown()
+            server_thread.join(timeout=5)
+            server.server_close()
 
     async def test_atif_flushes_open_agent_on_clear(self, tmp_path):
         await plugin.initialize(

@@ -205,6 +205,22 @@ describe('Scope-local guardrail registration and execution', () => {
     popScope(scope);
   });
 
+  it('scope-local conditional guardrail throws a catchable error', async () => {
+    const scope = pushScope('sl_guard_throw', ScopeType.Agent, null, null);
+    scopeRegisterToolConditionalExecutionGuardrail(scope.uuid, 'sl_throw_1', 10, () => {
+      throw new Error('scope guardrail boom');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('sl_throw_tool', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /scope guardrail boom/i,
+      );
+    } finally {
+      scopeDeregisterToolConditionalExecutionGuardrail(scope.uuid, 'sl_throw_1');
+      popScope(scope);
+    }
+  });
+
   it('duplicate scope-local guardrail name fails', () => {
     const scope = pushScope('sl_guard_dup', ScopeType.Agent, null, null);
     scopeRegisterToolSanitizeRequestGuardrail(scope.uuid, 'sl_dup_guard', 10, (n, a) => a);
@@ -693,6 +709,22 @@ describe('Priority merge of global and scope-local middleware', () => {
     scopeDeregisterToolRequestIntercept(scope.uuid, 'sl_merge_local_int');
     popScope(scope);
     lib.deregisterToolRequestIntercept('sl_merge_global_int');
+  });
+
+  it('scope-local tool request intercept throws a catchable error', async () => {
+    const scope = pushScope('sl_tool_request_throw_scope', ScopeType.Agent, null, null);
+    scopeRegisterToolRequestIntercept(scope.uuid, 'sl_tool_request_throw', 10, false, () => {
+      throw new Error('scope tool request intercept boom');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('sl_tool_request_throw_call', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /scope tool request intercept boom/i,
+      );
+    } finally {
+      scopeDeregisterToolRequestIntercept(scope.uuid, 'sl_tool_request_throw');
+      popScope(scope);
+    }
   });
 
   it('scope-local execution intercept and global intercept merge', async () => {

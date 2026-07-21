@@ -1497,8 +1497,7 @@ fn wrap_event_sanitize_fn(
 ) -> EventSanitizeFn {
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |event, fields| {
-        let fallback = fields.clone();
-        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or(fallback)
+        call_event_sanitize_callback(cb, user_data.ptr, event, &fields).unwrap_or_default()
     })
 }
 
@@ -2159,11 +2158,11 @@ fn native_stream_to_relay_stream(
     next_ctx: Option<NativeStreamNextContext>,
     callback_user_data: Option<Arc<NativeCallbackUserData>>,
 ) -> FlowResult<LlmJsonStream> {
-    Ok(Box::pin(NativeRelayLlmStream::from_raw(
+    Ok(LlmJsonStream::new(NativeRelayLlmStream::from_raw(
         raw,
         next_ctx,
         callback_user_data,
-    )?) as LlmJsonStream)
+    )?))
 }
 
 fn drop_native_stream(mut raw: NemoRelayNativeLlmStreamV1) {

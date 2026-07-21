@@ -13,7 +13,9 @@ use std::sync::Arc;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
-use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, ToolExecutionNextFn};
+use nemo_relay::api::runtime::{
+    LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
+};
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, create_scope_stack as create_scope_stack_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
@@ -40,8 +42,7 @@ use crate::py_types::{
     PyScopeStack, PyScopeType, PyToolAttributes, PyToolHandle,
 };
 
-pub(crate) type RustJsonStream =
-    std::pin::Pin<Box<dyn tokio_stream::Stream<Item = FlowResult<serde_json::Value>> + Send>>;
+pub(crate) type RustJsonStream = LlmJsonStream;
 
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
@@ -100,12 +101,32 @@ fn py_annotated_llm_response(
 pub(crate) async fn forward_stream_to_channel(
     mut stream: RustJsonStream,
     tx: tokio::sync::mpsc::Sender<FlowResult<serde_json::Value>>,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    closed: tokio::sync::watch::Sender<Option<Result<(), String>>>,
 ) {
-    while let Some(item) = stream.next().await {
-        if tx.send(item).await.is_err() {
+    loop {
+        if *cancel.borrow() {
             break;
         }
+        let item = tokio::select! {
+            _ = cancel.changed() => break,
+            item = stream.next() => item,
+        };
+        let Some(item) = item else {
+            break;
+        };
+        tokio::select! {
+            _ = cancel.changed() => break,
+            result = tx.send(item) => {
+                if result.is_err() {
+                    break;
+                }
+            }
+        }
     }
+    closed.send_replace(Some(
+        stream.close().await.map_err(|error| error.to_string()),
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -775,8 +796,9 @@ fn llm_call_execute<'py>(
 ///     func: An async callable ``(LlmRequest) -> AsyncIterator[Any]`` that returns JSON chunks.
 ///     collector: A callable ``(Any) -> None`` invoked with each intercepted chunk
 ///         (after stream execution intercepts have been applied).
-///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted.
-///         Its return value is the aggregated response (converted to JSON).
+///     finalizer: A callable ``() -> Any`` invoked once when the stream is exhausted
+///         or explicitly closed. Its return value is the aggregated response
+///         (converted to JSON).
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``LlmAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -785,6 +807,9 @@ fn llm_call_execute<'py>(
 ///     codec: Optional request codec used for annotated-aware request intercepts.
 ///     response_codec: Optional response codec used to attach annotated response data
 ///         to emitted end events.
+///
+/// Consumers that stop reading early must call ``await stream.aclose()`` to
+/// wait for producer cleanup and surface cleanup errors.
 ///
 /// Returns:
 ///     An awaitable that resolves to an ``LlmStream`` async iterator of JSON chunks.
@@ -861,10 +886,19 @@ fn llm_stream_call_execute<'py>(
 
                 // Spawn a tokio task that drains the Rust stream into an mpsc channel
                 let (tx, rx) = tokio::sync::mpsc::channel::<FlowResult<serde_json::Value>>(32);
-                tokio::spawn(forward_stream_to_channel(rust_stream, tx));
+                let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
+                let (closed, closed_rx) = tokio::sync::watch::channel(None);
+                tokio::spawn(forward_stream_to_channel(
+                    rust_stream,
+                    tx,
+                    cancel_rx,
+                    closed,
+                ));
 
                 Ok(PyLlmStream {
-                    receiver: tokio::sync::Mutex::new(rx),
+                    receiver: Arc::new(tokio::sync::Mutex::new(rx)),
+                    cancel,
+                    closed: closed_rx,
                 })
             })
             .await

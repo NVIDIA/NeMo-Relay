@@ -875,6 +875,45 @@ fn structured_upstream_failure_classification_matches_retry_policy() {
 }
 
 #[tokio::test]
+async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let sse_body = concat!(
+        "data: {\"chunk\":\"first\"}\n\n",
+        "data: {not valid json}\n\n"
+    );
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let response = test_http_client()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_json_stream(response);
+
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({"chunk": "first"})
+    );
+    let error = stream.next().await.unwrap().unwrap_err().to_string();
+    assert!(error.contains("SSE data payload"), "{error}");
+    assert!(error.contains("not valid json"), "{error}");
+    assert!(stream.next().await.is_none());
+
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn retry_aware_buffered_body_read_failure_stays_structured() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -929,6 +968,70 @@ async fn retry_aware_buffered_body_read_failure_stays_structured() {
         panic!("expected structured upstream failure, got {error:?}");
     };
     assert_eq!(failure.class, UpstreamFailureClass::Connection);
+    assert!(upstream_error.lock().unwrap().is_none());
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn retry_aware_buffered_invalid_json_stays_structured() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nx-request-id: provider-request\r\ncontent-length: 22\r\nconnection: close\r\n\r\n{invalid-provider-json",
+            )
+            .await
+            .unwrap();
+    });
+
+    let state = AppState::new(GatewayConfig::default());
+    let prepared = PreparedGatewayRequest {
+        method: Method::POST,
+        headers: HeaderMap::new(),
+        path: "/v1/chat/completions".into(),
+        provider: ProviderRoute::OpenAiChatCompletions,
+        upstream_url: format!("http://{address}/v1/chat/completions"),
+        body_bytes: Bytes::from_static(b"{}"),
+        request_json: json!({}),
+        streaming: false,
+        authorization: crate::provider_auth::ProviderRequestAuthorization {
+            source_credential: crate::provider_auth::SourceCredentialDisposition::Absent,
+            allow_environment_provider_auth: false,
+        },
+    };
+    let upstream_info = Arc::new(Mutex::new(None));
+    let upstream_error = Arc::new(Mutex::new(None));
+    let upstream_failed = Arc::new(Mutex::new(false));
+    let response_bytes = Arc::new(Mutex::new(None));
+    let func = build_buffered_func(
+        state,
+        &prepared,
+        upstream_info,
+        upstream_error.clone(),
+        upstream_failed,
+        response_bytes,
+    );
+    let error = func(LlmRequest {
+        headers: Map::from_iter([(INTERNAL_RETRY_AWARE_HEADER.into(), json!("true"))]),
+        content: json!({}),
+    })
+    .await
+    .unwrap_err();
+
+    let FlowError::Upstream(failure) = error else {
+        panic!("expected structured upstream failure, got {error:?}");
+    };
+    assert_eq!(failure.status, Some(200));
+    assert_eq!(failure.class, UpstreamFailureClass::Other);
+    assert_eq!(failure.body, "{invalid-provider-json");
+    assert_eq!(
+        failure.headers.get("x-request-id"),
+        Some(&"provider-request".to_string())
+    );
     assert!(upstream_error.lock().unwrap().is_none());
     server.await.unwrap();
 }
@@ -1778,7 +1881,7 @@ async fn streaming_gateway_call_guard_finishes_when_body_is_dropped() {
         .await
         .unwrap();
 
-    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+    let stream = LlmJsonStream::new(futures_util::stream::pending::<
         std::result::Result<Value, FlowError>,
     >());
     let body = client_sse_body(
@@ -1858,7 +1961,7 @@ fn streaming_gateway_call_guard_finishes_without_a_current_runtime() {
         (manager, prep)
     });
     let final_response = json!({ "output_text": "streamed final" });
-    let stream: LlmJsonStream = Box::pin(futures_util::stream::pending::<
+    let stream = LlmJsonStream::new(futures_util::stream::pending::<
         std::result::Result<Value, FlowError>,
     >());
     let body = client_sse_body(
@@ -1936,7 +2039,7 @@ async fn streaming_body_records_final_response_for_turn_output() {
     let session_id = prep.session_id.clone();
     let owner_subagent_id = prep.owner_subagent_id.clone();
     let final_response = json!({ "output_text": "streamed final" });
-    let stream: LlmJsonStream = Box::pin(futures_util::stream::empty::<
+    let stream = LlmJsonStream::new(futures_util::stream::empty::<
         std::result::Result<Value, FlowError>,
     >());
     let body = client_sse_body(

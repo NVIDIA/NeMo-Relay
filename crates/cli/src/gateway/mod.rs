@@ -81,7 +81,7 @@ pub(crate) async fn passthrough(
 
 // Captures upstream HTTP status and response headers from inside the managed `func`. The runtime's
 // LLM execution callback returns only a Json (or Json stream), so the outer gateway needs a side
-// channel to recover the bytes the client expects.
+// channel to recover transport metadata that is not represented in the runtime response.
 type UpstreamResponseInfo = Arc<Mutex<Option<(StatusCode, HeaderMap)>>>;
 
 // Captures the original `reqwest::Error` from an upstream send failure so the gateway can return
@@ -100,7 +100,7 @@ async fn run_managed_gateway(
         let session_id = prep.session_id.clone();
         let session_finish = prep.session_finish;
         let model = prep.model_name.as_deref().unwrap_or("<unknown>");
-        log::warn!(
+        log::debug!(
             target: "nemo_relay.gateway",
             event = "observability_bypassed",
             session_id = session_id.as_str(),
@@ -221,23 +221,23 @@ async fn run_managed_buffered(
                 .expect("upstream info lock poisoned")
                 .take()
                 .unwrap_or((StatusCode::OK, HeaderMap::new()));
-            let captured = response_bytes
+            let response_body = match response_bytes
                 .lock()
                 .expect("response bytes lock poisoned")
-                .take();
-            // A short-circuiting execution intercept (e.g. a response_cache hit)
-            // returns the response without an upstream call, so no upstream bytes
-            // were captured; serialize the returned JSON as the body instead.
-            // `upstream_info` is written together with `response_bytes`, so
-            // `headers` here is the empty default.
-            let body_bytes = match captured {
-                Some(bytes) => bytes,
+                .take()
+            {
+                Some(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                    Ok(upstream_json) if upstream_json != response_json => {
+                        Body::from(response_json.to_string())
+                    }
+                    _ => Body::from(bytes),
+                },
                 None => {
                     headers.insert(
                         http::header::CONTENT_TYPE,
                         HeaderValue::from_static("application/json"),
                     );
-                    Bytes::from(serde_json::to_vec(&response_json).unwrap_or_default())
+                    Body::from(response_json.to_string())
                 }
             };
             state
@@ -248,7 +248,7 @@ async fn run_managed_buffered(
                 .sessions
                 .finish_gateway_call(&session_id, session_finish)
                 .await;
-            build_response(status, headers, Body::from(body_bytes))
+            build_response(status, headers, response_body)
         }
         Err(error) => {
             state
@@ -358,6 +358,13 @@ fn build_buffered_func(
                 )));
             }
             let parsed = serde_json::from_slice::<Value>(&bytes);
+            if parsed.is_err() && retry_aware {
+                return Err(FlowError::Upstream(http_failure(
+                    status,
+                    &response_headers,
+                    &bytes,
+                )));
+            }
             *upstream_info.lock().expect("upstream info lock poisoned") =
                 Some((status, response_headers));
             *response_bytes.lock().expect("response bytes lock poisoned") = Some(bytes);
@@ -579,15 +586,13 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
         while let Some(chunk) = bytes.next().await {
             match chunk {
                 Ok(buffer) => {
-                    match decoder.push_bytes(&buffer) {
-                        Ok(events) => {
-                            for event in events {
-                                yield Ok(event.data);
+                    for result in decoder.push_bytes_results(&buffer) {
+                        match result {
+                            Ok(event) => yield Ok(event.data),
+                            Err(error) => {
+                                yield Err(error);
+                                return;
                             }
-                        }
-                        Err(error) => {
-                            yield Err(error);
-                            return;
                         }
                     }
                 }
@@ -603,7 +608,7 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
             Err(error) => yield Err(error),
         }
     };
-    Box::pin(stream)
+    LlmJsonStream::new(stream)
 }
 
 // Re-encodes a runtime JSON stream as `text/event-stream` frames for the downstream client. Event

@@ -554,13 +554,13 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             })
             .func(Arc::new(|request| {
                 Box::pin(async move {
-                    Ok(Box::pin(tokio_stream::iter(vec![
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![
                         Ok(json!({
                             "stream_chunk": 1,
                             "request": request.content,
                         })),
                         Ok(json!({ "stream_chunk": 2 })),
-                    ])) as LlmJsonStream)
+                    ])))
                 })
             }))
             .collector(Box::new(move |chunk| {
@@ -742,6 +742,57 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
     assert_eq!(result["raw_tool_outcome"], true);
     assert!(result.get("pending_marks").is_none());
 
+    drop(cleanup);
+    activation.clear();
+}
+
+#[tokio::test]
+async fn native_event_sanitizer_callback_errors_clear_observability_fields() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref =
+        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_event_sanitize_errors");
+    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
+        .expect("raw native event sanitizer fixture should load");
+    let mut cleanup = NativePluginTestCleanup::new();
+
+    let mut plugin_config = PluginConfig::default();
+    plugin_config.components.push(PluginComponentSpec {
+        kind: "fixture_native".into(),
+        enabled: true,
+        config: Map::new(),
+    });
+    initialize_plugins_exact(plugin_config)
+        .await
+        .expect("raw native event sanitizer fixture should initialize");
+    cleanup.mark_plugin_configuration_active();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "native_event_sanitizer_error_capture",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    cleanup.mark_subscriber_registered("native_event_sanitizer_error_capture");
+
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("native-event-sanitize-error")
+            .data(json!({ "secret": true }))
+            .metadata(json!({ "secret": true }))
+            .build(),
+    )
+    .expect("mark event should emit");
+    flush_subscribers().expect("event should flush");
+
+    let captured_events = events.lock().unwrap().clone();
+    let event = find_event(&captured_events, "native-event-sanitize-error", None);
+    assert_eq!(event.data(), None);
+    assert_eq!(event.metadata(), None);
+
+    deregister_subscriber("native_event_sanitizer_error_capture")
+        .expect("test subscriber should deregister");
     drop(cleanup);
     activation.clear();
 }
