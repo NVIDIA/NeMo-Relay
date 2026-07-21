@@ -156,8 +156,12 @@ fn build_completion_unknowns(
 ) -> napi::Result<(JsUnknown, JsUnknown)> {
     let resolve_completion = completion.clone();
     let resolve = env.create_function_from_closure("__nemo_relay_resolve", move |ctx| {
-        let value = ctx.get::<Json>(0).unwrap_or(Json::Null);
-        resolve_completion.send(Ok(value));
+        let value = ctx.get::<Json>(0).map_err(|error| {
+            FlowError::Internal(format!(
+                "JavaScript callback result could not be converted to JSON: {error}"
+            ))
+        });
+        resolve_completion.send(value);
         ctx.env.get_undefined()
     })?;
 
@@ -180,14 +184,51 @@ fn build_completion_unknowns(
 
 fn create_promise_wrapper(env: &Env, callable: &JsFunction) -> napi::Result<JsFunction> {
     let factory: JsFunction = env.run_script(
-        r#"((fn) => function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
+        r#"((fn) => {
+  function jsonValue(value, seen = new Set()) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        throw new TypeError('JavaScript callback returned a non-finite number that cannot be converted to JSON');
+      }
+      return value;
+    }
+    if (typeof value !== 'object') {
+      throw new TypeError(`JavaScript callback returned an unsupported ${typeof value} value that cannot be converted to JSON`);
+    }
+    if (seen.has(value)) {
+      throw new TypeError('JavaScript callback returned a circular value that cannot be converted to JSON');
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+      const length = value.length;
+      const result = new Array(length);
+      for (let index = 0; index < length; index += 1) {
+        result[index] = jsonValue(value[index], seen);
+      }
+      seen.delete(value);
+      return result;
+    }
+
+    const result = Object.create(null);
+    for (const key of Object.keys(value)) {
+      result[key] = jsonValue(value[key], seen);
+    }
+    seen.delete(value);
+    return result;
+  }
+
+  return function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
   if (error != null) {
     reject(error);
     return;
   }
   Promise.resolve().then(() => (
     next === undefined ? fn(arg0) : fn(arg0, next)
-  )).then(resolve, reject);
+  )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, reject);
+  };
 })"#,
     )?;
     let wrapper_unknown: JsUnknown = factory.call(None, &[function_to_unknown(env, callable)])?;

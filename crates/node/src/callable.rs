@@ -119,6 +119,68 @@ pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Re
     Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
 }
 
+/// Wrap a synchronous execution callback so failures cross the N-API boundary as data.
+///
+/// The return value is validated before NAPI-RS attempts to convert it to JSON. This
+/// prevents unsupported values such as `BigInt` from reaching conversion paths that
+/// abort the Node process.
+pub(crate) fn safe_execution_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    let factory: JsFunction = env.run_script(
+        r#"((fn) => {
+  function jsonValue(value, seen = new Set()) {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        throw new TypeError('JavaScript callback returned a non-finite number that cannot be converted to JSON');
+      }
+      return value;
+    }
+    if (typeof value !== 'object') {
+      throw new TypeError(`JavaScript callback returned an unsupported ${typeof value} value that cannot be converted to JSON`);
+    }
+    if (seen.has(value)) {
+      throw new TypeError('JavaScript callback returned a circular value that cannot be converted to JSON');
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+      const length = value.length;
+      const result = new Array(length);
+      for (let index = 0; index < length; index += 1) {
+        result[index] = jsonValue(value[index], seen);
+      }
+      seen.delete(value);
+      return result;
+    }
+
+    const result = Object.create(null);
+    for (const key of Object.keys(value)) {
+      result[key] = jsonValue(value[key], seen);
+    }
+    seen.delete(value);
+    return result;
+  }
+
+  return function __nemo_relay_execution_wrapper(...args) {
+    try {
+      const value = fn(...args);
+      return { ok: true, value: jsonValue(value === undefined ? null : value) };
+    } catch (error) {
+      let message = 'JavaScript callback failed';
+      try {
+        message = String(error?.message ?? error);
+      } catch {}
+      return { ok: false, error: message };
+    }
+  };
+})"#,
+    )?;
+    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
+    let wrapper_unknown = factory.call(None, &[func_unknown])?;
+    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+}
+
 pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Result<Json> {
     let result: MiddlewareCallbackResult = serde_json::from_value(value).map_err(|error| {
         FlowError::Internal(format!(
@@ -314,7 +376,8 @@ pub fn wrap_js_tool_exec_fn(
                     "failed to queue JS tool execution callback: {status:?}",
                 )));
             }
-            rx.await.map_err(|e| FlowError::Internal(e.to_string()))
+            let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
+            unwrap_middleware_result(result, "JS tool execution callback failed")
         })
     })
 }
@@ -507,7 +570,8 @@ pub fn wrap_js_llm_exec_fn(
                     "failed to queue JS LLM execution callback: {status:?}",
                 )));
             }
-            rx.await.map_err(|e| FlowError::Internal(e.to_string()))
+            let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
+            unwrap_middleware_result(result, "JS LLM execution callback failed")
         })
     })
 }

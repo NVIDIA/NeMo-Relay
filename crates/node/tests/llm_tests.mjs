@@ -184,6 +184,42 @@ describe('LLM execute', () => {
     assert.equal(result, null);
   });
 
+  it('sync execute rejects thrown callbacks without terminating Node', async () => {
+    await assert.rejects(
+      () =>
+        llmCallExecute('exec_llm_throw', makeNative(), () => {
+          throw new Error('sync llm callback failed');
+        }),
+      /sync llm callback failed/,
+    );
+
+    const result = await llmCallExecute('exec_llm_after_throw', makeNative(), () => ({
+      ok: true,
+    }));
+    assert.deepEqual(result, {
+      ok: true,
+    });
+  });
+
+  it('sync and async execute reject invalid JSON results without terminating Node', async () => {
+    const cases = [
+      ['sync_bigint', () => llmCallExecute('exec_llm_bigint', makeNative(), () => ({ value: 1n }))],
+      ['async_bigint', () => llmCallExecuteAsync('exec_async_llm_bigint', makeNative(), async () => 1n)],
+      ['sync_sparse_array', () => llmCallExecute('exec_llm_sparse_array', makeNative(), () => [, 1])],
+      ['async_sparse_array', () => llmCallExecuteAsync('exec_async_llm_sparse_array', makeNative(), async () => [, 1])],
+    ];
+
+    for (const [kind, execute] of cases) {
+      await assert.rejects(execute, /bigint|undefined|json/i);
+      const result = await llmCallExecute(`exec_llm_after_${kind}`, makeNative(), () => ({
+        ok: true,
+      }));
+      assert.deepEqual(result, {
+        ok: true,
+      });
+    }
+  });
+
   it('execute records OTEL status metadata on end events', async () => {
     const events = [];
     registerSubscriber('node_llm_status_metadata_sub', (e) => events.push(e));
