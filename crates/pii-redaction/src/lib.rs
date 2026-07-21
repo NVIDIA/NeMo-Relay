@@ -13,6 +13,7 @@ pub mod component;
 pub(crate) mod detectors;
 pub(crate) mod local;
 pub(crate) mod overlay;
+pub(crate) mod trajectory;
 
 #[cfg(test)]
 pub(crate) fn test_mutex() -> &'static Mutex<()> {
