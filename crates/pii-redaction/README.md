@@ -21,6 +21,8 @@ NeMo Relay PII Redaction allows you to:
 
 - Use `PiiRedactionConfig`, the canonical config contract for the top-level
   `pii_redaction` plugin component.
+- Compose multiple ordered built-in or runtime-provided local-model policies
+  inside one singleton component.
 - Install deterministic redaction behavior through the NeMo Relay privacy
   plugin system instead of custom sanitize callbacks.
 - Sanitize emitted tool request or response payloads and supported codec-backed
@@ -73,21 +75,38 @@ configuration that includes a `pii_redaction` component:
 nemo_relay_pii_redaction::component::register_pii_redaction_component()?;
 ```
 
-A minimal config can redact detected emails from emitted tool input payloads:
+A profile-array config can apply multiple policies across every supported
+sanitization surface:
 
 ```toml
 [[components]]
 kind = "pii_redaction"
 
 [components.config]
-mode = "builtin"
-tool_input = true
+codec = "openai_chat"
 
-[components.config.builtin]
+[[components.config.profiles]]
+mode = "builtin"
+priority = 80
+
+[components.config.profiles.builtin]
 action = "redact"
 detector = "email"
-target_paths = []
+
+[[components.config.profiles]]
+mode = "builtin"
+priority = 90
+
+[components.config.profiles.builtin]
+action = "redact"
+detector = "api_key"
 ```
+
+Profiles execute by ascending priority, with array order breaking ties. Relay
+assigns internal positional names such as `profile_0`; no user-supplied ID is
+required. Profile-array mode covers marks, LLM and tool observability, and
+scope metadata automatically. The original single-policy surface flags remain
+available for backward compatibility but cannot be combined with `profiles`.
 
 ## Built-In Backend
 
