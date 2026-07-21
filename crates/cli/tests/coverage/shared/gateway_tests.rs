@@ -875,6 +875,45 @@ fn structured_upstream_failure_classification_matches_retry_policy() {
 }
 
 #[tokio::test]
+async fn sse_json_stream_yields_valid_event_before_later_batch_error() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let sse_body = concat!(
+        "data: {\"chunk\":\"first\"}\n\n",
+        "data: {not valid json}\n\n"
+    );
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        sse_body.len(),
+        sse_body
+    );
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        let _ = socket.read(&mut request).await.unwrap();
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+
+    let response = test_http_client()
+        .get(format!("http://{address}"))
+        .send()
+        .await
+        .unwrap();
+    let mut stream = sse_json_stream(response);
+
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        json!({"chunk": "first"})
+    );
+    let error = stream.next().await.unwrap().unwrap_err().to_string();
+    assert!(error.contains("SSE data payload"), "{error}");
+    assert!(error.contains("not valid json"), "{error}");
+    assert!(stream.next().await.is_none());
+
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn retry_aware_buffered_body_read_failure_stays_structured() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
