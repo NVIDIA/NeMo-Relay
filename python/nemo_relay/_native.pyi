@@ -912,10 +912,24 @@ class AtofExporter:
         """Deregister ``name`` and return whether it existed."""
         ...
     def force_flush(self) -> None:
-        """Wait for queued subscriber delivery, then flush the file sink or drain the stream sink."""
+        """Flush the exporter.
+
+        Outside a native subscriber callback, wait for queued subscriber
+        delivery, then flush the file sink or ask the stream sink to drain up
+        to its timeout. A re-entrant call does not establish the delivery
+        barrier. A stream timeout is logged and does not by itself return an
+        error.
+        """
         ...
     def shutdown(self) -> None:
-        """Wait for queued subscriber delivery, then flush and shut down the exporter."""
+        """Flush the exporter and shut it down.
+
+        Outside a native subscriber callback, wait for queued subscriber
+        delivery, then flush the file sink or ask the stream sink to drain and
+        close up to its timeout. A re-entrant call does not establish the
+        delivery barrier. A stream timeout is logged and does not by itself
+        return an error.
+        """
         ...
 
 class ScopeStack:

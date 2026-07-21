@@ -1830,13 +1830,19 @@ func (e *AtofExporter) Deregister(name string) error {
 	return checkStatus(status)
 }
 
-// ForceFlush flushes the output file.
+// ForceFlush, outside a native subscriber callback, waits for queued subscriber delivery and then
+// flushes the configured file sink or asks the configured stream sink to drain up to its timeout.
+// A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
+// not by itself return an error.
 func (e *AtofExporter) ForceFlush() error {
 	status := C.nemo_relay_atof_exporter_force_flush(e.ptr)
 	return checkStatus(status)
 }
 
-// Shutdown flushes the output file.
+// Shutdown, outside a native subscriber callback, waits for queued subscriber delivery and then
+// flushes the configured file sink or asks the configured stream sink to drain and close up to its
+// timeout. A re-entrant call does not establish the delivery barrier. A stream timeout is logged
+// and does not by itself return an error.
 func (e *AtofExporter) Shutdown() error {
 	status := C.nemo_relay_atof_exporter_shutdown(e.ptr)
 	return checkStatus(status)

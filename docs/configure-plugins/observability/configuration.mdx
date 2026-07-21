@@ -441,9 +441,12 @@ that are unavailable in the current build or target.
 Call `plugin.clear()` or `clear_plugin_configuration()` during teardown.
 Clearing the plugin configuration waits for previously queued subscriber
 callbacks, runs exporter-specific shutdown work, and removes plugin-owned
-registrations. That work flushes file exporters, drains and closes ATOF stream
-sinks, writes any eligible partial ATIF trajectories, and shuts down owned OTLP
-subscribers.
+registrations. That work flushes file exporters, asks ATOF stream sink workers
+to drain and close within their configured timeout, writes any eligible partial
+ATIF trajectories, and shuts down owned OTLP subscribers. If an ATOF stream
+worker times out, NeMo Relay logs a warning and continues teardown; clearing
+the plugin can still return successfully without confirming that worker drained
+or closed.
 
 This is a graceful teardown barrier, not a crash-durability guarantee. If the
 process terminates before clearing begins or finishes, the output can omit

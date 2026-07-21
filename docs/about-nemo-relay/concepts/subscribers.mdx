@@ -141,8 +141,8 @@ observe:
 |---|---|---|
 | Event-producing call returns | The runtime call completed. On native targets, the runtime normally queues subscriber work for background dispatch. | Subscriber callbacks ran, exporter work completed, or output is visible or durable. |
 | Subscriber flush returns | All native subscriber callbacks queued before the flush call have completed. | Exporter-owned workers drained or a remote backend accepted the data. |
-| Exporter barrier returns | The runtime drained the shared subscriber queue, and the exporter completed its documented `force_flush()`, `export()`, or equivalent operation. | Exactly-once delivery, machine-crash durability, or success beyond the exporter's documented error and timeout behavior. |
-| Plugin clear or exporter shutdown returns | NeMo Relay completed graceful terminal draining and cleanup, or reported an error. | Retention if the process terminates before teardown completes. |
+| Exporter barrier returns | The runtime drained the shared subscriber queue, and the exporter completed its documented `force_flush()`, `export()`, or equivalent operation. For a worker-backed exporter, that operation can stop after its configured timeout. | Exactly-once delivery, machine-crash durability, confirmed completion by a worker that timed out, or success beyond the exporter's documented error and timeout behavior. |
+| Plugin clear or exporter shutdown returns | NeMo Relay completed the component's documented graceful teardown steps, or reported an error. | Retention if the process terminates before teardown completes or completion by a worker that timed out during teardown. |
 | Process terminates before a barrier | You can observe only callback side effects and exporter work that completed before termination. | Retention of queued subscriber callbacks or pending exporter work. |
 
 Use the subscriber flush API when application shutdown, tests, or examples must

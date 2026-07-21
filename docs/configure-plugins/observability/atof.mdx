@@ -112,7 +112,7 @@ The following table describes each stream sink:
 | `transport` | `http_post` | `http_post`, `websocket`, or `ndjson`. |
 | `headers` | `{}` | String-to-string headers for requests or handshakes. |
 | `header_env` | `{}` | Maps each header name to an environment variable that contains the full header value. Each variable must be set and nonblank, and the same header cannot also appear in `headers`. |
-| `timeout_millis` | `3000` | Per-sink timeout. Must be greater than `0`. |
+| `timeout_millis` | `3000` | Per-sink timeout for stream I/O and flush or close acknowledgement. Must be greater than `0`. |
 | `field_name_policy` | `preserve` | Field-name handling before Relay sends stream events. Accepted values are `preserve` and `replace_dots`. |
 
 Use `header_env` for secrets so the configuration stores the environment
@@ -137,13 +137,20 @@ The following transports are supported:
 For a file sink, the shared subscriber flush completes the synchronous file
 callback. For a stream sink, it only confirms that the ATOF callback queued the
 stream work. A manual exporter's `force_flush()` first waits for queued
-subscriber callbacks, then flushes file output or drains queued stream events
-while keeping the exporter open. `shutdown()` performs the terminal form of
-that operation, closes stream connections, and ignores events delivered after
-the exporter closes.
+subscriber callbacks, then flushes file output or asks each stream worker to
+drain its queued events while keeping the exporter open. It waits for each
+stream worker up to that sink's `timeout_millis` value. If a worker does not
+acknowledge in time, NeMo Relay logs a warning and `force_flush()` can still
+return successfully; the worker can still have queued work.
+
+`shutdown()` follows the same delivery barrier, flushes file output, and asks
+each stream worker to drain and close within the configured timeout. It ignores
+events delivered after the exporter closes. A timeout is logged and does not by
+itself cause `shutdown()` to return an error.
 
 During graceful shutdown, `plugin.clear()` or `clear_plugin_configuration()`
-drains and closes plugin-managed stream sinks.
+uses that same terminal stream-sink operation. It does not guarantee that a
+worker which timed out drained or closed.
 
 ## Migrate From Version 1
 

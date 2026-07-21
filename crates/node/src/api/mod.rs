@@ -3680,7 +3680,10 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Wait for queued subscriber delivery, then flush the file sink or drain the stream sink.
+    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
+    /// file sink or ask the stream sink to drain for up to its timeout. A re-entrant call does not
+    /// establish the delivery barrier. A stream timeout is logged and does not by itself return an
+    /// error.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner
@@ -3688,7 +3691,10 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Wait for queued subscriber delivery, then flush and shut down the exporter.
+    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
+    /// file sink or ask the stream sink to drain and close up to its timeout. A re-entrant call
+    /// does not establish the delivery barrier. A stream timeout is logged and does not by itself
+    /// return an error.
     #[napi]
     pub fn shutdown(&self) -> napi::Result<()> {
         self.inner
