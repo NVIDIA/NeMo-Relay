@@ -36,6 +36,7 @@ use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
 
+use crate::callback_factory;
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
@@ -117,6 +118,15 @@ pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Re
     let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
     let wrapper_unknown = factory.call(None, &[func_unknown])?;
     Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+}
+
+/// Wrap a synchronous execution callback so failures cross the N-API boundary as data.
+///
+/// The return value is validated before NAPI-RS attempts to convert it to JSON. This
+/// prevents unsupported values such as `BigInt` from reaching conversion paths that
+/// abort the Node process.
+pub(crate) fn safe_execution_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
+    callback_factory::wrap_execution_callback(env, func)
 }
 
 pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Result<Json> {
@@ -314,7 +324,8 @@ pub fn wrap_js_tool_exec_fn(
                     "failed to queue JS tool execution callback: {status:?}",
                 )));
             }
-            rx.await.map_err(|e| FlowError::Internal(e.to_string()))
+            let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
+            unwrap_middleware_result(result, "JS tool execution callback failed")
         })
     })
 }
@@ -507,7 +518,8 @@ pub fn wrap_js_llm_exec_fn(
                     "failed to queue JS LLM execution callback: {status:?}",
                 )));
             }
-            rx.await.map_err(|e| FlowError::Internal(e.to_string()))
+            let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
+            unwrap_middleware_result(result, "JS LLM execution callback failed")
         })
     })
 }

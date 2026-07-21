@@ -1924,7 +1924,7 @@ pub fn tool_call_execute(
     env: Env,
     name: String,
     args: Json,
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    #[napi(ts_arg_type = "(arg: Json) => any")] func: JsFunction,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -1934,7 +1934,8 @@ pub fn tool_call_execute(
     let parent = handle
         .map(|h| h.inner.clone())
         .unwrap_or_else(task_scope_top);
-    let exec_fn = callable::wrap_js_tool_exec_fn(func);
+    let callback = callable::safe_execution_callback(&env, &func)?;
+    let exec_fn = callable::wrap_js_tool_exec_fn(json_callback_tsfn(&env, &callback)?);
     let default_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| exec_fn(args));
     let scope_stack = current_scope_stack_handle();
 
@@ -2116,7 +2117,7 @@ pub fn llm_call_execute(
     env: Env,
     name: String,
     request: Json,
-    func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    #[napi(ts_arg_type = "(arg: Json) => any")] func: JsFunction,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -2132,7 +2133,8 @@ pub fn llm_call_execute(
         .unwrap_or_else(task_scope_top);
     let llm_request: LlmRequest = serde_json::from_value(request)
         .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
-    let exec_fn = callable::wrap_js_llm_exec_fn(func);
+    let callback = callable::safe_execution_callback(&env, &func)?;
+    let exec_fn = callable::wrap_js_llm_exec_fn(json_callback_tsfn(&env, &callback)?);
     let default_fn: LlmExecutionNextFn = std::sync::Arc::new(move |req| exec_fn(req));
     let codec = match (codec_decode, codec_encode) {
         (Some(d), Some(e)) => Some(callable::wrap_js_codec(d, e)),
