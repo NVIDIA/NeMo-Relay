@@ -3,9 +3,12 @@
 
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
-use nemo_relay::plugin::{PluginError, PluginRegistrationContext, Result as PluginResult};
+use nemo_relay::plugin::{
+    PluginError, PluginRegistrationContext, Result as PluginResult, rollback_registrations,
+};
 
 use super::component::PiiRedactionConfig;
+use super::component::profile_registration_prefix;
 
 #[doc(hidden)]
 pub type LocalBackendProvider = Arc<
@@ -41,6 +44,7 @@ pub fn clear_local_backend_provider() -> PluginResult<()> {
 pub(super) fn register_local_backend(
     config: PiiRedactionConfig,
     ctx: &mut PluginRegistrationContext,
+    profile_name: Option<&str>,
 ) -> PluginResult<()> {
     let provider = local_backend_provider_guard()?.clone();
 
@@ -49,6 +53,7 @@ pub(super) fn register_local_backend(
             target: "nemo_relay.plugin",
             event = "plugin_resource_access_failed",
             plugin_kind = "pii_redaction",
+            profile = profile_name.unwrap_or("legacy"),
             resource_kind = "local_model_backend",
             permission = "execute",
             reason = "provider_unavailable";
@@ -62,16 +67,27 @@ pub(super) fn register_local_backend(
         target: "nemo_relay.plugin",
         event = "plugin_resource_access_pending",
         plugin_kind = "pii_redaction",
+        profile = profile_name.unwrap_or("legacy"),
         resource_kind = "local_model_backend",
         permission = "execute";
         "Plugin resource access validation started"
     );
-    match provider(config, ctx) {
+    let mut scoped_context = profile_name.map(|profile_name| {
+        PluginRegistrationContext::with_namespace(
+            ctx.qualify_name(&format!("{}/", profile_registration_prefix(profile_name))),
+        )
+    });
+    let provider_context = scoped_context.as_mut().unwrap_or(ctx);
+    match provider(config, provider_context) {
         Ok(()) => {
+            if let Some(scoped_context) = scoped_context {
+                ctx.extend_registrations(scoped_context.into_registrations());
+            }
             log::info!(
                 target: "nemo_relay.plugin",
                 event = "plugin_resource_access_validated",
                 plugin_kind = "pii_redaction",
+                profile = profile_name.unwrap_or("legacy"),
                 resource_kind = "local_model_backend",
                 permission = "execute";
                 "Plugin resource access validated"
@@ -79,10 +95,15 @@ pub(super) fn register_local_backend(
             Ok(())
         }
         Err(error) => {
+            if let Some(scoped_context) = scoped_context {
+                let mut registrations = scoped_context.into_registrations();
+                rollback_registrations(&mut registrations);
+            }
             log::warn!(
                 target: "nemo_relay.plugin",
                 event = "plugin_resource_access_failed",
                 plugin_kind = "pii_redaction",
+                profile = profile_name.unwrap_or("legacy"),
                 resource_kind = "local_model_backend",
                 permission = "execute",
                 reason = "initialization_failed";
