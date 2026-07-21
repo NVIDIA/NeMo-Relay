@@ -240,11 +240,7 @@ fn standalone_command_words(command: &str) -> Option<Vec<String>> {
     let words = shell_words::split(&escaped_windows_paths).ok()?;
     if words.is_empty()
         || words.iter().any(|word| {
-            matches!(
-                word.as_str(),
-                "|" | "||" | "&" | "&&" | ";" | "<" | ">" | "<<" | ">>"
-            ) || word.contains("$(")
-                || word.contains('`')
+            word.contains(['|', '&', ';', '<', '>']) || word.contains("$(") || word.contains('`')
         })
     {
         return None;
@@ -349,9 +345,15 @@ fn positional_paths(words: &[String], rejected_flags: &[&str]) -> Vec<String> {
 
 fn powershell_content_paths(words: &[String]) -> Vec<String> {
     if words.iter().any(|word| {
-        ["-totalcount", "-tail", "-head", "-first", "-last"]
-            .iter()
-            .any(|flag| word.eq_ignore_ascii_case(flag) || word.starts_with(&format!("{flag}:")))
+        let candidate = word
+            .split([':', '='])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        candidate.len() > 1
+            && ["-totalcount", "-tail", "-head", "-first", "-last"]
+                .iter()
+                .any(|flag| flag.starts_with(&candidate))
     }) {
         return Vec::new();
     }

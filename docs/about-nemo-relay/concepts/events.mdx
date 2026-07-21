@@ -151,14 +151,22 @@ Standard fields from the [shared envelope](#shared-envelope), such as
 
 <Warning>
 Automatic skill-load extraction is best effort. Relay emits `skill.load` only
-when all of the following conditions are true:
+through one of the following detection paths:
 
-- Relay sees the original tool arguments, or an integration supplies a
-  precomputed detection before removing them.
+- An integration supplies a precomputed detection with a nonempty skill name
+  and supported source before removing the original tool arguments.
+- Relay sees a recognized first-class skill tool with a nonempty `skill`,
+  `skill_name`, or `name` argument.
+- Relay sees the original arguments for a supported reader request that meets
+  all of the reader criteria below.
+
+For a reader request, all of the following conditions must be true:
+
 - The tool name matches a supported reader, either directly or through one
   supported shell wrapper.
-- A recognized argument field or parsed command contains a path or URI that
-  ends exactly in `SKILL.md`.
+- A recognized argument field or parsed command contains a path or URI. Its
+  final path component equals `SKILL.md` under an ASCII case-insensitive
+  comparison.
 - The path's immediate parent directory has a nonempty name, which Relay uses
   as the skill name.
 - The request reads the entire file. Relay ignores requests that use partial or
@@ -212,13 +220,13 @@ PowerShell wrappers support `Get-Content`. Relay treats unknown tool names,
 argument fields, wrapper forms, Windows `type`, and PowerShell aliases as
 unsupported until an integration explicitly adds them to the registry.
 
-For a reader request, the path must end in `SKILL.md`. Relay uses the immediate
-parent directory as the skill name. Relay doesn't emit a mark when a structured
-request has a nonzero `offset`, a `limit`, or a range control. It also doesn't
-emit a mark for shell commands that use pipelines, redirections, compound
-commands, or range-limited readers. An explicit structured `offset` of `0`
-still represents a complete read. Relay omits the full path and shell command
-from the mark.
+For a reader request, the final path component must equal `SKILL.md` under an
+ASCII case-insensitive comparison. Relay uses the immediate parent directory as
+the skill name. Relay doesn't emit a mark when a structured request has a
+nonzero `offset`, a `limit`, or a range control. It also doesn't emit a mark for
+shell commands that use pipelines, redirections, compound commands, or
+range-limited readers. An explicit structured `offset` of `0` still represents
+a complete read. Relay omits the full path and shell command from the mark.
 
 The mark has these lifecycle semantics:
 
