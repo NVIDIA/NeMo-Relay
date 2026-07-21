@@ -52,6 +52,11 @@ annotation, Relay rejects the outcome before creating the LLM lifecycle. When
 no request codec is active, the raw request remains fully writable and is the
 provider-visible source of truth.
 
+Gateway interceptors must preserve the request's effective `stream` mode. The
+gateway chooses buffered or streaming response handling before request
+intercepts run and rejects changes between those modes before contacting the
+provider.
+
 When a managed LLM call has a response codec, NeMo Relay decodes the raw provider response for observability and attaches the result to the emitted LLM end event. The response codec does not rewrite the value returned to the application. Use [Provider Response Codecs](/integrate-into-frameworks/provider-response-codecs) for response-only behavior and custom response codec examples.
 
 The built-in codecs guarantee
@@ -444,6 +449,15 @@ contract.
 - Framework-owned clients, sockets, streams, callbacks, and file handles stay outside codec results.
 
 ## Migrate Raw Gateway Body Mutation
+
+The 0.6 request annotation expansion uses
+`nemo.relay.AnnotatedLlmRequest@2` and
+`nemo.relay.LlmRequestInterceptOutcome@2` at dynamic plugin boundaries. Rebuild
+Rust native plugins and Rust `grpc-v1` workers against NeMo Relay 0.6, and
+update Python workers to the 0.6 worker SDK. A dynamic plugin that registers an
+LLM request intercept must set `compat.relay = ">=0.6,<1.0"`, or another range
+that excludes Relay 0.5. Relay enforces this floor when the intercept is
+registered.
 
 Gateway interceptors that mutate provider request bodies must now edit the
 annotation on the three generation routes. For example, replace

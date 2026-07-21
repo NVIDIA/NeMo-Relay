@@ -81,7 +81,9 @@ fn should_insert_tool_blocks_before_message(
     request: &AnnotatedLlmRequest,
     message: &Message,
 ) -> bool {
-    !inserted_tool_blocks && !matches!(message, Message::System { .. }) && request.tools.is_some()
+    !inserted_tool_blocks
+        && !matches!(message, Message::System { .. } | Message::Developer { .. })
+        && request.tools.is_some()
 }
 
 fn append_message_blocks(

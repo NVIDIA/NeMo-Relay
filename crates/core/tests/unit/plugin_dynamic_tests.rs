@@ -1837,3 +1837,16 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     registry.add(disabled).unwrap();
     assert!(!registry.disable("acme.guardrails.pii").unwrap());
 }
+
+#[test]
+fn annotated_request_consumers_must_exclude_relay_zero_five() {
+    let error = validate_annotated_request_consumer_compatibility(
+        ">=0.5,<1.0",
+        "example.request_interceptor",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains(">=0.6,<1.0"));
+
+    validate_annotated_request_consumer_compatibility(">=0.6,<1.0", "example.request_interceptor")
+        .unwrap();
+}

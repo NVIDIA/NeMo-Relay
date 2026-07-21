@@ -582,15 +582,14 @@ fn decode_chat_tool(value: &Json) -> Result<ToolDefinition> {
     let name = function.get("name").and_then(Json::as_str).ok_or_else(|| {
         FlowError::InvalidArgument("OpenAI Chat function tool is missing name".into())
     })?;
+    let description = super::optional_string(function, "description", "OpenAI Chat function tool")?;
+    let strict = super::optional_bool(function, "strict", "OpenAI Chat function tool")?;
     Ok(ToolDefinition::Function {
         function: FunctionDefinition {
             name: name.to_string(),
-            description: function
-                .get("description")
-                .and_then(Json::as_str)
-                .map(str::to_string),
+            description,
             parameters: function.get("parameters").cloned(),
-            strict: function.get("strict").and_then(Json::as_bool),
+            strict,
             extra: function
                 .iter()
                 .filter(|(key, _)| {
@@ -818,9 +817,9 @@ impl LlmCodec for OpenAIChatCodec {
             .iter()
             .map(decode_chat_message)
             .collect::<Result<Vec<_>>>()?;
-        let model = obj.get("model").and_then(|v| v.as_str()).map(String::from);
-        let temperature = obj.get("temperature").and_then(|v| v.as_f64());
-        let top_p = obj.get("top_p").and_then(|v| v.as_f64());
+        let model = super::optional_string(obj, "model", "OpenAI Chat")?;
+        let temperature = super::optional_f64(obj, "temperature", "OpenAI Chat")?;
+        let top_p = super::optional_f64(obj, "top_p", "OpenAI Chat")?;
         let stop = match obj.get("stop") {
             Some(Json::String(stop)) => Some(vec![stop.clone()]),
             Some(Json::Array(_)) => Some(
@@ -835,10 +834,8 @@ impl LlmCodec for OpenAIChatCodec {
                 ));
             }
         };
-        let max_tokens = obj
-            .get("max_completion_tokens")
-            .and_then(|v| v.as_u64())
-            .or_else(|| obj.get("max_tokens").and_then(|v| v.as_u64()));
+        let max_tokens = super::optional_u64(obj, "max_completion_tokens", "OpenAI Chat")?
+            .or(super::optional_u64(obj, "max_tokens", "OpenAI Chat")?);
         let params =
             if temperature.is_some() || max_tokens.is_some() || top_p.is_some() || stop.is_some() {
                 Some(GenerationParams {
@@ -864,6 +861,38 @@ impl LlmCodec for OpenAIChatCodec {
             })
             .transpose()?;
         let tool_choice = obj.get("tool_choice").map(decode_chat_tool_choice);
+        let store = super::optional_bool(obj, "store", "OpenAI Chat")?;
+        let user = super::optional_string(obj, "user", "OpenAI Chat")?;
+        let service_tier = super::optional_string(obj, "service_tier", "OpenAI Chat")?;
+        let parallel_tool_calls = super::optional_bool(obj, "parallel_tool_calls", "OpenAI Chat")?;
+        let top_logprobs = super::optional_u64(obj, "top_logprobs", "OpenAI Chat")?;
+        let stream = super::optional_bool(obj, "stream", "OpenAI Chat")?;
+        let frequency_penalty = super::optional_f64(obj, "frequency_penalty", "OpenAI Chat")?;
+        let functions = match obj.get("functions") {
+            Some(Json::Null) | None => None,
+            Some(Json::Array(functions)) => Some(functions.clone()),
+            Some(_) => {
+                return Err(FlowError::InvalidArgument(
+                    "OpenAI Chat functions must be an array or null".into(),
+                ));
+            }
+        };
+        let logprobs = super::optional_bool(obj, "logprobs", "OpenAI Chat")?;
+        let modalities = match obj.get("modalities") {
+            Some(Json::Null) | None => None,
+            Some(value) => Some(serde_json::from_value(value.clone()).map_err(|error| {
+                FlowError::InvalidArgument(format!("invalid OpenAI Chat modalities: {error}"))
+            })?),
+        };
+        let n = super::optional_u64(obj, "n", "OpenAI Chat")?;
+        let presence_penalty = super::optional_f64(obj, "presence_penalty", "OpenAI Chat")?;
+        let prompt_cache_key = super::optional_string(obj, "prompt_cache_key", "OpenAI Chat")?;
+        let prompt_cache_retention =
+            super::optional_string(obj, "prompt_cache_retention", "OpenAI Chat")?;
+        let reasoning_effort = super::optional_string(obj, "reasoning_effort", "OpenAI Chat")?;
+        let safety_identifier = super::optional_string(obj, "safety_identifier", "OpenAI Chat")?;
+        let seed = super::optional_i64(obj, "seed", "OpenAI Chat")?;
+        let verbosity = super::optional_string(obj, "verbosity", "OpenAI Chat")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -877,66 +906,40 @@ impl LlmCodec for OpenAIChatCodec {
             params,
             tools,
             tool_choice,
-            store: obj.get("store").and_then(|v| v.as_bool()),
+            store,
             previous_response_id: None,
             truncation: None,
             reasoning: None,
             include: None,
-            user: obj.get("user").and_then(|v| v.as_str()).map(String::from),
+            user,
             metadata: obj.get("metadata").cloned(),
-            service_tier: obj
-                .get("service_tier")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            parallel_tool_calls: obj.get("parallel_tool_calls").and_then(|v| v.as_bool()),
+            service_tier,
+            parallel_tool_calls,
             max_output_tokens: None,
             max_tool_calls: None,
-            top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
-            stream: obj.get("stream").and_then(|v| v.as_bool()),
+            top_logprobs,
+            stream,
             api_specific: Some(ApiSpecificRequest::OpenAIChat {
                 audio: obj.get("audio").cloned(),
-                frequency_penalty: obj.get("frequency_penalty").and_then(Json::as_f64),
+                frequency_penalty,
                 function_call: obj.get("function_call").cloned(),
-                functions: obj.get("functions").and_then(Json::as_array).cloned(),
+                functions,
                 logit_bias: obj.get("logit_bias").cloned(),
-                logprobs: obj.get("logprobs").and_then(Json::as_bool),
-                modalities: obj
-                    .get("modalities")
-                    .map(|value| serde_json::from_value(value.clone()))
-                    .transpose()
-                    .map_err(|error| {
-                        FlowError::InvalidArgument(format!(
-                            "invalid OpenAI Chat modalities: {error}"
-                        ))
-                    })?,
+                logprobs,
+                modalities,
                 moderation: obj.get("moderation").cloned(),
-                n: obj.get("n").and_then(Json::as_u64),
+                n,
                 prediction: obj.get("prediction").cloned(),
-                presence_penalty: obj.get("presence_penalty").and_then(Json::as_f64),
-                prompt_cache_key: obj
-                    .get("prompt_cache_key")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                presence_penalty,
+                prompt_cache_key,
                 prompt_cache_options: obj.get("prompt_cache_options").cloned(),
-                prompt_cache_retention: obj
-                    .get("prompt_cache_retention")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
-                reasoning_effort: obj
-                    .get("reasoning_effort")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                prompt_cache_retention,
+                reasoning_effort,
                 response_format: obj.get("response_format").cloned(),
-                safety_identifier: obj
-                    .get("safety_identifier")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
-                seed: obj.get("seed").and_then(Json::as_i64),
+                safety_identifier,
+                seed,
                 stream_options: obj.get("stream_options").cloned(),
-                verbosity: obj
-                    .get("verbosity")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                verbosity,
                 web_search_options: obj.get("web_search_options").cloned(),
             }),
             extra,

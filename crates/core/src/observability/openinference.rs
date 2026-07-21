@@ -1095,26 +1095,37 @@ fn push_optimization_attributes(
 
 fn push_annotated_input_messages(attributes: &mut Vec<KeyValue>, messages: &[Message]) {
     for (index, message) in messages.iter().enumerate() {
-        let (role, content) = match message {
-            Message::System { content, .. } => ("system", Some(content)),
-            Message::Developer { content, .. } => ("developer", Some(content)),
-            Message::User { content, .. } => ("user", Some(content)),
-            Message::Assistant { content, .. } => ("assistant", content.as_ref()),
-            Message::Tool { content, .. } => ("tool", Some(content)),
-            Message::Function { .. } => ("function", None),
-            Message::ToolCallItem { .. } => ("assistant", None),
-            Message::ToolResultItem { .. } => ("tool", None),
-            Message::ProviderNative { value, .. } => (
-                value
-                    .get("role")
-                    .and_then(Json::as_str)
-                    .unwrap_or("provider_native"),
-                None,
-            ),
+        let role = match message {
+            Message::System { .. } => "system",
+            Message::Developer { .. } => "developer",
+            Message::User { .. } => "user",
+            Message::Assistant { .. } => "assistant",
+            Message::Tool { .. } => "tool",
+            Message::Function { .. } => "function",
+            Message::ToolCallItem { .. } => "assistant",
+            Message::ToolResultItem { .. } => "tool",
+            Message::ProviderNative { value, .. } => value
+                .get("role")
+                .and_then(Json::as_str)
+                .unwrap_or("provider_native"),
         };
         push_message_role(attributes, "llm.input_messages", index, role);
+        let content = match message {
+            Message::System { content, .. }
+            | Message::Developer { content, .. }
+            | Message::User { content, .. }
+            | Message::Tool { content, .. } => message_content_text(content),
+            Message::Assistant { content, .. } => content.as_ref().and_then(message_content_text),
+            Message::Function { content, .. } => {
+                content.as_deref().and_then(display_text_from_string)
+            }
+            Message::ProviderNative { value, .. } => {
+                value.get("content").and_then(display_text_from_json)
+            }
+            Message::ToolCallItem { .. } | Message::ToolResultItem { .. } => None,
+        };
         if let Some(content) = content {
-            push_message_text_content(attributes, "llm.input_messages", index, content);
+            push_message_text_value(attributes, "llm.input_messages", index, content);
         }
     }
 }
@@ -1159,18 +1170,16 @@ fn push_message_role(
     ));
 }
 
-fn push_message_text_content(
+fn push_message_text_value(
     attributes: &mut Vec<KeyValue>,
     prefix: &'static str,
     index: usize,
-    content: &MessageContent,
+    text: String,
 ) {
-    if let Some(text) = message_content_text(content) {
-        attributes.push(KeyValue::new(
-            format!("{prefix}.{index}.message.content"),
-            text,
-        ));
-    }
+    attributes.push(KeyValue::new(
+        format!("{prefix}.{index}.message.content"),
+        text,
+    ));
 }
 
 fn message_content_text(content: &MessageContent) -> Option<String> {

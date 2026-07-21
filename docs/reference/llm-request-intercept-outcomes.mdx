@@ -56,6 +56,11 @@ requests. Interceptors written for those routes must migrate provider-body
 mutation from `request.content` to `annotated_request`. Count-token, model,
 probe, and non-LLM passthrough routes retain raw-body authority.
 
+For gateway generation routes, preserve the effective `stream` mode in the
+annotation. Relay rejects buffered-to-streaming and streaming-to-buffered edits
+before the provider callback because response handling is selected from the
+original request.
+
 The following diagram shows how Relay resolves an intercept outcome before
 managed execution.
 
@@ -93,7 +98,7 @@ or object shape:
 - Public C callbacks return one owned canonical outcome JSON string, and native
   ABI v1 callbacks return one host-owned outcome JSON string.
 - Rust and Python `grpc-v1` worker SDKs return their canonical outcome in a
-  `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@1`.
+  `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@2`.
 
 The standalone request-intercept helper returns the complete outcome but does
 not emit its pending marks because it does not own an LLM lifecycle.
@@ -122,6 +127,14 @@ hosts them. Replace tuple results, split C/Go
 outputs, metadata envelopes, and parallel mark-aware registrations with the
 canonical outcome and the existing `register_llm_request_intercept`
 registration name.
+
+The 0.6 annotation expansion changes the request and outcome envelope schemas
+to `nemo.relay.AnnotatedLlmRequest@2` and
+`nemo.relay.LlmRequestInterceptOutcome@2`. Rebuild Rust native plugins and Rust
+`grpc-v1` workers against NeMo Relay 0.6, and update Python workers to the 0.6
+worker SDK. Dynamic plugins that register an LLM request intercept must declare
+`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. The
+host enforces this compatibility floor during registration.
 
 For gateway generation requests, replace code such as
 `request.content["messages"] = ...` with an edit to

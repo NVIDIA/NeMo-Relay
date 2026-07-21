@@ -813,6 +813,37 @@ fn responses_tool_edits_preserve_unknown_fields_and_explicit_nulls() {
 }
 
 #[test]
+fn responses_wrapped_function_tool_edits_preserve_the_wrapped_representation() {
+    let codec = OpenAIResponsesCodec;
+    let original = make_request(json!({
+        "model": "gpt-5",
+        "input": "hello",
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "lookup_before",
+                "description": null,
+                "strict": null,
+                "future_function": {"mode": "keep"}
+            },
+            "future_wrapper": null
+        }]
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    let ToolDefinition::Function { function, .. } = &mut annotated.tools.as_mut().unwrap()[0]
+    else {
+        panic!("expected portable function tool");
+    };
+    function.name = "lookup_after".into();
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let mut expected = original;
+    expected.content["tools"][0]["function"]["name"] = json!("lookup_after");
+    assert_eq!(encoded, expected);
+    assert!(encoded.content["tools"][0].get("name").is_none());
+}
+
+#[test]
 fn responses_string_input_and_native_surface_mismatch_are_explicit() {
     let codec = OpenAIResponsesCodec;
     let original = make_request(json!({
@@ -852,6 +883,30 @@ fn request_schema_rejects_malformed_known_responses_items() {
             .unwrap_err();
         assert!(error.to_string().contains("missing"));
     }
+
+    for (field, malformed) in [
+        ("background", json!("yes")),
+        ("max_output_tokens", json!(-1)),
+        ("parallel_tool_calls", json!("yes")),
+        ("previous_response_id", json!(7)),
+    ] {
+        let mut content = json!({"model": "gpt-5", "input": []});
+        content[field] = malformed;
+        let error = codec.decode(&make_request(content)).unwrap_err();
+        assert!(
+            error.to_string().contains(field),
+            "unexpected error: {error}"
+        );
+    }
+
+    let error = codec
+        .decode(&make_request(json!({
+            "model": "gpt-5",
+            "input": [],
+            "tools": [{"type": "function", "name": "lookup", "strict": "yes"}]
+        })))
+        .unwrap_err();
+    assert!(error.to_string().contains("strict"));
 }
 
 // ===================================================================

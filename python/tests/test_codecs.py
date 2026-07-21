@@ -190,6 +190,8 @@ class TestAnnotatedLLMRequestConstruction:
         annotated.api_specific = None
         assert annotated.instructions == "Updated policy"
         assert annotated.api_specific is None
+        annotated.instructions = None
+        assert annotated.instructions is None
 
 
 # ---------------------------------------------------------------------------

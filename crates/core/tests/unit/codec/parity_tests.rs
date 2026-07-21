@@ -726,3 +726,59 @@ fn test_request_normalization_parity() {
     assert_eq!(chat.max_output_tokens, None);
     assert_eq!(anthropic.max_output_tokens, None);
 }
+
+#[test]
+fn baseline_patching_keeps_raw_array_fields_with_reordered_logical_items() {
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A"},
+        {"type": "text", "text": "b", "provider_marker": "B"},
+        {"type": "text", "text": "c", "provider_marker": "C"}
+    ]);
+    let baseline = json!([
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"},
+        {"type": "text", "text": "c"}
+    ]);
+    let edited = json!([
+        {"type": "text", "text": "b2"},
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "c"}
+    ]);
+
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited),
+        json!([
+            {"type": "text", "text": "b2", "provider_marker": "B"},
+            {"type": "text", "text": "a", "provider_marker": "A"},
+            {"type": "text", "text": "c", "provider_marker": "C"}
+        ])
+    );
+}
+
+#[test]
+fn baseline_patching_handles_insert_delete_and_duplicate_reorders() {
+    let duplicate_a = json!({"type": "text", "text": "a"});
+    let b = json!({"type": "text", "text": "b"});
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A1"},
+        {"type": "text", "text": "a", "provider_marker": "A2"},
+        {"type": "text", "text": "b", "provider_marker": "B"}
+    ]);
+    let baseline = Json::Array(vec![duplicate_a.clone(), duplicate_a.clone(), b.clone()]);
+    let edited = Json::Array(vec![
+        duplicate_a.clone(),
+        b,
+        duplicate_a,
+        json!({"type": "text", "text": "new"}),
+    ]);
+
+    assert_eq!(
+        super::patch_changed_json(&original, &baseline, &edited),
+        json!([
+            {"type": "text", "text": "a", "provider_marker": "A1"},
+            {"type": "text", "text": "b", "provider_marker": "B"},
+            {"type": "text", "text": "a", "provider_marker": "A2"},
+            {"type": "text", "text": "new"}
+        ])
+    );
+}

@@ -19,9 +19,10 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext, PluginContext, PluginRuntime, Result,
-    ScopeType, ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError,
-    WorkerServerConfig, serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
+    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
+    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
+    serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -1262,6 +1263,16 @@ async fn worker_service_reports_missing_handlers_and_malformed_payloads() {
             .into_inner(),
         "EOF while parsing",
     );
+    assert_worker_error(
+        client
+            .invoke(Request::new(llm_invoke_with_legacy_annotation(
+                "llm-request",
+            )))
+            .await
+            .expect("legacy annotation schema returns structured error")
+            .into_inner(),
+        "expected \"nemo.relay.AnnotatedLlmRequest@2\"",
+    );
 
     let unknown_stream_surface = client
         .invoke_stream(Request::new(InvokeRequest {
@@ -2337,8 +2348,27 @@ fn llm_invoke_with_bad_annotation(registration_name: &str) -> InvokeRequest {
         request.payload.as_mut()
     {
         payload.annotated_request = Some(JsonEnvelope {
-            schema: "nemo.relay.AnnotatedLlmRequest@1".into(),
+            schema: ANNOTATED_LLM_REQUEST_SCHEMA.into(),
             json: b"{".to_vec(),
+        });
+    }
+    request
+}
+
+fn llm_invoke_with_legacy_annotation(registration_name: &str) -> InvokeRequest {
+    let mut request = llm_invoke(
+        registration_name,
+        RegistrationSurface::LlmRequestIntercept,
+        llm_request(),
+        None,
+        None,
+    );
+    if let Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Llm(payload)) =
+        request.payload.as_mut()
+    {
+        payload.annotated_request = Some(JsonEnvelope {
+            schema: "nemo.relay.AnnotatedLlmRequest@1".into(),
+            json: br#"{"messages":[]}"#.to_vec(),
         });
     }
     request

@@ -133,6 +133,61 @@ fn acg_profile_helpers_cover_none_paths_and_short_hash() {
 }
 
 #[test]
+fn system_fingerprint_preserves_sources_roles_and_content_boundaries() {
+    let mut instructions_and_system = request(
+        vec![Message::System {
+            content: MessageContent::Text("b".into()),
+            name: None,
+        }],
+        None,
+    );
+    instructions_and_system.instructions = Some(MessageContent::Text("a".into()));
+    let joined_system = request(
+        vec![Message::System {
+            content: MessageContent::Text("a\nb".into()),
+            name: None,
+        }],
+        None,
+    );
+    let developer = request(
+        vec![Message::Developer {
+            content: MessageContent::Text("a\nb".into()),
+            name: None,
+        }],
+        None,
+    );
+    let split_parts = request(
+        vec![Message::System {
+            content: MessageContent::Parts(vec![
+                ContentPart::Text {
+                    text: "a".into(),
+                    extra: serde_json::Map::new(),
+                },
+                ContentPart::Text {
+                    text: "b".into(),
+                    extra: serde_json::Map::new(),
+                },
+            ]),
+            name: None,
+        }],
+        None,
+    );
+
+    assert_ne!(
+        system_prompt_fingerprint(&instructions_and_system),
+        system_prompt_fingerprint(&joined_system)
+    );
+    assert_ne!(
+        system_prompt_fingerprint(&joined_system),
+        system_prompt_fingerprint(&developer)
+    );
+    assert_ne!(
+        system_prompt_fingerprint(&joined_system),
+        system_prompt_fingerprint(&split_parts)
+    );
+}
+
+#[test]
 fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
     let with_image_a = request(
         vec![Message::User {
@@ -356,26 +411,88 @@ fn acg_profile_covers_extended_roles_and_native_content() {
         assert!(learning_seed_fingerprint(&request(vec![message], None)).starts_with(prefix));
     }
 
-    let serialized_parts = request(
-        vec![Message::User {
-            content: MessageContent::Parts(vec![
-                ContentPart::Refusal {
-                    refusal: "no".into(),
-                    extra: serde_json::Map::new(),
-                },
-                ContentPart::Audio {
-                    audio: json!({"data": "audio"}),
-                    extra: serde_json::Map::new(),
-                },
-                ContentPart::ProviderNative {
-                    provider: "openai_responses".into(),
-                    kind: "future".into(),
-                    value: json!({"type": "future"}),
-                },
-            ]),
-            name: None,
-        }],
-        None,
+    let seed_for_part = |part| {
+        learning_seed_fingerprint(&request(
+            vec![Message::User {
+                content: MessageContent::Parts(vec![part]),
+                name: None,
+            }],
+            None,
+        ))
+    };
+    assert_ne!(
+        seed_for_part(ContentPart::Refusal {
+            refusal: "no-a".into(),
+            extra: serde_json::Map::new(),
+        }),
+        seed_for_part(ContentPart::Refusal {
+            refusal: "no-b".into(),
+            extra: serde_json::Map::new(),
+        })
     );
-    assert!(learning_seed_fingerprint(&serialized_parts).starts_with("user:"));
+    assert_ne!(
+        seed_for_part(ContentPart::Audio {
+            audio: json!({"data": "audio-a"}),
+            extra: serde_json::Map::new(),
+        }),
+        seed_for_part(ContentPart::Audio {
+            audio: json!({"data": "audio-b"}),
+            extra: serde_json::Map::new(),
+        })
+    );
+    assert_ne!(
+        seed_for_part(ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "future".into(),
+            value: json!({"type": "future", "value": "a"}),
+        }),
+        seed_for_part(ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "future".into(),
+            value: json!({"type": "future", "value": "b"}),
+        })
+    );
+}
+
+#[test]
+fn learning_seed_fingerprint_includes_variant_discriminator_fields() {
+    let seed_for_message = |message| learning_seed_fingerprint(&request(vec![message], None));
+    assert_ne!(
+        seed_for_message(Message::Function {
+            content: Some("same".into()),
+            name: "one".into(),
+        }),
+        seed_for_message(Message::Function {
+            content: Some("same".into()),
+            name: "two".into(),
+        })
+    );
+    assert_ne!(
+        seed_for_message(Message::ToolCallItem {
+            id: None,
+            call_id: "call".into(),
+            name: "one".into(),
+            arguments: json!({"same": true}),
+            extra: serde_json::Map::new(),
+        }),
+        seed_for_message(Message::ToolCallItem {
+            id: None,
+            call_id: "call".into(),
+            name: "two".into(),
+            arguments: json!({"same": true}),
+            extra: serde_json::Map::new(),
+        })
+    );
+    assert_ne!(
+        seed_for_message(Message::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "reasoning".into(),
+            value: json!({"same": true}),
+        }),
+        seed_for_message(Message::ProviderNative {
+            provider: "anthropic_messages".into(),
+            kind: "thinking".into(),
+            value: json!({"same": true}),
+        })
+    );
 }

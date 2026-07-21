@@ -53,7 +53,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tower::service_fn;
 
 use crate::api::event::{Event, EventSanitizeFields};
-use crate::api::llm::LlmRequest;
+use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, ToolExecutionNextFn,
     current_scope_stack, with_scope_stack,
@@ -63,7 +63,7 @@ use crate::api::scope::{
     event as emit_scope_mark, pop_scope, push_scope,
 };
 use crate::api::tool::ToolExecutionInterceptOutcome;
-use crate::codec::request::AnnotatedLlmRequest;
+use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
@@ -73,12 +73,12 @@ use crate::plugin::{
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
+    validate_annotated_request_consumer_compatibility,
 };
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
-const ANNOTATED_LLM_REQUEST_SCHEMA: &str = "nemo.relay.AnnotatedLlmRequest@1";
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_RETRY: Duration = Duration::from_millis(25);
@@ -448,6 +448,12 @@ fn load_one_worker_plugin(
         )));
     }
     validate_relay_compatibility(manifest.compat.relay.as_deref())?;
+    let relay_compat = manifest
+        .compat
+        .relay
+        .as_deref()
+        .expect("validated worker manifest must declare compat.relay")
+        .to_string();
     let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
         unreachable!("validated worker manifest must carry worker load contract");
     };
@@ -606,6 +612,12 @@ fn load_one_worker_plugin(
         validate_registration_plan(&spec.plugin_id, &register)?;
         register.registrations
     };
+    if registrations.iter().any(|registration| {
+        RegistrationSurface::try_from(registration.surface)
+            .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
+    }) {
+        validate_annotated_request_consumer_compatibility(&relay_compat, &spec.plugin_id)?;
+    }
 
     log::info!(
         target: "nemo_relay.worker",
@@ -1626,7 +1638,7 @@ impl WorkerPluginCallback {
         match response.result {
             Some(invoke_response_result::Result::LlmRequest(result)) => {
                 let outcome = required_envelope(result.outcome, "llm request intercept outcome")?;
-                if outcome.schema != "nemo.relay.LlmRequestInterceptOutcome@1" {
+                if outcome.schema != LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA {
                     return Err(FlowError::Internal(format!(
                         "worker returned unsupported LLM request intercept outcome schema: {}",
                         outcome.schema

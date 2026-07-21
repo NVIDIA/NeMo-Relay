@@ -695,15 +695,15 @@ fn decode_responses_tool(value: &Json) -> Result<ToolDefinition> {
     let name = function.get("name").and_then(Json::as_str).ok_or_else(|| {
         FlowError::InvalidArgument("OpenAI Responses function tool is missing name".into())
     })?;
+    let description =
+        super::optional_string(function, "description", "OpenAI Responses function tool")?;
+    let strict = super::optional_bool(function, "strict", "OpenAI Responses function tool")?;
     Ok(ToolDefinition::Function {
         function: FunctionDefinition {
             name: name.into(),
-            description: function
-                .get("description")
-                .and_then(Json::as_str)
-                .map(str::to_string),
+            description,
             parameters: function.get("parameters").cloned(),
-            strict: function.get("strict").and_then(Json::as_bool),
+            strict,
             extra: function
                 .iter()
                 .filter(|(key, _)| {
@@ -723,18 +723,11 @@ fn encode_responses_tool(tool: &ToolDefinition) -> Result<Json> {
     match tool {
         ToolDefinition::Function { function, extra } => {
             let mut obj = extra.clone();
-            obj.extend(function.extra.clone());
+            let Json::Object(function) = encode_responses_function(function) else {
+                unreachable!("function definition encodes as an object")
+            };
+            obj.extend(function);
             obj.insert("type".into(), Json::String("function".into()));
-            obj.insert("name".into(), Json::String(function.name.clone()));
-            if let Some(description) = &function.description {
-                obj.insert("description".into(), Json::String(description.clone()));
-            }
-            if let Some(parameters) = &function.parameters {
-                obj.insert("parameters".into(), parameters.clone());
-            }
-            if let Some(strict) = function.strict {
-                obj.insert("strict".into(), Json::Bool(strict));
-            }
             Ok(Json::Object(obj))
         }
         ToolDefinition::ProviderNative {
@@ -744,6 +737,61 @@ fn encode_responses_tool(tool: &ToolDefinition) -> Result<Json> {
             "tool {other:?} cannot be encoded for OpenAI Responses"
         ))),
     }
+}
+
+fn encode_responses_function(function: &FunctionDefinition) -> Json {
+    let mut obj = function.extra.clone();
+    obj.insert("name".into(), Json::String(function.name.clone()));
+    if let Some(description) = &function.description {
+        obj.insert("description".into(), Json::String(description.clone()));
+    }
+    if let Some(parameters) = &function.parameters {
+        obj.insert("parameters".into(), parameters.clone());
+    }
+    if let Some(strict) = function.strict {
+        obj.insert("strict".into(), Json::Bool(strict));
+    }
+    Json::Object(obj)
+}
+
+fn patch_responses_tool(
+    original: &Json,
+    baseline: &ToolDefinition,
+    edited: &ToolDefinition,
+    baseline_value: &Json,
+    edited_value: &Json,
+) -> Result<Json> {
+    if let (
+        Some(original),
+        ToolDefinition::Function {
+            function: baseline_function,
+            extra: baseline_extra,
+        },
+        ToolDefinition::Function {
+            function: edited_function,
+            extra: edited_extra,
+        },
+    ) = (original.as_object(), baseline, edited)
+        && let Some(original_function) = original.get("function")
+    {
+        let mut patched = original.clone();
+        patch_extra_fields(&mut patched, baseline_extra, edited_extra);
+        patched.insert(
+            "function".into(),
+            super::patch_changed_json(
+                original_function,
+                &encode_responses_function(baseline_function),
+                &encode_responses_function(edited_function),
+            ),
+        );
+        return Ok(Json::Object(patched));
+    }
+
+    Ok(super::patch_changed_json(
+        original,
+        baseline_value,
+        edited_value,
+    ))
 }
 
 fn decode_openai_or_anthropic_tool_choice(value: &Json) -> ToolChoice {
@@ -930,15 +978,19 @@ fn patch_responses_api_specific(
 
 fn decode_openai_or_anthropic_parallel_tool_calls(
     obj: &serde_json::Map<String, Json>,
-) -> Option<bool> {
-    if let Some(value) = obj.get("parallel_tool_calls").and_then(|v| v.as_bool()) {
-        return Some(value);
+) -> Result<Option<bool>> {
+    if let Some(value) = super::optional_bool(obj, "parallel_tool_calls", "OpenAI Responses")? {
+        return Ok(Some(value));
     }
-    let tool_choice = obj.get("tool_choice")?.as_object()?;
-    tool_choice
-        .get("disable_parallel_tool_use")
-        .and_then(|v| v.as_bool())
-        .map(|disabled| !disabled)
+    let Some(tool_choice) = obj.get("tool_choice").and_then(Json::as_object) else {
+        return Ok(None);
+    };
+    Ok(super::optional_bool(
+        tool_choice,
+        "disable_parallel_tool_use",
+        "OpenAI Responses tool_choice",
+    )?
+    .map(|disabled| !disabled))
 }
 
 // ---------------------------------------------------------------------------
@@ -1061,10 +1113,10 @@ impl LlmCodec for OpenAIResponsesCodec {
                 ));
             }
         };
-        let model = obj.get("model").and_then(|v| v.as_str()).map(String::from);
-        let temperature = obj.get("temperature").and_then(|v| v.as_f64());
-        let top_p = obj.get("top_p").and_then(|v| v.as_f64());
-        let max_tokens = obj.get("max_output_tokens").and_then(|v| v.as_u64());
+        let model = super::optional_string(obj, "model", "OpenAI Responses")?;
+        let temperature = super::optional_f64(obj, "temperature", "OpenAI Responses")?;
+        let top_p = super::optional_f64(obj, "top_p", "OpenAI Responses")?;
+        let max_tokens = super::optional_u64(obj, "max_output_tokens", "OpenAI Responses")?;
         let params = if temperature.is_some() || max_tokens.is_some() || top_p.is_some() {
             Some(GenerationParams {
                 temperature,
@@ -1091,6 +1143,21 @@ impl LlmCodec for OpenAIResponsesCodec {
         let tool_choice = obj
             .get("tool_choice")
             .map(decode_openai_or_anthropic_tool_choice);
+        let store = super::optional_bool(obj, "store", "OpenAI Responses")?;
+        let previous_response_id =
+            super::optional_string(obj, "previous_response_id", "OpenAI Responses")?;
+        let user = super::optional_string(obj, "user", "OpenAI Responses")?;
+        let service_tier = super::optional_string(obj, "service_tier", "OpenAI Responses")?;
+        let parallel_tool_calls = decode_openai_or_anthropic_parallel_tool_calls(obj)?;
+        let max_tool_calls = super::optional_u64(obj, "max_tool_calls", "OpenAI Responses")?;
+        let top_logprobs = super::optional_u64(obj, "top_logprobs", "OpenAI Responses")?;
+        let stream = super::optional_bool(obj, "stream", "OpenAI Responses")?;
+        let background = super::optional_bool(obj, "background", "OpenAI Responses")?;
+        let prompt_cache_key = super::optional_string(obj, "prompt_cache_key", "OpenAI Responses")?;
+        let prompt_cache_retention =
+            super::optional_string(obj, "prompt_cache_retention", "OpenAI Responses")?;
+        let safety_identifier =
+            super::optional_string(obj, "safety_identifier", "OpenAI Responses")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -1103,44 +1170,29 @@ impl LlmCodec for OpenAIResponsesCodec {
             params,
             tools,
             tool_choice,
-            store: obj.get("store").and_then(|v| v.as_bool()),
-            previous_response_id: obj
-                .get("previous_response_id")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            store,
+            previous_response_id,
             truncation: obj.get("truncation").cloned(),
             reasoning: obj.get("reasoning").cloned(),
             include: obj.get("include").cloned(),
-            user: obj.get("user").and_then(|v| v.as_str()).map(String::from),
+            user,
             metadata: obj.get("metadata").cloned(),
-            service_tier: obj
-                .get("service_tier")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            parallel_tool_calls: decode_openai_or_anthropic_parallel_tool_calls(obj),
-            max_output_tokens: obj.get("max_output_tokens").and_then(|v| v.as_u64()),
-            max_tool_calls: obj.get("max_tool_calls").and_then(|v| v.as_u64()),
-            top_logprobs: obj.get("top_logprobs").and_then(|v| v.as_u64()),
-            stream: obj.get("stream").and_then(|v| v.as_bool()),
+            service_tier,
+            parallel_tool_calls,
+            max_output_tokens: max_tokens,
+            max_tool_calls,
+            top_logprobs,
+            stream,
             api_specific: Some(ApiSpecificRequest::OpenAIResponses {
-                background: obj.get("background").and_then(Json::as_bool),
+                background,
                 context_management: obj.get("context_management").cloned(),
                 conversation: obj.get("conversation").cloned(),
                 moderation: obj.get("moderation").cloned(),
                 prompt: obj.get("prompt").cloned(),
-                prompt_cache_key: obj
-                    .get("prompt_cache_key")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                prompt_cache_key,
                 prompt_cache_options: obj.get("prompt_cache_options").cloned(),
-                prompt_cache_retention: obj
-                    .get("prompt_cache_retention")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
-                safety_identifier: obj
-                    .get("safety_identifier")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                prompt_cache_retention,
+                safety_identifier,
                 stream_options: obj.get("stream_options").cloned(),
                 text: obj.get("text").cloned(),
             }),
@@ -1237,11 +1289,12 @@ impl LlmCodec for OpenAIResponsesCodec {
                 .tools
                 .as_deref()
                 .map(|tools| {
-                    super::encode_changed_items(
+                    super::encode_changed_items_with_patch(
                         tools,
                         baseline.tools.as_deref().unwrap_or(&[]),
                         obj.get("tools").and_then(Json::as_array).map(Vec::as_slice),
                         encode_responses_tool,
+                        patch_responses_tool,
                     )
                 })
                 .transpose()?

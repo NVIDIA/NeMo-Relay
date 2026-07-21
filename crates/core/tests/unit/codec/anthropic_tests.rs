@@ -798,6 +798,39 @@ fn request_schema_rejects_malformed_known_anthropic_components() {
         })))
         .unwrap_err();
     assert!(error.to_string().contains("stop_sequences"));
+
+    for (field, malformed) in [
+        ("top_k", json!("many")),
+        ("temperature", json!("high")),
+        ("stream", json!("yes")),
+        ("container", json!(7)),
+    ] {
+        let mut content = json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 64,
+            "messages": []
+        });
+        content[field] = malformed;
+        let error = codec.decode(&make_request(content)).unwrap_err();
+        assert!(
+            error.to_string().contains(field),
+            "unexpected error: {error}"
+        );
+    }
+
+    let error = codec
+        .decode(&make_request(json!({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 64,
+            "messages": [],
+            "tools": [{
+                "name": "lookup",
+                "input_schema": {"type": "object"},
+                "strict": "yes"
+            }]
+        })))
+        .unwrap_err();
+    assert!(error.to_string().contains("strict"));
 }
 
 // ===================================================================
@@ -855,6 +888,24 @@ fn test_encode_writes_anthropic_modeled_controls() {
         obj.get("tool_choice")
             .and_then(|v| v.get("disable_parallel_tool_use")),
         Some(&json!(true))
+    );
+}
+
+#[test]
+fn test_encode_synthesizes_tool_choice_for_parallel_tool_calls_edit() {
+    let codec = AnthropicMessagesCodec;
+    let original = make_request(json!({
+        "messages": [{ "role": "user", "content": "Hi" }],
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 100
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    annotated.parallel_tool_calls = Some(false);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["tool_choice"],
+        json!({"type": "auto", "disable_parallel_tool_use": true})
     );
 }
 

@@ -301,13 +301,16 @@ fn annotated_message_text(message: Option<&MessageContent>) -> Option<String> {
                 .filter_map(|part| match part {
                     ContentPart::Text { text, .. } => Some(text.as_str()),
                     ContentPart::Refusal { refusal, .. } => Some(refusal.as_str()),
+                    ContentPart::ProviderNative { value, .. } => value
+                        .get("text")
+                        .and_then(Json::as_str)
+                        .or_else(|| value.get("refusal").and_then(Json::as_str)),
                     ContentPart::ImageUrl { .. }
                     | ContentPart::Image { .. }
                     | ContentPart::Audio { .. }
                     | ContentPart::File { .. }
                     | ContentPart::ToolUse { .. }
-                    | ContentPart::ToolResult { .. }
-                    | ContentPart::ProviderNative { .. } => None,
+                    | ContentPart::ToolResult { .. } => None,
                 })
                 .collect();
             (!text_parts.is_empty()).then(|| text_parts.join("\n"))

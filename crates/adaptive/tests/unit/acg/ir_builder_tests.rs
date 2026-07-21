@@ -279,8 +279,8 @@ fn build_prompt_ir_covers_extended_request_messages_and_content_parts() {
 
     let prompt_ir = build_prompt_ir(&request).unwrap();
     assert_eq!(prompt_ir.blocks[0].span_id.0, "system-0-instructions");
-    assert_eq!(prompt_ir.blocks[1].span_id.0, "system-1-web_search_preview");
-    assert_eq!(prompt_ir.blocks[2].span_id.0, "system-2-developer");
+    assert_eq!(prompt_ir.blocks[1].span_id.0, "system-1-developer");
+    assert_eq!(prompt_ir.blocks[2].span_id.0, "system-2-web_search_preview");
     assert!(
         prompt_ir
             .blocks

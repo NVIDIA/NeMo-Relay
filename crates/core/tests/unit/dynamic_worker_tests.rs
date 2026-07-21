@@ -399,7 +399,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             "llm_intercept_invalid_request" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
                     outcome: Some(JsonEnvelope {
-                        schema: "nemo.relay.LlmRequestInterceptOutcome@1".into(),
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@2".into(),
                         json: br#"{"request":null}"#.to_vec(),
                     }),
                 })),
@@ -415,7 +415,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             "llm_intercept_invalid_annotated" => InvokeResponse {
                 result: Some(InvokeResult::LlmRequest(LlmRequestInterceptResult {
                     outcome: Some(JsonEnvelope {
-                        schema: "nemo.relay.LlmRequestInterceptOutcome@1".into(),
+                        schema: "nemo.relay.LlmRequestInterceptOutcome@2".into(),
                         json: serde_json::to_vec(&json!({
                             "request": valid_llm_request(),
                             "annotated_request": 3,

@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::Json;
 
+/// Versioned JSON envelope schema for [`AnnotatedLlmRequest`].
+///
+/// Version 2 adds tagged request components that older exhaustive Rust
+/// consumers cannot deserialize safely.
+pub const ANNOTATED_LLM_REQUEST_SCHEMA: &str = "nemo.relay.AnnotatedLlmRequest@2";
+
 // ---------------------------------------------------------------------------
 // AnnotatedLlmRequest type hierarchy
 // ---------------------------------------------------------------------------

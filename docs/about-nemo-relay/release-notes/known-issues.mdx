@@ -81,7 +81,7 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
 
 ### Compatibility and Migration Notes
 
-#### Rebuild Rust Plugins and Workers That Consume Request Annotations
+#### Update Plugins and Workers That Consume Request Annotations
 
 <Warning>
 `AnnotatedLlmRequest` now includes shared instructions, a tagged
@@ -89,19 +89,21 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
 variants. This is a Rust source-compatibility break for exhaustive matches and
 direct struct literals.
 
-Rebuild Rust native plugins and `grpc-v1` workers that accept annotated LLM
-requests against NeMo Relay 0.6. Set their manifest requirement to
+Rebuild Rust native plugins and Rust `grpc-v1` workers that accept annotated
+LLM requests against NeMo Relay 0.6. Update Python workers to the 0.6 worker
+SDK. Set their manifest requirement to
 `compat.relay = ">=0.6,<1.0"` instead of the broader `>=0.5,<1.0` guidance. A
-0.5 Rust worker can otherwise be admitted by a 0.6 host and fail when it
-deserializes a newly added enum variant. The JSON envelope remains
-`nemo.relay.AnnotatedLlmRequest@1`; that family tag does not make an older
-exhaustive Rust enum forward-compatible.
+0.5 consumer cannot decode the added fields and enum variants. Relay 0.6 labels
+request annotations as `nemo.relay.AnnotatedLlmRequest@2` and request-intercept
+results as `nemo.relay.LlmRequestInterceptOutcome@2`. The host rejects a
+dynamic plugin that registers an LLM request intercept while its
+`compat.relay` range still admits Relay 0.5.
 
-Python workers already receive annotations as `dict[str, Any]`. Node.js, Go,
-and raw C FFI request-intercept callbacks continue to carry the annotation as
-JSON, so they do not require new binding DTOs. Consumers in those languages
-should still avoid closed-world matching on role or component discriminator
-strings.
+Python workers continue to receive annotations as `dict[str, Any]`, but the
+worker SDK validates the versioned envelope. Node.js, Go, and raw C FFI
+request-intercept callbacks continue to carry the annotation as JSON, so they
+do not require new binding DTOs. Consumers in those languages should still
+avoid closed-world matching on role or component discriminator strings.
 
 The [Codecs](/about-nemo-relay/concepts/codecs) guide documents the expanded
 annotation schema and mutation contract. PR

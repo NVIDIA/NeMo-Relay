@@ -1363,6 +1363,51 @@ fn chat_tool_edits_preserve_nested_unknown_fields_and_explicit_nulls() {
 }
 
 #[test]
+fn chat_reordered_content_parts_keep_nested_provider_fields_with_their_items() {
+    let codec = OpenAIChatCodec;
+    let original = make_request(json!({
+        "model": "gpt-4.1",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "a", "vendor_marker": "A"}
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "b", "vendor_marker": "B"}
+                }
+            ]
+        }]
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    let Message::User {
+        content: MessageContent::Parts(parts),
+        ..
+    } = &mut annotated.messages[0]
+    else {
+        panic!("expected portable user content parts");
+    };
+    parts.swap(0, 1);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["messages"][0]["content"],
+        json!([
+            {
+                "type": "image_url",
+                "image_url": {"url": "b", "vendor_marker": "B"}
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": "a", "vendor_marker": "A"}
+            }
+        ])
+    );
+}
+
+#[test]
 fn native_chat_tool_choices_round_trip_without_fallback_loss() {
     let codec = OpenAIChatCodec;
     for tool_choice in [
@@ -1405,6 +1450,34 @@ fn request_schema_rejects_malformed_known_chat_components() {
             .unwrap_err();
         assert!(error.to_string().contains("OpenAI Chat"));
     }
+
+    for (field, malformed) in [
+        ("frequency_penalty", json!("high")),
+        ("parallel_tool_calls", json!("yes")),
+        ("top_logprobs", json!(-1)),
+        ("prompt_cache_key", json!(7)),
+        ("seed", json!(1.5)),
+    ] {
+        let mut content = json!({"model": "gpt-4.1", "messages": []});
+        content[field] = malformed;
+        let error = codec.decode(&make_request(content)).unwrap_err();
+        assert!(
+            error.to_string().contains(field),
+            "unexpected error: {error}"
+        );
+    }
+
+    let error = codec
+        .decode(&make_request(json!({
+            "model": "gpt-4.1",
+            "messages": [],
+            "tools": [{
+                "type": "function",
+                "function": {"name": "lookup", "strict": "yes"}
+            }]
+        })))
+        .unwrap_err();
+    assert!(error.to_string().contains("strict"));
 }
 
 // ===================================================================

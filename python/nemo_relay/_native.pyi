@@ -30,6 +30,7 @@ _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
 _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
+_MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
@@ -463,7 +464,7 @@ class AnnotatedLLMRequest:
         self,
         messages: Sequence[Mapping[str, _JsonValue]],
         *,
-        instructions: Optional[_JsonValue] = None,
+        instructions: Optional[_MessageContent] = None,
         model: Optional[str] = None,
         params: Optional[Mapping[str, _JsonValue]] = None,
         tools: Optional[Sequence[Mapping[str, _JsonValue]]] = None,
@@ -500,11 +501,11 @@ class AnnotatedLLMRequest:
         """Replace normalized message objects."""
         ...
     @property
-    def instructions(self) -> Optional[_JsonValue]:
+    def instructions(self) -> Optional[_MessageContent]:
         """Return provider-level instructions, if present."""
         ...
     @instructions.setter
-    def instructions(self, value: Optional[_JsonValue]) -> None:
+    def instructions(self, value: Optional[_MessageContent]) -> None:
         """Set or clear provider-level instructions."""
         ...
     @property

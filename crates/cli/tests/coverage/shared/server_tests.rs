@@ -2648,6 +2648,62 @@ async fn gateway_request_codec_rejects_raw_body_mutation_before_upstream() {
 }
 
 #[tokio::test]
+async fn gateway_request_codec_rejects_stream_mode_changes_before_upstream() {
+    let intercept_name = "server-gateway-request-codec-stream-mode-rejection";
+    let _ = deregister_llm_request_intercept(intercept_name);
+    let _cleanup = RequestInterceptCleanup(intercept_name);
+    register_llm_request_intercept(
+        intercept_name,
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            if request
+                .headers
+                .get("x-codec-stream-toggle")
+                .and_then(Value::as_str)
+                == Some("true")
+            {
+                let mut annotated = annotated.expect("generation route must expose an annotation");
+                annotated.stream = Some(!annotated.stream.unwrap_or(false));
+                return Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)));
+            }
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+
+    let (upstream, captured_requests) = spawn_request_codec_matrix_upstream().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let app = router(config);
+
+    for streaming in [false, true] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("x-codec-stream-toggle", "true")
+                    .body(Body::from(
+                        json!({
+                            "model": "gpt-test",
+                            "input": "original",
+                            "stream": streaming,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert!(captured_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn gateway_request_codecs_apply_buffered_and_streaming_edits_on_all_generation_routes() {
     let intercept_name = "server-gateway-request-codec-all-generation-routes";
     let _ = deregister_llm_request_intercept(intercept_name);

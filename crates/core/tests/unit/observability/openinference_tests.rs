@@ -4277,11 +4277,21 @@ fn annotated_input_projection_covers_extended_roles_and_native_text() {
     assert_attr(&attributes, "llm.input_messages.1.message.role", "function");
     assert_attr(
         &attributes,
+        "llm.input_messages.1.message.content",
+        "legacy",
+    );
+    assert_attr(
+        &attributes,
         "llm.input_messages.2.message.role",
         "assistant",
     );
     assert_attr(&attributes, "llm.input_messages.3.message.role", "tool");
     assert_attr(&attributes, "llm.input_messages.4.message.role", "critic");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.4.message.content",
+        "native",
+    );
     assert_attr(
         &attributes,
         "llm.input_messages.5.message.role",

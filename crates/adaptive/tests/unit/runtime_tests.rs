@@ -414,7 +414,7 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
     );
     assert_eq!(
         profile_key,
-        "agent-1::model=claude-sonnet-4::roles=system.user::system=sha256:97f793c76::anchor=no-anchor::tools=no-tools"
+        "agent-1::model=claude-sonnet-4::roles=system.user::system=sha256:3087d8fd4::anchor=no-anchor::tools=no-tools"
     );
     let learning_key = crate::acg_profile::derive_acg_learning_key(
         "agent-1",
@@ -426,7 +426,7 @@ fn adaptive_acg_defaults_and_profile_key_behavior_stay_stable() {
             "user:{}",
             crate::acg::sha256_hex("Summarize the latest findings")
         )),
-        short_hash(&crate::acg::sha256_hex("You are a careful planner")),
+        "sha256:3087d8fd4",
     );
     assert_eq!(learning_key, expected_learning_key,);
 

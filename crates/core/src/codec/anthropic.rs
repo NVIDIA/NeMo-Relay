@@ -166,11 +166,16 @@ fn decode_anthropic_tool_choice(val: &Json) -> Option<ToolChoice> {
 
 /// Extract Anthropic `disable_parallel_tool_use` from tool_choice and map
 /// to normalized `parallel_tool_calls` semantics.
-fn decode_parallel_tool_calls(val: &Json) -> Option<bool> {
-    let obj = val.as_object()?;
-    obj.get("disable_parallel_tool_use")
-        .and_then(|v| v.as_bool())
-        .map(|disabled| !disabled)
+fn decode_parallel_tool_calls(val: &Json) -> Result<Option<bool>> {
+    let Some(obj) = val.as_object() else {
+        return Ok(None);
+    };
+    Ok(super::optional_bool(
+        obj,
+        "disable_parallel_tool_use",
+        "Anthropic Messages tool_choice",
+    )?
+    .map(|disabled| !disabled))
 }
 
 /// Encode a normalized [`ToolChoice`] back into Anthropic JSON format.
@@ -516,9 +521,8 @@ fn decode_anthropic_tool(value: &Json) -> Result<ToolDefinition> {
     let obj = value.as_object().ok_or_else(|| {
         FlowError::InvalidArgument("Anthropic Messages tool must be an object".into())
     })?;
-    let is_client_tool = obj.get("type").is_none()
-        && obj.get("name").and_then(Json::as_str).is_some()
-        && obj.get("input_schema").is_some();
+    let is_client_tool =
+        obj.get("type").is_none() && obj.contains_key("name") && obj.contains_key("input_schema");
     if !is_client_tool {
         let native = native_component("anthropic_messages", value);
         return Ok(ToolDefinition::ProviderNative {
@@ -539,19 +543,18 @@ fn decode_anthropic_tool(value: &Json) -> Result<ToolDefinition> {
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
+    let name =
+        super::optional_string(obj, "name", "Anthropic Messages tool")?.ok_or_else(|| {
+            FlowError::InvalidArgument("Anthropic Messages tool is missing name".into())
+        })?;
+    let description = super::optional_string(obj, "description", "Anthropic Messages tool")?;
+    let strict = super::optional_bool(obj, "strict", "Anthropic Messages tool")?;
     Ok(ToolDefinition::Function {
         function: FunctionDefinition {
-            name: obj
-                .get("name")
-                .and_then(Json::as_str)
-                .expect("client tool name checked above")
-                .to_string(),
-            description: obj
-                .get("description")
-                .and_then(Json::as_str)
-                .map(str::to_string),
+            name,
+            description,
             parameters: obj.get("input_schema").cloned(),
-            strict: obj.get("strict").and_then(Json::as_bool),
+            strict,
             extra: function_extra,
         },
         extra: wrapper_extra,
@@ -721,10 +724,10 @@ impl LlmCodec for AnthropicMessagesCodec {
             .get("system")
             .map(decode_anthropic_content)
             .transpose()?;
-        let model = obj.get("model").and_then(|v| v.as_str()).map(String::from);
-        let temperature = obj.get("temperature").and_then(|v| v.as_f64());
-        let top_p = obj.get("top_p").and_then(|v| v.as_f64());
-        let max_tokens = obj.get("max_tokens").and_then(|v| v.as_u64());
+        let model = super::optional_string(obj, "model", "Anthropic Messages")?;
+        let temperature = super::optional_f64(obj, "temperature", "Anthropic Messages")?;
+        let top_p = super::optional_f64(obj, "top_p", "Anthropic Messages")?;
+        let max_tokens = super::optional_u64(obj, "max_tokens", "Anthropic Messages")?;
         let stop = obj
             .get("stop_sequences")
             .filter(|value| !value.is_null())
@@ -767,7 +770,18 @@ impl LlmCodec for AnthropicMessagesCodec {
                 ToolChoice::ProviderNative(native_component("anthropic_messages", value))
             })
         });
-        let parallel_tool_calls = obj.get("tool_choice").and_then(decode_parallel_tool_calls);
+        let parallel_tool_calls = obj
+            .get("tool_choice")
+            .map(decode_parallel_tool_calls)
+            .transpose()?
+            .flatten();
+        let service_tier = super::optional_string(obj, "service_tier", "Anthropic Messages")?;
+        let stream = super::optional_bool(obj, "stream", "Anthropic Messages")?;
+        let container = super::optional_string(obj, "container", "Anthropic Messages")?;
+        let inference_geo = super::optional_string(obj, "inference_geo", "Anthropic Messages")?;
+        let top_k = super::optional_u64(obj, "top_k", "Anthropic Messages")?;
+        let user_profile_id =
+            super::optional_string(obj, "anthropic-user-profile-id", "Anthropic Messages")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -787,32 +801,20 @@ impl LlmCodec for AnthropicMessagesCodec {
             include: None,
             user: None,
             metadata: obj.get("metadata").cloned(),
-            service_tier: obj
-                .get("service_tier")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            service_tier,
             parallel_tool_calls,
             max_output_tokens: None,
             max_tool_calls: None,
             top_logprobs: None,
-            stream: obj.get("stream").and_then(Json::as_bool),
+            stream,
             api_specific: Some(ApiSpecificRequest::AnthropicMessages {
                 cache_control: obj.get("cache_control").cloned(),
-                container: obj
-                    .get("container")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
-                inference_geo: obj
-                    .get("inference_geo")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                container,
+                inference_geo,
                 output_config: obj.get("output_config").cloned(),
                 thinking: obj.get("thinking").cloned(),
-                top_k: obj.get("top_k").and_then(Json::as_u64),
-                user_profile_id: obj
-                    .get("anthropic-user-profile-id")
-                    .and_then(Json::as_str)
-                    .map(str::to_string),
+                top_k,
+                user_profile_id,
             }),
             extra,
         })
@@ -916,7 +918,12 @@ impl LlmCodec for AnthropicMessagesCodec {
                     edited,
                     annotated.parallel_tool_calls,
                 )?),
-                (None, _) => None,
+                (None, _) => annotated
+                    .parallel_tool_calls
+                    .map(|parallel| {
+                        encode_tool_choice_with_parallel_hint(&ToolChoice::Auto, Some(parallel))
+                    })
+                    .transpose()?,
             };
             set_or_remove_json(obj, "tool_choice", tool_choice);
         }

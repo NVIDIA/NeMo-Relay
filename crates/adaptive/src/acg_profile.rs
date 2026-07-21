@@ -88,28 +88,35 @@ fn message_role_tag(message: &Message) -> &'static str {
 }
 
 fn system_prompt_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String {
-    let mut system_content = annotated_request
-        .instructions
-        .as_ref()
-        .map(extract_text)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut system_content = Vec::new();
+    if let Some(instructions) = &annotated_request.instructions {
+        system_content.push(serde_json::json!({
+            "source": "instructions",
+            "content": instructions,
+        }));
+    }
     system_content.extend(
         annotated_request
             .messages
             .iter()
             .filter_map(|message| match message {
-                Message::System { content, .. } | Message::Developer { content, .. } => {
-                    Some(extract_text(content))
-                }
+                Message::System { content, .. } => Some(serde_json::json!({
+                    "source": "message",
+                    "role": "system",
+                    "content": content,
+                })),
+                Message::Developer { content, .. } => Some(serde_json::json!({
+                    "source": "message",
+                    "role": "developer",
+                    "content": content,
+                })),
                 _ => None,
             }),
     );
-    let system_content = system_content.join("\n");
     if system_content.is_empty() {
         "no-system".to_string()
     } else {
-        sha256_hex(&system_content)
+        hash_canonical_json(&serde_json::Value::Array(system_content))
     }
 }
 
@@ -174,21 +181,44 @@ fn learning_seed_fingerprint(annotated_request: &AnnotatedLlmRequest) -> String 
             Message::Tool { content, .. } => {
                 Some(format!("tool:{}", sha256_hex(&extract_text(content))))
             }
-            Message::Function { content, .. } => Some(format!(
+            Message::Function { content, name } => Some(format!(
                 "function:{}",
-                sha256_hex(content.as_deref().unwrap_or_default())
+                hash_canonical_json(&serde_json::json!({
+                    "name": name,
+                    "content": content,
+                }))
             )),
-            Message::ToolCallItem { arguments, .. } => {
-                Some(format!("tool-call:{}", sha256_hex(&arguments.to_string())))
-            }
+            Message::ToolCallItem {
+                name, arguments, ..
+            } => Some(format!(
+                "tool-call:{}",
+                hash_canonical_json(&serde_json::json!({
+                    "name": name,
+                    "arguments": arguments,
+                }))
+            )),
             Message::ToolResultItem { output, .. } => {
                 Some(format!("tool-result:{}", sha256_hex(&output.to_string())))
             }
-            Message::ProviderNative { value, .. } => {
-                Some(format!("native:{}", sha256_hex(&value.to_string())))
-            }
+            Message::ProviderNative {
+                provider,
+                kind,
+                value,
+            } => Some(format!(
+                "native:{}",
+                hash_canonical_json(&serde_json::json!({
+                    "provider": provider,
+                    "kind": kind,
+                    "value": value,
+                }))
+            )),
         })
         .unwrap_or_else(|| "no-seed".to_string())
+}
+
+fn hash_canonical_json(value: &serde_json::Value) -> String {
+    let canonical = canonicalize_value(value).unwrap_or_else(|_| value.to_string());
+    sha256_hex(&canonical)
 }
 
 fn tool_schema_fingerprint(tools: Option<&[ToolDefinition]>) -> String {
