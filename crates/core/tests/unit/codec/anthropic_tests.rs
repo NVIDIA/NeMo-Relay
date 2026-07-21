@@ -804,6 +804,10 @@ fn request_schema_rejects_malformed_known_anthropic_components() {
         ("temperature", json!("high")),
         ("stream", json!("yes")),
         ("container", json!(7)),
+        ("metadata", json!("user-123")),
+        ("cache_control", json!("ephemeral")),
+        ("output_config", json!("high")),
+        ("thinking", json!("enabled")),
     ] {
         let mut content = json!({
             "model": "claude-sonnet-4-20250514",

@@ -1500,6 +1500,15 @@ fn request_schema_rejects_malformed_known_chat_components() {
         ("top_logprobs", json!(-1)),
         ("prompt_cache_key", json!(7)),
         ("seed", json!(1.5)),
+        ("metadata", json!("tenant")),
+        ("audio", json!("wav")),
+        ("logit_bias", json!("42")),
+        ("moderation", json!("auto")),
+        ("prediction", json!("content")),
+        ("prompt_cache_options", json!("request")),
+        ("response_format", json!("json_object")),
+        ("stream_options", json!("include_usage")),
+        ("web_search_options", json!("low")),
     ] {
         let mut content = json!({"model": "gpt-4.1", "messages": []});
         content[field] = malformed;

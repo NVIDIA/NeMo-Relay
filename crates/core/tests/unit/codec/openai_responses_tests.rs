@@ -889,6 +889,15 @@ fn request_schema_rejects_malformed_known_responses_items() {
         ("max_output_tokens", json!(-1)),
         ("parallel_tool_calls", json!("yes")),
         ("previous_response_id", json!(7)),
+        ("reasoning", json!("high")),
+        ("include", json!("reasoning.encrypted_content")),
+        ("metadata", json!("tenant")),
+        ("context_management", json!("compaction")),
+        ("moderation", json!("auto")),
+        ("prompt", json!("pmpt_1")),
+        ("prompt_cache_options", json!("request")),
+        ("stream_options", json!("obfuscation")),
+        ("text", json!("json_object")),
     ] {
         let mut content = json!({"model": "gpt-5", "input": []});
         content[field] = malformed;

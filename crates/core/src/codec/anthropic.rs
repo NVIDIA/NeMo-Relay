@@ -782,6 +782,10 @@ impl LlmCodec for AnthropicMessagesCodec {
         let top_k = super::optional_u64(obj, "top_k", "Anthropic Messages")?;
         let user_profile_id =
             super::optional_string(obj, "anthropic-user-profile-id", "Anthropic Messages")?;
+        let metadata = super::optional_object(obj, "metadata", "Anthropic Messages")?;
+        let cache_control = super::optional_object(obj, "cache_control", "Anthropic Messages")?;
+        let output_config = super::optional_object(obj, "output_config", "Anthropic Messages")?;
+        let thinking = super::optional_object(obj, "thinking", "Anthropic Messages")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -800,7 +804,7 @@ impl LlmCodec for AnthropicMessagesCodec {
             reasoning: None,
             include: None,
             user: None,
-            metadata: obj.get("metadata").cloned(),
+            metadata,
             service_tier,
             parallel_tool_calls,
             max_output_tokens: None,
@@ -808,11 +812,11 @@ impl LlmCodec for AnthropicMessagesCodec {
             top_logprobs: None,
             stream,
             api_specific: Some(ApiSpecificRequest::AnthropicMessages {
-                cache_control: obj.get("cache_control").cloned(),
+                cache_control,
                 container,
                 inference_geo,
-                output_config: obj.get("output_config").cloned(),
-                thinking: obj.get("thinking").cloned(),
+                output_config,
+                thinking,
                 top_k,
                 user_profile_id,
             }),

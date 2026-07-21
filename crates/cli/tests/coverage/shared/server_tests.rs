@@ -2648,6 +2648,34 @@ async fn gateway_request_codec_rejects_raw_body_mutation_before_upstream() {
 }
 
 #[tokio::test]
+async fn gateway_request_codec_rejects_malformed_modeled_structure_before_upstream() {
+    let (upstream, captured_requests) = spawn_request_codec_matrix_upstream().await;
+    let mut config = test_config();
+    config.openai_base_url = upstream.url();
+    let response = router(config)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": "gpt-test",
+                        "messages": [],
+                        "response_format": "json_object",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(captured_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn gateway_request_codec_rejects_stream_mode_changes_before_upstream() {
     let intercept_name = "server-gateway-request-codec-stream-mode-rejection";
     let _ = deregister_llm_request_intercept(intercept_name);

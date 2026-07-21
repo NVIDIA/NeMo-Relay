@@ -1154,6 +1154,17 @@ impl LlmCodec for OpenAIResponsesCodec {
             super::optional_string(obj, "prompt_cache_retention", "OpenAI Responses")?;
         let safety_identifier =
             super::optional_string(obj, "safety_identifier", "OpenAI Responses")?;
+        let reasoning = super::optional_object(obj, "reasoning", "OpenAI Responses")?;
+        let include = super::optional_array(obj, "include", "OpenAI Responses")?;
+        let metadata = super::optional_object(obj, "metadata", "OpenAI Responses")?;
+        let context_management =
+            super::optional_array(obj, "context_management", "OpenAI Responses")?;
+        let moderation = super::optional_object(obj, "moderation", "OpenAI Responses")?;
+        let prompt = super::optional_object(obj, "prompt", "OpenAI Responses")?;
+        let prompt_cache_options =
+            super::optional_object(obj, "prompt_cache_options", "OpenAI Responses")?;
+        let stream_options = super::optional_object(obj, "stream_options", "OpenAI Responses")?;
+        let text = super::optional_object(obj, "text", "OpenAI Responses")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -1169,10 +1180,10 @@ impl LlmCodec for OpenAIResponsesCodec {
             store,
             previous_response_id,
             truncation: obj.get("truncation").cloned(),
-            reasoning: obj.get("reasoning").cloned(),
-            include: obj.get("include").cloned(),
+            reasoning,
+            include,
             user,
-            metadata: obj.get("metadata").cloned(),
+            metadata,
             service_tier,
             parallel_tool_calls,
             max_output_tokens: max_tokens,
@@ -1181,16 +1192,16 @@ impl LlmCodec for OpenAIResponsesCodec {
             stream,
             api_specific: Some(ApiSpecificRequest::OpenAIResponses {
                 background,
-                context_management: obj.get("context_management").cloned(),
+                context_management,
                 conversation: obj.get("conversation").cloned(),
-                moderation: obj.get("moderation").cloned(),
-                prompt: obj.get("prompt").cloned(),
+                moderation,
+                prompt,
                 prompt_cache_key,
-                prompt_cache_options: obj.get("prompt_cache_options").cloned(),
+                prompt_cache_options,
                 prompt_cache_retention,
                 safety_identifier,
-                stream_options: obj.get("stream_options").cloned(),
-                text: obj.get("text").cloned(),
+                stream_options,
+                text,
             }),
             extra,
         })

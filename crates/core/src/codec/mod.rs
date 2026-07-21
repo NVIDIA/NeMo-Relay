@@ -99,6 +99,34 @@ fn optional_string(
     }
 }
 
+fn optional_object(
+    obj: &serde_json::Map<String, Json>,
+    key: &str,
+    surface: &str,
+) -> Result<Option<Json>> {
+    match obj.get(key) {
+        Some(Json::Null) | None => Ok(None),
+        Some(value @ Json::Object(_)) => Ok(Some(value.clone())),
+        Some(_) => Err(FlowError::InvalidArgument(format!(
+            "{surface} {key} must be an object or null"
+        ))),
+    }
+}
+
+fn optional_array(
+    obj: &serde_json::Map<String, Json>,
+    key: &str,
+    surface: &str,
+) -> Result<Option<Json>> {
+    match obj.get(key) {
+        Some(Json::Null) | None => Ok(None),
+        Some(value @ Json::Array(_)) => Ok(Some(value.clone())),
+        Some(_) => Err(FlowError::InvalidArgument(format!(
+            "{surface} {key} must be an array or null"
+        ))),
+    }
+}
+
 fn encode_changed_items<T, F>(
     edited: &[T],
     baseline: &[T],

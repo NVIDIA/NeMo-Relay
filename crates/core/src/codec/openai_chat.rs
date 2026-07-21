@@ -893,6 +893,16 @@ impl LlmCodec for OpenAIChatCodec {
         let safety_identifier = super::optional_string(obj, "safety_identifier", "OpenAI Chat")?;
         let seed = super::optional_i64(obj, "seed", "OpenAI Chat")?;
         let verbosity = super::optional_string(obj, "verbosity", "OpenAI Chat")?;
+        let metadata = super::optional_object(obj, "metadata", "OpenAI Chat")?;
+        let audio = super::optional_object(obj, "audio", "OpenAI Chat")?;
+        let logit_bias = super::optional_object(obj, "logit_bias", "OpenAI Chat")?;
+        let moderation = super::optional_object(obj, "moderation", "OpenAI Chat")?;
+        let prediction = super::optional_object(obj, "prediction", "OpenAI Chat")?;
+        let prompt_cache_options =
+            super::optional_object(obj, "prompt_cache_options", "OpenAI Chat")?;
+        let response_format = super::optional_object(obj, "response_format", "OpenAI Chat")?;
+        let stream_options = super::optional_object(obj, "stream_options", "OpenAI Chat")?;
+        let web_search_options = super::optional_object(obj, "web_search_options", "OpenAI Chat")?;
         let extra: serde_json::Map<String, Json> = obj
             .iter()
             .filter(|(k, _)| !MODELED_REQUEST_KEYS.contains(&k.as_str()))
@@ -912,7 +922,7 @@ impl LlmCodec for OpenAIChatCodec {
             reasoning: None,
             include: None,
             user,
-            metadata: obj.get("metadata").cloned(),
+            metadata,
             service_tier,
             parallel_tool_calls,
             max_output_tokens: None,
@@ -920,27 +930,27 @@ impl LlmCodec for OpenAIChatCodec {
             top_logprobs,
             stream,
             api_specific: Some(ApiSpecificRequest::OpenAIChat {
-                audio: obj.get("audio").cloned(),
+                audio,
                 frequency_penalty,
                 function_call: obj.get("function_call").cloned(),
                 functions,
-                logit_bias: obj.get("logit_bias").cloned(),
+                logit_bias,
                 logprobs,
                 modalities,
-                moderation: obj.get("moderation").cloned(),
+                moderation,
                 n,
-                prediction: obj.get("prediction").cloned(),
+                prediction,
                 presence_penalty,
                 prompt_cache_key,
-                prompt_cache_options: obj.get("prompt_cache_options").cloned(),
+                prompt_cache_options,
                 prompt_cache_retention,
                 reasoning_effort,
-                response_format: obj.get("response_format").cloned(),
+                response_format,
                 safety_identifier,
                 seed,
-                stream_options: obj.get("stream_options").cloned(),
+                stream_options,
                 verbosity,
-                web_search_options: obj.get("web_search_options").cloned(),
+                web_search_options,
             }),
             extra,
         })
