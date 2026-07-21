@@ -29,12 +29,13 @@ use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecu
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
     LlmOptimizationModelTransition,
 };
-use nemo_relay::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
+use nemo_relay::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay::codec::response::FinishReason;
 use nemo_relay::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
@@ -178,6 +179,8 @@ impl LlmCodec for TrackingCodec {
         }
 
         Ok(AnnotatedLlmRequest {
+            instructions: None,
+            api_specific: None,
             messages,
             model: Some(self.id.clone()),
             params: None,
@@ -453,6 +456,98 @@ async fn test_encode_runs_after_intercepts() {
 
     // Cleanup
     deregister_llm_request_intercept("modify_model").unwrap();
+}
+
+#[tokio::test]
+async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let original = make_llm_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 128,
+        "system": [{
+            "type": "text",
+            "text": "Keep the cache marker.",
+            "cache_control": {"type": "ephemeral"}
+        }],
+        "messages": [
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"q": "x"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "done"}]}
+        ],
+        "future_field": null
+    }));
+
+    let unchanged_capture = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured = unchanged_capture.clone();
+    let provider: LlmExecutionNextFn = Arc::new(move |request| {
+        *captured.lock().unwrap() = Some(request);
+        Box::pin(async { Ok(json!({"content": []})) })
+    });
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("anthropic.messages")
+            .request(original.clone())
+            .func(provider)
+            .codec(Arc::new(AnthropicMessagesCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(unchanged_capture.lock().unwrap().as_ref(), Some(&original));
+
+    register_llm_request_intercept(
+        "issue_501_annotated_edit",
+        1,
+        false,
+        Arc::new(|_name, mut request, annotated| {
+            let mut annotated = annotated.expect("request codec must provide an annotation");
+            let Some(MessageContent::Parts(parts)) = &mut annotated.instructions else {
+                panic!("expected block-form Anthropic system instructions");
+            };
+            let ContentPart::Text { text, extra } = &mut parts[0] else {
+                panic!("expected portable text instructions");
+            };
+            *text = "Edited without dropping cache metadata.".into();
+            assert_eq!(
+                extra.get("cache_control"),
+                Some(&json!({"type": "ephemeral"}))
+            );
+            request
+                .headers
+                .insert("x-annotation-seen".into(), json!("yes"));
+            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+        }),
+    )
+    .unwrap();
+
+    let edited_capture = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured = edited_capture.clone();
+    let provider: LlmExecutionNextFn = Arc::new(move |request| {
+        *captured.lock().unwrap() = Some(request);
+        Box::pin(async { Ok(json!({"content": []})) })
+    });
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("anthropic.messages")
+            .request(original.clone())
+            .func(provider)
+            .codec(Arc::new(AnthropicMessagesCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let edited = edited_capture.lock().unwrap().clone().unwrap();
+    let mut expected = original;
+    expected.content["system"][0]["text"] = json!("Edited without dropping cache metadata.");
+    expected
+        .headers
+        .insert("x-annotation-seen".into(), json!("yes"));
+    assert_eq!(edited, expected);
+
+    deregister_llm_request_intercept("issue_501_annotated_edit").unwrap();
 }
 
 #[tokio::test]

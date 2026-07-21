@@ -13,6 +13,8 @@ use super::*;
 
 fn request(messages: Vec<Message>, tools: Option<Vec<ToolDefinition>>) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages,
         model: Some("gpt-4o".to_string()),
         params: None,
@@ -36,13 +38,15 @@ fn request(messages: Vec<Message>, tools: Option<Vec<ToolDefinition>>) -> Annota
 }
 
 fn sample_tool(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        tool_type: "function".to_string(),
+    ToolDefinition::Function {
         function: FunctionDefinition {
             name: name.to_string(),
             description: Some("desc".to_string()),
             parameters: Some(json!({"type":"object","properties":{"a":{"type":"string"}}})),
+            strict: None,
+            extra: serde_json::Map::new(),
         },
+        extra: serde_json::Map::new(),
     }
 }
 
@@ -53,18 +57,21 @@ fn acg_profile_derivation_covers_anchor_hash_system_fallback_and_empty_tools() {
             Message::System {
                 content: MessageContent::Parts(vec![ContentPart::Text {
                     text: "System guide".to_string(),
+                    extra: serde_json::Map::new(),
                 }]),
                 name: None,
             },
             Message::User {
                 content: MessageContent::Parts(vec![ContentPart::Text {
                     text: "Language guide".to_string(),
+                    extra: serde_json::Map::new(),
                 }]),
                 name: None,
             },
             Message::Assistant {
                 content: Some(MessageContent::Parts(vec![ContentPart::Text {
                     text: "Acknowledged".to_string(),
+                    extra: serde_json::Map::new(),
                 }])),
                 tool_calls: None,
                 name: None,
@@ -126,6 +133,61 @@ fn acg_profile_helpers_cover_none_paths_and_short_hash() {
 }
 
 #[test]
+fn system_fingerprint_preserves_sources_roles_and_content_boundaries() {
+    let mut instructions_and_system = request(
+        vec![Message::System {
+            content: MessageContent::Text("b".into()),
+            name: None,
+        }],
+        None,
+    );
+    instructions_and_system.instructions = Some(MessageContent::Text("a".into()));
+    let joined_system = request(
+        vec![Message::System {
+            content: MessageContent::Text("a\nb".into()),
+            name: None,
+        }],
+        None,
+    );
+    let developer = request(
+        vec![Message::Developer {
+            content: MessageContent::Text("a\nb".into()),
+            name: None,
+        }],
+        None,
+    );
+    let split_parts = request(
+        vec![Message::System {
+            content: MessageContent::Parts(vec![
+                ContentPart::Text {
+                    text: "a".into(),
+                    extra: serde_json::Map::new(),
+                },
+                ContentPart::Text {
+                    text: "b".into(),
+                    extra: serde_json::Map::new(),
+                },
+            ]),
+            name: None,
+        }],
+        None,
+    );
+
+    assert_ne!(
+        system_prompt_fingerprint(&instructions_and_system),
+        system_prompt_fingerprint(&joined_system)
+    );
+    assert_ne!(
+        system_prompt_fingerprint(&joined_system),
+        system_prompt_fingerprint(&developer)
+    );
+    assert_ne!(
+        system_prompt_fingerprint(&joined_system),
+        system_prompt_fingerprint(&split_parts)
+    );
+}
+
+#[test]
 fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
     let with_image_a = request(
         vec![Message::User {
@@ -134,6 +196,7 @@ fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
                     url: "https://example.com/a.png".to_string(),
                     detail: Some("high".to_string()),
                 },
+                extra: serde_json::Map::new(),
             }]),
             name: None,
         }],
@@ -146,6 +209,7 @@ fn acg_profile_image_parts_contribute_stable_fingerprint_signal() {
                     url: "https://example.com/b.png".to_string(),
                     detail: Some("high".to_string()),
                 },
+                extra: serde_json::Map::new(),
             }]),
             name: None,
         }],
@@ -270,4 +334,165 @@ fn acg_profile_fingerprints_cover_alternate_role_sequences() {
         None,
     );
     assert_eq!(learning_seed_fingerprint(&system_only), "no-seed");
+}
+
+#[test]
+fn acg_profile_covers_extended_roles_and_native_content() {
+    let all_roles = request(
+        vec![
+            Message::Developer {
+                content: MessageContent::Text("developer".into()),
+                name: None,
+            },
+            Message::Function {
+                content: Some("legacy result".into()),
+                name: "legacy".into(),
+            },
+            Message::ToolCallItem {
+                id: None,
+                call_id: "call_1".into(),
+                name: "lookup".into(),
+                arguments: json!({"q": "x"}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ToolResultItem {
+                id: None,
+                call_id: "call_1".into(),
+                output: json!({"ok": true}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "reasoning".into(),
+                value: json!({"type": "reasoning"}),
+            },
+        ],
+        None,
+    );
+    let key = derive_acg_profile_key("agent-extended", &all_roles);
+    assert!(key.contains("roles=developer.function.tool_call.tool_result.provider_native"));
+
+    for (message, prefix) in [
+        (
+            Message::Function {
+                content: None,
+                name: "legacy".into(),
+            },
+            "function:",
+        ),
+        (
+            Message::ToolCallItem {
+                id: None,
+                call_id: "call_1".into(),
+                name: "lookup".into(),
+                arguments: json!({"q": "x"}),
+                extra: serde_json::Map::new(),
+            },
+            "tool-call:",
+        ),
+        (
+            Message::ToolResultItem {
+                id: None,
+                call_id: "call_1".into(),
+                output: json!({"ok": true}),
+                extra: serde_json::Map::new(),
+            },
+            "tool-result:",
+        ),
+        (
+            Message::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "reasoning".into(),
+                value: json!({"type": "reasoning"}),
+            },
+            "native:",
+        ),
+    ] {
+        assert!(learning_seed_fingerprint(&request(vec![message], None)).starts_with(prefix));
+    }
+
+    let seed_for_part = |part| {
+        learning_seed_fingerprint(&request(
+            vec![Message::User {
+                content: MessageContent::Parts(vec![part]),
+                name: None,
+            }],
+            None,
+        ))
+    };
+    assert_ne!(
+        seed_for_part(ContentPart::Refusal {
+            refusal: "no-a".into(),
+            extra: serde_json::Map::new(),
+        }),
+        seed_for_part(ContentPart::Refusal {
+            refusal: "no-b".into(),
+            extra: serde_json::Map::new(),
+        })
+    );
+    assert_ne!(
+        seed_for_part(ContentPart::Audio {
+            audio: json!({"data": "audio-a"}),
+            extra: serde_json::Map::new(),
+        }),
+        seed_for_part(ContentPart::Audio {
+            audio: json!({"data": "audio-b"}),
+            extra: serde_json::Map::new(),
+        })
+    );
+    assert_ne!(
+        seed_for_part(ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "future".into(),
+            value: json!({"type": "future", "value": "a"}),
+        }),
+        seed_for_part(ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "future".into(),
+            value: json!({"type": "future", "value": "b"}),
+        })
+    );
+}
+
+#[test]
+fn learning_seed_fingerprint_includes_variant_discriminator_fields() {
+    let seed_for_message = |message| learning_seed_fingerprint(&request(vec![message], None));
+    assert_ne!(
+        seed_for_message(Message::Function {
+            content: Some("same".into()),
+            name: "one".into(),
+        }),
+        seed_for_message(Message::Function {
+            content: Some("same".into()),
+            name: "two".into(),
+        })
+    );
+    assert_ne!(
+        seed_for_message(Message::ToolCallItem {
+            id: None,
+            call_id: "call".into(),
+            name: "one".into(),
+            arguments: json!({"same": true}),
+            extra: serde_json::Map::new(),
+        }),
+        seed_for_message(Message::ToolCallItem {
+            id: None,
+            call_id: "call".into(),
+            name: "two".into(),
+            arguments: json!({"same": true}),
+            extra: serde_json::Map::new(),
+        })
+    );
+    assert_ne!(
+        seed_for_message(Message::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "reasoning".into(),
+            value: json!({"same": true}),
+        }),
+        seed_for_message(Message::ProviderNative {
+            provider: "anthropic_messages".into(),
+            kind: "thinking".into(),
+            value: json!({"same": true}),
+        })
+    );
 }

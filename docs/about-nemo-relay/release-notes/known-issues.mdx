@@ -81,6 +81,36 @@ The following limitations and migration steps apply to NVIDIA NeMo Relay 0.6.
 
 ### Compatibility and Migration Notes
 
+#### Update Plugins and Workers That Consume Request Annotations
+
+<Warning>
+`AnnotatedLlmRequest` now includes shared instructions, a tagged
+`api_specific` surface, and additional message, content, tool, and tool-choice
+variants. This is a Rust source-compatibility break for exhaustive matches and
+direct struct literals.
+
+Rebuild Rust native plugins and Rust `grpc-v1` workers that accept annotated
+LLM requests against NeMo Relay 0.6. Update Python workers to the 0.6 worker
+SDK. Set their manifest requirement to
+`compat.relay = ">=0.6,<1.0"` instead of the broader `>=0.5,<1.0` guidance. A
+0.5 consumer cannot decode the added fields and enum variants. Relay 0.6 labels
+request annotations as `nemo.relay.AnnotatedLlmRequest@2` and request-intercept
+results as `nemo.relay.LlmRequestInterceptOutcome@2`. The host rejects a
+dynamic plugin that registers an LLM request intercept while its
+`compat.relay` range still admits Relay 0.5.
+
+Python workers continue to receive annotations as `dict[str, Any]`, but the
+worker SDK validates the versioned envelope. Node.js, Go, and raw C FFI
+request-intercept callbacks continue to carry the annotation as JSON, so they
+do not require new binding DTOs. Consumers in those languages should still
+avoid closed-world matching on role or component discriminator strings.
+
+The [Codecs](/about-nemo-relay/concepts/codecs) guide documents the expanded
+annotation schema and mutation contract. PR
+[#509](https://github.com/NVIDIA/NeMo-Relay/pull/509) introduced the request
+codec integration and Rust source break.
+</Warning>
+
 #### Update Managed LLM Stream Consumers
 
 <Warning>
@@ -277,6 +307,10 @@ catalog lists the current paths and task routing. PR
 
 ### Fixed in NVIDIA NeMo Relay 0.6
 
+- Coding-agent gateway generation routes now decode request annotations for
+  Anthropic Messages, OpenAI Chat Completions, and OpenAI Responses. Request
+  interceptors can edit portable and provider-native fields while unchanged
+  nested fields, explicit nulls, and provider representations survive encoding.
 - Installed coding-agent sessions now acquire the shared gateway through MCP
   before hooks or routed provider traffic. This prevents cold-start loss and
   coordinates concurrent startup and recovery.

@@ -44,7 +44,7 @@ pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationSummary, LlmOptimizationSummaryStatus, LlmOptimizationTokenImpact,
     LlmOptimizationTokens,
 };
-pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
+pub use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
@@ -1518,7 +1518,13 @@ impl WorkerService {
                 let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
                 let annotated = payload
                     .annotated_request
-                    .map(|value| decode_json_envelope::<AnnotatedLlmRequest>(&value))
+                    .map(|value| {
+                        decode_expected_json_envelope::<AnnotatedLlmRequest>(
+                            &value,
+                            "annotated llm request",
+                            ANNOTATED_LLM_REQUEST_SCHEMA,
+                        )
+                    })
                     .transpose()?;
                 let handler = self.llm_request(&request.registration_name)?;
                 let outcome = with_thread_scope(&scope, || {
@@ -1765,6 +1771,20 @@ fn required_json<T: serde::de::DeserializeOwned>(
     Ok(decode_json_envelope::<T>(&value)?)
 }
 
+fn decode_expected_json_envelope<T: serde::de::DeserializeOwned>(
+    value: &JsonEnvelope,
+    field: &str,
+    expected_schema: &str,
+) -> Result<T> {
+    if value.schema != expected_schema {
+        return Err(WorkerSdkError::InvalidInput(format!(
+            "{field} has schema {:?}; expected {expected_schema:?}",
+            value.schema
+        )));
+    }
+    Ok(decode_json_envelope(value)?)
+}
+
 fn empty_response() -> InvokeResponse {
     InvokeResponse {
         result: Some(nemo_relay_worker_proto::v1::invoke_response::Result::Empty(
@@ -1800,7 +1820,7 @@ fn llm_request_response(outcome: LlmRequestInterceptOutcome) -> Result<InvokeRes
             nemo_relay_worker_proto::v1::invoke_response::Result::LlmRequest(
                 LlmRequestInterceptResult {
                     outcome: Some(json_envelope(
-                        "nemo.relay.LlmRequestInterceptOutcome@1",
+                        nemo_relay_types::api::llm::LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
                         &outcome,
                     )?),
                 },

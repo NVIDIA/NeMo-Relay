@@ -67,6 +67,36 @@ Response decoding improves observability and downstream consistency. It does not
 automatically change the value returned to the application unless a separate
 typed value boundary also does so.
 
+The built-in request codecs are lossless patch codecs. For an unchanged
+annotation, the following identity holds at the JSON-value level:
+
+```text
+encode(decode(original), original) == original
+```
+
+Encoding compares the edited annotation with a freshly decoded baseline and
+patches only fields that changed. This preserves caller-selected forms such as
+string content versus content blocks, explicit `null` values, legacy field
+names, ordered input items, metadata, and unknown fields. Removing a key from
+top-level `extra` removes that unknown key from the provider request; adding or
+changing a key overlays it.
+
+`AnnotatedLlmRequest` separates portable and provider-specific data:
+
+- `instructions` represents Anthropic `system` and OpenAI Responses
+  `instructions`.
+- `messages`, content parts, function calls and results, tools, and tool choice
+  expose portable components when the shapes have shared semantics.
+- `api_specific` is a tagged, mutable surface for modeled Anthropic Messages,
+  OpenAI Chat Completions, or OpenAI Responses controls.
+- Provider-only messages, content blocks, input items, tools, and tool choices
+  use `{ provider, kind, value }`, where `value` is the exact native JSON.
+- Top-level `extra` is reserved for unknown future fields.
+
+A provider-native component can only be encoded by the provider surface named
+in its `provider` field. Provider mismatches and portable edits that the target
+API cannot represent fail before the provider callback.
+
 ## Normalized Data Consumption
 
 Normalized codec output is applicable to several runtime layers:
@@ -101,11 +131,12 @@ disambiguate an otherwise identical request shape, such as an Anthropic Messages
 request without a top-level `system` field, but no provider annotation is
 invented without either a matching provider surface or a recognized hint.
 
-Provider extraction covers model names, messages, generation parameters, tool
-definitions, tool calls, finish reasons, usage, cost, provider-specific fields,
-and replayable request or response JSON when the source payload contains enough
-information. Provider codecs should preserve unknown fields and treat request
-encoding as a merge over the original provider payload.
+Provider extraction covers model names, instructions, messages, generation
+parameters, tool definitions, tool calls, finish reasons, usage, cost,
+provider-specific fields, and replayable request or response JSON when the
+source payload contains enough information. Provider codecs preserve unknown
+fields and treat request encoding as a baseline-aware patch over the original
+provider payload.
 
 The response-extraction interface is the existing response codec contract:
 `LlmResponseCodec::decode_response` returns `AnnotatedLlmResponse`. Built-in
@@ -132,6 +163,13 @@ normalization. For example, the recognized `anthropic` and `anthropic.messages`
 hints let Anthropic Messages requests without a top-level `system` field decode
 through the Anthropic provider surface instead of being treated as shape-only
 OpenAI Chat payloads.
+
+The `nemo-relay` gateway always enables matching request codecs for
+`/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both buffered
+and streaming execution. Count-token, model, probe, and non-LLM passthrough
+routes do not enable request codecs. Gateway request intercepts must therefore
+edit generation bodies through `annotated_request`; raw `request.content`
+remains writable on routes without a request codec.
 
 ### Agent Payload Extraction
 

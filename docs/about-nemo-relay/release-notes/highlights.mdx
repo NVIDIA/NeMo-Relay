@@ -50,7 +50,11 @@ dynamic plugins.
   history. Later starts keep the system instructions, latest user turn, and
   following messages. The provider request itself does not change.
 - A central provider-codec factory now resolves canonical provider names and
-  the built-in request, response, and streaming codecs.
+  the built-in request, response, and streaming codecs. The coding-agent
+  gateway uses lossless request codecs for Anthropic Messages, OpenAI Chat
+  Completions, and OpenAI Responses generation routes, so middleware can edit
+  portable or provider-native request annotations without rebuilding untouched
+  wire data.
 
 ### Observability and Optimization
 
@@ -117,8 +121,11 @@ dynamic plugins.
   typed attribute paths at the same time.
 - Check ATIF and event consumers for assumptions about marks, requested model
   names, or complete request histories.
-- Update Rust exhaustive matches, direct struct literals, and editor metadata
-  consumers for the new public variants and fields.
+- Update Rust exhaustive matches and direct `AnnotatedLlmRequest`, message,
+  content, and tool literals for the new public variants and fields. Rebuild
+  Rust native plugins and `grpc-v1` workers that consume request annotations
+  against 0.6, and narrow their manifest requirement to
+  `compat.relay = ">=0.6,<1.0"`.
 - Migrate Rust code that directly constructs `LlmJsonStream`, and update Go
   call sites to handle the error returned by `LlmStream.Close`. Call an
   explicit close method when a consumer stops reading an LLM stream early.

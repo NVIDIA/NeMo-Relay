@@ -118,6 +118,8 @@ fn make_test_run(agent_id: &str) -> RunRecord {
 
 fn sample_annotated_request(model: &str) -> AnnotatedLlmRequest {
     AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![
             Message::System {
                 content: MessageContent::Text("You are a careful planner".to_string()),

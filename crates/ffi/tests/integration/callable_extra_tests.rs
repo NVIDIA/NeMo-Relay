@@ -257,6 +257,8 @@ fn test_callable_extra_request_intercept_and_codec_paths() {
     assert!(decode_err.to_string().contains("invalid JSON"));
 
     let annotated = AnnotatedLLMRequest {
+        instructions: None,
+        api_specific: None,
         model: Some("test-model".into()),
         messages: vec![],
         params: None,

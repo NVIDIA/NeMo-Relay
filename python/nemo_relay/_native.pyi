@@ -30,6 +30,7 @@ _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
 _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
+_MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
@@ -463,21 +464,25 @@ class AnnotatedLLMRequest:
         self,
         messages: Sequence[Mapping[str, _JsonValue]],
         *,
+        instructions: Optional[_MessageContent] = None,
         model: Optional[str] = None,
         params: Optional[Mapping[str, _JsonValue]] = None,
         tools: Optional[Sequence[Mapping[str, _JsonValue]]] = None,
         tool_choice: Optional[str | Mapping[str, _JsonValue]] = None,
+        api_specific: Optional[Mapping[str, _JsonValue]] = None,
         extra: Optional[Mapping[str, _JsonValue]] = None,
     ) -> None:
         """Create a normalized LLM request view.
 
         Args:
             messages: Provider-normalized message objects.
+            instructions: Optional provider-level instructions.
             model: Optional model name.
             params: Optional provider parameters.
             tools: Optional tool declarations.
             tool_choice: Optional tool-selection directive.
-            extra: Optional provider-specific fields.
+            api_specific: Optional tagged provider-specific request fields.
+            extra: Optional unknown future top-level fields.
 
         Returns:
             ``None``.
@@ -494,6 +499,14 @@ class AnnotatedLLMRequest:
     @messages.setter
     def messages(self, value: Sequence[Mapping[str, _JsonValue]]) -> None:
         """Replace normalized message objects."""
+        ...
+    @property
+    def instructions(self) -> Optional[_MessageContent]:
+        """Return provider-level instructions, if present."""
+        ...
+    @instructions.setter
+    def instructions(self, value: Optional[_MessageContent]) -> None:
+        """Set or clear provider-level instructions."""
         ...
     @property
     def model(self) -> Optional[str]:
@@ -528,12 +541,20 @@ class AnnotatedLLMRequest:
         """Set or clear the normalized tool-choice directive."""
         ...
     @property
+    def api_specific(self) -> Optional[_JsonObject]:
+        """Return tagged provider-specific request fields, if present."""
+        ...
+    @api_specific.setter
+    def api_specific(self, value: Optional[Mapping[str, _JsonValue]]) -> None:
+        """Set or clear tagged provider-specific request fields."""
+        ...
+    @property
     def extra(self) -> _JsonObject:
-        """Return provider-specific request fields."""
+        """Return unknown future top-level request fields."""
         ...
     @extra.setter
     def extra(self, value: Mapping[str, _JsonValue]) -> None:
-        """Replace provider-specific request fields."""
+        """Replace unknown future top-level request fields."""
         ...
     def system_prompt(self) -> Optional[str]:
         """Return the first normalized system prompt, if one is present."""

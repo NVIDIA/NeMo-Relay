@@ -58,6 +58,32 @@ fn openai_chat_overlay_removes_tool_calls_when_typed_entry_has_wrong_shape() {
 }
 
 #[test]
+fn annotated_message_text_includes_provider_native_text_and_refusal_parts() {
+    let content = MessageContent::Parts(vec![
+        ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "output_text".into(),
+            value: json!({"text": "redacted text"}),
+        },
+        ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "refusal".into(),
+            value: json!({"refusal": "redacted refusal"}),
+        },
+        ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "reasoning".into(),
+            value: json!({"summary": []}),
+        },
+    ]);
+
+    assert_eq!(
+        annotated_message_text(Some(&content)).as_deref(),
+        Some("redacted text\nredacted refusal")
+    );
+}
+
+#[test]
 fn openai_responses_overlay_removes_extra_function_calls() {
     let mut items = vec![
         json!({"type": "message", "content": [{"type": "output_text", "text": "ok"}]}),

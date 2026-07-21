@@ -352,8 +352,12 @@ impl AnnotatedLlmResponse {
         match self.message.as_ref()? {
             MessageContent::Text(s) => Some(s.as_str()),
             MessageContent::Parts(parts) => parts.iter().find_map(|p| match p {
-                crate::codec::request::ContentPart::Text { text } => Some(text.as_str()),
-                crate::codec::request::ContentPart::ImageUrl { .. } => None,
+                crate::codec::request::ContentPart::Text { text, .. } => Some(text.as_str()),
+                crate::codec::request::ContentPart::ProviderNative { value, .. } => value
+                    .get("text")
+                    .and_then(crate::Json::as_str)
+                    .or_else(|| value.get("refusal").and_then(crate::Json::as_str)),
+                _ => None,
             }),
         }
     }

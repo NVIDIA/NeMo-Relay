@@ -115,6 +115,72 @@ class TestBuiltinCodecDecodeEncode:
         assert cast(float, encoded_content["temperature"]) == 0.7
         assert len(cast(list[JsonObject], encoded_content["messages"])) == 2
 
+    def test_anthropic_issue_501_roundtrip_and_annotated_edit(self):
+        """Anthropic cache blocks survive unchanged and edited Python annotations."""
+        codec = AnthropicMessagesCodec()
+        original = LLMRequest(
+            {},
+            {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 128,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": "Keep this cached.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "toolu_1",
+                                "name": "lookup",
+                                "input": {"q": "x"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "toolu_1",
+                                "content": "done",
+                            }
+                        ],
+                    },
+                ],
+                "future_field": None,
+            },
+        )
+
+        annotated = codec.decode(original)
+        assert annotated.instructions == [
+            {
+                "type": "text",
+                "text": "Keep this cached.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert codec.encode(annotated, original).content == original.content
+
+        instructions = cast(list[JsonObject], annotated.instructions)
+        instructions[0]["text"] = "Edited safely."
+        annotated.instructions = instructions
+        encoded = codec.encode(annotated, original)
+        expected = dict(cast(JsonObject, original.content))
+        expected["system"] = [
+            {
+                "type": "text",
+                "text": "Edited safely.",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert encoded.content == expected
+
 
 # ---------------------------------------------------------------------------
 # 3. Built-in codec decode_response

@@ -75,6 +75,8 @@ fn make_scope_start_event(name: &str) -> Event {
 
 fn make_annotated_llm_event(name: &str) -> Event {
     let request = AnnotatedLlmRequest {
+        instructions: None,
+        api_specific: None,
         messages: vec![Message::User {
             content: MessageContent::Text("hello".into()),
             name: None,

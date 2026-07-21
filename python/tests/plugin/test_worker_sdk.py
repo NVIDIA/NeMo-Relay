@@ -1296,7 +1296,7 @@ async def test_tool_execution_intercept_rejects_legacy_raw_result():
                 pb.LLM_REQUEST_INTERCEPT,
                 llm=_llm_payload(request={"content": {}}, annotated={"messages": []}),
             ),
-            "expected 'nemo.relay.AnnotatedLlmRequest@1'",
+            "expected 'nemo.relay.AnnotatedLlmRequest@2'",
         ),
     ],
 )
