@@ -262,24 +262,52 @@ pub(super) fn tool_sanitize_callback(backend: CompiledBuiltinBackend) -> ToolSan
 }
 
 pub(super) fn event_sanitize_callback(backend: CompiledBuiltinBackend) -> EventSanitizeFn {
+    event_sanitize_callback_with_scope_categories(backend, None)
+}
+
+pub(super) fn scope_event_sanitize_callback(
+    backend: CompiledBuiltinBackend,
+    sanitize_llm: bool,
+    sanitize_tool: bool,
+) -> EventSanitizeFn {
+    event_sanitize_callback_with_scope_categories(backend, Some((sanitize_llm, sanitize_tool)))
+}
+
+fn event_sanitize_callback_with_scope_categories(
+    backend: CompiledBuiltinBackend,
+    scope_categories: Option<(bool, bool)>,
+) -> EventSanitizeFn {
     Arc::new(move |event, mut fields| {
-        if matches!(event, Event::Scope(_))
-            && event
-                .category()
-                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"))
-        {
+        if scope_categories.is_some_and(|(sanitize_llm, sanitize_tool)| {
+            matches!(event, Event::Scope(_))
+                && event
+                    .category()
+                    .is_some_and(|category| match category.as_str() {
+                        "llm" => !sanitize_llm,
+                        "tool" => !sanitize_tool,
+                        _ => false,
+                    })
+        }) {
             return fields;
         }
 
-        fields.data = fields
-            .data
-            .map(|data| backend.sanitize_json_preorder_dfs(data));
+        let specialized_scope = matches!(event, Event::Scope(_))
+            && event
+                .category()
+                .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
+
+        if !specialized_scope {
+            fields.data = fields
+                .data
+                .map(|data| backend.sanitize_json_preorder_dfs(data));
+            fields.category_profile = fields.category_profile.and_then(|profile| {
+                sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
+            });
+        }
+
         fields.metadata = fields
             .metadata
             .map(|metadata| backend.sanitize_json_preorder_dfs(metadata));
-        fields.category_profile = fields.category_profile.and_then(|profile| {
-            sanitize_serializable_with_backend::<CategoryProfile>(&backend, profile).ok()
-        });
         fields
     })
 }
