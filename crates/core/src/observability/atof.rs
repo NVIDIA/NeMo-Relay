@@ -477,7 +477,11 @@ impl AtofExporter {
         Ok(removed)
     }
 
-    /// Flush the underlying file and drain queued endpoint events.
+    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
+    /// configured file sink or ask the configured stream sink to drain for up to its timeout.
+    ///
+    /// A re-entrant call does not establish the delivery barrier. A stream timeout is logged and
+    /// does not by itself return an error.
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         let mut state = self
@@ -515,7 +519,11 @@ impl AtofExporter {
         )
     }
 
-    /// Shut down the exporter by flushing buffered data and closing endpoints.
+    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
+    /// configured file sink or ask the configured stream sink to drain and close up to its timeout.
+    ///
+    /// A re-entrant call does not establish the delivery barrier. A stream timeout is logged and
+    /// does not by itself return an error.
     pub fn shutdown(&self) -> Result<()> {
         flush_subscribers()?;
         let mut state = self

@@ -93,6 +93,10 @@ def flush() -> None:
     Native NeMo Relay event APIs enqueue subscriber callbacks and return without
     waiting for observer work. Use this barrier in tests and shutdown paths when
     captured subscriber output must be complete before continuing.
+
+    Call this function outside subscriber callbacks. A re-entrant call returns
+    without waiting to avoid blocking the dispatcher, so callbacks later in the
+    same dispatch snapshot can still run.
     """
     return _native_flush()
 

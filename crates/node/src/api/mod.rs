@@ -2849,6 +2849,10 @@ pub fn deregister_subscriber(name: String) -> Result<bool> {
 
 /// Wait for native subscriber callbacks queued before this call to finish.
 ///
+/// Call this function outside native subscriber callbacks. A re-entrant call returns without
+/// waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
+/// still run.
+///
 /// JavaScript subscribers are queued through Node's `ThreadsafeFunction`; callers that
 /// need JS callback side effects should await an event-loop tick after this returns.
 #[napi]
@@ -3676,7 +3680,10 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Flush the output file.
+    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
+    /// file sink or ask the stream sink to drain for up to its timeout. A re-entrant call does not
+    /// establish the delivery barrier. A stream timeout is logged and does not by itself return an
+    /// error.
     #[napi]
     pub fn force_flush(&self) -> napi::Result<()> {
         self.inner
@@ -3684,7 +3691,10 @@ impl AtofExporter {
             .map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 
-    /// Shut down the exporter by flushing output.
+    /// Outside a native subscriber callback, wait for queued subscriber delivery, then flush the
+    /// file sink or ask the stream sink to drain and close up to its timeout. A re-entrant call
+    /// does not establish the delivery barrier. A stream timeout is logged and does not by itself
+    /// return an error.
     #[napi]
     pub fn shutdown(&self) -> napi::Result<()> {
         self.inner

@@ -1150,6 +1150,10 @@ NemoRelayStatus nemo_relay_deregister_subscriber(const char *name);
 
 /**
  * Wait for subscriber callbacks queued before this call to finish.
+ *
+ * Call this function outside native subscriber callbacks. A re-entrant call returns without
+ * waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can
+ * still run.
  */
 NemoRelayStatus nemo_relay_flush_subscribers(void);
 
@@ -1297,7 +1301,11 @@ NemoRelayStatus nemo_relay_atof_exporter_register(const struct FfiAtofExporter *
 NemoRelayStatus nemo_relay_atof_exporter_deregister(const char *name);
 
 /**
- * Flushes the ATOF exporter output file.
+ * Outside a native subscriber callback, waits for queued subscriber delivery, then flushes the
+ * configured file sink or asks the configured stream sink to drain for up to its timeout.
+ *
+ * A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
+ * not by itself return an error.
  *
  * # Safety
  * `exporter` must be a valid, non-null pointer.
@@ -1305,7 +1313,11 @@ NemoRelayStatus nemo_relay_atof_exporter_deregister(const char *name);
 NemoRelayStatus nemo_relay_atof_exporter_force_flush(const struct FfiAtofExporter *exporter);
 
 /**
- * Shuts down the ATOF exporter by flushing output.
+ * Outside a native subscriber callback, waits for queued subscriber delivery, then flushes the
+ * configured file sink or asks the configured stream sink to drain and close up to its timeout.
+ *
+ * A re-entrant call does not establish the delivery barrier. A stream timeout is logged and does
+ * not by itself return an error.
  *
  * # Safety
  * `exporter` must be a valid, non-null pointer.

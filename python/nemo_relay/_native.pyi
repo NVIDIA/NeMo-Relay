@@ -912,10 +912,24 @@ class AtofExporter:
         """Deregister ``name`` and return whether it existed."""
         ...
     def force_flush(self) -> None:
-        """Flush the output file."""
+        """Flush the exporter.
+
+        Outside a native subscriber callback, wait for queued subscriber
+        delivery, then flush the file sink or ask the stream sink to drain up
+        to its timeout. A re-entrant call does not establish the delivery
+        barrier. A stream timeout is logged and does not by itself return an
+        error.
+        """
         ...
     def shutdown(self) -> None:
-        """Flush the output file before shutdown."""
+        """Flush the exporter and shut it down.
+
+        Outside a native subscriber callback, wait for queued subscriber
+        delivery, then flush the file sink or ask the stream sink to drain and
+        close up to its timeout. A re-entrant call does not establish the
+        delivery barrier. A stream timeout is logged and does not by itself
+        return an error.
+        """
         ...
 
 class ScopeStack:
@@ -1968,7 +1982,11 @@ def deregister_subscriber(name: str) -> bool:
     ...
 
 def flush_subscribers() -> None:
-    """Wait for subscriber callbacks already queued by native event emission."""
+    """Wait for subscriber callbacks queued by native event emission.
+
+    Call this function outside subscriber callbacks. A re-entrant call returns
+    without waiting, so callbacks later in the same dispatch snapshot can run.
+    """
     ...
 
 def scope_register_tool_sanitize_request_guardrail(
