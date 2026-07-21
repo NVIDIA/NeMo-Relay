@@ -746,7 +746,7 @@ fn baseline_patching_keeps_raw_array_fields_with_reordered_logical_items() {
     ]);
 
     assert_eq!(
-        super::patch_changed_json(&original, &baseline, &edited),
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
         json!([
             {"type": "text", "text": "b2", "provider_marker": "B"},
             {"type": "text", "text": "a", "provider_marker": "A"},
@@ -773,12 +773,35 @@ fn baseline_patching_handles_insert_delete_and_duplicate_reorders() {
     ]);
 
     assert_eq!(
-        super::patch_changed_json(&original, &baseline, &edited),
+        super::patch_changed_json(&original, &baseline, &edited).unwrap(),
         json!([
             {"type": "text", "text": "a", "provider_marker": "A1"},
             {"type": "text", "text": "b", "provider_marker": "B"},
             {"type": "text", "text": "a", "provider_marker": "A2"},
             {"type": "text", "text": "new"}
         ])
+    );
+}
+
+#[test]
+fn baseline_patching_rejects_multiple_reordered_and_edited_items_without_provenance() {
+    let original = json!([
+        {"type": "text", "text": "a", "provider_marker": "A"},
+        {"type": "text", "text": "b", "provider_marker": "B"}
+    ]);
+    let baseline = json!([
+        {"type": "text", "text": "a"},
+        {"type": "text", "text": "b"}
+    ]);
+    let edited = json!([
+        {"type": "text", "text": "b-edited"},
+        {"type": "text", "text": "a-edited"}
+    ]);
+
+    let error = super::patch_changed_json(&original, &baseline, &edited).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("multiple edited array items without stable identities")
     );
 }

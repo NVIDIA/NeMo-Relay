@@ -910,7 +910,7 @@ impl LlmCodec for AnthropicMessagesCodec {
                         baseline.parallel_tool_calls,
                     )?;
                     Some(match obj.get("tool_choice") {
-                        Some(original) => super::patch_changed_json(original, &before, &edited),
+                        Some(original) => super::patch_changed_json(original, &before, &edited)?,
                         None => edited,
                     })
                 }

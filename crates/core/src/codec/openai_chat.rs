@@ -1041,7 +1041,7 @@ impl LlmCodec for OpenAIChatCodec {
                     let edited = encode_chat_tool_choice(edited)?;
                     let before = encode_chat_tool_choice(before)?;
                     Some(match obj.get("tool_choice") {
-                        Some(original) => super::patch_changed_json(original, &before, &edited),
+                        Some(original) => super::patch_changed_json(original, &before, &edited)?,
                         None => edited,
                     })
                 }

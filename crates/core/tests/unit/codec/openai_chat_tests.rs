@@ -1408,6 +1408,49 @@ fn chat_reordered_content_parts_keep_nested_provider_fields_with_their_items() {
 }
 
 #[test]
+fn chat_reordered_and_edited_content_parts_are_rejected_without_provenance() {
+    let codec = OpenAIChatCodec;
+    let original = make_request(json!({
+        "model": "gpt-4.1",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "a", "vendor_marker": "A"}
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "b", "vendor_marker": "B"}
+                }
+            ]
+        }]
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    let Message::User {
+        content: MessageContent::Parts(parts),
+        ..
+    } = &mut annotated.messages[0]
+    else {
+        panic!("expected portable user content parts");
+    };
+    parts.swap(0, 1);
+    for (part, url) in parts.iter_mut().zip(["b-edited", "a-edited"]) {
+        let ContentPart::ImageUrl { image_url, .. } = part else {
+            panic!("expected image URL part");
+        };
+        image_url.url = url.into();
+    }
+
+    let error = codec.encode(&annotated, &original).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("multiple edited array items without stable identities")
+    );
+}
+
+#[test]
 fn native_chat_tool_choices_round_trip_without_fallback_loss() {
     let codec = OpenAIChatCodec;
     for tool_choice in [

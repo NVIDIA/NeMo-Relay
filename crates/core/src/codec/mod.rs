@@ -115,7 +115,7 @@ where
         original,
         encode,
         |original, _, _, baseline_value, edited_value| {
-            Ok(patch_changed_json(original, baseline_value, edited_value))
+            patch_changed_json(original, baseline_value, edited_value)
         },
     )
 }
@@ -132,7 +132,11 @@ where
     F: FnMut(&T) -> Result<Json>,
     P: FnMut(&Json, &T, &T, &Json, &Json) -> Result<Json>,
 {
-    let alignment = align_changed_items(edited, baseline);
+    let alignment = if original.is_some() {
+        align_changed_items(edited, baseline)?
+    } else {
+        vec![None; edited.len()]
+    };
     edited
         .iter()
         .enumerate()
@@ -159,7 +163,7 @@ where
         .collect()
 }
 
-fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Vec<Option<usize>> {
+fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Result<Vec<Option<usize>>> {
     let mut alignment = vec![None; edited.len()];
     let mut used = vec![false; baseline.len()];
 
@@ -197,6 +201,13 @@ fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Vec<Option
         .filter_map(|(index, item)| (!item).then_some(index))
         .collect::<Vec<_>>();
 
+    if unmatched_edited.len() > 1 && unmatched_baseline.len() > 1 {
+        return Err(FlowError::InvalidArgument(
+            "cannot safely preserve provider fields for multiple edited array items without stable identities"
+                .into(),
+        ));
+    }
+
     if !structurally_changed && edited.len() == baseline.len() {
         for index in unmatched_edited {
             alignment[index] = Some(index);
@@ -207,11 +218,11 @@ fn align_changed_items<T: PartialEq>(edited: &[T], baseline: &[T]) -> Vec<Option
         alignment[*edited_index] = Some(*baseline_index);
     }
 
-    alignment
+    Ok(alignment)
 }
 
-fn patch_changed_array(original: &[Json], baseline: &[Json], edited: &[Json]) -> Vec<Json> {
-    let alignment = align_changed_items(edited, baseline);
+fn patch_changed_array(original: &[Json], baseline: &[Json], edited: &[Json]) -> Result<Vec<Json>> {
+    let alignment = align_changed_items(edited, baseline)?;
     edited
         .iter()
         .enumerate()
@@ -222,14 +233,14 @@ fn patch_changed_array(original: &[Json], baseline: &[Json], edited: &[Json]) ->
             {
                 return patch_changed_json(original_value, baseline_value, edited_value);
             }
-            edited_value.clone()
+            Ok(edited_value.clone())
         })
         .collect()
 }
 
-fn patch_changed_json(original: &Json, baseline: &Json, edited: &Json) -> Json {
+fn patch_changed_json(original: &Json, baseline: &Json, edited: &Json) -> Result<Json> {
     if baseline == edited {
-        return original.clone();
+        return Ok(original.clone());
     }
 
     match (original, baseline, edited) {
@@ -238,7 +249,7 @@ fn patch_changed_json(original: &Json, baseline: &Json, edited: &Json) -> Json {
                 .into_iter()
                 .any(|key| baseline.get(key) != edited.get(key))
             {
-                return Json::Object(edited.clone());
+                return Ok(Json::Object(edited.clone()));
             }
             let mut patched = original.clone();
             for key in baseline.keys().filter(|key| !edited.contains_key(*key)) {
@@ -250,18 +261,18 @@ fn patch_changed_json(original: &Json, baseline: &Json, edited: &Json) -> Json {
                 }
                 let value = match (original.get(key), baseline.get(key)) {
                     (Some(original_value), Some(baseline_value)) => {
-                        patch_changed_json(original_value, baseline_value, edited_value)
+                        patch_changed_json(original_value, baseline_value, edited_value)?
                     }
                     _ => edited_value.clone(),
                 };
                 patched.insert(key.clone(), value);
             }
-            Json::Object(patched)
+            Ok(Json::Object(patched))
         }
-        (Json::Array(original), Json::Array(baseline), Json::Array(edited)) => {
-            Json::Array(patch_changed_array(original, baseline, edited))
-        }
-        _ => edited.clone(),
+        (Json::Array(original), Json::Array(baseline), Json::Array(edited)) => Ok(Json::Array(
+            patch_changed_array(original, baseline, edited)?,
+        )),
+        _ => Ok(edited.clone()),
     }
 }
 

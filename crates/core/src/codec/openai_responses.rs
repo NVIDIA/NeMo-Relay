@@ -782,16 +782,12 @@ fn patch_responses_tool(
                 original_function,
                 &encode_responses_function(baseline_function),
                 &encode_responses_function(edited_function),
-            ),
+            )?,
         );
         return Ok(Json::Object(patched));
     }
 
-    Ok(super::patch_changed_json(
-        original,
-        baseline_value,
-        edited_value,
-    ))
+    super::patch_changed_json(original, baseline_value, edited_value)
 }
 
 fn decode_openai_or_anthropic_tool_choice(value: &Json) -> ToolChoice {
@@ -1307,7 +1303,7 @@ impl LlmCodec for OpenAIResponsesCodec {
                     let edited = encode_responses_tool_choice(edited)?;
                     let before = encode_responses_tool_choice(before)?;
                     Some(match obj.get("tool_choice") {
-                        Some(original) => super::patch_changed_json(original, &before, &edited),
+                        Some(original) => super::patch_changed_json(original, &before, &edited)?,
                         None => edited,
                     })
                 }
