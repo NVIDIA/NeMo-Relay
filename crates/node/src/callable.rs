@@ -36,6 +36,7 @@ use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result};
 
+use crate::callback_factory;
 use crate::convert::{callback_json, record_callback_error};
 use crate::promise_call::{JsonNextFn, JsonStreamNextFn, PromiseAwareFn};
 use crate::types::{EventSanitizeFields, JsEvent, event_sanitize_fields_from_json};
@@ -125,60 +126,7 @@ pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Re
 /// prevents unsupported values such as `BigInt` from reaching conversion paths that
 /// abort the Node process.
 pub(crate) fn safe_execution_callback(env: &Env, func: &JsFunction) -> napi::Result<JsFunction> {
-    let factory: JsFunction = env.run_script(
-        r#"((fn) => {
-  function jsonValue(value, seen = new Set()) {
-    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-      return value;
-    }
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) {
-        throw new TypeError('JavaScript callback returned a non-finite number that cannot be converted to JSON');
-      }
-      return value;
-    }
-    if (typeof value !== 'object') {
-      throw new TypeError(`JavaScript callback returned an unsupported ${typeof value} value that cannot be converted to JSON`);
-    }
-    if (seen.has(value)) {
-      throw new TypeError('JavaScript callback returned a circular value that cannot be converted to JSON');
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      const length = value.length;
-      const result = new Array(length);
-      for (let index = 0; index < length; index += 1) {
-        result[index] = jsonValue(value[index], seen);
-      }
-      seen.delete(value);
-      return result;
-    }
-
-    const result = Object.create(null);
-    for (const key of Object.keys(value)) {
-      result[key] = jsonValue(value[key], seen);
-    }
-    seen.delete(value);
-    return result;
-  }
-
-  return function __nemo_relay_execution_wrapper(...args) {
-    try {
-      const value = fn(...args);
-      return { ok: true, value: jsonValue(value === undefined ? null : value) };
-    } catch (error) {
-      let message = 'JavaScript callback failed';
-      try {
-        message = String(error?.message ?? error);
-      } catch {}
-      return { ok: false, error: message };
-    }
-  };
-})"#,
-    )?;
-    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
-    let wrapper_unknown = factory.call(None, &[func_unknown])?;
-    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+    callback_factory::wrap_execution_callback(env, func)
 }
 
 pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Result<Json> {

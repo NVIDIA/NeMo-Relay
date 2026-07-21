@@ -22,6 +22,8 @@ use serde_json::Value as Json;
 
 use nemo_relay::error::{FlowError, Result as FlowResult};
 
+use crate::callback_factory;
+
 pub type JsonNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
 pub type JsonStreamNextFn =
@@ -182,59 +184,6 @@ fn build_completion_unknowns(
     ))
 }
 
-fn create_promise_wrapper(env: &Env, callable: &JsFunction) -> napi::Result<JsFunction> {
-    let factory: JsFunction = env.run_script(
-        r#"((fn) => {
-  function jsonValue(value, seen = new Set()) {
-    if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-      return value;
-    }
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) {
-        throw new TypeError('JavaScript callback returned a non-finite number that cannot be converted to JSON');
-      }
-      return value;
-    }
-    if (typeof value !== 'object') {
-      throw new TypeError(`JavaScript callback returned an unsupported ${typeof value} value that cannot be converted to JSON`);
-    }
-    if (seen.has(value)) {
-      throw new TypeError('JavaScript callback returned a circular value that cannot be converted to JSON');
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      const length = value.length;
-      const result = new Array(length);
-      for (let index = 0; index < length; index += 1) {
-        result[index] = jsonValue(value[index], seen);
-      }
-      seen.delete(value);
-      return result;
-    }
-
-    const result = Object.create(null);
-    for (const key of Object.keys(value)) {
-      result[key] = jsonValue(value[key], seen);
-    }
-    seen.delete(value);
-    return result;
-  }
-
-  return function __nemo_relay_promise_wrapper(error, arg0, next, resolve, reject) {
-  if (error != null) {
-    reject(error);
-    return;
-  }
-  Promise.resolve().then(() => (
-    next === undefined ? fn(arg0) : fn(arg0, next)
-  )).then((value) => jsonValue(value === undefined ? null : value)).then(resolve, reject);
-  };
-})"#,
-    )?;
-    let wrapper_unknown: JsUnknown = factory.call(None, &[function_to_unknown(env, callable)])?;
-    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
-}
-
 /// A wrapper around a JS function that can be called from any thread and
 /// transparently handles both synchronous and Promise return values.
 pub struct PromiseAwareFn {
@@ -246,7 +195,7 @@ impl PromiseAwareFn {
     ///
     /// Must be called on the JS main thread (i.e., in a sync `#[napi]` function).
     pub fn new(env: &Env, func: &JsFunction) -> napi::Result<Self> {
-        let wrapper = create_promise_wrapper(env, func)?;
+        let wrapper = callback_factory::wrap_promise_callback(env, func)?;
         let mut tsfn =
             env.create_threadsafe_function(&wrapper, 0, |ctx: ThreadSafeCallContext<CallArgs>| {
                 let next = match ctx.value.next {
