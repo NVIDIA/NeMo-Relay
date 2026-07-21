@@ -197,3 +197,104 @@ fn build_prompt_ir_omits_tool_schema_hashes_when_no_tools_are_present() {
     assert!(prompt_ir.tool_schema_hashes.is_none());
     assert_eq!(prompt_ir.blocks[0].span_id.0, "user-0");
 }
+
+#[test]
+fn build_prompt_ir_covers_extended_request_messages_and_content_parts() {
+    let request = AnnotatedLlmRequest {
+        instructions: Some(MessageContent::Text("Top-level instructions".into())),
+        messages: vec![
+            Message::Developer {
+                content: MessageContent::Text("Developer guide".into()),
+                name: Some("developer".into()),
+            },
+            Message::User {
+                content: MessageContent::Parts(vec![
+                    ContentPart::Refusal {
+                        refusal: "refusal".into(),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::Image {
+                        image: serde_json::json!({"file_id": "image_1"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::Audio {
+                        audio: serde_json::json!({"data": "audio"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::File {
+                        file: serde_json::json!({"file_id": "file_1"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::ToolUse {
+                        id: "call_1".into(),
+                        name: "lookup".into(),
+                        input: serde_json::json!({"q": "x"}),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::ToolResult {
+                        tool_use_id: "call_1".into(),
+                        content: serde_json::json!("ok"),
+                        is_error: Some(false),
+                        extra: serde_json::Map::new(),
+                    },
+                    ContentPart::ProviderNative {
+                        provider: "openai_responses".into(),
+                        kind: "future".into(),
+                        value: serde_json::json!({"type": "future"}),
+                    },
+                ]),
+                name: None,
+            },
+            Message::Function {
+                content: None,
+                name: "legacy".into(),
+            },
+            Message::ToolCallItem {
+                id: Some("fc_1".into()),
+                call_id: "call_1".into(),
+                name: "lookup".into(),
+                arguments: serde_json::json!({"q": "x"}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ToolResultItem {
+                id: Some("fco_1".into()),
+                call_id: "call_1".into(),
+                output: serde_json::json!({"ok": true}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "reasoning".into(),
+                value: serde_json::json!({"type": "reasoning", "summary": []}),
+            },
+        ],
+        tools: Some(vec![ToolDefinition::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "web_search_preview".into(),
+            value: serde_json::json!({"type": "web_search_preview"}),
+        }]),
+        model: Some("gpt-5".into()),
+        ..AnnotatedLlmRequest::default()
+    };
+
+    let prompt_ir = build_prompt_ir(&request).unwrap();
+    assert_eq!(prompt_ir.blocks[0].span_id.0, "system-0-instructions");
+    assert_eq!(prompt_ir.blocks[1].span_id.0, "system-1-web_search_preview");
+    assert_eq!(prompt_ir.blocks[2].span_id.0, "system-2-developer");
+    assert!(
+        prompt_ir
+            .blocks
+            .iter()
+            .any(|block| block.content_type == BlockContentType::ToolSchema)
+    );
+    assert!(
+        prompt_ir
+            .blocks
+            .iter()
+            .any(|block| block.span_id.0.ends_with("reasoning"))
+    );
+    assert_eq!(
+        prompt_ir.tool_schema_hashes.as_ref().unwrap()[0].tool_name,
+        "web_search_preview"
+    );
+}

@@ -15,8 +15,8 @@ use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{
-    AnnotatedLlmRequest, FunctionDefinition, GenerationParams, Message, MessageContent,
-    ToolDefinition,
+    AnnotatedLlmRequest, ContentPart, FunctionDefinition, GenerationParams, Message,
+    MessageContent, ToolDefinition,
 };
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
@@ -4229,6 +4229,85 @@ fn annotated_llm_payloads_emit_flattened_openinference_message_and_tool_attribut
         "{\"query\":\"docs\"}",
     );
     assert_attr(&attributes, "llm.finish_reason", "tool_use");
+}
+
+#[test]
+fn annotated_input_projection_covers_extended_roles_and_native_text() {
+    let messages = vec![
+        Message::Developer {
+            content: MessageContent::Text("developer".into()),
+            name: None,
+        },
+        Message::Function {
+            content: Some("legacy".into()),
+            name: "legacy".into(),
+        },
+        Message::ToolCallItem {
+            id: None,
+            call_id: "call_1".into(),
+            name: "lookup".into(),
+            arguments: json!({}),
+            extra: serde_json::Map::new(),
+        },
+        Message::ToolResultItem {
+            id: None,
+            call_id: "call_1".into(),
+            output: json!("ok"),
+            extra: serde_json::Map::new(),
+        },
+        Message::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "message".into(),
+            value: json!({"role": "critic", "content": "native"}),
+        },
+        Message::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "reasoning".into(),
+            value: json!({"type": "reasoning"}),
+        },
+    ];
+    let mut attributes = Vec::new();
+    push_annotated_input_messages(&mut attributes, &messages);
+    let attributes = attr_map(&attributes);
+    assert_attr(
+        &attributes,
+        "llm.input_messages.0.message.role",
+        "developer",
+    );
+    assert_attr(&attributes, "llm.input_messages.1.message.role", "function");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.2.message.role",
+        "assistant",
+    );
+    assert_attr(&attributes, "llm.input_messages.3.message.role", "tool");
+    assert_attr(&attributes, "llm.input_messages.4.message.role", "critic");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.5.message.role",
+        "provider_native",
+    );
+
+    let content = MessageContent::Parts(vec![
+        ContentPart::Refusal {
+            refusal: "portable refusal".into(),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "output_text".into(),
+            value: json!({"text": "native text"}),
+        },
+        ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "refusal".into(),
+            value: json!({"refusal": "native refusal"}),
+        },
+    ]);
+    assert_eq!(
+        message_content_text(&content).as_deref(),
+        Some("portable refusal\nnative text\nnative refusal")
+    );
 }
 
 #[test]

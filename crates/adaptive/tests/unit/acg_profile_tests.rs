@@ -280,3 +280,102 @@ fn acg_profile_fingerprints_cover_alternate_role_sequences() {
     );
     assert_eq!(learning_seed_fingerprint(&system_only), "no-seed");
 }
+
+#[test]
+fn acg_profile_covers_extended_roles_and_native_content() {
+    let all_roles = request(
+        vec![
+            Message::Developer {
+                content: MessageContent::Text("developer".into()),
+                name: None,
+            },
+            Message::Function {
+                content: Some("legacy result".into()),
+                name: "legacy".into(),
+            },
+            Message::ToolCallItem {
+                id: None,
+                call_id: "call_1".into(),
+                name: "lookup".into(),
+                arguments: json!({"q": "x"}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ToolResultItem {
+                id: None,
+                call_id: "call_1".into(),
+                output: json!({"ok": true}),
+                extra: serde_json::Map::new(),
+            },
+            Message::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "reasoning".into(),
+                value: json!({"type": "reasoning"}),
+            },
+        ],
+        None,
+    );
+    let key = derive_acg_profile_key("agent-extended", &all_roles);
+    assert!(key.contains("roles=developer.function.tool_call.tool_result.provider_native"));
+
+    for (message, prefix) in [
+        (
+            Message::Function {
+                content: None,
+                name: "legacy".into(),
+            },
+            "function:",
+        ),
+        (
+            Message::ToolCallItem {
+                id: None,
+                call_id: "call_1".into(),
+                name: "lookup".into(),
+                arguments: json!({"q": "x"}),
+                extra: serde_json::Map::new(),
+            },
+            "tool-call:",
+        ),
+        (
+            Message::ToolResultItem {
+                id: None,
+                call_id: "call_1".into(),
+                output: json!({"ok": true}),
+                extra: serde_json::Map::new(),
+            },
+            "tool-result:",
+        ),
+        (
+            Message::ProviderNative {
+                provider: "openai_responses".into(),
+                kind: "reasoning".into(),
+                value: json!({"type": "reasoning"}),
+            },
+            "native:",
+        ),
+    ] {
+        assert!(learning_seed_fingerprint(&request(vec![message], None)).starts_with(prefix));
+    }
+
+    let serialized_parts = request(
+        vec![Message::User {
+            content: MessageContent::Parts(vec![
+                ContentPart::Refusal {
+                    refusal: "no".into(),
+                    extra: serde_json::Map::new(),
+                },
+                ContentPart::Audio {
+                    audio: json!({"data": "audio"}),
+                    extra: serde_json::Map::new(),
+                },
+                ContentPart::ProviderNative {
+                    provider: "openai_responses".into(),
+                    kind: "future".into(),
+                    value: json!({"type": "future"}),
+                },
+            ]),
+            name: None,
+        }],
+        None,
+    );
+    assert!(learning_seed_fingerprint(&serialized_parts).starts_with("user:"));
+}

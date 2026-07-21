@@ -6,7 +6,10 @@
 use super::*;
 use serde_json::json;
 
-use super::super::request::MessageContent;
+use super::super::request::{
+    ContentPart, FunctionDefinition, Message, MessageContent, OpenAiImageUrl,
+    ProviderNativeComponent, ToolChoiceFunction, ToolChoiceFunctionName,
+};
 use super::super::response::{ApiSpecificResponse, FinishReason};
 
 // -------------------------------------------------------------------
@@ -1041,6 +1044,273 @@ fn test_helper_and_error_paths_cover_remaining_responses_branches() {
         }
         other => panic!("unexpected encode result: {other:?}"),
     }
+}
+
+#[test]
+fn responses_request_component_branch_matrix() {
+    assert!(decode_responses_content(&json!({})).is_err());
+    for invalid in [
+        json!(42),
+        json!({"type": "input_text"}),
+        json!({"type": "refusal"}),
+    ] {
+        assert!(decode_responses_content_part(&invalid).is_err());
+    }
+    for valid in [
+        json!({"type": "input_text", "text": "hello", "future": 1}),
+        json!({"type": "output_text", "text": "hello"}),
+        json!({"type": "input_image", "image_url": "https://example.com/a.png", "detail": "high", "future": 1}),
+        json!({"type": "input_file", "file_id": "file_1", "filename": "a.txt", "future": 1}),
+        json!({"type": "refusal", "refusal": "no", "future": 1}),
+        json!({"type": "future_part", "payload": 1}),
+    ] {
+        assert!(decode_responses_content_part(&valid).is_ok());
+    }
+
+    for invalid in [
+        json!(42),
+        json!({"role": "user"}),
+        json!({"type": "function_call", "name": "lookup", "arguments": "{}"}),
+        json!({"type": "function_call", "call_id": "call", "arguments": "{}"}),
+        json!({"type": "function_call", "call_id": "call", "name": "lookup"}),
+        json!({"type": "function_call", "id": 7, "call_id": "call", "name": "lookup", "arguments": "{}"}),
+        json!({"type": "function_call_output", "output": "ok"}),
+        json!({"type": "function_call_output", "call_id": "call"}),
+        json!({"type": "function_call_output", "id": 7, "call_id": "call", "output": "ok"}),
+    ] {
+        assert!(decode_responses_input_item(&invalid).is_err());
+    }
+    for portable in [
+        json!({"type": "message", "role": "user", "content": "u"}),
+        json!({"type": "message", "role": "system", "content": "s"}),
+        json!({"type": "message", "role": "developer", "content": "d"}),
+        json!({"type": "message", "role": "assistant", "content": "a"}),
+        json!({"type": "function_call", "id": null, "call_id": "call", "name": "lookup", "arguments": "raw"}),
+        json!({"type": "function_call_output", "id": null, "call_id": "call", "output": "ok"}),
+    ] {
+        assert!(!matches!(
+            decode_responses_input_item(&portable).unwrap(),
+            Message::ProviderNative { .. }
+        ));
+    }
+    for native in [
+        json!({"type": "message", "role": "user", "content": "u", "future": 1}),
+        json!({"type": "message", "role": "future", "content": "x"}),
+        json!({"type": "reasoning", "summary": []}),
+    ] {
+        assert!(matches!(
+            decode_responses_input_item(&native).unwrap(),
+            Message::ProviderNative { .. }
+        ));
+    }
+
+    let content = MessageContent::Parts(vec![
+        ContentPart::Text {
+            text: "hello".into(),
+            extra: serde_json::Map::from_iter([("future".into(), json!(1))]),
+        },
+        ContentPart::ImageUrl {
+            image_url: OpenAiImageUrl {
+                url: "https://example.com/a.png".into(),
+                detail: Some("high".into()),
+            },
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::Image {
+            image: json!({"file_id": "file_1"}),
+            extra: serde_json::Map::from_iter([("detail".into(), json!("low"))]),
+        },
+        ContentPart::File {
+            file: json!({"file_id": "file_2"}),
+            extra: serde_json::Map::from_iter([("filename".into(), json!("a.txt"))]),
+        },
+        ContentPart::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "future".into(),
+            value: json!({"type": "future"}),
+        },
+    ]);
+    assert_eq!(
+        encode_responses_content(&content, false)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    let assistant_content = MessageContent::Parts(vec![
+        ContentPart::Text {
+            text: "answer".into(),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::Refusal {
+            refusal: "no".into(),
+            extra: serde_json::Map::new(),
+        },
+    ]);
+    assert_eq!(
+        encode_responses_content(&assistant_content, true).unwrap()[0]["type"],
+        json!("output_text")
+    );
+    for invalid in [
+        ContentPart::Image {
+            image: json!("bad"),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::File {
+            file: json!("bad"),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::Refusal {
+            refusal: "not user input".into(),
+            extra: serde_json::Map::new(),
+        },
+    ] {
+        assert!(encode_responses_content(&MessageContent::Parts(vec![invalid]), false).is_err());
+    }
+
+    let items = vec![
+        Message::User {
+            content: MessageContent::Text("u".into()),
+            name: None,
+        },
+        Message::System {
+            content: MessageContent::Text("s".into()),
+            name: None,
+        },
+        Message::Developer {
+            content: MessageContent::Text("d".into()),
+            name: None,
+        },
+        Message::Assistant {
+            content: Some(assistant_content),
+            tool_calls: None,
+            name: None,
+        },
+        Message::ToolCallItem {
+            id: Some("fc_1".into()),
+            call_id: "call_1".into(),
+            name: "lookup".into(),
+            arguments: json!({"q": "x"}),
+            extra: serde_json::Map::from_iter([("status".into(), json!("completed"))]),
+        },
+        Message::ToolCallItem {
+            id: None,
+            call_id: "call_2".into(),
+            name: "lookup".into(),
+            arguments: json!("{ raw }"),
+            extra: serde_json::Map::new(),
+        },
+        Message::ToolResultItem {
+            id: Some("fco_1".into()),
+            call_id: "call_1".into(),
+            output: json!({"ok": true}),
+            extra: serde_json::Map::new(),
+        },
+        Message::ProviderNative {
+            provider: "openai_responses".into(),
+            kind: "reasoning".into(),
+            value: json!({"type": "reasoning"}),
+        },
+    ];
+    for item in &items {
+        assert!(encode_responses_input_item(item).is_ok());
+    }
+    assert!(
+        encode_responses_input_item(&Message::Assistant {
+            content: None,
+            tool_calls: None,
+            name: None,
+        })
+        .is_err()
+    );
+
+    for invalid in [
+        json!(42),
+        json!({"type": "function"}),
+        json!({"type": "function", "function": {}}),
+    ] {
+        assert!(decode_responses_tool(&invalid).is_err());
+    }
+    assert!(matches!(
+        decode_responses_tool(&json!({"type": "web_search_preview"})).unwrap(),
+        ToolDefinition::ProviderNative { .. }
+    ));
+    let function_tool = ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "lookup".into(),
+            description: Some("Lookup".into()),
+            parameters: Some(json!({"type": "object"})),
+            strict: Some(true),
+            extra: serde_json::Map::from_iter([("future_function".into(), json!(1))]),
+        },
+        extra: serde_json::Map::from_iter([("future_wrapper".into(), json!(2))]),
+    };
+    assert_eq!(
+        encode_responses_tool(&function_tool).unwrap()["strict"],
+        json!(true)
+    );
+    let native_tool = ToolDefinition::ProviderNative {
+        provider: "openai_responses".into(),
+        kind: "web_search".into(),
+        value: json!({"type": "web_search_preview"}),
+    };
+    assert_eq!(
+        encode_responses_tool(&native_tool).unwrap()["type"],
+        json!("web_search_preview")
+    );
+    let mismatched_tool = ToolDefinition::ProviderNative {
+        provider: "openai_chat".into(),
+        kind: "custom".into(),
+        value: json!({"type": "custom"}),
+    };
+    assert!(encode_responses_tool(&mismatched_tool).is_err());
+
+    for (wire, expected) in [
+        (json!("required"), ToolChoice::Required),
+        (json!({"type": "any"}), ToolChoice::Required),
+        (json!({"type": "none"}), ToolChoice::None),
+        (
+            json!({"type": "tool", "name": "lookup"}),
+            ToolChoice::Specific(ToolChoiceFunction {
+                choice_type: "function".into(),
+                function: ToolChoiceFunctionName {
+                    name: "lookup".into(),
+                },
+            }),
+        ),
+    ] {
+        assert_eq!(decode_openai_or_anthropic_tool_choice(&wire), expected);
+    }
+    let specific = ToolChoice::Specific(ToolChoiceFunction {
+        choice_type: "function".into(),
+        function: ToolChoiceFunctionName {
+            name: "lookup".into(),
+        },
+    });
+    assert_eq!(
+        encode_responses_tool_choice(&ToolChoice::None).unwrap(),
+        json!("none")
+    );
+    assert_eq!(
+        encode_responses_tool_choice(&specific).unwrap()["name"],
+        json!("lookup")
+    );
+    let native_choice = ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "openai_responses".into(),
+        kind: "mcp".into(),
+        value: json!({"type": "mcp"}),
+    });
+    assert_eq!(
+        encode_responses_tool_choice(&native_choice).unwrap()["type"],
+        json!("mcp")
+    );
+    let mismatched_choice = ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "anthropic_messages".into(),
+        kind: "tool".into(),
+        value: json!({"type": "tool"}),
+    });
+    assert!(encode_responses_tool_choice(&mismatched_choice).is_err());
 }
 
 // ===================================================================

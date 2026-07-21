@@ -6,7 +6,10 @@
 use super::*;
 use serde_json::json;
 
-use super::super::request::{Message, MessageContent, ToolChoice};
+use super::super::request::{
+    ContentPart, FunctionDefinition, Message, MessageContent, ProviderNativeComponent, ToolChoice,
+    ToolChoiceFunction, ToolChoiceFunctionName,
+};
 use super::super::response::{ApiSpecificResponse, FinishReason};
 
 // -------------------------------------------------------------------
@@ -1029,6 +1032,191 @@ fn test_helper_and_error_paths_cover_remaining_anthropic_branches() {
         }
         other => panic!("unexpected encode result: {other:?}"),
     }
+}
+
+#[test]
+fn anthropic_request_component_branch_matrix() {
+    let specific = ToolChoice::Specific(ToolChoiceFunction {
+        choice_type: "function".into(),
+        function: ToolChoiceFunctionName {
+            name: "lookup".into(),
+        },
+    });
+    assert_eq!(
+        encode_anthropic_tool_choice(&ToolChoice::Required).unwrap(),
+        json!({"type": "any"})
+    );
+    assert_eq!(
+        encode_anthropic_tool_choice(&specific).unwrap(),
+        json!({"type": "tool", "name": "lookup"})
+    );
+    assert_eq!(
+        encode_tool_choice_with_parallel_hint(&specific, Some(false)).unwrap(),
+        json!({"type": "tool", "name": "lookup", "disable_parallel_tool_use": true})
+    );
+    let native_choice = ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "anthropic_messages".into(),
+        kind: "future".into(),
+        value: json!({"type": "future"}),
+    });
+    assert_eq!(
+        encode_anthropic_tool_choice(&native_choice).unwrap(),
+        json!({"type": "future"})
+    );
+    let mismatched_choice = ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "openai_chat".into(),
+        kind: "future".into(),
+        value: json!({"type": "future"}),
+    });
+    assert!(encode_anthropic_tool_choice(&mismatched_choice).is_err());
+
+    for invalid in [json!(42), json!({"type": "text"})] {
+        assert!(decode_anthropic_content_part(&invalid).is_err());
+    }
+    for invalid in [
+        json!({"type": "tool_use", "name": "lookup", "input": {}}),
+        json!({"type": "tool_use", "id": "call", "input": {}}),
+        json!({"type": "tool_use", "id": "call", "name": "lookup"}),
+        json!({"type": "tool_result", "content": "ok"}),
+        json!({"type": "tool_result", "tool_use_id": "call"}),
+        json!({"type": "tool_result", "tool_use_id": "call", "content": "ok", "is_error": "no"}),
+    ] {
+        assert!(decode_anthropic_content_part(&invalid).is_err());
+    }
+    assert!(decode_anthropic_content(&json!({})).is_err());
+
+    let content = MessageContent::Parts(vec![
+        ContentPart::Text {
+            text: "hello".into(),
+            extra: serde_json::Map::from_iter([(
+                "cache_control".into(),
+                json!({"type": "ephemeral"}),
+            )]),
+        },
+        ContentPart::Image {
+            image: json!({"source": {"type": "base64", "data": "a"}}),
+            extra: serde_json::Map::from_iter([("alt".into(), json!("image"))]),
+        },
+        ContentPart::File {
+            file: json!({"source": {"type": "text", "data": "notes"}}),
+            extra: serde_json::Map::from_iter([("title".into(), json!("Notes"))]),
+        },
+        ContentPart::ToolUse {
+            id: "call".into(),
+            name: "lookup".into(),
+            input: json!({"q": "x"}),
+            extra: serde_json::Map::from_iter([("caller".into(), json!("client"))]),
+        },
+        ContentPart::ToolResult {
+            tool_use_id: "call".into(),
+            content: json!("ok"),
+            is_error: Some(false),
+            extra: serde_json::Map::from_iter([("future".into(), json!(1))]),
+        },
+        ContentPart::ProviderNative {
+            provider: "anthropic_messages".into(),
+            kind: "thinking".into(),
+            value: json!({"type": "thinking", "thinking": "private"}),
+        },
+    ]);
+    let encoded_content = encode_anthropic_content(&content).unwrap();
+    assert_eq!(encoded_content.as_array().unwrap().len(), 6);
+    assert_eq!(encoded_content[4]["is_error"], json!(false));
+    assert!(
+        encode_anthropic_content_part(&ContentPart::Image {
+            image: json!("bad"),
+            extra: serde_json::Map::new(),
+        })
+        .is_err()
+    );
+    assert!(
+        encode_anthropic_content_part(&ContentPart::File {
+            file: json!("bad"),
+            extra: serde_json::Map::new(),
+        })
+        .is_err()
+    );
+    assert!(
+        encode_anthropic_content_part(&ContentPart::Audio {
+            audio: json!({}),
+            extra: serde_json::Map::new(),
+        })
+        .is_err()
+    );
+
+    for invalid in [json!(42), json!({"content": "x"}), json!({"role": "user"})] {
+        assert!(decode_anthropic_message(&invalid).is_err());
+    }
+    assert!(matches!(
+        decode_anthropic_message(&json!({"role": "user", "content": "x", "name": "Ada"})).unwrap(),
+        Message::ProviderNative { .. }
+    ));
+    assert!(matches!(
+        decode_anthropic_message(&json!({"role": "system", "content": "x"})).unwrap(),
+        Message::System { .. }
+    ));
+    assert!(matches!(
+        decode_anthropic_message(&json!({"role": "future", "content": "x"})).unwrap(),
+        Message::ProviderNative { .. }
+    ));
+
+    let assistant_without_content = Message::Assistant {
+        content: None,
+        tool_calls: None,
+        name: None,
+    };
+    assert_eq!(
+        encode_anthropic_message(&assistant_without_content).unwrap()["content"],
+        json!([])
+    );
+    let native_message = Message::ProviderNative {
+        provider: "anthropic_messages".into(),
+        kind: "future".into(),
+        value: json!({"role": "future", "content": null}),
+    };
+    assert_eq!(
+        encode_anthropic_message(&native_message).unwrap()["role"],
+        json!("future")
+    );
+    assert!(
+        encode_anthropic_message(&Message::Developer {
+            content: MessageContent::Text("no".into()),
+            name: None,
+        })
+        .is_err()
+    );
+
+    assert!(decode_anthropic_tool(&json!(42)).is_err());
+    assert!(matches!(
+        decode_anthropic_tool(&json!({"type": "web_search_20250305", "name": "search"})).unwrap(),
+        ToolDefinition::ProviderNative { .. }
+    ));
+    let rich_tool = ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "lookup".into(),
+            description: Some("Lookup".into()),
+            parameters: Some(json!({"type": "object"})),
+            strict: Some(true),
+            extra: serde_json::Map::from_iter([("future_function".into(), json!(1))]),
+        },
+        extra: serde_json::Map::from_iter([("cache_control".into(), json!({"type": "ephemeral"}))]),
+    };
+    assert_eq!(
+        encode_anthropic_tools(&[rich_tool]).unwrap()[0]["strict"],
+        json!(true)
+    );
+    let native_tool = ToolDefinition::ProviderNative {
+        provider: "anthropic_messages".into(),
+        kind: "web_search".into(),
+        value: json!({"type": "web_search", "name": "search"}),
+    };
+    assert_eq!(encode_anthropic_tools(&[native_tool]).unwrap().len(), 1);
+    let mismatched_tool = ToolDefinition::ProviderNative {
+        provider: "openai_chat".into(),
+        kind: "custom".into(),
+        value: json!({"type": "custom"}),
+    };
+    assert!(encode_anthropic_tools(&[mismatched_tool]).is_err());
 }
 
 #[test]

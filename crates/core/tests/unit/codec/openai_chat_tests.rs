@@ -6,7 +6,10 @@
 use super::*;
 use serde_json::json;
 
-use super::super::request::{ContentPart, MessageContent, OpenAiImageUrl};
+use super::super::request::{
+    ContentPart, FunctionCall, FunctionDefinition, Message, MessageContent, OpenAiImageUrl,
+    ProviderNativeComponent, ToolCall, ToolChoiceFunction, ToolChoiceFunctionName,
+};
 use super::super::response::{ApiSpecificResponse, CostSource, FinishReason};
 
 // -------------------------------------------------------------------
@@ -932,6 +935,255 @@ fn test_helper_and_error_paths_cover_remaining_chat_branches() {
         }
         other => panic!("unexpected encode result: {other:?}"),
     }
+}
+
+#[test]
+fn chat_request_component_branch_matrix() {
+    assert!(decode_chat_content(&json!({})).is_err());
+    for invalid in [
+        json!(42),
+        json!({"type": "text"}),
+        json!({"type": "image_url"}),
+        json!({"type": "image_url", "image_url": {"detail": "high"}}),
+        json!({"type": "input_audio"}),
+        json!({"type": "file"}),
+        json!({"type": "refusal"}),
+    ] {
+        assert!(decode_chat_content_part(&invalid).is_err());
+    }
+    let parts = MessageContent::Parts(vec![
+        ContentPart::Text {
+            text: "hello".into(),
+            extra: serde_json::Map::from_iter([("future".into(), json!(1))]),
+        },
+        ContentPart::ImageUrl {
+            image_url: OpenAiImageUrl {
+                url: "https://example.com/image.png".into(),
+                detail: Some("high".into()),
+            },
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::Audio {
+            audio: json!({"data": "audio", "format": "wav"}),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::File {
+            file: json!({"file_id": "file_1"}),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::Refusal {
+            refusal: "no".into(),
+            extra: serde_json::Map::new(),
+        },
+        ContentPart::ProviderNative {
+            provider: "openai_chat".into(),
+            kind: "future".into(),
+            value: json!({"type": "future", "value": 1}),
+        },
+    ]);
+    assert_eq!(
+        encode_chat_content(&parts)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+    assert!(
+        encode_chat_content(&MessageContent::Parts(vec![ContentPart::Image {
+            image: json!({}),
+            extra: serde_json::Map::new(),
+        }]))
+        .is_err()
+    );
+
+    for invalid in [
+        json!(42),
+        json!({"type": "function"}),
+        json!({"id": "call", "type": "function", "function": {"name": "lookup", "arguments": "{}"}, "future": 1}),
+        json!({"id": "call", "type": "function", "function": {"name": "lookup", "arguments": "{}", "future": 1}}),
+        json!({"type": "function", "function": {"name": "lookup", "arguments": "{}"}}),
+        json!({"id": "call", "type": "function", "function": {"arguments": "{}"}}),
+        json!({"id": "call", "type": "function", "function": {"name": "lookup"}}),
+    ] {
+        let result = decode_chat_tool_call(&invalid);
+        assert!(result.is_err() || result.unwrap().is_none());
+    }
+    assert!(
+        decode_chat_tool_call(&json!({"type": "custom"}))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        decode_chat_tool_call(&json!({
+            "id": "call",
+            "type": "function",
+            "function": {"name": "lookup", "arguments": "{}"}
+        }))
+        .unwrap()
+        .is_some()
+    );
+
+    for invalid in [
+        json!(42),
+        json!({"content": "x"}),
+        json!({"role": "user"}),
+        json!({"role": "user", "content": "x", "name": 7}),
+        json!({"role": "assistant", "tool_calls": 7}),
+        json!({"role": "tool", "content": "x"}),
+        json!({"role": "function", "content": null}),
+    ] {
+        assert!(decode_chat_message(&invalid).is_err());
+    }
+    for native in [
+        json!({"role": "user", "content": "x", "future": 1}),
+        json!({"role": "assistant", "content": null, "future": 1}),
+        json!({"role": "assistant", "content": null, "tool_calls": [{"type": "custom"}]}),
+        json!({"role": "future", "content": "x"}),
+    ] {
+        assert!(matches!(
+            decode_chat_message(&native).unwrap(),
+            Message::ProviderNative { .. }
+        ));
+    }
+    for portable in [
+        json!({"role": "system", "content": "s", "name": null}),
+        json!({"role": "developer", "content": "d", "name": "dev"}),
+        json!({"role": "user", "content": "u"}),
+        json!({"role": "assistant", "content": null, "tool_calls": null, "name": "bot"}),
+        json!({"role": "tool", "content": "ok", "tool_call_id": "call"}),
+        json!({"role": "function", "content": null, "name": "legacy"}),
+    ] {
+        assert!(!matches!(
+            decode_chat_message(&portable).unwrap(),
+            Message::ProviderNative { .. }
+        ));
+    }
+
+    let tool_call = ToolCall {
+        id: "call".into(),
+        call_type: "function".into(),
+        function: FunctionCall {
+            name: "lookup".into(),
+            arguments: "{}".into(),
+        },
+    };
+    let messages = vec![
+        Message::System {
+            content: MessageContent::Text("s".into()),
+            name: Some("system".into()),
+        },
+        Message::Developer {
+            content: MessageContent::Text("d".into()),
+            name: None,
+        },
+        Message::User {
+            content: MessageContent::Text("u".into()),
+            name: None,
+        },
+        Message::Assistant {
+            content: Some(MessageContent::Text("a".into())),
+            tool_calls: Some(vec![tool_call]),
+            name: Some("bot".into()),
+        },
+        Message::Tool {
+            content: MessageContent::Text("ok".into()),
+            tool_call_id: "call".into(),
+        },
+        Message::Function {
+            content: None,
+            name: "legacy".into(),
+        },
+        Message::ProviderNative {
+            provider: "openai_chat".into(),
+            kind: "future".into(),
+            value: json!({"role": "future"}),
+        },
+    ];
+    for message in &messages {
+        assert!(encode_chat_message(message).is_ok());
+    }
+    assert!(
+        encode_chat_message(&Message::ToolCallItem {
+            id: None,
+            call_id: "call".into(),
+            name: "lookup".into(),
+            arguments: json!({}),
+            extra: serde_json::Map::new(),
+        })
+        .is_err()
+    );
+
+    for invalid in [
+        json!(42),
+        json!({"type": "function"}),
+        json!({"type": "function", "function": {}}),
+    ] {
+        assert!(decode_chat_tool(&invalid).is_err());
+    }
+    assert!(matches!(
+        decode_chat_tool(&json!({"type": "custom", "name": "grammar"})).unwrap(),
+        ToolDefinition::ProviderNative { .. }
+    ));
+    let function_tool = ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "lookup".into(),
+            description: Some("Lookup".into()),
+            parameters: Some(json!({"type": "object"})),
+            strict: Some(true),
+            extra: serde_json::Map::from_iter([("future_function".into(), json!(1))]),
+        },
+        extra: serde_json::Map::from_iter([("future_wrapper".into(), json!(2))]),
+    };
+    assert_eq!(
+        encode_chat_tool(&function_tool).unwrap()["function"]["strict"],
+        json!(true)
+    );
+    let native_tool = ToolDefinition::ProviderNative {
+        provider: "openai_chat".into(),
+        kind: "custom".into(),
+        value: json!({"type": "custom"}),
+    };
+    assert_eq!(
+        encode_chat_tool(&native_tool).unwrap()["type"],
+        json!("custom")
+    );
+    let mismatched_tool = ToolDefinition::ProviderNative {
+        provider: "openai_responses".into(),
+        kind: "custom".into(),
+        value: json!({"type": "custom"}),
+    };
+    assert!(encode_chat_tool(&mismatched_tool).is_err());
+
+    let specific = ToolChoice::Specific(ToolChoiceFunction {
+        choice_type: "function".into(),
+        function: ToolChoiceFunctionName {
+            name: "lookup".into(),
+        },
+    });
+    assert_eq!(
+        encode_chat_tool_choice(&ToolChoice::None).unwrap(),
+        json!("none")
+    );
+    assert_eq!(
+        encode_chat_tool_choice(&specific).unwrap()["type"],
+        json!("function")
+    );
+    let native_choice = ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "openai_chat".into(),
+        kind: "tool_choice".into(),
+        value: json!({"type": "custom"}),
+    });
+    assert_eq!(
+        encode_chat_tool_choice(&native_choice).unwrap()["type"],
+        json!("custom")
+    );
+    let mismatched_choice = ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "anthropic_messages".into(),
+        kind: "tool_choice".into(),
+        value: json!({"type": "tool"}),
+    });
+    assert!(encode_chat_tool_choice(&mismatched_choice).is_err());
 }
 // ===================================================================
 // stream_options identity tests
